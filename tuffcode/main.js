@@ -179,6 +179,42 @@ ipcMain.handle('fs:rename', async (_e, from, to) => {
   await fsp.rename(from, to);
 });
 ipcMain.handle('fs:trash', (_e, p) => shell.trashItem(p));
+
+// Find in Files: every match of a pattern in the project's text files.
+const NOT_TEXT = /\.(png|jpe?g|gif|ico|bmp|webp|exe|dll|zip|7z|rar|pdf|mp3|wav|ogg|mp4|woff2?|ttf|otf|pyc|asar)$/i;
+ipcMain.handle('fs:search', async (_e, root, source, flags) => {
+  const re = new RegExp(source, flags.includes('g') ? flags : `${flags}g`);
+  const results = [];
+  let total = 0;
+  for (const f of await listAllFiles(root)) {
+    if (NOT_TEXT.test(f.name)) continue;
+    let text;
+    try {
+      if ((await fsp.stat(f.path)).size > 1_000_000) continue;
+      text = await fsp.readFile(f.path, 'utf8');
+    } catch { continue; }
+    if (text.includes('\u0000')) continue;
+    const matches = [];
+    text.split(/\r?\n/).forEach((line, i) => {
+      re.lastIndex = 0;
+      let m;
+      while (total < 2000 && (m = re.exec(line))) {
+        if (!m[0]) { re.lastIndex++; continue; }
+        matches.push({ line: i + 1, col: m.index + 1, len: m[0].length, preview: line.slice(0, 300) });
+        total++;
+      }
+    });
+    if (matches.length) results.push({ path: f.path, rel: f.rel, matches });
+    if (total >= 2000) return { results, total, truncated: true };
+  }
+  return { results, total, truncated: false };
+});
+ipcMain.handle('fs:replaceInFile', async (_e, file, source, flags, replacement, isRegex) => {
+  const text = await fsp.readFile(file, 'utf8');
+  const next = text.replace(new RegExp(source, flags.includes('g') ? flags : `${flags}g`), isRegex ? replacement : () => replacement);
+  if (next !== text) await fsp.writeFile(file, next, 'utf8');
+  return next !== text;
+});
 ipcMain.handle('shell:reveal', (_e, p) => shell.showItemInFolder(p));
 
 ipcMain.handle('dialog:openFolder', async () => {
@@ -214,7 +250,8 @@ ipcMain.handle('dialog:openImage', async (_e, defaultPath) => {
 });
 ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(p));
 ipcMain.handle('shell:openExternal', (_e, url) => {
-  if (/^https:\/\/github\.com\/trickortree\/tuff-code\b/.test(url)) shell.openExternal(url);
+  // Only TuffCode's repo and the sites of the agents Tuff Agents can run.
+  if (/^https:\/\/(github\.com\/trickortree\/tuff-code\b|code\.claude\.com\/|developers\.openai\.com\/codex|antigravity\.google\b)/.test(url)) shell.openExternal(url);
 });
 
 ipcMain.handle('app:version', () => app.getVersion());
@@ -236,7 +273,16 @@ ipcMain.handle('tuff:check', async (_e, source) => {
     proc.stdout.on('data', (d) => (out += d));
     proc.stderr.on('data', (d) => (out += d));
     proc.on('error', () => resolve({ ok: true, unknown: true, message: '' }));
-    proc.on('close', (code) => resolve({ ok: code === 0, message: (out.match(/Tuff error[^\r\n]*/) || [''])[0] }));
+    proc.on('close', (code) => {
+      // "Tuff error on line 3: ...", then "  3 | code" and a caret under the column.
+      const lines = out.split(/\r?\n/);
+      const i = lines.findIndex((l) => /^Tuff error/.test(l));
+      const m = i >= 0 ? lines[i].match(/^Tuff error on line (\d+): (.*)$/) : null;
+      const codeLine = lines[i + 1] || '';
+      const caret = (lines[i + 2] || '').indexOf('^');
+      const prefix = (codeLine.match(/^\s*\d+ \| /) || [''])[0].length;
+      resolve({ ok: code === 0, message: i >= 0 ? lines[i] : '', line: m ? Number(m[1]) : null, col: caret >= prefix ? caret - prefix + 1 : 1, text: m ? m[2] : '' });
+    });
   });
   fsp.rm(file, { force: true }).catch(() => {});
   return result;

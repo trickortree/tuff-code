@@ -76,6 +76,28 @@
           <div class="learn-progress"><div class="lp-bar"><div id="lp-fill"></div></div><span id="lp-text"></span></div>
           <div id="learn-body"></div>
         </div>
+        <div class="side-view hidden" id="view-find">
+          <div class="panel-header">
+            <span class="panel-title">Find in Files</span>
+            <div class="panel-actions">
+              <button id="ff-hide" title="Hide"><svg viewBox="0 0 16 16"><path d="M3 8h10" /></svg></button>
+            </div>
+          </div>
+          <div class="ff-box">
+            <div class="ff-field">
+              <input id="ff-q" placeholder="Search the project" spellcheck="false" />
+              <button class="ff-opt" id="ff-case" title="Match case">Aa</button>
+              <button class="ff-opt" id="ff-word" title="Whole words only">ab</button>
+              <button class="ff-opt" id="ff-re" title="Use a regular expression">.*</button>
+            </div>
+            <div class="ff-field">
+              <input id="ff-r" placeholder="Replace with" spellcheck="false" />
+              <button class="ff-go" id="ff-replace" title="Replace every match">Replace all</button>
+            </div>
+            <div class="ff-sum" id="ff-sum"></div>
+          </div>
+          <div class="ff-results" id="ff-results"></div>
+        </div>
         <div class="side-view hidden" id="view-plugins">
           <div class="panel-header">
             <span class="panel-title">Plugins</span>
@@ -179,6 +201,7 @@
       <div class="sb-left" id="sb-path"></div>
       <div class="sb-right">
         <span id="sb-run-status"></span>
+        <button id="sb-problems" class="hidden"></button>
         <span id="sb-pos">1:1</span>
         <span id="sb-eol">CRLF</span>
         <span>UTF-8</span>
@@ -289,6 +312,10 @@
             <div class="st-field">
               <div class="st-label">Minimap<small>Code overview on the right edge.</small></div>
               <label class="switch"><input type="checkbox" id="st-minimap" /><span></span></label>
+            </div>
+            <div class="st-field">
+              <div class="st-label">Check for mistakes as you type<small>Red squiggles show up without running the program.</small></div>
+              <label class="switch"><input type="checkbox" id="st-live" /><span></span></label>
             </div>
             <div class="st-field">
               <div class="st-label">Auto code sort when you run<small>Tidies indentation, sorts imports and functions, and adds notes. Ctrl+Alt+L does it any time.</small></div>

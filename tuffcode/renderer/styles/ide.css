@@ -724,3 +724,33 @@ body.enter #statusbar { animation: upin .55s .3s cubic-bezier(.2,.9,.25,1) both;
 .pl-foot { margin-top: auto; padding: 14px 12px; font-size: 12px; line-height: 1.45; color: var(--text-muted); }
 .pl-link { display: block; margin-top: 6px; padding: 0; color: var(--accent); font: 600 12px var(--font-ui); }
 .pl-link:hover { text-decoration: underline; }
+
+/* ---------- live checking, find in files, zen ---------- */
+#sb-problems { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 6px; border-radius: 4px; font: inherit; color: var(--text-dim); }
+#sb-problems.ok::before { content: "✓ "; color: var(--green); }
+#sb-problems.bad { color: #ffb3ba; background: color-mix(in srgb, var(--red) 16%, transparent); cursor: pointer; }
+#sb-problems.bad::before { content: "● "; color: var(--red); }
+.ff-box { display: flex; flex-direction: column; gap: 6px; padding: 0 10px 8px; }
+.ff-field { display: flex; align-items: center; gap: 2px; height: 30px; padding: 0 3px 0 0; border-radius: 7px; border: 1px solid #43454a; background: var(--bg-editor); }
+.ff-field:focus-within { border-color: var(--accent); }
+.ff-field input { flex: 1; min-width: 0; height: 100%; padding: 0 9px; border: 0; outline: 0; background: transparent; color: var(--text); font: 13px var(--font-ui); }
+.ff-opt { width: 24px; height: 22px; border-radius: 5px; font: 600 11.5px var(--font-code); color: var(--text-muted); }
+.ff-opt:hover { background: var(--bg-hover); color: var(--text); }
+.ff-opt.on { background: var(--accent-soft); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
+.ff-go { height: 22px; padding: 0 8px; border-radius: 5px; font: 600 11.5px var(--font-ui); color: var(--text-dim); background: var(--bg-active); }
+.ff-go:hover { color: var(--text); }
+.ff-sum { min-height: 16px; font-size: 12px; color: var(--text-muted); }
+.ff-results { flex: 1; min-height: 0; overflow: auto; padding-bottom: 10px; }
+.ff-file { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; font-size: 12.5px; cursor: pointer; }
+.ff-file:hover { background: var(--bg-hover); }
+.ff-file .fi { width: 16px; height: 16px; flex: none; }
+.ff-file .nm { font-weight: 600; }
+.ff-file .dir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11.5px; }
+.ff-file .n { min-width: 18px; padding: 0 5px; border-radius: 8px; background: var(--bg-active); color: var(--text-dim); font-size: 11px; text-align: center; }
+.ff-hit { display: flex; gap: 8px; padding: 2px 10px 2px 30px; font: 12px/1.6 var(--font-code); cursor: pointer; white-space: nowrap; }
+.ff-hit:hover { background: var(--bg-hover); }
+.ff-hit .ln { flex: none; min-width: 22px; color: var(--text-muted); text-align: right; }
+.ff-hit .tx { overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); }
+.ff-hit mark { background: color-mix(in srgb, #e2a508 40%, transparent); color: var(--text); border-radius: 2px; }
+#app.zen #toolstrip, #app.zen #sidebar, #app.zen #sidebar-resizer, #app.zen #bottom-panel, #app.zen #bottom-resizer,
+#app.zen #rightbar, #app.zen #rightbar-resizer, #app.zen #toolstrip-right, #app.zen #statusbar, #app.zen #breadcrumbs { display: none !important; }

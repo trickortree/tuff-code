@@ -264,6 +264,10 @@ window.registerTuff = function registerTuff(monaco, accent) {
       const fns = TUFF_BUILTINS.map((b) => ({ label: b, kind: K.Function, insertText: `${b}($0)`, insertTextRules: R, range, detail: window.TUFF_DOCS[b]?.[0], documentation: window.TUFF_DOCS[b]?.[1] }));
       const seen = new Set([...window.TUFF_KEYWORDS, ...TUFF_BUILTINS]);
       const ids = [];
+      for (const f of userFuncs(model)) {
+        seen.add(f.name);
+        ids.push({ label: f.name, kind: K.Function, insertText: `${f.name}($0)`, insertTextRules: R, range, detail: `func ${f.name}(${f.params.join(', ')})` });
+      }
       for (const m of model.getValue().matchAll(/[A-Za-z_]\w{1,}/g)) {
         if (!seen.has(m[0]) && m[0] !== word.word) {
           seen.add(m[0]);
@@ -274,8 +278,242 @@ window.registerTuff = function registerTuff(monaco, accent) {
     },
   });
 
+  registerTuffNavigation(monaco);
   window.defineTuffTheme(monaco, accent);
 };
+
+// ---------------------------------------------------------------- understanding a file
+// Every name used in code (not in strings or comments, and not a .member or :method),
+// with its position. Used for go to definition, find uses and rename.
+function tuffIdents(model) {
+  const out = [];
+  const lines = model.getLinesContent();
+  lines.forEach((text, i) => {
+    let quote = null;
+    for (let c = 0; c < text.length;) {
+      const ch = text[c];
+      if (quote) {
+        if (ch === '\\') c += 2;
+        else { if (ch === quote) quote = null; c++; }
+        continue;
+      }
+      if (ch === '"' || ch === "'") { quote = ch; c++; continue; }
+      if (ch === '#') break;
+      const m = /^[A-Za-z_]\w*/.exec(text.slice(c));
+      if (m && !/\w/.test(text[c - 1] || '')) {
+        const prev = text[c - 1];
+        if (prev !== '.' && prev !== ':' && !window.TUFF_KEYWORDS.includes(m[0])) {
+          out.push({ name: m[0], line: i + 1, start: c + 1, end: c + 1 + m[0].length });
+        }
+        c += m[0].length;
+        continue;
+      }
+      c++;
+    }
+  });
+  return out;
+}
+
+function userFuncs(model) {
+  const out = [];
+  model.getLinesContent().forEach((text, i) => {
+    const m = text.match(/^(\s*)func\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?/);
+    if (m) out.push({ name: m[2], line: i + 1, col: m[1].length + text.slice(m[1].length).indexOf(m[2]) + 1, indent: m[1].length, params: (m[3] || '').split(',').map((s) => s.trim()).filter(Boolean) });
+  });
+  return out;
+}
+
+// Last line of the indented block that starts on `line`.
+function blockEnd(model, line) {
+  const lines = model.getLinesContent();
+  const indent = (s) => s.length - s.trimStart().length;
+  const base = indent(lines[line - 1]);
+  let end = line;
+  for (let i = line; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    if (indent(lines[i]) <= base) break;
+    end = i + 1;
+  }
+  return end;
+}
+
+function definitionOf(model, name, atLine) {
+  const funcs = userFuncs(model);
+  const fn = funcs.find((f) => f.name === name);
+  if (fn) return { line: fn.line, start: fn.col, end: fn.col + name.length };
+  // An input of the function we're inside.
+  const inside = funcs.filter((f) => f.line <= atLine && blockEnd(model, f.line) >= atLine).pop();
+  if (inside && inside.params.includes(name)) {
+    const text = model.getLineContent(inside.line);
+    const col = text.indexOf('(') + 1 + text.slice(text.indexOf('(')).search(new RegExp(`\\b${name}\\b`));
+    return { line: inside.line, start: col, end: col + name.length };
+  }
+  const lines = model.getLinesContent();
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(new RegExp(`^(\\s*)(?:for\\s+)?(${name})\\s*(?:=(?!=)|[+\\-*/]=|\\s+in\\b)`));
+    if (m) return { line: i + 1, start: m[0].indexOf(name) + 1, end: m[0].indexOf(name) + 1 + name.length };
+  }
+  return null;
+}
+
+// The call the cursor is inside: name, how it's called and which input it's on.
+function callAt(textBefore) {
+  let depth = 0;
+  let commas = 0;
+  let quote = null;
+  for (let i = textBefore.length - 1; i >= 0; i--) {
+    const c = textBefore[i];
+    if (quote) { if (c === quote) quote = null; continue; }
+    if (c === '"' || c === "'") { quote = c; continue; }
+    if (c === ')' || c === ']') depth++;
+    else if (c === '[') depth--;
+    else if (c === '(') {
+      if (depth === 0) {
+        const m = textBefore.slice(0, i).match(/(?:([A-Za-z_]\w*)\.|:)?([A-Za-z_]\w*)\s*$/);
+        if (!m) return null;
+        const how = m[1] ? 'lib' : /:[A-Za-z_]\w*\s*$/.test(textBefore.slice(0, i)) ? 'method' : 'call';
+        return { name: m[2], lib: m[1], how, active: commas };
+      }
+      depth--;
+    } else if (c === ',' && depth === 0) commas++;
+  }
+  return null;
+}
+
+function registerTuffNavigation(monaco) {
+  const L = monaco.languages;
+  const wordAt = (model, position) => {
+    const w = model.getWordAtPosition(position);
+    if (!w) return null;
+    const hit = tuffIdents(model).find((x) => x.line === position.lineNumber && x.start === w.startColumn);
+    return hit ? w : null;
+  };
+  const range = (line, start, end) => new monaco.Range(line, start, line, end);
+
+  L.registerDefinitionProvider('tuff', {
+    provideDefinition(model, position) {
+      const w = wordAt(model, position);
+      const d = w && definitionOf(model, w.word, position.lineNumber);
+      return d ? { uri: model.uri, range: range(d.line, d.start, d.end) } : null;
+    },
+  });
+
+  L.registerReferenceProvider('tuff', {
+    provideReferences(model, position) {
+      const w = wordAt(model, position);
+      if (!w) return [];
+      return tuffIdents(model).filter((x) => x.name === w.word).map((x) => ({ uri: model.uri, range: range(x.line, x.start, x.end) }));
+    },
+  });
+
+  L.registerRenameProvider('tuff', {
+    resolveRenameLocation(model, position) {
+      const w = wordAt(model, position);
+      if (!w) return { rejectReason: 'Put the cursor on a name you made (a variable or a function) to rename it.', range: undefined, text: '' };
+      if (TUFF_BUILTINS.includes(w.word) || window.TUFF_LIBS[w.word]) return { rejectReason: `'${w.word}' is part of Tuff, so it can't be renamed.`, range: undefined, text: '' };
+      return { range: range(position.lineNumber, w.startColumn, w.endColumn), text: w.word };
+    },
+    provideRenameEdits(model, position, newName) {
+      const w = wordAt(model, position);
+      if (!w) return null;
+      if (!/^[A-Za-z_]\w*$/.test(newName) || window.TUFF_KEYWORDS.includes(newName)) return { edits: [], rejectReason: `'${newName}' can't be a name. Use letters, numbers and _, and not a Tuff word.` };
+      const edits = tuffIdents(model).filter((x) => x.name === w.word).map((x) => ({ resource: model.uri, versionId: model.getVersionId(), textEdit: { range: range(x.line, x.start, x.end), text: newName } }));
+      return { edits };
+    },
+  });
+
+  L.registerDocumentSymbolProvider('tuff', {
+    displayName: 'Tuff',
+    provideDocumentSymbols(model) {
+      const K = L.SymbolKind;
+      const symbols = [];
+      const seen = new Set();
+      model.getLinesContent().forEach((text, i) => {
+        const line = i + 1;
+        let m;
+        if ((m = text.match(/^\s*func\s+([A-Za-z_]\w*)\s*(\([^)]*\))?/))) {
+          const end = blockEnd(model, line);
+          symbols.push({ name: m[1], detail: m[2] || '()', kind: K.Function, range: new monaco.Range(line, 1, end, model.getLineMaxColumn(end)), selectionRange: range(line, 1, model.getLineMaxColumn(line)), tags: [] });
+        } else if ((m = text.match(/^([A-Za-z_]\w*)\s*=\s*(m?tgui)\.window/))) {
+          symbols.push({ name: m[1], detail: `${m[2]} window`, kind: K.Class, range: range(line, 1, model.getLineMaxColumn(line)), selectionRange: range(line, 1, m[1].length + 1), tags: [] });
+          seen.add(m[1]);
+        } else if ((m = text.match(/^([A-Za-z_]\w*)\s*=\s*[A-Za-z_]\w*:([a-z]+)/))) {
+          if (seen.has(m[1])) return;
+          seen.add(m[1]);
+          symbols.push({ name: m[1], detail: m[2], kind: K.Field, range: range(line, 1, model.getLineMaxColumn(line)), selectionRange: range(line, 1, m[1].length + 1), tags: [] });
+        } else if ((m = text.match(/^([A-Za-z_]\w*)\s*=(?!=)/))) {
+          if (seen.has(m[1])) return;
+          seen.add(m[1]);
+          symbols.push({ name: m[1], detail: 'variable', kind: K.Variable, range: range(line, 1, model.getLineMaxColumn(line)), selectionRange: range(line, 1, m[1].length + 1), tags: [] });
+        }
+      });
+      return symbols;
+    },
+  });
+
+  L.registerSignatureHelpProvider('tuff', {
+    signatureHelpTriggerCharacters: ['(', ','],
+    signatureHelpRetriggerCharacters: [','],
+    provideSignatureHelp(model, position) {
+      const before = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
+      if (insideStringOrComment(before)) return null;
+      const call = callAt(before);
+      if (!call) return null;
+      let sig = null;
+      let doc = '';
+      if (call.how === 'lib') [sig, doc] = window.TUFF_LIBS[call.lib]?.[call.name] || [];
+      else if (call.how === 'method') [sig, doc] = window.TUFF_METHOD_DOCS[call.name] || [];
+      else {
+        const f = userFuncs(model).find((x) => x.name === call.name);
+        if (f) { sig = `${f.name}(${f.params.join(', ')})`; doc = 'A function in this file.'; }
+        else [sig, doc] = window.TUFF_DOCS[call.name] || [];
+      }
+      const inner = sig && sig.match(/\(([^)]*)\)/);
+      if (!inner) return null;
+      const params = inner[1].split(',').map((s) => s.trim()).filter(Boolean);
+      return {
+        value: { signatures: [{ label: sig, documentation: doc, parameters: params.map((p) => ({ label: p })) }], activeSignature: 0, activeParameter: Math.min(call.active, Math.max(0, params.length - 1)) },
+        dispose() {},
+      };
+    },
+  });
+
+  // Colour swatches (with a picker) on "#rrggbb" text, e.g. app:accent "#ff8800".
+  L.registerColorProvider('tuff', {
+    provideDocumentColors(model) {
+      const out = [];
+      model.getLinesContent().forEach((text, i) => {
+        for (const m of text.matchAll(/(["'])#([0-9a-fA-F]{6})\1/g)) {
+          const hex = m[2];
+          out.push({
+            color: { red: parseInt(hex.slice(0, 2), 16) / 255, green: parseInt(hex.slice(2, 4), 16) / 255, blue: parseInt(hex.slice(4, 6), 16) / 255, alpha: 1 },
+            range: range(i + 1, m.index + 2, m.index + 9),
+          });
+        }
+      });
+      return out;
+    },
+    provideColorPresentations(model, info) {
+      const h = (v) => Math.round(v * 255).toString(16).padStart(2, '0');
+      return [{ label: `#${h(info.color.red)}${h(info.color.green)}${h(info.color.blue)}` }];
+    },
+  });
+
+  // Hovering one of your own functions shows how to call it and the note Auto Code Sort wrote.
+  L.registerHoverProvider('tuff', {
+    provideHover(model, position) {
+      const w = wordAt(model, position);
+      if (!w) return null;
+      const f = userFuncs(model).find((x) => x.name === w.word);
+      if (!f) return null;
+      const above = f.line > 1 ? model.getLineContent(f.line - 1).match(/^\s*#\s*↳\s*(.*)$/) : null;
+      return {
+        range: range(position.lineNumber, w.startColumn, w.endColumn),
+        contents: [{ value: '```tuff\nfunc ' + f.name + '(' + f.params.join(', ') + ')\n```' }, { value: above ? above[1] : `Defined on line ${f.line}. Ctrl+click or F12 jumps there.` }],
+      };
+    },
+  });
+}
 
 window.defineTuffTheme = function defineTuffTheme(monaco, accent) {
   const a = accent.replace('#', '');
