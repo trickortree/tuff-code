@@ -4,7 +4,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const { spawn } = require('child_process');
 
-const RUNTIME_DIR = path.join(__dirname, '..');
+const RUNTIME_DIR = app.isPackaged ? path.join(process.resourcesPath, 'runtime-src') : path.join(__dirname, '..');
 const RUNTIME_FILES = ['tuff.py', 'tuff_tgui.py'];
 const DEFAULT_ICON = path.join(__dirname, 'renderer', 'assets', 'icon.png');
 const ASSET_EXTS = new Set(['.png', '.gif', '.ico', '.jpg', '.jpeg', '.txt', '.json', '.csv', '.wav']);

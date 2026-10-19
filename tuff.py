@@ -1246,7 +1246,7 @@ def main():
     if args[0] == "--check" and len(args) > 1:
         return check_file(args[1])
     code = run_file(args[0])
-    if getattr(sys, "frozen", False) and not WINDOWED:
+    if getattr(sys, "frozen", False) and not WINDOWED and not IDE:
         try:
             input("\nPress Enter to close...")
         except EOFError:

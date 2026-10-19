@@ -3,15 +3,70 @@
   "productName": "TuffCode",
   "version": "1.0.0",
   "description": "TuffCode - the IDE for the Tuff language",
+  "author": "trickortree",
   "repository": "github:trickortree/tuff-code",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build:runtime": "py -3 -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py",
+    "dist": "npm run build:runtime && electron-builder --win nsis --x64 --publish never"
+  },
+  "build": {
+    "appId": "com.trickortree.tuffcode",
+    "productName": "TuffCode",
+    "copyright": "Copyright © 2026 trickortree",
+    "directories": {
+      "output": "../build/installer"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "build.js",
+      "updater.js",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../build/runtime/tuff-runtime",
+        "to": "runtime"
+      },
+      {
+        "from": "../tuff.py",
+        "to": "runtime-src/tuff.py"
+      },
+      {
+        "from": "../tuff_tgui.py",
+        "to": "runtime-src/tuff_tgui.py"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "renderer/assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "TuffCode",
+      "artifactName": "TuffCode-Setup-${version}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "trickortree",
+        "repo": "tuff-code"
+      }
+    ]
   },
   "devDependencies": {
-    "electron": "^38.0.0"
+    "electron": "^38.0.0",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "monaco-editor": "^0.52.2"
   }
 }

@@ -6,7 +6,9 @@ const { spawn } = require('child_process');
 const builder = require('./build');
 const updater = require('./updater');
 
-const TUFF_INTERPRETER = path.join(__dirname, '..', 'tuff.py');
+const TUFF_INTERPRETER = app.isPackaged
+  ? path.join(process.resourcesPath, 'runtime-src', 'tuff.py')
+  : path.join(__dirname, '..', 'tuff.py');
 const SKIP_DIRS = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv']);
 
 let win;
@@ -92,8 +94,13 @@ async function listAllFiles(root, limit = 5000) {
   return out;
 }
 
-function pythonCommand() {
-  return process.platform === 'win32' ? { cmd: 'py', args: ['-3', '-u'] } : { cmd: 'python3', args: ['-u'] };
+const RUNTIME_EXE = path.join(process.resourcesPath || '', 'runtime', process.platform === 'win32' ? 'tuff-runtime.exe' : 'tuff-runtime');
+
+// Installed copies run Tuff with the bundled runtime; source checkouts use Python + tuff.py.
+function tuffCommand(extra) {
+  if (app.isPackaged && fs.existsSync(RUNTIME_EXE)) return { cmd: RUNTIME_EXE, args: extra };
+  const py = process.platform === 'win32' ? { cmd: 'py', args: ['-3', '-u'] } : { cmd: 'python3', args: ['-u'] };
+  return { cmd: py.cmd, args: [...py.args, TUFF_INTERPRETER, ...extra] };
 }
 
 function send(channel, payload) {
@@ -102,8 +109,7 @@ function send(channel, payload) {
 
 function startRun(file, id) {
   if (runProc) runProc.kill();
-  const { cmd, args } = pythonCommand();
-  const fullArgs = [...args, TUFF_INTERPRETER, file];
+  const { cmd, args: fullArgs } = tuffCommand([file]);
   const out = (stream, text) => send('run:data', { id, stream, text });
   out('cmd', `${cmd} ${fullArgs.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')}\n`);
   const proc = spawn(cmd, fullArgs, {
@@ -117,7 +123,9 @@ function startRun(file, id) {
   proc.stdout.on('data', (d) => out('stdout', d));
   proc.stderr.on('data', (d) => out('stderr', d));
   proc.stdin.on('error', () => {});
-  proc.on('error', (err) => out('stderr', `Could not start Python (${err.message}). Is Python installed?\n`));
+  proc.on('error', (err) => out('stderr', app.isPackaged
+    ? `Could not start the Tuff runtime (${err.message}). Try reinstalling TuffCode.\n`
+    : `Could not start Python (${err.message}). Is Python installed?\n`));
   proc.on('close', (code, signal) => {
     if (runProc === proc) runProc = null;
     send('run:exit', { id, code: code ?? (signal ? -1 : 0) });
@@ -219,10 +227,10 @@ ipcMain.handle('tuff:check', async (_e, source) => {
   await fsp.mkdir(dir, { recursive: true });
   const file = path.join(dir, `check-${process.pid}-${Date.now()}.tuf`);
   await fsp.writeFile(file, source, 'utf8');
-  const { cmd, args } = pythonCommand();
+  const { cmd, args } = tuffCommand(['--check', file]);
   const result = await new Promise((resolve) => {
     let out = '';
-    const proc = spawn(cmd, [...args, TUFF_INTERPRETER, '--check', file], { windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+    const proc = spawn(cmd, args, { windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
     proc.stdout.on('data', (d) => (out += d));
     proc.stderr.on('data', (d) => (out += d));
     proc.on('error', () => resolve({ ok: true, unknown: true, message: '' }));

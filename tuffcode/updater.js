@@ -15,7 +15,7 @@ let state = { status: 'idle', latest: null, ready: null, error: null };
 let timer = null;
 
 const version = () => app.getVersion();
-const isGitCheckout = () => fs.existsSync(path.join(ROOT, '.git'));
+const isGitCheckout = () => !app.isPackaged && fs.existsSync(path.join(ROOT, '.git'));
 
 function parseVersion(v) {
   return String(v || '').replace(/^v/i, '').split(/[.+-]/).slice(0, 3).map((n) => parseInt(n, 10) || 0);
@@ -144,8 +144,44 @@ async function installWithGit() {
   if (pull.code !== 0) throw new Error(`git pull didn't work: ${pull.out.trim().split('\n').pop()}`);
 }
 
+// ---------------------------------------------------------------- installed copies: electron-updater
+let au = null;
+let auSilent = false;
+let auAutoInstall = false;
+
+function installer() {
+  if (au) return au;
+  const { autoUpdater } = require('electron-updater');
+  au = autoUpdater;
+  au.autoDownload = false;
+  au.autoInstallOnAppQuit = true;
+  au.on('update-available', (info) => {
+    set({ status: 'available', latest: { version: info.version, url: `https://github.com/${REPO}/releases/tag/v${info.version}` } });
+    if (auAutoInstall) install();
+  });
+  au.on('update-not-available', () => set({ status: state.ready ? 'ready' : 'up-to-date' }));
+  au.on('download-progress', (p) => set({ status: 'downloading', detail: `${Math.round(p.percent)}%` }));
+  au.on('update-downloaded', (info) => set({ status: 'ready', ready: info.version, detail: null }));
+  au.on('error', (err) => {
+    const msg = String(err?.message || err).split('\n')[0];
+    set(auSilent && state.status === 'checking' ? { status: state.ready ? 'ready' : 'idle' } : { status: 'error', error: msg });
+  });
+  return au;
+}
+
 async function check({ silent = false, autoInstall = false } = {}) {
   if (['checking', 'downloading', 'installing'].includes(state.status)) return state;
+  if (app.isPackaged) {
+    auSilent = silent;
+    auAutoInstall = autoInstall;
+    set({ status: 'checking', error: null, detail: null });
+    try {
+      await installer().checkForUpdates();
+    } catch (err) {
+      set({ status: silent ? 'idle' : 'error', error: String(err?.message || err).split('\n')[0] });
+    }
+    return state;
+  }
   set({ status: 'checking', error: null, detail: null });
   try {
     const latest = await findLatest();
@@ -163,6 +199,15 @@ async function check({ silent = false, autoInstall = false } = {}) {
 
 async function install() {
   if (!state.latest || !newer(state.latest.version, version())) return state;
+  if (app.isPackaged) {
+    set({ status: 'downloading', detail: '0%' });
+    try {
+      await installer().downloadUpdate();
+    } catch (err) {
+      set({ status: 'error', error: String(err?.message || err).split('\n')[0] });
+    }
+    return state;
+  }
   try {
     if (isGitCheckout()) await installWithGit();
     else await installFromZip(state.latest);
@@ -198,6 +243,10 @@ function start(sendEvent, getSettings) {
 }
 
 function restart() {
+  if (app.isPackaged && au) {
+    au.quitAndInstall(true, true);
+    return;
+  }
   app.relaunch();
   app.exit(0);
 }

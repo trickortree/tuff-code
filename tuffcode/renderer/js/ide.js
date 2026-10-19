@@ -1245,7 +1245,7 @@
       case 'checking': return 'Checking for updates…';
       case 'up-to-date': return 'You have the latest version.';
       case 'available': return `Version ${s.latest.version} is available.`;
-      case 'downloading': return `Downloading version ${s.latest?.version}…`;
+      case 'downloading': return `Downloading version ${s.latest?.version}…${s.detail ? ` ${s.detail}` : ''}`;
       case 'installing': return s.detail || 'Installing the update…';
       case 'ready': return `Version ${s.ready} is installed. Restart TuffCode to use it.`;
       case 'error': return `Couldn't update: ${s.error}`;
