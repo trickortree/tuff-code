@@ -28,8 +28,8 @@
   const isUnder = (p, dir) => p === dir || p.startsWith(dir + SEP);
   const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
-  const LANGS = { tuf: 'tuff', py: 'python', js: 'javascript', ts: 'typescript', json: 'json', md: 'markdown', html: 'html', css: 'css', xml: 'xml', yml: 'yaml', yaml: 'yaml', txt: 'plaintext' };
-  const LANG_NAMES = { tuff: 'Tuff', python: 'Python', javascript: 'JavaScript', typescript: 'TypeScript', json: 'JSON', markdown: 'Markdown', html: 'HTML', css: 'CSS', xml: 'XML', yaml: 'YAML', plaintext: 'Plain text' };
+  const LANGS = { tuf: 'tuff', py: 'python', js: 'javascript', ts: 'typescript', json: 'json', md: 'markdown', html: 'html', css: 'css', xml: 'xml', yml: 'yaml', yaml: 'yaml', txt: 'plaintext', env: 'ini', ini: 'ini', cfg: 'ini', toml: 'ini', sh: 'shell', bat: 'bat', cmd: 'bat', ps1: 'powershell' };
+  const LANG_NAMES = { tuff: 'Tuff', python: 'Python', javascript: 'JavaScript', typescript: 'TypeScript', json: 'JSON', markdown: 'Markdown', html: 'HTML', css: 'CSS', xml: 'XML', yaml: 'YAML', plaintext: 'Plain text', ini: 'Settings (.env / .ini)', shell: 'Shell', bat: 'Batch', powershell: 'PowerShell' };
   const langFor = (p) => LANGS[ext(p)] || 'plaintext';
 
   function fileIcon(name, isDir, open) {
@@ -70,14 +70,34 @@
   }
 
   // ---------- modal ----------
-  function ask({ title, value = '', confirm = false, okLabel = 'OK', validate, selectStem }) {
+  // choices: optional [{ label, apply(name) -> name, matches(name) -> bool }] shown as chips under the input.
+  function ask({ title, value = '', confirm = false, okLabel = 'OK', validate, selectStem, choices }) {
     return new Promise((resolve) => {
-      const modal = $('#modal'), input = $('#modal-input'), err = $('#modal-error');
+      const modal = $('#modal'), input = $('#modal-input'), err = $('#modal-error'), chips = $('#modal-choices');
       $('#modal-title').textContent = title;
       $('#modal-ok').textContent = okLabel;
       input.classList.toggle('hidden', confirm);
       input.value = value;
       err.textContent = '';
+      chips.classList.toggle('hidden', !choices);
+      chips.innerHTML = '';
+      const markChip = () => [...chips.children].forEach((b, i) => b.classList.toggle('sel', choices[i].matches(input.value.trim())));
+      for (const c of choices || []) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = c.label;
+        b.onmousedown = (e) => e.preventDefault();
+        b.onclick = () => {
+          input.value = c.apply(input.value.trim());
+          const dot = input.value.lastIndexOf('.');
+          input.focus();
+          input.setSelectionRange(0, dot > 0 ? dot : input.value.length);
+          markChip();
+        };
+        chips.appendChild(b);
+      }
+      input.oninput = choices ? markChip : null;
+      if (choices) markChip();
       modal.classList.remove('hidden');
       if (!confirm) {
         input.focus();
@@ -181,8 +201,25 @@
           stickyScroll: { enabled: true },
           fixedOverflowWidgets: true,
           glyphMargin: true,
+          autoIndent: 'full',
         });
         editor.onDidChangeCursorPosition((e) => { $('#sb-pos').textContent = `${e.position.lineNumber}:${e.position.column}`; });
+        // ':' and '.' open the method/library list only where it makes sense, and close
+        // any list that was already showing otherwise (so Enter after "else:" is a newline).
+        editor.onDidType((text) => {
+          if (text !== ':' && text !== '.') return;
+          const model = editor.getModel();
+          if (!model || model.getLanguageId() !== 'tuff') return;
+          const want = window.tuffWantsSuggest(model, editor.getPosition());
+          setTimeout(() => editor.trigger('tuff', want ? 'editor.action.triggerSuggest' : 'hideSuggestWidget', {}), 0);
+        });
+        // Backspacing over the ':' or '.' that opened the suggestion list closes the list too.
+        editor.onKeyDown((e) => {
+          if (e.keyCode !== monaco.KeyCode.Backspace) return;
+          const pos = editor.getPosition();
+          const ch = pos.column > 1 ? editor.getModel().getLineContent(pos.lineNumber)[pos.column - 2] : '';
+          if (ch === ':' || ch === '.') setTimeout(() => editor.trigger('tuff', 'hideSuggestWidget'), 0);
+        });
         editor.addAction({
           id: 'tuff.autosort',
           label: 'Auto Code Sort',
@@ -298,7 +335,7 @@
     const isRoot = p === state.root;
     const items = [];
     if (row.dataset.dir) {
-      items.push({ label: 'New Tuff File', sc: 'Ctrl+Alt+N', run: () => newEntry(false, p) }, { label: 'New Folder', run: () => newEntry(true, p) }, 'sep');
+      items.push({ label: 'New File…', sc: 'Ctrl+Alt+N', run: () => newEntry(false, p) }, { label: 'New Folder', run: () => newEntry(true, p) }, 'sep');
     } else {
       items.push({ label: 'Open', run: () => openFile(p) });
       if (ext(p) === 'tuf') items.push({ label: `Run '${basename(p)}'`, sc: 'Shift+F10', run: async () => { await saveAll(); startRun(p); } });
@@ -340,10 +377,28 @@
     return row && row.dataset.dir ? s : dirname(s) || state.root;
   }
 
+  // File types offered when making a new file. A name typed without an extension becomes a .tuf file
+  // unless "Other" is picked, so Makefile, .env, notes.txt and friends are all fine.
+  const stemOf = (n) => (n.startsWith('.') && n.indexOf('.', 1) < 0 ? '' : n.replace(/\.[^.]*$/, ''));
+  const withExt = (e) => (n) => `${stemOf(n) || 'untitled'}.${e}`;
+  const FILE_TYPES = [
+    { label: 'Tuff', apply: withExt('tuf'), matches: (n) => ext(n) === 'tuf' },
+    { label: 'Text', apply: withExt('txt'), matches: (n) => ext(n) === 'txt' },
+    { label: 'Markdown', apply: withExt('md'), matches: (n) => ext(n) === 'md' },
+    { label: 'JSON', apply: withExt('json'), matches: (n) => ext(n) === 'json' },
+    { label: '.env', apply: (n) => (!stemOf(n) || stemOf(n) === 'untitled' ? '.env' : `${stemOf(n)}.env`), matches: (n) => ext(n) === 'env' },
+    { label: 'Other', apply: (n) => stemOf(n) || n, matches: (n) => !!n && !['tuf', 'txt', 'md', 'json', 'env'].includes(ext(n)) },
+  ];
+
   async function newEntry(isDir, base = targetDir()) {
-    let name = await ask({ title: isDir ? 'New Folder' : 'New Tuff File', value: isDir ? '' : 'untitled', validate: validName });
+    let name = await ask({
+      title: isDir ? 'New Folder' : 'New File',
+      value: isDir ? '' : 'untitled.tuf',
+      validate: validName,
+      selectStem: !isDir,
+      choices: isDir ? null : FILE_TYPES,
+    });
     if (!name) return;
-    if (!isDir && !name.includes('.')) name += '.tuf';
     const p = join(base, name);
     try {
       isDir ? await api.fs.createDir(p) : await api.fs.createFile(p);
@@ -620,7 +675,7 @@
   function setRunning(on) {
     state.running = on;
     $('#btn-run').classList.toggle('running', on);
-    $('#btn-stop').disabled = !on;
+    $('#btn-run').title = on ? 'Stop (Ctrl+F2)' : 'Run (Shift+F10)';
     const s = $('#sb-run-status');
     s.classList.toggle('running', on);
     s.textContent = on ? `Running ${basename(state.lastRunFile)}` : '';
@@ -948,7 +1003,7 @@
     renderBuildSteps();
     showBottom(true);
     setBottomTab('build');
-    $('#btn-build').classList.add('building');
+    $('.run-widget').classList.add('building');
     api.build.start({ file: params.file, root: state.root, name: params.name, icon: params.icon, windowed: params.windowed });
   }
 
@@ -965,7 +1020,7 @@
 
   function finishBuild(ev) {
     bd.building = false;
-    $('#btn-build').classList.remove('building');
+    $('.run-widget').classList.remove('building');
     const r = $('#bo-result');
     if (ev.ok) {
       $('#bo-title').textContent = `${basename(ev.exe)} is ready`;
@@ -1019,7 +1074,6 @@
   $('#build-dialog').addEventListener('mousedown', (e) => { if (e.target.id === 'build-dialog') closeBuildDialog(); });
   $('#bd-x').onclick = $('#bd-cancel').onclick = closeBuildDialog;
   $('#bd-go').onclick = startBuildFromDialog;
-  $('#btn-build').onclick = () => openBuildDialog();
   $('#build-again').onclick = () => (bd.last ? runBuild(bd.last) : openBuildDialog());
   $('#build-cancel').onclick = () => api.build.cancel();
   $('#bo-details-toggle').onclick = (e) => {
@@ -1087,7 +1141,7 @@
   };
 
   const commands = {
-    newFile: { label: 'New Tuff File', sc: 'Ctrl+Alt+N', run: () => newEntry(false) },
+    newFile: { label: 'New File…', sc: 'Ctrl+Alt+N', run: () => newEntry(false) },
     newFolder: { label: 'New Folder', run: () => newEntry(true) },
     openFolder: { label: 'Open Folder…', sc: 'Ctrl+O', run: pickFolder },
     saveAll: { label: 'Save All', sc: 'Ctrl+S', run: async () => { await saveAll(); toast('All files saved', 'ok', 1600); } },
@@ -1471,8 +1525,7 @@
   api.win.onMaximized(setMaxIcon);
   api.win.onBlur(() => saveAll());
 
-  $('#btn-run').onclick = runCurrent;
-  $('#btn-stop').onclick = () => api.run.stop();
+  $('#btn-run').onclick = () => (state.running ? api.run.stop() : runCurrent());
   $('#run-rerun').onclick = rerun;
   $('#run-stop2').onclick = () => api.run.stop();
   $('#run-clear').onclick = () => {
@@ -1483,12 +1536,11 @@
   $('#sidebar-hide').onclick = () => toggleSidebar(false);
   $('#btn-search').onclick = () => openSearch('all');
   $('#btn-settings').onclick = openSettings;
-  $('#btn-studio').onclick = () => openStudio();
   $('#tree-new-file').onclick = () => newEntry(false);
   $('#tree-refresh').onclick = refreshTree;
   $('#tree-collapse').onclick = () => { tree.expanded = new Set([state.root]); renderTree(); };
   document.querySelectorAll('.ts-btn').forEach((b) => {
-    b.onclick = () => ({ project: () => toggleSidebar(), learn: () => showSideView('learn'), studio: () => openStudio(), search: () => openSearch('all'), run: toggleBottom })[b.dataset.tool]();
+    b.onclick = () => ({ project: () => toggleSidebar(), learn: () => showSideView('learn'), studio: () => openStudio(), run: toggleBottom })[b.dataset.tool]();
   });
   $('#learn-hide').onclick = () => showSideView('learn', false);
 
@@ -1497,7 +1549,7 @@
     const recent = (state.settings.recent || []).filter((p) => p !== state.root);
     showMenu(r.left, r.bottom + 4, [
       { label: 'Open Folder…', sc: 'Ctrl+O', run: pickFolder },
-      { label: 'New Tuff File', sc: 'Ctrl+Alt+N', run: () => newEntry(false) },
+      { label: 'New File…', sc: 'Ctrl+Alt+N', run: () => newEntry(false) },
       ...(recent.length ? ['sep', ...recent.map((p) => ({ label: basename(p), sc: p.length > 38 ? '…' + p.slice(-36) : p, run: () => openFolder(p) }))] : []),
     ]);
   };
@@ -1506,8 +1558,12 @@
     const t = activeTab();
     const cur = t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile;
     showMenu(r.left, r.bottom + 4, [
-      { label: cur ? `Run '${basename(cur)}'` : 'Run Current File', sc: 'Shift+F10', run: runCurrent },
-      { label: 'Stop', sc: 'Ctrl+F2', run: () => api.run.stop() },
+      state.running
+        ? { label: 'Stop', sc: 'Ctrl+F2', run: () => api.run.stop() }
+        : { label: cur ? `Run '${basename(cur)}'` : 'Run Current File', sc: 'Shift+F10', run: runCurrent },
+      { label: 'Rerun', sc: 'Ctrl+F5', run: rerun },
+      'sep',
+      { label: 'Build .exe…', sc: 'Ctrl+F9', run: () => openBuildDialog() },
       'sep',
       { label: 'Show Run Window', sc: 'Alt+4', run: () => showBottom(true) },
     ]);

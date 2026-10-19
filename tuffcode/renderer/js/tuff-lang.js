@@ -116,6 +116,40 @@ window.TUFF_DOCS = {
 
 const TUFF_BUILTINS = ['print', 'number', 'text', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average'];
 
+// A line that opens an indented block: if/elif/else/while/for/func ending in ':' or 'then'.
+const BLOCK_OPENER = /^\s*(if|elif|else|while|for|func)\b.*(:|\bthen)\s*(#.*)?$/;
+const BLOCK_START = /^\s*(if|elif|else|while|for|func)\b/;
+
+// True when the end of `text` is inside a "string", a 'string' or a # comment.
+function insideStringOrComment(text) {
+  let quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'") quote = c;
+    else if (c === '#') return true;
+  }
+  return quote !== null;
+}
+
+// Should typing ':' or '.' just before `position` open the suggestion list?
+// Yes for a method call (app:) or a library (tgui.); no for the colon that opens a block
+// (func greet():, if x is 1:, else:), numbers (3.) and anything inside a string or comment.
+window.tuffWantsSuggest = function tuffWantsSuggest(model, position) {
+  const line = model.getLineContent(position.lineNumber);
+  const before = line.slice(0, position.column - 1);
+  if (insideStringOrComment(before)) return false;
+  if (before.endsWith('.')) {
+    const lib = before.match(/([A-Za-z_]\w*)\.$/);
+    return !!(lib && window.TUFF_LIBS[lib[1]]);
+  }
+  if (!/[A-Za-z_]\w*:$/.test(before)) return false;
+  const atEnd = !line.slice(position.column - 1).trim();
+  return !(atEnd && BLOCK_START.test(line));
+};
+
 window.registerTuff = function registerTuff(monaco, accent) {
   monaco.languages.register({ id: 'tuff', extensions: ['.tuf'], aliases: ['Tuff', 'tuff'] });
 
@@ -154,9 +188,13 @@ window.registerTuff = function registerTuff(monaco, accent) {
     ],
     surroundingPairs: [{ open: '"', close: '"' }, { open: '(', close: ')' }, { open: '[', close: ']' }],
     indentationRules: {
-      increaseIndentPattern: /^\s*(if|elif|else|while|for|func)\b.*(:|\bthen)\s*(#.*)?$/,
+      increaseIndentPattern: BLOCK_OPENER,
       decreaseIndentPattern: /^\s*(elif|else)\b/,
     },
+    onEnterRules: [
+      { beforeText: BLOCK_OPENER, action: { indentAction: monaco.languages.IndentAction.Indent } },
+      { beforeText: /^\s+(return|break|continue)\b.*$/, action: { indentAction: monaco.languages.IndentAction.Outdent } },
+    ],
     folding: { offSide: true },
   });
 
@@ -177,14 +215,17 @@ window.registerTuff = function registerTuff(monaco, accent) {
     },
   });
 
+  // No trigger characters here: the IDE opens the list itself after ':' or '.'
+  // (see tuffWantsSuggest), which is reliable and never fires for block colons.
   monaco.languages.registerCompletionItemProvider('tuff', {
-    triggerCharacters: [':', '.'],
     provideCompletionItems(model, position) {
       const word = model.getWordUntilPosition(position);
       const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn };
       const K = monaco.languages.CompletionItemKind;
       const R = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
-      const before = model.getLineContent(position.lineNumber).slice(0, word.startColumn - 1);
+      const line = model.getLineContent(position.lineNumber);
+      const before = line.slice(0, word.startColumn - 1);
+      if (insideStringOrComment(line.slice(0, position.column - 1))) return { suggestions: [] };
       const libMatch = before.match(/(\w+)\.$/);
       if (libMatch) {
         const lib = window.TUFF_LIBS[libMatch[1]];
