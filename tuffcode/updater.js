@@ -125,12 +125,22 @@ async function installFromZip(latest) {
   fsp.rm(work, { recursive: true, force: true }).catch(() => {});
 }
 
+function findGit() {
+  const candidates = [
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'PortableGit', 'cmd', 'git.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Git', 'cmd', 'git.exe'),
+    path.join(process.env.ProgramFiles || '', 'Git', 'cmd', 'git.exe'),
+  ];
+  return candidates.find((p) => fs.existsSync(p)) || 'git';
+}
+
 async function installWithGit() {
   set({ status: 'installing', detail: 'Pulling with git…' });
-  const status = await run('git', ['status', '--porcelain'], ROOT);
+  const git = findGit();
+  const status = await run(git, ['status', '--porcelain', '--untracked-files=no'], ROOT);
   if (status.code !== 0) throw new Error('This copy of TuffCode is a git checkout, but git isn\'t available. Update it with git pull.');
   if (status.out.trim()) throw new Error('This is a git checkout with unsaved changes, so TuffCode won\'t touch it. Commit or stash, then update with git pull.');
-  const pull = await run('git', ['pull', '--ff-only'], ROOT);
+  const pull = await run(git, ['pull', '--ff-only'], ROOT);
   if (pull.code !== 0) throw new Error(`git pull didn't work: ${pull.out.trim().split('\n').pop()}`);
 }
 
