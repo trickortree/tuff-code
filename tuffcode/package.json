@@ -1,0 +1,17 @@
+{
+  "name": "tuffcode",
+  "productName": "TuffCode",
+  "version": "1.0.0",
+  "description": "TuffCode - the IDE for the Tuff language",
+  "repository": "github:trickortree/tuff-code",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^38.0.0"
+  },
+  "dependencies": {
+    "monaco-editor": "^0.52.2"
+  }
+}
