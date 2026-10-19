@@ -1,0 +1,11 @@
+{
+  "id": "snippets",
+  "name": "Snippet Library",
+  "version": "1.0.0",
+  "author": "trickortree",
+  "description": "Ready-made bits of Tuff you can drop into your code: loops, functions, live lines, app windows, buttons, timers and more. Save your own from any selection too.",
+  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 7l-5 5 5 5M16 7l5 5-5 5\"/><path d=\"M13.5 4.5l-3 15\"/></svg>",
+  "main": "panel.js",
+  "style": "panel.css",
+  "panels": [{ "id": "library", "title": "Snippets" }]
+}

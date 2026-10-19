@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "plugins": [
+    {
+      "id": "tuff-agents",
+      "name": "Tuff Agents",
+      "version": "1.0.0",
+      "author": "trickortree",
+      "description": "An AI helper in a sidebar on the right, a bit like GitHub Copilot. Ask Claude Code, Codex or Antigravity about your code, or let them make changes. They get Tuff's docs and can check and run your programs through TuffCode's MCP tools.",
+      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M11 3.5l1.9 4.8 4.8 1.9-4.8 1.9L11 17l-1.9-4.9-4.8-1.9 4.8-1.9z\"/><path d=\"M18.5 14.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z\"/></svg>",
+      "builtin": true,
+      "tags": [
+        "AI",
+        "agents",
+        "MCP"
+      ]
+    },
+    {
+      "id": "snippets",
+      "name": "Snippet Library",
+      "version": "1.0.0",
+      "author": "trickortree",
+      "description": "Ready-made bits of Tuff you can drop into your code: loops, functions, live lines, app windows, buttons, timers and more. Save your own from any selection too.",
+      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 7l-5 5 5 5M16 7l5 5-5 5\"/><path d=\"M13.5 4.5l-3 15\"/></svg>",
+      "builtin": true,
+      "tags": [
+        "code",
+        "beginner"
+      ]
+    }
+  ]
+}
