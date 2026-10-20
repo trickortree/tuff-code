@@ -10,11 +10,13 @@
 .ss-muted { color: var(--text-muted); font-size: 12px; }
 p.ss-muted, .ss-note { margin: 0; line-height: 1.45; }
 .ss-note { margin: 0 0 8px; font-size: 12px; color: var(--text-dim); }
+.ss-warn { margin: 0 0 8px; font-size: 12px; line-height: 1.45; color: var(--yellow); }
 
 /* buttons */
 .ss-btn { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 6px; border: 1px solid #4e5157; font-size: 12px; color: var(--text); white-space: nowrap; }
 .ss-btn:hover, .ss-btn.on { background: var(--bg-hover); }
 .ss-btn:disabled { opacity: .4; cursor: default; background: none; }
+.ss-btn.ss-wrap { height: auto; min-height: 26px; padding-block: 4px; white-space: normal; overflow-wrap: anywhere; text-align: left; }
 .ss-btn svg, .ss-ic svg { width: 14px; height: 14px; flex: none; }
 .ss-ic { width: 28px; height: 28px; flex: none; display: grid; place-items: center; border-radius: 6px; color: var(--text-dim); }
 .ss-ic svg { width: 16px; height: 16px; }

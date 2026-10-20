@@ -394,6 +394,37 @@ export default async (t, ctx) => {
   const noAsk = async () => { await t.sleep(700); return ev(`document.querySelector('#modal').classList.contains('hidden')`); };
   const openTuf = (...p) => ev(`(async () => { await window.TuffIDE.openFile(${JSON.stringify(P(...p))}); return 1; })()`);
 
+  // 14b. a game in a subfolder: tgame and atgui only load pictures from the game's own folder, so "Use in
+  // code" gives them no "../" path (it would pass --check, then fail when the game runs). It offers to save
+  // the picture in there instead. mtgui can reach the folder above, so it keeps the "../" line.
+  const LEVEL = 'mention tgame\n\ngame = tgame.window("Level 1", 400, 300)\n';
+  fs.mkdirSync(P('levels'), { recursive: true });
+  fs.writeFileSync(P('levels', 'level1.tuf'), LEVEL);
+  await openTuf('levels', 'level1.tuf');
+  await t.sleep(300);
+  await clickEl('[data-a="new"]');
+  await clickEl('[data-size="16"]');
+  await typeInto('[data-f="name"]', 'gem');
+  await typeInto('[data-f="folder"]', 'sprites');
+  await clickEl(`[data-color="${GREEN}"]`);
+  await clickEl('[data-tool="pencil"]');
+  await tap(4, 4);
+  await save();
+  const away = await ev(`({ warn: ${q('.ss-warn')}?.textContent || '', pre: !!${q('.ss-pre')}, insert: !!${q('[data-a="insert"]')}, btn: ${q('[data-a="savethere"]')}?.textContent || '' })`);
+  check('A game in levels/: "Use in code" says the picture has to be in that folder too, and shows no code that would fail', /level1\.tuf is in "levels"/.test(away.warn) && !away.pre && !away.insert && away.btn === 'Save it in "levels/sprites"', away);
+  await clickEl('[data-lib="atgui"]');
+  const atAway = await ev(`!!${q('.ss-warn')} && !${q('.ss-pre')}`);
+  await clickEl('[data-lib="mtgui"]');
+  const mtAway = await pre();
+  check('atgui says the same; mtgui, which can reach the folder above, gets the "../" line', atAway && mtAway === 'gem = app:image "../sprites/gem.png"', { atAway, mtAway });
+  await clickEl('[data-lib="tgame"]');
+  await clickEl('[data-a="savethere"]');
+  await t.sleep(700);
+  const gemCode = await pre();
+  fs.writeFileSync(P('levels', 'use_gem.tuf'), `${LEVEL}${gemCode}\n\nwhile game:open():\n    game:frame()\n`);
+  out = ctx.tuffCheck(P('levels', 'use_gem.tuf'));
+  check('"Save it in levels/sprites" saves it there, and the line finds it from level1.tuf', exists('levels/sprites/gem.png') && png('levels/sprites/gem.png').at(4, 4) === GREEN && gemCode === 'gem = game:image("sprites/gem.png", 200, 150, 16)' && /OK/.test(out), { gemCode, out });
+
   // 14c. Undo after opening a picture brings back the sprite from before, and that sprite doesn't own the
   // opened picture: saving it there asks first. Redo brings the opened picture back, which does own it.
   await openTuf('main.tuf');
@@ -444,6 +475,29 @@ export default async (t, ctx) => {
   check('In another project, saving over its own sprites/coin.png and coin_game.tuf asks first, and Cancel leaves them alone',
     bSave === 'Replace sprites/coin.png?' && bTry === 'Replace coin_game.tuf?' && decodePng(path.join(B, 'sprites', 'coin.png')).w === 8 && fs.readFileSync(path.join(B, 'coin_game.tuf'), 'utf8') === '# project B\'s own game\n', { bSave, bTry });
   await openTuf('main.tuf');
+
+  // 14f. A picture with a space and a dot in its name saves back to that same file, and names in other
+  // alphabets keep their letters.
+  const ship = Buffer.alloc(16 * 16 * 4);
+  ship.set([255, 0, 0, 255], 0);
+  fs.writeFileSync(P('sprites', 'Player Ship.v2.png'), encodePng(16, 16, ship));
+  await clickEl('[data-a="open"]');
+  await waitFor(`[...${SS}.querySelectorAll('.ss-menu [data-open]')].some((b) => b.textContent === 'sprites/Player Ship.v2.png')`);
+  await openFromList('sprites/Player Ship.v2.png');
+  await waitFor(`${q('[data-f="name"]')}.value === 'Player Ship.v2'`);
+  await clickEl(`[data-color="${BLUE}"]`);
+  await tap(5, 5);
+  await clickEl('[data-a="save"]');
+  const shipAsked = !(await noAsk());
+  const shipPng = png('sprites/Player Ship.v2.png');
+  const shipCode = await pre();
+  out = tuffOk('use_ship.tuf', `${MAIN}${shipCode}\n\nwhile game:open():\n    game:frame()\n`);
+  check('Opening "Player Ship.v2.png" and saving writes that same file, without asking or making a renamed copy',
+    !shipAsked && shipPng.at(5, 5) === BLUE && shipPng.at(0, 0) === '#ff0000' && !exists('sprites/Player_Shipv2.png') && !exists('sprites/Player_Ship.v2.png'), { shipAsked, px: [shipPng.at(5, 5), shipPng.at(0, 0)] });
+  check('...and its code uses the name as it is, and passes tuff --check', shipCode === 'Player_Ship_v2 = game:image("sprites/Player Ship.v2.png", 320, 240, 16)' && /OK/.test(out), { shipCode, out });
+  await typeInto('[data-f="name"]', 'Bär');
+  check('A name like Bär keeps its letters', (await ev(`${q('.ss-where')}.textContent`)) === 'Saves sprites/Bär.png (16 x 16 pixels).', await ev(`${q('.ss-where')}.textContent`));
+  await typeInto('[data-f="folder"]', 'sprites');
 
   // 15. a little blinking smiley for the screenshots, at 400 px and then 300 px wide (where everything still fits)
   await clickEl('[data-a="new"]');

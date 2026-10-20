@@ -771,7 +771,11 @@ TuffPlugins.register('sprite-studio', (t) => {
   }
 
   // ---------------------------------------------------------------- saving
-  const cleanName = (s) => String(s || '').trim().replace(/\.png$/i, '').replace(/\s+/g, '_').replace(/[^\w-]/g, '').slice(0, 60) || 'sprite';
+  // A name that works as a file name on Windows and on a Mac: without \ / : * ? " < > |, control characters
+  // or a dot or space at the end. Spaces, dots and letters of any alphabet stay, so a picture that was opened
+  // ("Player Ship.png") saves back to the same file.
+  const cleanName = (s) => [...String(s || '').trim().replace(/\.png$/i, '').replace(/[\\/:*?"<>|\u0000-\u001f\u007f\u0085\u2028\u2029]/g, '')]
+    .slice(0, 60).join('').replace(/[. ]+$/, '') || 'sprite';
   const cleanFolder = (s) => slash(s).split('/').map((p) => p.trim().replace(/[<>:"|?*]/g, '')).filter((p) => p && p !== '.' && p !== '..').join('/');
 
   function plan() {
@@ -839,9 +843,11 @@ TuffPlugins.register('sprite-studio', (t) => {
   }
 
   // ---------------------------------------------------------------- "Use in code"
+  // A Tuff variable name from the sprite's name: "Player Ship.v2" -> Player_Ship_v2. Tuff names can use
+  // letters of any alphabet.
   function varName(name) {
-    let v = name.replace(/-/g, '_').replace(/[^\w]/g, '');
-    if (!v || /^\d/.test(v)) v = 'sprite_' + v;
+    let v = name.replace(/[\s.-]+/g, '_').replace(/[^\p{L}\p{Nd}_]/gu, '').replace(/_+/g, '_');
+    if (!v || /^\p{Nd}/u.test(v)) v = 'sprite_' + v;
     if (RESERVED.has(v)) v += '_pic';
     return v;
   }
@@ -861,6 +867,11 @@ TuffPlugins.register('sprite-studio', (t) => {
     const rel = slash(t.project.rel(f));
     return rel === slash(f) ? '' : dirOf(rel);
   }
+
+  // tgame and atgui only load pictures from the open .tuf file's own folder (or a folder inside it), so a
+  // path like "../sprites/hero.png" passes --check and then fails when the game runs. mtgui can reach
+  // anywhere. True when the saved picture is somewhere this library can't reach from fromDir.
+  const outOfReach = (which, info, fromDir) => !!fromDir && which !== 'mtgui' && info.frames.some((f) => !f.toLowerCase().startsWith(fromDir.toLowerCase() + '/'));
 
   // The open file's window: its variable, and its middle for where a tgame picture starts.
   function windowInfo(which) {
@@ -931,12 +942,24 @@ TuffPlugins.register('sprite-studio', (t) => {
     if (!root) return;
     const body = $('.ss-code-body');
     if (!saved) { body.innerHTML = '<p class="ss-muted">Save your sprite, and the Tuff code that shows it appears here.</p>'; return; }
-    const code = snippet(lib, saved, activeDir(), windowInfo(lib));
-    body.innerHTML = `
-      <div class="ss-seg ss-libs" role="tablist">${['tgame', 'mtgui', 'atgui'].map((l) => `<button data-lib="${l}" class="${l === lib ? 'on' : ''}" title="${{ tgame: 'Games', mtgui: 'App windows', atgui: 'Modern apps' }[l]}">${l}</button>`).join('')}</div>
+    const libs = `<div class="ss-seg ss-libs" role="tablist">${['tgame', 'mtgui', 'atgui'].map((l) => `<button data-lib="${l}" class="${l === lib ? 'on' : ''}" title="${{ tgame: 'Games', mtgui: 'App windows', atgui: 'Modern apps' }[l]}">${l}</button>`).join('')}</div>`;
+    const tryBtn = `<button class="ss-btn" data-a="try">${icon('page')}Try in a new file</button>`;
+    const dir = activeDir();
+    if (outOfReach(lib, saved, dir)) {
+      // No code that would fail: offer to save the picture where the open file can find it.
+      const from = dirOf(saved.frames[0]);
+      const there = from ? `${dir}/${baseOf(from)}` : dir;
+      const base = baseOf(slash(t.project.rel(t.editor.file())));
+      body.innerHTML = `${libs}
+        <p class="ss-warn">${lib} looks for pictures in your ${lib === 'tgame' ? 'game' : 'app'}'s own folder. ${esc(base)} is in "${esc(dir)}", so the picture has to be in there too.</p>
+        <div class="ss-row"><button class="ss-btn ss-wrap" data-a="savethere" data-dir="${esc(there)}">Save it in "${esc(there)}"</button>${tryBtn}</div>`;
+      return;
+    }
+    const code = snippet(lib, saved, dir, windowInfo(lib));
+    body.innerHTML = `${libs}
       <pre class="ss-pre" aria-label="Tuff code">${codeLines(code)}</pre>
       <p class="ss-note">${esc(NOTES[lib](saved))}${saved.frames.length > 1 ? ` It shows the next picture ${fps} times a second.` : ''}</p>
-      <div class="ss-row"><button class="ss-btn" data-a="copy">${icon('copy')}Copy</button><button class="ss-btn" data-a="insert">Insert</button><button class="ss-btn" data-a="try">${icon('page')}Try in a new file</button></div>`;
+      <div class="ss-row"><button class="ss-btn" data-a="copy">${icon('copy')}Copy</button><button class="ss-btn" data-a="insert">Insert</button>${tryBtn}</div>`;
   }
 
   async function tryFile() {
@@ -1000,10 +1023,13 @@ TuffPlugins.register('sprite-studio', (t) => {
       case 'add': case 'dup': case 'del': case 'left': case 'right': return frameOp(d.a);
       case 'play': return setPlaying(!playing);
       case 'save': return save();
-      case 'copy':
+      case 'savethere': $('[data-f="folder"]').value = d.dir; whereText(); return save();
+      case 'copy': case 'insert':
+        // the open file may have changed since the code was shown
+        if (outOfReach(lib, saved, activeDir())) return renderCode();
+        if (d.a === 'insert') { t.editor.insert(snippet(lib, saved, activeDir(), windowInfo(lib)) + '\n'); return; }
         navigator.clipboard.writeText(snippet(lib, saved, activeDir(), windowInfo(lib))).then(() => t.toast('Copied.', 'ok', 1500), () => t.toast('Couldn\'t copy. Select the code and copy it by hand.', 'error'));
         return;
-      case 'insert': t.editor.insert(snippet(lib, saved, activeDir(), windowInfo(lib)) + '\n'); return;
       case 'try': return tryFile();
     }
   }
