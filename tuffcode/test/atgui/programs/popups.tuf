@@ -1,0 +1,21 @@
+mention atgui
+
+# Popups that wait for an answer, asked in the top-level code: the window opens for the first one.
+# popups.js answers them; a timer keeps running while they're open.
+app = atgui.window("atgui popups test", 560, 420)
+ticks = 0
+app:heading "Popups"
+app:every(0.05, tick)
+name = app:ask "What's your name?"
+say "Hi " + name
+sure = app:confirm "Are you sure?"
+say sure
+nope = app:confirm "Really sure?"
+say nope
+app:alert "All done"
+say "after alert"
+say ticks > 2
+app:close
+
+func tick():
+    ticks += 1

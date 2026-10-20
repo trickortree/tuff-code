@@ -1,0 +1,137 @@
+mention atgui
+
+# Every widget with an event function that says what happened. widgets.js clicks, types and presses keys
+# in the page; run_all.py checks what was said, in order.
+app = atgui.window("atgui widgets test", 1000, 800)
+count = 0
+counter = app:text "0"
+row = app:row
+row:button("Add one", add_one, "primary")
+row:button("Named", named, "secondary")
+row:button("Probe", probe, "outline")
+row:button("Open modal", open_modal, "ghost")
+box = app:input "Type here"
+box:change typed
+box:enter entered
+area = app:textarea "Message"
+area:enter sent
+check = app:checkbox("Tick me", false)
+check:change ticked
+sw = app:switch("Switch me", true)
+sw:change switched
+s = app:slider(0, 10, 3)
+s:change slid
+d = app:dropdown(["Red", "Green", "Blue"], "Green")
+d:change picked
+lst = app:list(["Apple", "Banana", "Cherry"])
+lst:change chose
+t = app:table(["Name", "Age"])
+t:add(["Ada", "36"])
+t:add(["Alan", "41"])
+t:change row_chosen
+tabs = app:tabs()
+one = tabs:tab "One"
+one:text "First page"
+two = tabs:tab "Two"
+two:text "Second page"
+tabs:change tab_opened
+card = app:card
+card:text "Hover or click me"
+card:hover hovered
+card:clicked card_clicked
+card:style("radius", 12)
+card:style("hover background", "#ff0000")
+card:css "outline: 2px solid rgb(0, 128, 0)"
+card:tooltip "A tip"
+m = app:menu()
+m:item("Rename", renamed)
+lst:menu m
+focus_box = app:input "Focus me"
+focus_box:focus focused
+app:key("ctrl+k", shortcut)
+md = app:markdown "Hello **world**"
+code = app:code("say 1", "tuff")
+dlg = app:modal("A modal")
+dlg:text "Inside"
+dlg:closed modal_closed
+badge = app:badge("Beta", "info")
+pg = app:progress(10)
+
+func add_one():
+    count += 1
+    counter:set text(count)
+    say "add_one " + count
+
+func named(name):
+    say "named " + name
+
+func typed(words):
+    say "typed " + words
+
+func entered(words):
+    say "entered " + words
+
+func sent(words):
+    say "sent " + words
+    area:clear
+
+func ticked(on):
+    say "ticked " + on
+
+func switched(on):
+    say "switched " + on
+
+func slid(n):
+    say "slid " + n
+
+func picked(color):
+    say "picked " + color
+
+func chose(fruit):
+    say "chose " + fruit
+
+func row_chosen(cells):
+    say "row " + cells[0] + " " + cells[1]
+
+func tab_opened(name):
+    say "tab " + name
+
+func hovered(on):
+    say "hover " + on
+
+func card_clicked():
+    say "card clicked"
+
+func renamed(what):
+    say "renamed " + what
+
+func focused(on):
+    say "focused " + on
+
+func shortcut():
+    say "shortcut"
+
+func open_modal():
+    dlg:open
+
+func modal_closed():
+    say "modal closed"
+
+func probe():
+    say "values " + box:value() + " " + check:value() + " " + sw:value() + " " + s:value() + " " + d:value() + " " + lst:value() + " " + tabs:value()
+    lst:add "Date"
+    lst:remove "Apple"
+    say lst:items()
+    md:add " and *more*"
+    code:set "say 2"
+    badge:set "Gamma"
+    badge:style "danger"
+    pg:set 75
+    say pg:value() + 1
+    counter:hide
+    d:set "Blue"
+    say d:value()
+    t:add(["Grace", "85"])
+    sw:set(false, true)
+    s:set 9
+    say s:value()

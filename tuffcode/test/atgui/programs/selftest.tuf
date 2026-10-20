@@ -1,0 +1,48 @@
+mention atgui
+
+# Drives itself, the way the guide tells people to test a window app: app:after runs selftest, which calls
+# the program's own functions, says what it finds, and closes the window.
+app = atgui.window("atgui self-test", 520, 420)
+n = 0
+ticks = 0
+label = app:text "0"
+app:button("Add", add, "primary")
+box = app:input "Name"
+sw = app:switch("On", false)
+lst = app:list(["A", "B"])
+md = app:markdown ""
+timer = app:every(0.05, tick)
+app:after(0.6, selftest)
+app:closed bye
+
+func add():
+    n += 1
+    label:set text(n)
+
+func tick():
+    ticks += 1
+
+func selftest():
+    add()
+    add()
+    say label:value()
+    box:set "Ada"
+    say box:value()
+    sw:set(true)
+    say sw:value()
+    lst:add "C"
+    lst:set "C"
+    say lst:value()
+    lst:remove "A"
+    say lst:items()
+    lst:clear
+    say lst:items()
+    md:add "Hello"
+    md:add " **there**"
+    say md:value()
+    timer:stop
+    say ticks > 4
+    app:close
+
+func bye():
+    say "closed"

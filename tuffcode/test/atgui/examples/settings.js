@@ -1,0 +1,27 @@
+// Drives examples/settings.tuf: theme dropdown, accent chips, switches, Ctrl+S (toast), confirm popup.
+const app = T.q('.at-app');
+const accent = () => getComputedStyle(app).getPropertyValue('--accent').trim();
+await T.shot('settings-dark');
+const dd = T.q('.at-dropdown');
+T.click(dd);
+const light = await T.until(() => T.find('.at-menu.at-open .at-mi', 'Light'));
+T.click(light);
+const isLight = await T.until(() => app.classList.contains('at-light'));
+T.click(T.find('.at-btn', 'Purple'));
+const purple = await T.until(() => accent() === '#8b5cf6');
+const sw = T.qa('.at-switch input')[1];
+T.click(sw);
+const flipped = sw.checked;
+const name = T.q('.at-input');
+T.type(name, 'Grace');
+T.key('s', { ctrlKey: true });
+const toast = await T.until(() => T.find('.at-toast', 'Saved, Grace'));
+await T.wait(350);
+await T.shot('settings');
+T.click(T.find('.at-btn', 'Delete account'));
+const popup = await T.until(() => T.q('.at-overlay.at-shown'));
+await T.wait(250);
+await T.shot('settings-confirm');
+T.click(T.find('.at-overlay.at-shown .at-btn', 'Yes'));
+const deleted = await T.until(() => T.find('.at-toast', 'Account deleted'));
+T.done({ isLight: !!isLight, purple: !!purple, flipped, toast: !!toast, popup: !!popup, deleted: !!deleted });

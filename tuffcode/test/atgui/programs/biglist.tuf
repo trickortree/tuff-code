@@ -1,0 +1,18 @@
+mention atgui
+
+# A list of 1,000 items in a scroll area. biglist.js scrolls it and times the frames, then picks an item.
+app = atgui.window("atgui big list", 720, 660)
+picked = app:heading "Nothing picked"
+app:small "1,000 items. Every tenth one has a second line and a badge."
+box = app:scroll()
+items = box:list()
+for i in range(1, 1000):
+    item = items:add("Item " + i)
+    item:icon "file"
+    if i % 10 is 0:
+        item:small "A second line for item " + i
+        item:badge text(i)
+items:change chose
+
+func chose(name):
+    picked:set "Picked " + name
