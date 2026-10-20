@@ -2714,12 +2714,17 @@ def setup_streams():
 def read_source(path):
     """The program's text, or None after a one-line message when the file can't be read."""
     try:
-        with open(path, encoding="utf-8-sig") as f:
-            return f.read()
+        with open(path, "rb") as f:
+            data = f.read()
+        # UTF-8 (with or without a BOM), or UTF-16 with its BOM: Notepad's "Unicode", and what Windows
+        # PowerShell's > and Out-File write.
+        text = data.decode("utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig")
+        return text.replace("\r\n", "\n").replace("\r", "\n")
     except FileNotFoundError:
         msg = f"There's no file called '{path}'."
     except UnicodeDecodeError:
-        msg = f"'{path}' isn't a text file, so it can't be a Tuff program."
+        msg = f"'{path}' isn't a text file, so it can't be a Tuff program." if b"\x00" in data else \
+            f"'{path}' isn't saved as UTF-8, so Tuff can't read it. Save it again as UTF-8, or copy its code into a new TuffCode file."
     except OSError as exc:
         msg = f"'{path}' is a folder, not a .tuf file." if os.path.isdir(path) else f"Couldn't open '{path}': {exc.strerror or exc}."
     report(TuffError(msg), "")
