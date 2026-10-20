@@ -914,6 +914,7 @@ class Sprite:
         self.points = props.get("points")
         self.words = props.get("text", "")
         self.size_ = props.get("size", 24)
+        self.ax = props.get("ax", 0.5)  # where x is across a text: 0 its left edge, 0.5 its middle, 1 its right edge
         self.file = props.pop("file", None)
         self.vx = self.vy = self.spin_speed = 0.0
         self.edge = "none"
@@ -972,6 +973,8 @@ class Sprite:
         if self.shape == "line":
             (ax, ay), (bx, by) = self.points
             return self.x + (ax + bx) / 2 * self.k, self.y + (ay + by) / 2 * self.k
+        if self.shape == "text" and self.ax != 0.5:  # aligned left or right: the words sit beside x, not around it
+            return self.x + (0.5 - self.ax) * 2 * self.half()[0] * self.mirror, self.y
         return self.x, self.y
 
     def contains(self, x, y):
@@ -1196,7 +1199,8 @@ class Sprite:
             raise self.rt.error(":align can be \"left\", \"center\" or \"right\".")
         if self.shape != "text":
             raise self.rt.error("Only text can be aligned.")
-        self.send(ax={"left": 0, "right": 1}.get(a, 0.5))
+        self.ax = {"left": 0, "right": 1}.get(a, 0.5)
+        self.send(ax=self.ax)  # clicks, :touches and :on_edge follow it through center()
         return self.native
 
     def hide(self):
