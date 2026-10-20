@@ -705,6 +705,11 @@ TuffPlugins.register('sprite-studio', (t) => {
     $('[data-a="open"]').classList.remove('on');
   }
 
+  // A press anywhere else in the window (the code editor, the project tree) closes the Open list.
+  function onDocDown(e) {
+    if (root && !$('.ss-menu').classList.contains('hidden') && !e.target.closest?.('.ss-menu, .ss [data-a="open"]')) closeMenu();
+  }
+
   async function openPng(f) {
     closeMenu();
     // walk_2.png next to walk_1.png and walk_3.png opens all of them, as frames
@@ -1136,6 +1141,7 @@ TuffPlugins.register('sprite-studio', (t) => {
       view.addEventListener('contextmenu', (e) => e.preventDefault());
       root.querySelector('.ss-code').addEventListener('pointerenter', () => saved && renderCode());
       window.addEventListener('keydown', onKey, true);
+      document.addEventListener('pointerdown', onDocDown, true);
       ro = new ResizeObserver(() => layout());
       ro.observe(root);
       setTool('pencil');
@@ -1155,6 +1161,7 @@ TuffPlugins.register('sprite-studio', (t) => {
 
   return () => {
     window.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('pointerdown', onDocDown, true);
     clearInterval(timer);
     cancelAnimationFrame(raf);
     ro?.disconnect();

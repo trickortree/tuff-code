@@ -340,6 +340,11 @@ export default async (t, ctx) => {
   for (let y = 0; y < 10; y++) for (let x = 0; x < 12; x++) coin.set((x + y) % 3 ? [255, 200, 0, 255] : [0, 0, 0, 0], (y * 12 + x) * 4);
   fs.writeFileSync(P('sprites', 'coin.png'), encodePng(12, 10, coin));
   await clickEl('[data-a="open"]');
+  await waitFor(`!${q('.ss-menu')}.classList.contains('hidden')`);
+  const ed = await ev(`(() => { const r = document.querySelector('.monaco-editor .view-lines').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + 40 }; })()`);
+  await t.click(ed.x, ed.y);
+  check('A click in the code editor closes the Open list', await waitFor(`${q('.ss-menu')}.classList.contains('hidden')`, 2000), null);
+  await clickEl('[data-a="open"]');
   await waitFor(`[...${SS}.querySelectorAll('.ss-menu [data-open]')].some((b) => b.textContent === 'sprites/coin.png')`);
   await openFromList('sprites/coin.png');
   await waitFor(`${q('.ss-canvas')}.dataset.w === '12'`);
