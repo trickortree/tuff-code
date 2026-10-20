@@ -512,7 +512,7 @@ class Err:
 
 
 ERR = Err()
-LIBRARIES = ("anims", "tgui", "mtgui", "tap")
+LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui")
 # Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
@@ -844,6 +844,13 @@ class Interpreter:
         except ImportError as exc:
             raise TuffError(f"tap couldn't load ({exc}). Reinstall TuffCode.")
         return tuff_tap.make_library(self.rt)
+
+    def lib_atgui(self):
+        try:
+            import tuff_atgui
+        except ImportError as exc:
+            raise TuffError(f"atgui couldn't load ({exc}). Reinstall TuffCode.")
+        return tuff_atgui.make_library(self.rt)
 
     def lib_anims(self):
         con = self.console
