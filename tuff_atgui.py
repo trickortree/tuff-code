@@ -642,6 +642,7 @@ document.addEventListener('pointerover', (e) => {
   if (!el) return;
   tipFor = el;
   tipTimer = setTimeout(() => {
+    if (!el.isConnected) return;
     if (!tip) { tip = document.createElement('div'); tip.className = 'at-tip'; (document.querySelector('.at-app') || document.body).appendChild(tip); }
     tip.textContent = el.getAttribute('data-at-tip');
     const r = el.getBoundingClientRect();
@@ -1191,7 +1192,7 @@ class Lib:
 
     # ---- timers
     # The engine's loop() only wakes up for every-frame functions it had when it last went to sleep, so the
-    # timer tick is registered once, when the window opens, and stays. While no timer is waiting it runs at
+    # timer tick is registered once, when the window opens, and stays. While no timer is nearly due it runs at
     # IDLE_FPS, which keeps an idle app nearly asleep; a new timer is first looked at within 1 / IDLE_FPS s.
     IDLE_FPS = 20
 
@@ -1227,8 +1228,9 @@ class Lib:
                 t.active = False
             if not self.fire(t.fn) and t.repeat:
                 t.active = False  # a timer whose function fails stops for good
-        if self.view is not None:
-            self.view.fps = 60 if any(t.active for t in self.timers) else self.IDLE_FPS
+        if self.view is not None:  # 60 wake-ups a second only while a timer is nearly due
+            soon = [t.due - now for t in self.timers if t.active and t.due is not None]
+            self.view.fps = 60 if soon and min(soon) < 0.1 else self.IDLE_FPS
         return None
 
     def after(self, seconds, fn):
