@@ -571,8 +571,11 @@ document.addEventListener('focusout', (e) => { const el = near(e.target, '[data-
 
 // ---- keys: Enter in text boxes, shortcuts, Escape, and no reloading or going back
 function combo(e) {
+  // The letter the keyboard layout types (so ctrl+a is the key marked A on any layout); the key's place
+  // only when Shift or Alt changed what it types (shift+1 is "!", which still means shift+1).
   let k = e.key.toLowerCase();
-  if (/^Key[A-Z]$/.test(e.code)) k = e.code.slice(3).toLowerCase();
+  if (/^[a-z0-9]$/.test(k)) { /* the letter or digit itself */ }
+  else if (/^Key[A-Z]$/.test(e.code)) k = e.code.slice(3).toLowerCase();
   else if (/^Digit\d$/.test(e.code)) k = e.code.slice(5);
   else k = { ' ': 'space', 'arrowup': 'up', 'arrowdown': 'down', 'arrowleft': 'left', 'arrowright': 'right', 'esc': 'escape', 'del': 'delete' }[k] || k;
   const mac = /Mac/.test(navigator.platform);
