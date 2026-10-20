@@ -35,6 +35,9 @@ const server = http.createServer((req, res) => {
     if (url.startsWith('/status/')) return send(Number(url.slice(8)), 'text/plain', `status ${url.slice(8)}`);
     if (url === '/empty') return send(204, null, '');
     if (url === '/redirect') return send(302, null, '', { Location: '/json' });
+    if (url === '/redirect-headers') return send(302, null, '', { Location: '/headers' });
+    if (url === '/redirect-away') return send(302, null, '', { Location: `${OTHER}/headers` });
+    if (url === '/bom') return send(200, 'application/json; charset=utf-8', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('{"temp":12.5}')]));
     if (url === '/badjson') return send(200, 'application/json', '{not json');
     if (url === '/slow') { slow.add({ res, timer: setTimeout(() => send(200, 'text/plain', 'too late'), 25000) }); return; }
     send(404, 'text/plain', 'no such page');
@@ -42,6 +45,13 @@ const server = http.createServer((req, res) => {
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
+// Another site (another port), for redirects that leave the first one. It shows the headers it got.
+const other = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(req.headers));
+});
+await new Promise((r) => other.listen(0, '127.0.0.1', r));
+const OTHER = `http://127.0.0.1:${other.address().port}`;
 // A port nobody is listening on, for "refused the connection".
 const closed = http.createServer();
 await new Promise((r) => closed.listen(0, '127.0.0.1', r));
@@ -185,6 +195,27 @@ say r:json:get("name")
 say "still running"
 `, ['404', 'false', 'status 404', '500', 'false', '201', 'true', '204', '[]', '200', 'Ada', 'still running']);
 
+await works('a redirect to another site keeps your keys there; the same site gets them', `h = tap.data()
+h:set("Authorization", "Bearer MY-SECRET-KEY")
+h:set("X-Api-Key", "KEY2")
+h:set("Accept", "application/json")
+same = tap.get("BASE/redirect-headers", h):json
+say same:get("authorization")
+say same:get("x-api-key")
+away = tap.get("BASE/redirect-away", h):json
+say away:get("authorization")
+say away:get("x-api-key")
+say away:get("accept")
+say away:get("user-agent")
+`, ['Bearer MY-SECRET-KEY', 'KEY2', 'nil', 'nil', 'application/json', 'TuffCode-tap/1.0']);
+
+await works('JSON that starts with a byte order mark', `res = tap.get("BASE/bom")
+say res:json:get("temp")
+say len(res:text)
+`, ['12.5', '13']);
+
+await stops('an err given to tap stops with its reason', 'res = tap.get(num("abc"))\n', "The input to tap.get() is err: num() couldn't turn 'abc' into a number.", 3);
+
 // The guide's example, with its two web addresses pointed at the local server.
 const guide = fs.readFileSync(path.join(here, '..', 'mcp', 'tuff-guide.md'), 'utf8').replace(/\r\n/g, '\n').match(/### tap\n```tuff\n([\s\S]*?)```/);
 check('the guide has a tap example', !!guide, null);
@@ -225,6 +256,8 @@ const info = `INFO  real HTTPS GET https://api.github.com/zen: ${online.code ===
 for (const { res, timer } of slow) { clearTimeout(timer); res.destroy(); }
 server.closeAllConnections?.();
 server.close();
+other.closeAllConnections?.();
+other.close();
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(results.join('\n'));
 console.log(info);

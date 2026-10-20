@@ -198,12 +198,22 @@ class Parser:
 
     def block(self, opener_optional=False):
         tok = self.peek()
-        if self.at("COLON") or self.at("KW", "then"):
+        # A ':' glued to the next word (then:say "hi", else:say, func f():say) is read as a method's ':', but no
+        # method call can start here, so it's this block's ':'.
+        if self.at("COLON") or self.at("METHOD") or self.at("KW", "then"):
             # "then:" works too: people often write both.
-            if self.next().kind == "KW" and self.at("COLON"):
+            if self.next().kind == "KW" and (self.at("COLON") or self.at("METHOD")):
                 self.next()
         elif not (opener_optional and self.at("NEWLINE")):
-            raise TuffError(f"Expected ':' or 'then' to start a block, but found {tok.show()}.", tok.line, tok.col)
+            # if x:say "hi" -> x:say was read as a method call, so the block's ':' seems to be missing
+            j = self.i - 1
+            while j >= 0 and self.toks[j].line == tok.line and self.toks[j].kind != "METHOD":
+                j -= 1
+            after = self.toks[j + 1] if j >= 0 and self.toks[j].kind == "METHOD" and self.toks[j].line == tok.line else None
+            tip = " Put a space after the ':' that starts the block (with a word right after it, ':' is read as a method)." \
+                if after is not None and ((after.kind == "KW" and after.value in ("say", "return", "break", "continue", "flush"))
+                                          or (tok.kind == "OP" and tok.value in ASSIGN_OPS)) else ""
+            raise TuffError(f"Expected ':' or 'then' to start a block, but found {tok.show()}.{tip}", tok.line, tok.col)
         if not self.at("NEWLINE"):
             stmt = self.simple_statement()
             self.end_line()
@@ -470,8 +480,9 @@ class Func:
 
 
 class Builtin:
-    def __init__(self, name, fn):
+    def __init__(self, name, fn, takes_err=False):
         self.name, self.fn = name, fn
+        self.takes_err = takes_err  # number(), text(), print()...: an err given to them doesn't stop the program
 
 
 class Line:
@@ -523,6 +534,10 @@ TGAME_NOTICE = "Tuff Engine is coming soon: a visual way to make games with Tuff
 TGAME_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+tgame\b", re.M)
 BUILTIN_NAMES = {"print", "number", "num", "text", "str", "int", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
                  "floor", "ceil", "min", "max", "sum", "average"}
+# Built-ins that are new in Tuff 1.0.4 and that people already use as their own variables (num = 0, err = "...").
+# Giving one a value inside a function makes that function's own variable, as it did before they were built in,
+# and the built-in stays for the rest of the program. At the top of the program it still replaces the built-in.
+OWN_NAME_BUILTINS = {"num", "int", "str", "err"}
 
 
 # return, break and continue on their way out. They keep their line, for when there's nothing to catch them.
@@ -609,7 +624,7 @@ def plain(v):
     return v.text if isinstance(v, Line) else v
 
 
-def call_python(label, fn, args):
+def call_python(label, fn, args, takes_err=False):
     """Call a built-in written in Python, turning Python problems into friendly Tuff errors."""
     try:
         inspect.signature(fn).bind(*args)
@@ -617,6 +632,10 @@ def call_python(label, fn, args):
         raise TuffError(f"{label} got the wrong number of inputs ({len(args)}).")
     except ValueError:
         pass
+    if not takes_err:  # an err stops here with the reason it's an err, before Python can say something confusing
+        for a in args:
+            if isinstance(plain(a), Err):
+                plain(a).stop(f"The input to {label}")
     try:
         return fn(*args)
     except (TuffError, ReturnSignal, BreakSignal, ContinueSignal, KeyboardInterrupt, SystemExit, RecursionError):
@@ -679,9 +698,10 @@ class Console:
 
 
 class Env:
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, own_names=False):
         self.vars = {}
         self.parent = parent
+        self.own_names = own_names  # holds OWN_NAME_BUILTINS: giving one of them a value makes a new variable
 
     def find(self, name):
         env = self
@@ -707,7 +727,9 @@ class Env:
         return env.vars[name]
 
     def set(self, name, value):
-        env = self.find(name) or self
+        env = self.find(name)
+        if env is None or env.own_names:
+            env = self
         env.vars[name] = value
 
 
@@ -777,7 +799,8 @@ class Interpreter:
         self.base_dir = base_dir
         self.rt = Runtime(self)
         self.console = Console()
-        self.globals = Env()
+        self.own_names = Env(own_names=True)  # OWN_NAME_BUILTINS, just above the program's own top-level names
+        self.globals = Env(self.own_names)
         builtins = {
             "print": self.b_print,
             "number": self.b_number,
@@ -801,11 +824,12 @@ class Interpreter:
             "sum": lambda *v: sum(self.num_list("sum", v, allow_empty=True)),
             "average": lambda *v: (lambda nums: sum(nums) / len(nums))(self.num_list("average", v)),
         }
+        takes_err = {"number", "num", "int", "text", "str", "print"}  # they hand an err back, or show it as "err"
         for name, fn in builtins.items():
-            self.globals.vars[name] = Builtin(name, fn)
+            (self.own_names if name in OWN_NAME_BUILTINS else self.globals).vars[name] = Builtin(name, fn, name in takes_err)
         self.globals.vars["all"] = ALL
         self.globals.vars["pi"] = math.pi
-        self.globals.vars["err"] = ERR
+        self.own_names.vars["err"] = ERR
 
     # math helpers
     def num_arg(self, name, v):
@@ -929,13 +953,17 @@ class Interpreter:
 
     def b_number(self, v, name="number"):
         # Text that isn't a number gives err (check with: if number(t) is err) instead of stopping the program.
+        # Anything else that isn't a number (a text box, nil, a list...) is a mistake in the program, so it stops.
         v = plain(v)
         if isinstance(v, Err):
             return v
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             return v
+        if isinstance(v, Native) and "value" in v.methods:  # a text box, a slider... (or a tgame text sprite)
+            thing = "sprite" if v.kind == "sprite" else f"{v.kind} widget"
+            raise TuffError(f"{name}() needs text or a number, not the {thing}. Add :value() to get what's in it.")
         if not isinstance(v, str):
-            return Err(f"{name}() needs text or a number, not {type_name(v)}")
+            raise TuffError(f"{name}() needs text or a number, not {type_name(v)}.")
         try:
             s = v.strip()
             return float(s) if "." in s else int(s)
@@ -1195,7 +1223,7 @@ class Interpreter:
 
     def invoke(self, fn, args, loose=False):
         if isinstance(fn, Builtin):
-            return call_python(fn.name + "()", fn.fn, args)
+            return call_python(fn.name + "()", fn.fn, args, fn.takes_err)
         if isinstance(fn, Func):
             if loose and len(args) > len(fn.params):
                 args = args[: len(fn.params)]
@@ -1543,7 +1571,7 @@ class Checker:
         self.loop_vars = set()
         self.imports = set()
         self.interp = Interpreter()
-        self.builtins = dict(self.interp.globals.vars)
+        self.builtins = {**self.interp.own_names.vars, **self.interp.globals.vars}
         self.memo = {}
         self.anims = None
         self.calls = {}  # name -> every line it's called on, like name(...)
@@ -1637,6 +1665,8 @@ class Checker:
             return self.memo[name]
         if name in seen:
             return None
+        if name in OWN_NAME_BUILTINS and name in self.everywhere and name not in self.top.names:
+            return None  # only functions make their own variables with this name; everywhere else it's the built-in
         kinds = set()
         if name in self.imports:
             kinds.add("$module:" + name)
@@ -1901,27 +1931,71 @@ class Checker:
 
     # ---- checks
     def check_top_level(self):
-        """A built-in's name given a value at the top replaces it, so later calls of it fail. And a
-        function made twice at the top: the second replaces the first."""
+        """A built-in's name given a value at the top replaces it, so later uses of it fail: calls of a built-in
+        function, and "is err" checks of what number() gave. And a function made twice at the top: the second
+        replaces the first."""
         made = {}
+        owner = {}  # id(node) -> the top-level function it's written in (nodes at the top aren't in here)
+        for f in nodes(self.program):
+            if f.kind == "func" and id(f) not in owner:
+                for x in nodes(f.body):
+                    owner[id(x)] = f.name
+        calls, uses = {}, {}  # name -> its calls; function name -> (call or event input, given to an event?)
+        for x in nodes(self.program):
+            if x.kind == "call" and x.fn.kind == "var":
+                calls.setdefault(x.fn.name, []).append(x)
+                uses.setdefault(x.fn.name, []).append((x, False))
+            elif x.kind == "method":
+                for a in x.args:
+                    if a.kind == "var":
+                        uses.setdefault(a.name, []).append((a, True))
+
+        def runs_after(fname, after, seen):
+            """Can the function fname run after line `after`? Yes when it's called on a later line, given to an
+            event at the top (events happen after the top of the program has run), or used in a function that can."""
+            for x, event in uses.get(fname, []):
+                where = owner.get(id(x))
+                if where is None:
+                    if x.line > after or event:
+                        return True
+                elif where not in seen and runs_after(where, after, seen | {where}):
+                    return True
+            return False
+
+        def later(found, after):
+            """The first line of these that can run after line `after`, or None."""
+            lines = [x.line for x in found if (x.line > after if owner.get(id(x)) is None else runs_after(owner[id(x)], after, {owner[id(x)]}))]
+            return min(lines) if lines else None
 
         def replaces(s, name, after):
-            """s sets the built-in called name; any call of it after line `after` breaks."""
+            """s sets the built-in called name; any call of it that runs after line `after` breaks."""
             if self.kind(s.value) in ("$func", "$builtin") or (self.kind(s.value) or "").startswith("$libfn:"):
                 return
-            later = [line for line in self.calls.get(name, []) if line > after]
-            if later:
-                self.problem(s, f"'{name}' is a built-in function, and giving it a value replaces it everywhere, so {name}() on line {later[0]} won't work. Use another name, like my_{name}.")
+            line = later(calls.get(name, []), after)
+            if line:
+                self.problem(s, f"'{name}' is a built-in function, and giving it a value replaces it everywhere, so {name}() on line {line} won't work. Use another name, like my_{name}.")
+
+        def replaces_err(s):
+            """s gives err a value, so a later "is err" check of what number() gave never finds one."""
+            if self.gives_err(s.value) or (s.value.kind == "var" and s.value.name == "err"):
+                return
+            checks = [x for x in nodes(self.program) if x.kind == "binop" and x.op in ("==", "!=") and self.err_check(x)]
+            line = later(checks, s.line)
+            if line:
+                self.problem(s, f"'err' is built in (number() and num() give it for text that isn't a number), and giving it a value replaces it everywhere, so the is err check on line {line} won't work. Use another name, like my_err.")
 
         for s in self.program:
             if s.kind == "assign" and s.op == "=" and s.target.kind == "var" and isinstance(self.builtins.get(s.target.name), Builtin):
                 replaces(s, s.target.name, s.line)
+            elif s.kind == "assign" and s.op == "=" and s.target.kind == "var" and s.target.name == "err":
+                replaces_err(s)
             # f() at the top runs f, and f setting a built-in's name (not one of its inputs) replaces it for everyone
+            # (except the OWN_NAME_BUILTINS: there it's f's own variable)
             if s.kind == "expr" and s.expr.kind == "call" and s.expr.fn.kind == "var" and self.only_func(s.expr.fn.name):
                 f = self.func_nodes[s.expr.fn.name]
                 for t in f.body:
                     if t.kind == "assign" and t.op == "=" and t.target.kind == "var" and t.target.name not in f.params \
-                            and isinstance(self.builtins.get(t.target.name), Builtin):
+                            and t.target.name not in OWN_NAME_BUILTINS and isinstance(self.builtins.get(t.target.name), Builtin):
                         replaces(t, t.target.name, s.line)
             if s.kind == "func":
                 if s.name in made:
@@ -1951,14 +2025,35 @@ class Checker:
             owner = cond.obj.name if cond.obj.kind == "var" else "thing"
             self.problem(cond, f"Everything after {owner}:has was read as the thing to look for. Put brackets around its input, like: {owner}:has(x) and ...")
 
+    def gives_err(self, x, seen=frozenset()):
+        """Could x be the err that number(), num() or int() give for text that isn't a number?"""
+        if x.kind == "call" and x.fn.kind == "var":
+            return x.fn.name in ("number", "num", "int") and x.fn.name not in self.func_count
+        if x.kind == "var" and x.name not in seen:
+            return any(self.gives_err(t.value, seen | {x.name}) for t in self.assigned.get(x.name, []) if t.op == "=")
+        return False
+
+    def err_check(self, e):
+        """e compares err with something that could really be err, like: if num(t) is err"""
+        sides = (e.left, e.right)
+        return any(x.kind == "var" and x.name == "err" for x in sides) and any(self.gives_err(x) for x in sides)
+
     def check_binop(self, e):
         op, a, b = e.op, self.kind(e.left), self.kind(e.right)
         typed = next((x for x in (e.left, e.right) if self.typed(x)), None)
         tip = f" {self.describe(typed)} is typed text, so turn it into a number first: number({self.describe(typed)})." if typed is not None and self.describe(typed) else ""
+        other = e.right if e.left.kind == "var" and e.left.name == "err" else e.left if e.right.kind == "var" and e.right.name == "err" else None
         if op in self.ORDER and e.left.kind == "binop" and e.left.op in self.COMPARE:
             self.problem(e, "Tuff can't chain comparisons like 1 < x < 9: the first part gives true or false. Write x > 1 and x < 9.")
         elif op in self.ORDER and {a, b} == {"$text", "$number"}:
             self.problem(e, f"Can't compare text with a number using {op}.{tip}")
+        elif op in ("==", "!=") and other is not None and "err" not in self.everywhere and self.kind(other) == "$text":
+            # answer is err: only number(), num() and int() give err, so typed text never is
+            who, word, check = self.describe(other), "never" if op == "==" else "always", "is" if op == "==" else "is not"
+            self.problem(e, f"{who} is text, so it's never err and this is {word} true. Use num({who}) {check} err to check whether it's a number." if who
+                         else f"Text is never err, so this is {word} true. Use num(...) {check} err to check whether it's a number.")
+        elif op in ("==", "!=") and other is not None and self.err_check(e):
+            pass  # num(t) is err: if err was given a value, check_top_level says so
         elif op in ("==", "!=") and {a, b} == {"$text", "$number"}:
             word = "never" if op == "==" else "always"
             self.problem(e, f"Text is never equal to a number, so this is {word} true.{tip or ' Turn the text into a number with number(...) first.'}")
@@ -2040,6 +2135,8 @@ class Checker:
                             tip = f" Use number({who})." if who and self.typed(a) else ""
                             self.problem(a, f"{name}() needs a number, not text.{tip}")
                             break
+                elif name in ("number", "num", "int") and n == 1:
+                    self.check_number_input(e.args[0], name)
             elif name not in self.builtins and not local:
                 kind = self.var_kind(name, frozenset())
                 if kind and not kind.startswith(("$module:", "$libfn:")) and kind not in ("$func", "$builtin"):
@@ -2050,6 +2147,20 @@ class Checker:
                 members = self.lib_members(lib[8:]) or {}
                 if fn.name in members and not accepts(members[fn.name], n):
                     self.problem(e, f"{lib[8:]}.{fn.name}() got the wrong number of inputs ({n}).")
+
+    def check_number_input(self, a, name):
+        """number(), num() and int() give err for text that isn't a number, but anything else that isn't text or a
+        number (a text box itself, a list, nil...) stops the program."""
+        kind = self.kind(a)
+        if kind is None or kind in ("$text", "$number", "$line"):
+            return
+        widget = kind.lstrip("@")
+        gui, at = gui_tables(), atgui_tables()
+        kinds = (at or {}).get("kinds", {}) if kind.startswith("@") else (gui or {}).get("kinds", {})
+        if "value" in kinds.get(widget, {}) and a.kind == "var":
+            self.problem(a, f"{name}() needs text or a number, not the {widget} widget. Use {name}({a.name}:value()) to get what's in it.")
+        else:
+            self.problem(a, f"{name}() needs text or a number, not {'a library' if kind.startswith('$module:') else self.what(kind)}.")
 
     def check_gives_back(self, e, name):
         """The answer of name() is used, but name() can't give one back."""
@@ -2603,12 +2714,17 @@ def setup_streams():
 def read_source(path):
     """The program's text, or None after a one-line message when the file can't be read."""
     try:
-        with open(path, encoding="utf-8-sig") as f:
-            return f.read()
+        with open(path, "rb") as f:
+            data = f.read()
+        # UTF-8 (with or without a BOM), or UTF-16 with its BOM: Notepad's "Unicode", and what Windows
+        # PowerShell's > and Out-File write.
+        text = data.decode("utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig")
+        return text.replace("\r\n", "\n").replace("\r", "\n")
     except FileNotFoundError:
         msg = f"There's no file called '{path}'."
     except UnicodeDecodeError:
-        msg = f"'{path}' isn't a text file, so it can't be a Tuff program."
+        msg = f"'{path}' isn't a text file, so it can't be a Tuff program." if b"\x00" in data else \
+            f"'{path}' isn't saved as UTF-8, so Tuff can't read it. Save it again as UTF-8, or copy its code into a new TuffCode file."
     except OSError as exc:
         msg = f"'{path}' is a folder, not a .tuf file." if os.path.isdir(path) else f"Couldn't open '{path}': {exc.strerror or exc}."
     report(TuffError(msg), "")

@@ -110,7 +110,8 @@ say double(4)
   - Turn it into a number first: `number("42")` is 42 and `number("4.5")` is 4.5. Spaces around the number are ignored: `number(" 5 ")` is 5. `num(...)` is a short name for `number(...)`.
   - `int(...)` gives a whole number, dropping the decimals toward zero: `int("42")` is 42, `int(3.7)` and `int("3.7")` are 3, `int(-2.9)` is -2. `str(...)` is the same as `text(...)`.
   - Text that isn't a number gives **`err`** instead of a number: `number("abc")`, `num("abc")` and `int("abc")` are all `err`. Check before using it: `if num(answer) is err:`. An `err` counts as false in an `if`.
-  - Using an `err` in maths or a function stops the program and says why: "Can't use + here, because one side is err: number() couldn't turn 'abc' into a number."
+  - Using an `err` in maths or a function stops the program and says why: "Can't use + here, because one side is err: number() couldn't turn 'abc' into a number." (`say`, `print` and `text(...)` just show it as `err`.)
+  - Anything else that isn't text or a number stops the program: `num(nil)`, `num([5])`, or a text box itself (`num(box)` instead of `num(box:value())`).
 
 ## Text
 - **Joining:** join with `+`: `"Hi " + name + "!"`. Anything joined with text becomes text: numbers, true/false, nil and even lists.
