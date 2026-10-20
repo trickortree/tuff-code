@@ -1,0 +1,94 @@
+/* Sound Lab. Flat and calm, in the IDE's own colour tokens: one accent, thin borders, no glows. */
+.sl { height: 100%; overflow-y: auto; overflow-x: hidden; padding: 0 4px 18px 12px; scrollbar-gutter: stable; font-size: 13px; container-type: inline-size; }
+.sl .sl-ic { width: 14px; height: 14px; flex: none; }
+.sl-h { padding: 14px 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+.sl > .sl-h:first-child { padding-top: 2px; }
+.sl-h-row { display: flex; align-items: center; justify-content: space-between; padding-top: 10px; padding-bottom: 2px; }
+
+/* ---------------------------------------------------------------- presets */
+.sl-presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 6px; }
+.sl-presets button { height: 28px; min-width: 0; padding: 0 6px; border-radius: 7px; border: 1px solid var(--border-soft); background: var(--bg-editor); color: var(--text-dim); font: 600 12px var(--font-ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background .12s, color .12s, border-color .12s; }
+.sl-presets button:hover { background: var(--bg-hover); color: var(--text); }
+.sl-presets button.on { background: var(--bg-active); border-color: var(--bg-active); color: var(--text); }
+.sl-tools { display: flex; flex-wrap: wrap; gap: 2px 16px; padding: 8px 0 0; }
+.sl-link { display: inline-flex; align-items: center; gap: 6px; padding: 3px 0; font: 600 12px var(--font-ui); color: var(--text-dim); transition: color .12s; }
+.sl-link:hover { color: var(--text); }
+.sl-link.inline { display: inline; padding: 0; font: inherit; color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
+
+/* ---------------------------------------------------------------- the sound: stays at the top while the sliders scroll */
+.sl-player { position: sticky; top: 0; z-index: 2; margin: 8px -4px 0 -12px; padding: 8px 4px 10px 12px; background: var(--bg-panel); border-bottom: 1px solid var(--border-soft); }
+.sl-wavebox { position: relative; height: 64px; border-radius: 8px; border: 1px solid var(--border-soft); background: var(--bg-editor); overflow: hidden; }
+.sl-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.sl-len { position: absolute; top: 5px; right: 8px; font: 11px var(--font-code); color: var(--text-muted); pointer-events: none; }
+.sl-prow { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.sl-play { flex: none; min-width: 76px; justify-content: center; }
+.sl-play .sl-ic { width: 12px; height: 12px; }
+.sl-check { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--text-dim); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sl-check input { flex: none; margin: 0; accent-color: var(--accent); cursor: pointer; }
+
+/* ---------------------------------------------------------------- wave picker */
+.sl-seg { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--bg-editor); border: 1px solid var(--border-soft); }
+.sl-seg button { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 4px; border-radius: 6px; font: 600 12px var(--font-ui); color: var(--text-dim); transition: background .12s, color .12s; }
+.sl-seg button:hover { color: var(--text); background: color-mix(in srgb, var(--bg-hover) 60%, transparent); }
+.sl-seg button.on { background: var(--bg-active); color: var(--text); }
+.sl-seg span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------------------------------------------------------- sliders */
+.sl-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) 66px; align-items: center; gap: 8px; min-height: 26px; }
+.sl-lbl { font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+.sl-val { font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--text-dim); text-align: right; white-space: nowrap; overflow: hidden; }
+.sl input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; min-width: 0; height: 20px; margin: 0; background: transparent; cursor: pointer; }
+.sl input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--bg-active) var(--a, 0%), var(--accent) var(--a, 0%), var(--accent) var(--b, 0%), var(--bg-active) var(--b, 0%)); }
+.sl input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; margin-top: -4px; border: 0; border-radius: 50%; background: var(--text); transition: transform .1s; }
+.sl input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.15); }
+.sl input[type="range"]:focus { outline: none; }
+.sl input[type="range"]:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.sl-adv { margin-top: 12px; border-top: 1px solid var(--border-soft); }
+.sl-adv summary { list-style: none; display: flex; align-items: center; gap: 6px; padding: 10px 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); cursor: pointer; }
+.sl-adv summary::-webkit-details-marker { display: none; }
+.sl-adv summary:hover { color: var(--text-dim); }
+.sl-adv summary:focus { outline: none; }
+.sl-adv summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.sl .sl-chev { width: 12px; height: 12px; transition: transform .15s; }
+.sl-adv[open] .sl-chev { transform: rotate(90deg); }
+.sl-adv-body { padding-bottom: 2px; }
+
+/* ---------------------------------------------------------------- save */
+.sl-save { display: flex; flex-wrap: wrap; gap: 8px; }
+.sl-namebox { flex: 1 1 140px; min-width: 0; display: flex; align-items: center; height: 30px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--bg-active); background: var(--bg-editor); font: 12.5px var(--font-code); color: var(--text-muted); cursor: text; }
+.sl-namebox:focus-within { border-color: var(--accent); }
+.sl-namebox input { flex: 1; min-width: 0; height: 100%; padding: 0 1px; border: 0; outline: none; background: transparent; color: var(--text); font: inherit; }
+.sl-save .btn { height: 30px; flex: none; }
+.sl .btn .sl-ic { width: 13px; height: 13px; }
+
+/* ---------------------------------------------------------------- use in code */
+.sl-code { padding: 8px 10px; border-radius: 7px; border: 1px solid var(--border-soft); background: var(--bg-editor); overflow-x: auto; }
+.sl-code code { font: 12.5px var(--font-code); color: var(--text); white-space: pre; user-select: text; }
+.sl-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.sl-note, .sl-warn { margin: 8px 0 0; font-size: 12px; line-height: 1.45; color: var(--text-muted); }
+.sl-warn { color: var(--yellow); }
+
+/* ---------------------------------------------------------------- sounds in this project */
+.sl-list { display: flex; flex-direction: column; gap: 2px; }
+.sl-item { display: flex; align-items: center; gap: 4px; min-height: 32px; padding: 3px 4px 3px 3px; border-radius: 7px; }
+.sl-item:hover { background: var(--bg-hover); }
+.sl-item.on { background: var(--bg-active); }
+.sl-ib { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; color: var(--text-dim); transition: background .12s, color .12s; }
+.sl-ib:hover { background: var(--bg-hover); color: var(--text); }
+.sl-item:hover .sl-ib:hover, .sl-item.on .sl-ib:hover { background: color-mix(in srgb, var(--text) 10%, transparent); }
+.sl-ib .sl-ic { width: 13px; height: 13px; }
+.sl-file { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
+.sl-file span { min-width: 0; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sl-file small { flex: none; font-size: 11px; color: var(--text-muted); }
+.sl-tb { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 7px; border-radius: 6px; font: 600 11.5px var(--font-ui); color: var(--text-dim); transition: background .12s, color .12s; }
+.sl-tb:hover { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text); }
+.sl .sl-tb .sl-ic { width: 12px; height: 12px; }
+.sl-empty { padding: 6px 2px; font-size: 12px; line-height: 1.45; color: var(--text-muted); }
+
+/* ---------------------------------------------------------------- narrow sidebars (about 300 px) */
+@container (max-width: 300px) {
+  .sl-row { grid-template-columns: 84px minmax(0, 1fr) 60px; gap: 6px; }
+  .sl-seg .sl-ic, .sl .sl-tb .sl-ic { display: none; }
+  .sl-file small { display: none; }
+}
