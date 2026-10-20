@@ -148,6 +148,8 @@ export default async (t, ctx) => {
   const opened = await waitFor(`!!document.querySelector('.ss .ss-canvas') && !document.querySelector('#rightbar').classList.contains('hidden')`);
   check('Installing it opens the Sprite Studio panel on the right', opened && (await ev(`document.querySelector('#rb-title').textContent`)) === 'Sprite Studio' &&
     (await ev(`[...document.querySelectorAll('#toolstrip-right .ts-btn')].some((b) => b.title === 'Sprite Studio')`)), await ev(`window.TuffPluginHost.state()`));
+  const mask = await ev(`(() => { const b = [...document.querySelectorAll('#toolstrip-right .ts-btn')].find((x) => x.title === 'Sprite Studio'); return decodeURIComponent(getComputedStyle(b.querySelector('.pi')).webkitMaskImage || ''); })()`);
+  check('Its toolstrip button draws the pencil-and-pixels icon', mask.includes('M15.6 4.4a2 2 0 0 1 2.8 0') && mask.includes('M2.5 19.5h3v3h-3z'), mask.slice(0, 200));
   await ev(`document.documentElement.style.setProperty('--rightbar-w', '400px'); 1`);
   await t.sleep(400);
 
