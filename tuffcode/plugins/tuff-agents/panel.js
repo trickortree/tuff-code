@@ -134,9 +134,14 @@ TuffPlugins.register('tuff-agents', (t) => {
   // The Run panel's Explain button on a Tuff error.
   window.tuffExplainError = (error) => quick(`I ran my program and got this error. Explain in simple words what's wrong and how to fix it:\n\`\`\`\n${error.trim()}\n\`\`\``);
 
-  function quick(text) {
+  async function quick(text) {
     panel.open();
-    setTimeout(() => send(text), 50);
+    // The first time the panel opens, it's still looking for agents. Wait for that, or send() thinks
+    // the agent isn't installed.
+    if (!S.agents) await looking;
+    if (S.view === 'setup') showSetup(false);
+    if (S.run) { t.toast('Wait for the reply to finish, or press Stop, then try again.'); return; }
+    send(text);
   }
 
   // ---------------------------------------------------------------- layout
@@ -216,16 +221,20 @@ TuffPlugins.register('tuff-agents', (t) => {
 
   const current = () => S.agents?.find((a) => a.id === S.agent);
 
+  let looking = Promise.resolve(); // settles once the latest look for agents has filled in S.agents
   async function refreshAgents() {
     S.agents = null;
     renderAgents();
     renderStatus();
+    let found;
+    looking = new Promise((r) => (found = r));
     try {
       S.agents = await t.agents.detect();
     } catch (err) {
       S.agents = [];
       t.toast(`Couldn't look for agents: ${err.message}`, 'error');
     }
+    found();
     renderAgents();
     renderStatus();
     renderSetup();
@@ -568,6 +577,8 @@ TuffPlugins.register('tuff-agents', (t) => {
   const COMPACT_PROMPT = 'Summarize this whole chat so far for the team of agents, so the summary can replace it. In at most 10 short bullet points: what the person is making and asked for, what was decided, what each agent did (name them, and the files they changed), and what is still open. Write only the summary.';
   function compact() {
     if (S.run) return;
+    // Tuff AI only reads the last few messages, so its summary would leave the rest of the chat out.
+    if (current()?.local) return note('Tuff AI can only see the last few messages, so it can\'t sum up the chat. Switch to Claude, Codex or Antigravity, then type /compact.');
     if (chatSoFar(true).length < 2) return note('Nothing to compact yet.');
     send(COMPACT_PROMPT, { compact: true });
   }

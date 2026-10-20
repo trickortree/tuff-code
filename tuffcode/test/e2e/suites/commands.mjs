@@ -1,5 +1,6 @@
 // The message box: Ask / Plan / Edit, "/" commands, /compact, and the follow-up buttons
-// ("Edit it for me" after an Ask answer that offers a change, "Go ahead" after a plan).
+// ("Edit it for me" after an Ask answer that offers a change, "Go ahead" after a plan), and Explain on a
+// Run error.
 export const meta = { title: 'modes, / commands and /compact' };
 
 export default async (t, ctx) => {
@@ -79,4 +80,52 @@ export default async (t, ctx) => {
   // Tuff AI only answers: Plan and Edit are off on its tab.
   await ev(`document.querySelector('.ta-agents button[data-id="tuffai"]').click()`);
   check('On the Tuff AI tab, Plan and Edit are switched off', await ev(`(() => { const b = [...document.querySelectorAll('.ta-mode button')]; return b.find(x => x.dataset.m === 'plan').disabled && b.find(x => x.dataset.m === 'edit').disabled && b.find(x => x.dataset.m === 'ask').classList.contains('on'); })()`), null);
+  // Tuff AI only reads the last few messages, so it can't sum up the chat for everyone.
+  const summaries = () => ev(`document.querySelectorAll('.ta-msg.agent.summary').length`);
+  const sumBefore = await summaries();
+  await send('/compact');
+  check('/compact on Tuff AI says to switch agents, and leaves the chat as it is (#12)', /can't sum up the chat/.test(await lastNote()) && await summaries() === sumBefore, await lastNote());
+
+  // Explain on a Run error (the Explain / Fix commands work the same way).
+  const toasts = () => ev(`window.__toasts`);
+  const watchToasts = () => ev(`(() => { window.__toasts = []; new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => n.classList?.contains('toast') && window.__toasts.push(n.textContent)))).observe(document.querySelector('#toasts'), { childList: true }); return 1; })()`);
+  const asked = () => ev(`document.querySelectorAll('.ta-msg.user').length`);
+  await watchToasts();
+  await ev(`document.querySelector('.ta-agents button[data-id="claude"]').click()`);
+  await ev(`document.querySelector('.ta [data-a="setup"]').click()`);
+  await waitFor(`!document.querySelector('.ta-setup').classList.contains('hidden')`, 5000);
+  let n = await asked();
+  await ev(`window.tuffExplainError('Tuff error on line 2: expected ":"'); 1`);
+  await waitFor(`document.querySelectorAll('.ta-msg.user').length > ${n}`, 8000);
+  await idle();
+  check('Explain from the Agent tools page goes back to the chat, where the answer shows (#38)', await asked() > n && await ev(`!document.querySelector('.ta-msgs').classList.contains('hidden') && document.querySelector('.ta-setup').classList.contains('hidden')`), await ev(`document.querySelector('.ta-msgs').className`));
+
+  await send('SLOW question');
+  await waitFor(`!!document.querySelector('.ta-msg.agent.live')`, 8000);
+  n = await asked();
+  await ev(`window.tuffExplainError('Tuff error on line 3: oops'); 1`);
+  await t.sleep(400);
+  check('Explain while an agent is answering says to wait, and sends nothing (#38)', (await toasts()).some((x) => /Wait for the reply to finish/.test(x)) && await asked() === n, await toasts());
+  await ev(`document.querySelector('.ta-send').click()`);
+  await idle();
+
+  // The panel looks for agents when it opens (and on "Look for agents again"). Explain waits for that
+  // instead of saying the agent isn't installed.
+  n = await asked();
+  let runsAt = runs('claude').length;
+  await ev(`(() => { document.querySelector('.ta-top [data-a="menu"]').click(); [...document.querySelectorAll('.ta-menu button')].find(b => /look for agents again/i.test(b.textContent)).click(); window.tuffExplainError('Tuff error on line 4: while looking'); return 1; })()`);
+  await waitFor(`document.querySelectorAll('.ta-msg.user').length > ${n}`, 15000);
+  await idle();
+  check('Explain while the panel looks for agents waits, then sends (#9)', await asked() > n && runs('claude').length > runsAt && !(await toasts()).some((x) => /isn't installed/.test(x)), { toasts: await toasts(), runs: [runsAt, runs('claude').length] });
+
+  // The first time the panel opens after a restart (it was closed when TuffCode last quit).
+  await ev(`document.querySelector('#toolstrip-right .ts-btn.active').click(); 1`);
+  await t.reload();
+  await waitFor(`typeof window.tuffExplainError === 'function' && !document.querySelector('.ta')`, 10000);
+  await watchToasts();
+  runsAt = runs('claude').length;
+  await ev(`window.tuffExplainError('Tuff error on line 5: after a restart'); 1`);
+  await waitFor(`document.querySelectorAll('.ta-msg.user').length > 0`, 15000);
+  await idle();
+  check('After a restart, Explain opens the panel and sends to the agent (#9)', await asked() === 1 && /after a restart/.test(last('claude').prompt || '') && runs('claude').length > runsAt && !(await toasts()).some((x) => /isn't installed/.test(x)), { toasts: await toasts(), asked: await asked(), runs: [runsAt, runs('claude').length] });
 };
