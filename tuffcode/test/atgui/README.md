@@ -22,7 +22,8 @@ Results, numbers and screenshots go to `out/` (ignored by git).
 types, presses keys and hovers with real DOM events, so they go through the engine's bridge and atgui's
 handlers like a person's would. It waits for each answer from the Tuff program (a change in the page),
 times round trips with a MutationObserver, and asks for screenshots, which WebView2 takes through the
-DevTools protocol (`Page.captureScreenshot`). A program that tests itself (`app:after` + `app:close`, as the
+DevTools protocol (`Page.captureScreenshot`). `T.press(' ')` makes a real key press through DevTools too
+(`Input.dispatchKeyEvent`), for what only a trusted key does, like Space pressing a focused button. A program that tests itself (`app:after` + `app:close`, as the
 guide recommends) needs no driver. A watchdog ends a run that hangs.
 
 Real focus events only fire while the window is the foreground one, so `widgets.js` sends `focusin` and
@@ -35,7 +36,7 @@ Real focus events only fire while the window is the foreground one, so `widgets.
 | `widgets` | Every widget and event through the page: the 29 lines the program says, in order (each event function's input included), and 45 checks of the page (styles, hover and pressed rules, tooltip, context menu, modal, Escape, markdown, code, pictures, split, glass, gradient, animation, escape hatches...) |
 | `selftest` | A program that drives itself: `:set`, `:value`, `:add`, `:remove`, `:clear`, pages, timers and `app:closed` |
 | `errors` | A mistake in a click, a keystroke and a timer function is reported once each, with its line, and the app keeps working |
-| `popups` | `app:ask`, `app:confirm` (Yes, and Escape for No) and `app:alert` in the top-level code; timers keep running meanwhile |
+| `popups` | `app:ask`, `app:confirm` (a real Space press on the focused Yes, and Escape for No) and `app:alert` in the top-level code; timers keep running meanwhile |
 | `osclose` | Closing with WM_CLOSE (the X button), through plain `tuff.py`: exit 0, `app:closed` ran |
 | `frameless` | `app:titlebar`: drag regions, the three buttons, maximize and restore (button and double-click), resize, close |
 | `latency` | 100 clicks and 100 keystrokes, each timed from the DOM event to the Tuff function's change in the page |

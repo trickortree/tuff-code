@@ -1267,9 +1267,11 @@ addEventListener('wheel', (e) => {
   wheel.dx += e.deltaX;
   wheel.dy += e.deltaY;
 }, { passive: true });
+// In a game, Space and the arrows are for playing: they mustn't scroll the page or press a focused button. An app
+// turns this off (tv.gameKeys = false, as atgui does), so Space presses its buttons and the arrows scroll.
 const GAME_KEYS = new Set([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 addEventListener('keydown', (e) => {
-  if (GAME_KEYS.has(e.key) && !editable(e.target)) e.preventDefault();
+  if (api.gameKeys && GAME_KEYS.has(e.key) && !editable(e.target)) e.preventDefault();
   emit('keydown', { key: e.key, code: e.code, repeat: e.repeat, ...mods(e) });
 });
 addEventListener('keyup', (e) => emit('keyup', { key: e.key, code: e.code, ...mods(e) }));
@@ -1303,7 +1305,7 @@ addEventListener('unhandledrejection', (e) => report(e.reason, 'the page'));
 // ---------------------------------------------------------------- start up
 
 // What custom JS (view.js(...) in Python) gets as `tv`.
-const api = { objs, node, emit, three: () => THREE, loadThree, root };
+const api = { objs, node, emit, three: () => THREE, loadThree, root, gameKeys: true };
 window.__tv = { apply };
 window.tuffView = api;
 requestAnimationFrame(tick);

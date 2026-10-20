@@ -1,4 +1,5 @@
-// Answers popups.tuf's popups: types a name and presses Enter, clicks Yes, presses Escape (= No), clicks OK.
+// Answers popups.tuf's popups: types a name and presses Enter, presses Space on the focused Yes (a real key
+// press: an app's Space presses its buttons), presses Escape (= No), clicks OK.
 const shown = () => { const all = T.qa('.at-overlay.at-shown'); return all[all.length - 1]; };
 const field = await T.until(() => shown() && shown().querySelector('.at-input'));
 const prompt = shown().querySelector('.at-text').textContent;
@@ -9,7 +10,8 @@ T.type(field, 'Ada');
 T.key('Enter', {}, field);
 o = await T.until(() => shown() && shown().textContent.includes('Are you sure?'));
 await T.wait(150);
-T.click(T.find('.at-overlay.at-shown .at-btn', 'Yes'));
+await T.until(() => document.activeElement && document.activeElement.textContent.trim() === 'Yes');
+await T.press(' ');
 o = await T.until(() => shown() && shown().textContent.includes('Really sure?'));
 T.key('Escape');
 o = await T.until(() => shown() && shown().textContent.includes('All done'));
