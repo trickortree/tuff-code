@@ -45,9 +45,11 @@ function pump() {
         return;
       }
       b.i++;
+      if (skip(c)) continue;
       try {
         run(c);
       } catch (err) {
+        if (c[0] === 'c' && !objs.has(c[1])) broken.add(c[1]);
         report(err, describe(c));
       }
     }
@@ -57,6 +59,18 @@ function pump() {
     stats.seq = b[0];
   }
   stats.applyMs += performance.now() - t0;
+}
+
+// Objects that couldn't be made. Commands for them, and for what goes inside them, are skipped quietly: the one
+// error that said why is enough, and a "there's no object" for each of them would bury it.
+const broken = new Set();
+
+function skip(c) {
+  if (!broken.size) return false;
+  if (c[0] === 'c' && broken.has(c[4])) { broken.add(c[1]); return true; }
+  if ((c[0] === 's' || (c[0] === 'k' && !c[4])) && broken.has(c[1])) return true;
+  if (c[0] === 'r' && broken.has(c[1])) { broken.delete(c[1]); return true; }
+  return false;
 }
 
 function loadThree() {

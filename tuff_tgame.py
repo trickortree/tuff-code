@@ -1383,6 +1383,10 @@ class World3D(Game):
 
     def setup(self):
         v = self.view
+        if v.info.get("webgl") is False:  # the page found no WebGL: three.js can't draw anything here
+            v.close()
+            raise self.rt.error("This computer can't show 3D worlds: its 3D graphics (WebGL) aren't working. "
+                                "2D games (tgame.window) still work, and updating the graphics driver may help.")
         self.cam = [0.0, 1.7, 8.0]
         self.cam_yaw = 0.0  # heading, degrees clockwise from looking down -z
         self.cam_pitch = -8.0
