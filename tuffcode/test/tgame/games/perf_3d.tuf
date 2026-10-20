@@ -1,0 +1,19 @@
+mention tgame
+
+# 300 objects from the kit on an island, and a first-person player walking through them (the pygame style).
+game = tgame.world("300 objects", 960, 600)
+game:sky "day"
+game:island(160)
+player = game:player("first person")
+kinds = ["tree", "pine", "rock", "crate", "bush", "tree"]
+for n in range(0, 299):
+    game:spawn(kinds[n % 6])
+fps_label = game:hud():text("fps", 480, 24, 22, "white")
+shown = 0
+
+while game:open():
+    dt = game:frame()
+    shown += dt
+    if shown > 0.5:
+        shown = 0
+        fps_label:set "fps: " + game:fps()

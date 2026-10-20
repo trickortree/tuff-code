@@ -1,0 +1,45 @@
+mention tgame
+
+game = tgame.world("Hypergamous Axe Sim", 960, 600)
+game:sky "day"
+game:island(80)
+player = game:player("first person")
+axe = player:hold("axe")
+hud = game:hud()
+logs_label = hud:text("Logs: 0", 90, 30, 26, "white")
+hud:text("Walk with WASD, click a tree to chop it", 480, 575, 16, "white")
+logs = 0
+
+game:spawn("hut", -6, 0, -10)
+game:spawn("sign", 2, 0, -3):label "Chop the trees!"
+for i in range(1, 6):
+    game:spawn("rock")
+for i in range(1, 20):
+    tree = game:spawn("tree")
+    tree:clicked chop
+for i in range(1, 10):
+    pine = game:spawn("pine")
+    pine:clicked chop
+near = game:spawn("pine", 0, 0, -6)
+near:clicked chop
+
+func chop(tree):
+    axe:swing()
+    if tree:distance(player) > 4 or tree:fallen():
+        return
+    game:sound "chop"
+    tree:shake()
+    hits = (tree:get("hits") or 0) + 1
+    tree:set("hits", hits)
+    tree:label "" + (3 - hits) + " / 3"
+    if hits is 3:
+        tree:fall()
+        tree:label ""
+        tree:set("hits", 0)
+        tree:regrow(5)
+        logs += 1
+        logs_label:set "Logs: " + logs
+        game:sound "coin"
+
+while game:open():
+    game:frame()

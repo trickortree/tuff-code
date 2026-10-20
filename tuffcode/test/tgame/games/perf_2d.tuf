@@ -1,0 +1,27 @@
+mention tgame
+
+# 200 sprites, each moved by Tuff code every frame (the pygame style). The test measures the frame rate.
+game = tgame.window("200 sprites", 800, 600)
+colors = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"]
+sprites = []
+vx = []
+vy = []
+for n in range(0, 199):
+    s = game:circle(random(10, 790), random(10, 590), 7, colors[n % 8])
+    s:on_edge "wrap"
+    sprites:add(s)
+    vx:add(random(-150, 150))
+    vy:add(random(-150, 150))
+fps_label = game:hud():text("fps", 400, 24, 22, "white")
+shown = 0
+
+while game:open():
+    dt = game:frame()
+    i = 0
+    for s in sprites:
+        s:move(vx[i] * dt, vy[i] * dt)
+        i += 1
+    shown += dt
+    if shown > 0.5:
+        shown = 0
+        fps_label:set "fps: " + game:fps()
