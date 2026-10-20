@@ -504,6 +504,10 @@ class View:
             self._closed = True
             self._inbox.append({"type": "close"})
             self._cond.notify_all()
+        if not self._debug:
+            # pywebview answers the page's last calls on threads of its own, and one that lands after the window
+            # is gone logs "Cannot access a disposed object" with a traceback. That's only noise once it's closed.
+            logging.getLogger("pywebview").setLevel(logging.CRITICAL)
         self._ready.set()
 
     def _fail(self, err):
