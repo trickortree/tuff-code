@@ -37,6 +37,7 @@ const server = http.createServer((req, res) => {
     if (url === '/redirect') return send(302, null, '', { Location: '/json' });
     if (url === '/redirect-headers') return send(302, null, '', { Location: '/headers' });
     if (url === '/redirect-away') return send(302, null, '', { Location: `${OTHER}/headers` });
+    if (url === '/bom') return send(200, 'application/json; charset=utf-8', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('{"temp":12.5}')]));
     if (url === '/badjson') return send(200, 'application/json', '{not json');
     if (url === '/slow') { slow.add({ res, timer: setTimeout(() => send(200, 'text/plain', 'too late'), 25000) }); return; }
     send(404, 'text/plain', 'no such page');
@@ -207,6 +208,11 @@ say away:get("x-api-key")
 say away:get("accept")
 say away:get("user-agent")
 `, ['Bearer MY-SECRET-KEY', 'KEY2', 'nil', 'nil', 'application/json', 'TuffCode-tap/1.0']);
+
+await works('JSON that starts with a byte order mark', `res = tap.get("BASE/bom")
+say res:json:get("temp")
+say len(res:text)
+`, ['12.5', '13']);
 
 await stops('an err given to tap stops with its reason', 'res = tap.get(num("abc"))\n', "The input to tap.get() is err: num() couldn't turn 'abc' into a number.", 3);
 

@@ -113,6 +113,8 @@ class Response:
                 self.decoded = self.body.decode(charset, errors="replace")
             except LookupError:
                 self.decoded = self.body.decode("utf-8", errors="replace")
+            if self.decoded.startswith("﻿"):  # a byte order mark isn't part of the text (browsers drop it too)
+                self.decoded = self.decoded[1:]
         return self.decoded
 
     def json(self):
