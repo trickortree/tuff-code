@@ -61,6 +61,26 @@ def drive(name, program, driver=None, timeout=60):
     return result
 
 
+def window_of(pid, title):
+    """The top-level window with this title that belongs to this process (Windows), or None."""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    found = []
+
+    def each(hwnd, _):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid:
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(hwnd, buf, 256)
+            if buf.value == title and user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+        return True
+    user32.EnumWindows(ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)(each), 0)
+    return found[0] if found else None
+
+
 def lines(text):
     return [x for x in text.replace("\r\n", "\n").split("\n") if x.strip()]
 
@@ -145,6 +165,31 @@ def main():
             R.check(v, f"page: {k}")
         R.check(len(checks) == 10, "all frameless checks came back", checks)
         R.check(r.get("code") == 0 and lines(r.get("stdout", "")) == ["closed"], "the close button closed it and app:closed ran", (r.get("exit"), r.get("stdout")))
+
+    if wants("osclose") and os.name == "nt":
+        print("== programs/osclose.tuf: closed with WM_CLOSE (the window's X), through plain tuff.py", flush=True)
+        proc = subprocess.Popen([sys.executable, TUFF, "tuffcode/test/atgui/programs/osclose.tuf"], cwd=REPO, env=ENV,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
+        hwnd = None
+        deadline = time.monotonic() + 20
+        while hwnd is None and time.monotonic() < deadline and proc.poll() is None:
+            hwnd = window_of(proc.pid, "atgui close test")
+            time.sleep(0.05)
+        R.check(hwnd is not None, "its window opened")
+        time.sleep(0.8)
+        closed_at = time.monotonic()
+        if hwnd is not None:
+            import ctypes
+            ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+        try:
+            out, err = proc.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, err = proc.communicate()
+        took = time.monotonic() - closed_at
+        R.check(proc.returncode == 0 and lines(out) == ["closed by the system"] and err == "",
+                f"the program ended cleanly {took:.2f} s after WM_CLOSE, and app:closed ran", (proc.returncode, out, err))
+        R.numbers["close_after_wm_close_s"] = round(took, 2)
 
     if wants("latency"):
         print("== programs/latency.tuf: round trips", flush=True)
