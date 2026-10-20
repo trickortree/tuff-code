@@ -351,7 +351,10 @@ window.registerTuff = function registerTuff(monaco, accent) {
         return { suggestions: Object.keys(window.TUFF_LIBS).map((l) => ({ label: l, kind: K.Module, insertText: l, range, documentation: window.TUFF_DOCS[l]?.[1] })) };
       }
       if (/\w:$/.test(before)) {
-        const methods = new Set([...Object.keys(window.TUFF_METHOD_DOCS), 'clear', 'upper', 'lower', 'trim', 'has', 'add', 'pop']);
+        // tgame's own methods (their docs start with "tgame") only crowd the list in files that use tgame.
+        const games = /^\s*(import|mention)\s+tgame\b/m.test(model.getValue());
+        const names = Object.keys(window.TUFF_METHOD_DOCS).filter((m) => games || !/^tgame\b/.test(window.TUFF_METHOD_DOCS[m][1]));
+        const methods = new Set([...names, 'clear', 'upper', 'lower', 'trim', 'has', 'add', 'pop']);
         return {
           suggestions: [...methods].map((m) => ({
             label: m, kind: K.Method, insertText: m, range,

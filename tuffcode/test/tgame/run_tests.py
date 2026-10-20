@@ -559,10 +559,12 @@ const fs = require('fs'), vm = require('vm');
 const window = {};
 vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), { window });
 const snippets = [];
+let provider = null;
 const monaco = { languages: { register() {}, setMonarchTokensProvider() {}, setLanguageConfiguration() {},
   registerHoverProvider() {}, registerDefinitionProvider() {}, registerReferenceProvider() {}, registerRenameProvider() {},
   registerDocumentSymbolProvider() {}, registerSignatureHelpProvider() {}, registerColorProvider() {},
   registerCompletionItemProvider(_id, p) {
+    provider = p;
     const model = { getWordUntilPosition: () => ({ startColumn: 1, endColumn: 1 }), getLineContent: () => '', getValue: () => '', getLinesContent: () => [] };
     for (const s of p.provideCompletionItems(model, { lineNumber: 1, column: 1 }).suggestions) if (s.kind === 'Snippet') snippets.push([s.label, s.insertText]);
   },
@@ -570,7 +572,10 @@ const monaco = { languages: { register() {}, setMonarchTokensProvider() {}, setL
   editor: { defineTheme() {} } };
 window.defineTuffTheme = () => {};
 try { window.registerTuff(monaco, '#3574f0'); } catch (e) { console.error(e); }
-console.log(JSON.stringify({ libs: window.TUFF_LIBS, docs: window.TUFF_DOCS, methods: window.TUFF_METHOD_DOCS, snippets }));
+const after = (src) => provider.provideCompletionItems({ getWordUntilPosition: () => ({ startColumn: 5, endColumn: 5 }),
+  getLineContent: () => 'app:', getValue: () => src, getLinesContent: () => src.split('\\n') }, { lineNumber: 1, column: 5 }).suggestions.map((s) => s.label);
+console.log(JSON.stringify({ libs: window.TUFF_LIBS, docs: window.TUFF_DOCS, methods: window.TUFF_METHOD_DOCS, snippets,
+  plain: after('app = tgui.window()\\n'), games: after('mention tgame\\n') }));
 """
 
 
@@ -591,6 +596,9 @@ def t_editor(c):
     c.check(not missing, f"every tgame method ({len(names)}) has hover docs", missing)
     shared = [m for m in names if m in t["methods"] and "tgame" not in t["methods"][m][1] and "tgame" not in t["methods"][m][0]]
     c.check(not shared, "names tgame shares with tgui and tap mention what they do in tgame", shared)
+    c.check("button" in t["plain"] and "frame" not in t["plain"] and "spawn" not in t["plain"],
+            "after app: in a file without tgame, the list leaves out tgame's own methods", [m for m in t["plain"] if m in ("frame", "spawn", "button")])
+    c.check("frame" in t["games"] and "spawn" in t["games"] and "button" in t["games"], "in a tgame file it offers them all", len(t["games"]))
     games = [(label, text) for label, text in t["snippets"] if label.startswith("tgame")]
     c.check(len(games) == 2, "there are 2D and 3D starter snippets", [g[0] for g in games])
     import re

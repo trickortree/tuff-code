@@ -30,14 +30,14 @@ Don't cover the windows while the tests run: a covered page stops drawing.
 | `notice` | The Tuff Engine line: first in the IDE's line protocol with the `notice` style, ANSI yellow in a terminal, plain in a pipe, never for `--check`, programs without tgame or a `--windowed` app |
 | `mcp` | `tuff_run` through the MCP server shows the notice as a plain first line |
 | `checker` | `--check` accepts every game here and correct snippets, and catches 34 kinds of mistake (wrong names with "Use :box instead", input counts, colors, keys, sounds, skies, missing files, event functions) |
-| `editor` | `tuff-lang.js`: tgame's functions, docs for all 101 method names, and the 2D and 3D snippets (which pass `--check` and run) |
+| `editor` | `tuff-lang.js`: tgame's functions, docs for all 101 method names, completions that only offer tgame's own methods in files using tgame, and the 2D and 3D snippets (which pass `--check` and run) |
 | `guide` | Every example in the guide's tgame section passes `--check` and runs |
 | `perf` | Frame rates: 200 sprites moved by Tuff code, 200 moving by `:speed`, 300 objects with a first-person walk, 300 boxes moved by Tuff code |
 
 ## Measured on this PC
 
 i9-12900K, RX 7900 XTX, Windows 11, a ~132 Hz display, Python 3.12.10, pywebview 6.2.1, WebView2 155.
-The last full runs: **226 passed, 0 failed** with Python + `tuff.py`, and the same 226 through the frozen runtime
+The last full runs: **228 passed, 0 failed** with Python + `tuff.py`, and the same 228 through the frozen runtime
 (`npm run build:runtime`). `build_exe_test.mjs`: 11/11. The IDE suite `e2e/suites/tgame.mjs`: 7/7.
 
 All four performance programs are Tuff programs in the pygame style (`while game:open(): dt = game:frame()`):
