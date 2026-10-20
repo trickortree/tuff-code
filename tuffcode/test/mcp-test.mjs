@@ -1,0 +1,58 @@
+// Drives the TuffCode MCP server over stdio like an agent would. Exits 1 if any check fails.
+// Usage: node test/mcp-test.mjs <TuffCode binary (or node)> <path to tuff-mcp.js>
+import { spawn } from 'node:child_process';
+const [cmd, ...args] = process.argv.slice(2);
+const proc = spawn(cmd, args, { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['pipe', 'pipe', 'inherit'] });
+let buf = '';
+const waiting = new Map();
+proc.stdout.on('data', (d) => {
+  buf += d;
+  let nl;
+  while ((nl = buf.indexOf('\n')) >= 0) {
+    const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+    const msg = JSON.parse(line);
+    waiting.get(msg.id)?.(msg); waiting.delete(msg.id);
+  }
+});
+let id = 0;
+const call = (method, params) => new Promise((r) => { const i = ++id; waiting.set(i, r); proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: i, method, params }) + '\n'); });
+const tool = async (name, a = {}) => (await call('tools/call', { name, arguments: a })).result;
+const results = [];
+const check = (name, ok, got) => results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : '\n      got: ' + JSON.stringify(got).slice(0, 400)}`);
+
+const init = await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
+check('initialize returns server info + tools capability', init.result?.serverInfo?.name === 'tuffcode' && init.result.capabilities.tools && init.result.protocolVersion === '2025-06-18', init);
+proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+const list = await call('tools/list', {});
+check('tools/list has 4 tools', list.result.tools.map((t) => t.name).join(',') === 'tuff_reference,tuff_examples,tuff_check,tuff_run', list.result.tools.map((t) => t.name));
+const ref = await tool('tuff_reference');
+const refText = ref.content[0].text;
+check('tuff_reference includes guide, keywords, builtins, libraries, widget methods', /Tuff language guide/.test(refText) && /## Keywords\nsay, input/.test(refText) && /`range\(start, end\)`/.test(refText) && /### anims/.test(refText) && /`app:button\(/.test(refText), refText.slice(0, 300));
+check('tuff_reference topic=widgets is just the methods part', /^## Methods \(windows, widgets, lists, text and lines\)/.test((await tool('tuff_reference', { topic: 'widgets' })).content[0].text), null);
+const guide = (await tool('tuff_reference', { topic: 'guide' })).content[0].text;
+check('the guide has the Python table, events, patterns and limits', ['## Tuff is not Python', '### Events: what the function gets', '## Patterns', "## What Tuff can't do", 'func is_number(t):'].every((s) => guide.includes(s)), guide.slice(0, 200));
+const methodDocs = (await tool('tuff_reference', { topic: 'widgets' })).content[0].text;
+check('the methods list has list and text methods', ['items:add value', 'thing:has value', 'text:trim'].every((s) => methodDocs.includes(s)), null);
+const ex = (await tool('tuff_examples')).content[0].text;
+check('tuff_examples has all 8 templates', (ex.match(/^## /gm) || []).length === 8 && /func add_task\(\):/.test(ex), ex.slice(0, 200));
+const good = await tool('tuff_check', { code: 'say "hi"\nfunc f(x):\n    x * 2\n' });
+check('tuff_check OK on good code', !good.isError && /OK/.test(good.content[0].text), good);
+const bad = await tool('tuff_check', { code: 'if x is 1\n    say 1\n' });
+check('tuff_check explains a mistake with its line', bad.isError && /line 1/i.test(bad.content[0].text) && /':' or 'then'/.test(bad.content[0].text), bad);
+const run = await tool('tuff_run', { code: 'name = input "Name? "\nsay "Hi " + name\nfor i in range(1, 3):\n    say i\n', input: 'Sam' });
+check('tuff_run runs with input and returns output', /Hi Sam/.test(run.content[0].text) && /1\n2\n3/.test(run.content[0].text) && /Exit code 0/.test(run.content[0].text), run);
+const scr = (await tool('tuff_run', { code: 'line = say "Loading"\nline:rewrite("Done!")\nsay "next"\nsay "gone"\nclear(1)\nname = input "Name? "\nsay "Hi " + name\n', input: 'Sam' })).content[0].text;
+check('tuff_run shows the final screen: rewritten and cleared lines, answers after questions', scr.startsWith('Done!\nnext\nName? Sam\nHi Sam\n'), scr);
+const short = (await tool('tuff_run', { code: 'a = input "A? "\nb = input "B? "\n', input: 'x' })).content[0].text;
+check('tuff_run says when the program runs out of answers', /no more input to read/.test(short) && /Exit code 1/.test(short), short);
+const deep = (await tool('tuff_check', { code: 'mention mtgui\napp = mtgui.window("T")\napp:hedding "Hi"\nb = app:button("Go", go(), "big")\nfunc go():\n    say 1\n' })).content[0].text;
+check('tuff_check lists every problem: method typo, handler with brackets, unknown style', /hedding/.test(deep) && /without brackets/.test(deep) && /'big' isn't a button style/.test(deep), deep);
+const slow = await tool('tuff_run', { code: 'while true:\n    wait(1)\n', timeout_seconds: 1 });
+check('tuff_run stops a program that runs too long', /Stopped after 1 seconds/.test(slow.content[0].text), slow);
+const nofile = await tool('tuff_check', { file: 'does/not/exist.tuf' });
+check('missing file is a clear error', nofile.isError && /No file at/.test(nofile.content[0].text), nofile);
+const unknown = await call('tools/call', { name: 'nope', arguments: {} });
+check('unknown tool is a JSON-RPC error', unknown.error?.code === -32602, unknown);
+console.log(results.join('\n'));
+proc.stdin.end();
+process.exitCode = results.some((r) => r.startsWith('FAIL')) ? 1 : 0;

@@ -18,6 +18,46 @@
   let editor = null;
   let monacoReady = null;
 
+  // ---------- Mac and Linux ----------
+  // A Mac keeps its own traffic-light buttons in the title bar (see main.js).
+  if (api.platform === 'darwin') document.documentElement.classList.add('mac');
+  // "Build .exe" is Windows talk; elsewhere the same feature builds an app.
+  if (api.platform !== 'win32') {
+    const words = () => {
+      const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let n = walk.nextNode(); n; n = walk.nextNode()) if (n.nodeValue.includes('.exe')) n.nodeValue = n.nodeValue.replace(/\ban \.exe\b/g, 'an app').replace(/\.exe\b/g, 'app');
+      for (const el of document.querySelectorAll('[title*=".exe"]')) el.title = el.title.replace(/\.exe\b/g, 'app');
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', words); else words();
+  }
+  // The .fl icons are glyphs from Windows' Segoe Fluent Icons font, which other systems don't have.
+  // There, each one is swapped for a drawn icon of the same meaning.
+  if (api.platform !== 'win32') {
+    const svg = (d) => `<svg class="fl-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+    const ICONS = {
+      '': svg('<path d="M4 6l4 4 4-4"/>'), // chevron down
+      '': svg('<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2L13.5 13.5"/>'), // search
+      '': svg('<circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.8M8 12.4v1.8M1.8 8h1.8M12.4 8h1.8M3.6 3.6l1.3 1.3M11.1 11.1l1.3 1.3M3.6 12.4l1.3-1.3M11.1 4.9l1.3-1.3"/>'), // settings
+      '': svg('<path d="M8 2a6 6 0 100 12c1 0 1.4-.7 1.1-1.5-.4-1 .2-1.9 1.3-1.9H12a2 2 0 002-2A6 6 0 008 2z"/><circle cx="5" cy="7" r=".8"/><circle cx="7.5" cy="4.8" r=".8"/><circle cx="10.5" cy="5.6" r=".8"/>'), // palette
+      '': svg('<path d="M3 8h10"/>'),
+      '': svg('<rect x="3.5" y="3.5" width="9" height="9"/>'),
+      '': svg('<rect x="3.5" y="5.5" width="7" height="7"/><path d="M5.5 5.5V3.5h7v7h-2"/>'),
+      '': svg('<path d="M4 4l8 8M12 4l-8 8"/>'),
+    };
+    const swap = (root) => {
+      for (const el of root.querySelectorAll ? root.querySelectorAll('.fl') : []) {
+        const g = el.textContent.trim();
+        if (ICONS[g]) el.innerHTML = ICONS[g];
+      }
+    };
+    const start = () => {
+      swap(document);
+      new MutationObserver((list) => { for (const m of list) for (const n of m.addedNodes) if (n.nodeType === 1) { if (n.classList?.contains('fl')) swap(n.parentNode); else swap(n); } })
+        .observe(document.body, { childList: true, subtree: true });
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+  }
+
   // ---------- helpers ----------
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const basename = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
@@ -1136,7 +1176,7 @@
     ['check', 'Check your code for mistakes'],
     ['tools', 'Get the build tools ready'],
     ['pack', 'Pack your program'],
-    ['build', 'Build your .exe'],
+    ['build', api.platform === 'win32' ? 'Build your .exe' : 'Build your app'],
   ];
   const bd = { file: null, icon: null, windowed: true, building: false, steps: {}, last: null };
   const exeName = (n) => n.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'MyTuffApp';
@@ -1163,7 +1203,7 @@
 
   function updateBuildDialog() {
     document.querySelectorAll('.bd-type').forEach((b) => b.classList.toggle('sel', (b.dataset.windowed === '1') === bd.windowed));
-    $('#bd-dest').textContent = join(join(state.root, 'dist'), `${exeName($('#bd-name').value)}.exe`);
+    $('#bd-dest').textContent = join(join(state.root, 'dist'), `${exeName($('#bd-name').value)}${api.platform === 'win32' ? '.exe' : ''}`);
   }
 
   async function openBuildDialog(file) {
@@ -1209,7 +1249,7 @@
     $('#bo-empty').classList.add('hidden');
     $('#bo-main').classList.remove('hidden');
     $('#bo-icon').src = params.iconSrc || 'assets/icon.png';
-    $('#bo-title').textContent = `Building ${params.name}.exe`;
+    $('#bo-title').textContent = `Building ${params.name}${api.platform === 'win32' ? '.exe' : ''}`;
     $('#bo-sub').textContent = `${rel(params.file)} · ${params.windowed ? 'Window app' : 'Console app'}`;
     $('#bo-result').innerHTML = '';
     $('#bo-log').textContent = '';

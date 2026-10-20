@@ -1,8 +1,22 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const fsp = fs.promises;
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
+
+// Apps opened from the Mac Dock or Finder get a bare PATH (/usr/bin:/bin:...), so Python, Homebrew
+// and the AI agents (claude, codex, agy) wouldn't be found. Use the login shell's PATH instead.
+if (process.platform !== 'win32') {
+  try {
+    const out = execFileSync(process.env.SHELL || '/bin/zsh', ['-ilc', 'printf "@@%s@@" "$PATH"'], { encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] });
+    const m = /@@(.*)@@/.exec(out);
+    if (m && m[1]) process.env.PATH = m[1];
+  } catch {}
+  const have = (process.env.PATH || '').split(':');
+  for (const d of ['/opt/homebrew/bin', '/usr/local/bin', path.join(os.homedir(), '.local', 'bin')]) if (!have.includes(d)) have.push(d);
+  process.env.PATH = have.filter(Boolean).join(':');
+}
 const builder = require('./build');
 const updater = require('./updater');
 const plugins = require('./plugins');
@@ -140,7 +154,8 @@ function createWindow() {
     height: 880,
     minWidth: 900,
     minHeight: 560,
-    frame: false,
+    // Our own title bar everywhere; on a Mac it keeps the real traffic-light buttons.
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 14 } } : { frame: false }),
     show: false,
     backgroundColor: '#05060a',
     icon: path.join(__dirname, 'renderer', 'assets', 'icon.png'),
@@ -301,6 +316,9 @@ ipcMain.handle('agents:connect', (_e, id, on) => agents.connect(id, on));
 ipcMain.handle('agents:mcpServer', () => agents.mcpServer());
 ipcMain.handle('agents:mcpSetup', () => agents.mcpSetup());
 ipcMain.handle('agents:mcpCheck', () => agents.mcpCheck());
+ipcMain.handle('agents:signedIn', (_e, id) => agents.signedIn(id));
+ipcMain.handle('agents:signIn', (_e, id) => agents.signIn(id));
+ipcMain.handle('agents:models', (_e, id, fresh) => agents.models(id, fresh));
 ipcMain.handle('agents:run', (_e, params) => { agents.run(params, (ev) => send('agents:event', ev)); return true; });
 ipcMain.handle('agents:stop', (_e, runId) => agents.stop(runId));
 
@@ -310,10 +328,23 @@ ipcMain.handle('window:close', () => win.close());
 ipcMain.handle('window:isMaximized', () => win.isMaximized());
 ipcMain.handle('app:devtools', () => win.webContents.toggleDevTools());
 
+// The Mac menu bar. Cut/Copy/Paste/Select All have to be menu items there or Cmd+C/V do nothing.
+// Undo, Close and Reload are left out so Cmd+Z, Cmd+W and Cmd+R reach the editor's own shortcuts.
+function macMenu() {
+  if (process.platform !== 'darwin') return;
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { role: 'appMenu', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
+    { label: 'Edit', submenu: [{ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
+    { role: 'windowMenu', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { type: 'separator' }, { role: 'front' }] },
+  ]));
+}
+
 app.whenReady().then(() => {
+  macMenu();
   createWindow();
   updater.start((s) => send('update:status', s), loadSettings);
 });
+app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 app.on('window-all-closed', () => {
   if (runProc) runProc.kill();
   app.quit();

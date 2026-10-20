@@ -190,7 +190,8 @@ async function build(opts, emit) {
   const args = [
     ...PY.args, '-m', 'PyInstaller', '--onefile', '--noconfirm', '--clean', '--log-level', 'INFO',
     '--name', name, '--distpath', distDir, '--workpath', path.join(work, 'work'), '--specpath', work,
-    '--icon', iconFile, windowed ? '--windowed' : '--console',
+    // A Mac app's icon has to be .icns; PyInstaller would need extra tools to convert ours.
+    ...(process.platform === 'win32' ? ['--icon', iconFile] : []), windowed ? '--windowed' : '--console',
     ...addData.flatMap((d) => ['--add-data', d]),
     ...(usesGui ? ['--hidden-import', 'tuff_tgui'] : ['--exclude-module', 'tkinter', '--exclude-module', 'tuff_tgui']),
     launcher,
@@ -208,7 +209,10 @@ async function build(opts, emit) {
       }
     },
   });
-  const exe = path.join(distDir, `${name}${process.platform === 'win32' ? '.exe' : ''}`);
+  // On a Mac a windowed program comes out as name.app (plus a bare name binary beside it).
+  const exe = process.platform === 'darwin' && windowed && fs.existsSync(path.join(distDir, `${name}.app`))
+    ? path.join(distDir, `${name}.app`)
+    : path.join(distDir, `${name}${process.platform === 'win32' ? '.exe' : ''}`);
   if (r.code !== 0 || !fs.existsSync(exe)) {
     return fail('build', 'Building your .exe', friendlyError(r.out));
   }

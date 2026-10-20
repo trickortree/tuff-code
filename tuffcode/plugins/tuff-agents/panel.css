@@ -70,6 +70,13 @@
 .ta-ctx button.on { color: var(--text-dim); border-style: solid; background: var(--bg-active); text-decoration: none; }
 .ta-compose textarea { width: 100%; box-sizing: border-box; min-height: 52px; max-height: 220px; resize: none; border: 0; outline: 0; background: transparent; color: var(--text); font: 13px/1.45 var(--font-ui); }
 .ta-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.ta-opts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.ta-opts.hidden { display: none; }
+.ta-sel { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font: 600 11px var(--font-ui); color: var(--text-muted); }
+.ta-sel select { height: 24px; max-width: 150px; padding: 0 4px; border-radius: 6px; border: 1px solid #43454a; background: var(--bg-panel); color: var(--text); font: 12px var(--font-ui); }
+.ta-sel select:focus { outline: 1px solid var(--accent); outline-offset: 0; }
+.ta-sel select:disabled { opacity: .55; cursor: not-allowed; }
+.ta-agents button:disabled { opacity: .45; cursor: not-allowed; }
 .ta-mode { display: flex; padding: 2px; border-radius: 7px; background: var(--bg-panel); }
 .ta-mode button { height: 24px; padding: 0 10px; border-radius: 5px; font: 600 12px var(--font-ui); color: var(--text-dim); }
 .ta-mode button.on { background: var(--bg-active); color: var(--text); }
