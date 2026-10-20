@@ -151,6 +151,8 @@ function remove(id) {
       break;
     case 'obj':
       n.obj.removeFromParent();
+      labels.delete(n);
+      if (n.type === 'label' && n.obj.material.map) n.obj.material.map.dispose();
       if (n.obj.material) n.obj.material.dispose();
       if (n.obj.dispose) n.obj.dispose();
       n.host.dirty = true;
@@ -226,6 +228,12 @@ const engineCalls = {
     if (reset) Object.assign(stats, { since: now, frames: 0, gaps: [], batches: 0, cmds: 0, applyMs: 0, drawMs: 0 });
     return out;
   },
+  snapshot,
+  tones,
+  sound,
+  sound_stop: soundStop,
+  sound_volume: soundVolume,
+  sound_state: soundState,
 };
 
 // ---------------------------------------------------------------- DOM elements
@@ -552,12 +560,41 @@ function setScene(n, props) {
         n.renderer.shadowMap.enabled = !!v;
         n.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         break;
+      case 'sky': setSky(n, v); break;
+      case 'clicklock': n.clicklock = !!v; break;
       default: rest[k] = v;
     }
   }
   if (lens) cam.updateProjectionMatrix();
   setEl(n.el, rest);
   n.dirty = true;
+}
+
+// A gradient sky: a dome around the camera, [top, horizon] or [top, horizon, below], drawn behind everything.
+function setSky(n, v) {
+  if (!v) {
+    if (n.sky) { n.sky.removeFromParent(); n.sky.material.dispose(); n.sky = null; }
+    return;
+  }
+  if (!n.sky) {
+    const material = new THREE.ShaderMaterial({
+      uniforms: { top: { value: new THREE.Color() }, mid: { value: new THREE.Color() }, low: { value: new THREE.Color() } },
+      vertexShader: 'varying vec3 vDir;\nvoid main() { vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: 'uniform vec3 top; uniform vec3 mid; uniform vec3 low; varying vec3 vDir;\n'
+        + 'void main() { float h = normalize(vDir).y; vec3 c = h > 0.0 ? mix(mid, top, pow(h, 0.55)) : mix(mid, low, pow(-h, 0.35));\n'
+        + 'gl_FragColor = vec4(c, 1.0);\n#include <colorspace_fragment>\n}',
+      side: THREE.BackSide, depthWrite: false, depthTest: false, fog: false,
+    });
+    n.sky = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), material);
+    n.sky.renderOrder = -1e6;
+    n.sky.frustumCulled = false;
+    n.sky.raycast = () => {};
+    n.scene.add(n.sky);
+  }
+  const u = n.sky.material.uniforms;
+  u.top.value.set(v[0]);
+  u.mid.value.set(v[1] || v[0]);
+  u.low.value.set(v[2] || v[1] || v[0]);
 }
 
 const MESHES = new Set(['box', 'sphere', 'plane', 'cylinder', 'cone', 'torus', 'capsule']);
@@ -583,13 +620,79 @@ function makeObj(type) {
       obj = new THREE.DirectionalLight(0xffffff, 2.5);
       obj.position.set(5, 10, 4);
       obj.shadow.mapSize.set(2048, 2048);
+      obj.shadow.bias = -0.0004;      // no stripes ("shadow acne") on flat ground
+      obj.shadow.normalBias = 0.03;
       break;
     case 'point': obj = new THREE.PointLight(0xffffff, 10, 0, 2); break;
+    case 'label': return makeLabel(p);
+    case 'model': obj = new THREE.Group(); break;
     default: throw new Error(`there's no 3D object called '${type}'`);
   }
   const n = { obj, p, pick: true };
   if (obj.isMesh) material(n);
   return n;
+}
+
+// A text label that always faces the camera: `text`, `h` (height in world units), `color`, `bg` (a CSS colour or
+// null), `ontop` (drawn over everything), `px` (the most it grows to on screen, in CSS pixels, so a label up close
+// doesn't fill the view). Its position is the middle of its bottom edge.
+const LABEL_KEYS = new Set(['text', 'h', 'color', 'bg', 'bold']);
+const labels = new Set();
+
+function makeLabel(p) {
+  Object.assign(p, { text: '', h: 0.45, color: '#ffffff', bg: 'rgba(10,12,18,0.55)', bold: true, px: 30 });
+  const obj = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false }));
+  obj.center.set(0.5, 0);
+  const n = { obj, p, pick: false };
+  drawLabel(n);
+  labels.add(n);
+  return n;
+}
+
+const labelAt = { v: null };
+
+function sizeLabels(n) {
+  if (!labels.size) return;
+  const cam = n.camera;
+  const v = labelAt.v || (labelAt.v = new THREE.Vector3());
+  const perPx = 2 * Math.tan((cam.fov * DEG) / 2) / Math.max(1, n.el.clientHeight);
+  for (const l of labels) {
+    if (l.host !== n || !l.obj.visible) continue;
+    l.obj.getWorldPosition(v);
+    const dist = Math.max(0.01, v.distanceTo(cam.position));
+    const h = Math.min(l.p.h, (l.p.px || 1e9) * perPx * dist);
+    l.obj.scale.set(h * l.aspect, h, 1);
+  }
+}
+
+function drawLabel(n) {
+  const p = n.p;
+  // A canvas texture can't change size once it's on the GPU, so a new text gets a new canvas.
+  const c = n.canvas = document.createElement('canvas');
+  const g = c.getContext('2d');
+  const font = `${p.bold ? 'bold ' : ''}48px Segoe UI, system-ui, sans-serif`;
+  g.font = font;
+  const text = String(p.text ?? '');
+  c.width = Math.max(8, Math.ceil(g.measureText(text).width) + 36);
+  c.height = 72;
+  g.font = font;
+  if (p.bg) {
+    g.fillStyle = p.bg;
+    g.beginPath();
+    g.roundRect(0, 0, c.width, c.height, 18);
+    g.fill();
+  }
+  g.fillStyle = p.color;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(text, c.width / 2, c.height / 2 + 2);
+  const m = n.obj.material;
+  if (m.map) m.map.dispose();
+  m.map = new THREE.CanvasTexture(c);
+  m.map.colorSpace = THREE.SRGBColorSpace;
+  m.needsUpdate = true;
+  n.aspect = c.width / c.height;
+  n.obj.scale.set(p.h * n.aspect, p.h, 1);
 }
 
 function geometry(type, p) {
@@ -655,9 +758,18 @@ function setObj(n, props) {
   const p = n.p;
   let geo = false;
   let mat = false;
+  let relabel = false;
   for (const k in props) {
     const v = props[k];
     switch (k) {
+      case 'ontop':
+        if (o.material) { o.material.depthTest = !v; o.material.needsUpdate = true; }
+        o.renderOrder = v ? 1000 : 0;
+        break;
+      case 'src':
+        if (n.type === 'model') loadModel(n, v);
+        else p[k] = v;
+        break;
       case 'x': o.position.x = v; break;
       case 'y': o.position.y = v; break;
       case 'z': o.position.z = v; break;
@@ -691,12 +803,14 @@ function setObj(n, props) {
         if (k === 'r' && n.type === 'cylinder') { p.rt = p.rb = v; geo = true; break; }
         if (k === 'color' && o.isLight) { o.color.set(v); break; }
         p[k] = v;
-        if (GEO_KEYS.has(k)) geo = true;
+        if (n.type === 'label') relabel = relabel || LABEL_KEYS.has(k);
+        else if (GEO_KEYS.has(k)) geo = true;
         else if (MAT_KEYS.has(k)) mat = true;
     }
   }
   if (geo && o.isMesh) o.geometry = geometry(n.type, p);
   if (mat && o.isMesh) material(n);
+  if (relabel) drawLabel(n);
   n.host.dirty = true;
 }
 
@@ -710,6 +824,11 @@ function draw3d(n) {
     n.camera.updateProjectionMatrix();
     n.resized = false;
   }
+  if (n.sky) {
+    n.sky.position.copy(n.camera.position);
+    n.sky.scale.setScalar(n.camera.far * 0.9);
+  }
+  sizeLabels(n);
   n.renderer.render(n.scene, n.camera);
 }
 
@@ -750,6 +869,261 @@ function project(n, x, y, z) {
   const v = new THREE.Vector3(x, y, z).project(n.camera);
   if (v.z > 1) return null;
   return [(v.x + 1) / 2 * n.el.clientWidth, (1 - v.y) / 2 * n.el.clientHeight];
+}
+
+// ---------------------------------------------------------------- .glb models
+
+// A 'model' object loads a binary glTF (.glb) from `src`: its meshes, node transforms, PBR base colors, and
+// pictures packed inside it. Skins, animations and morph targets are left out. The model is moved so its bottom
+// is at the object's position and it's centred over it, and a 'model' event tells Python its size.
+const models = new Map(); // src -> a promise of the loaded model, which each object copies
+
+function loadModel(n, src) {
+  n.p.src = src;
+  for (const c of [...n.obj.children]) n.obj.remove(c);
+  let job = models.get(src);
+  if (!job) {
+    job = fetch(src)
+      .then((r) => { if (!r.ok) throw new Error(`couldn't load the model ${decodeURIComponent(src.split('/').pop())} (${r.status})`); return r.arrayBuffer(); })
+      .then(parseGlb);
+    models.set(src, job);
+  }
+  job.then((model) => {
+    if (!objs.has(n.id) || n.p.src !== src) return;
+    const copy = model.clone(true);
+    const box = new THREE.Box3().setFromObject(copy);
+    const size = box.getSize(new THREE.Vector3());
+    const mid = box.getCenter(new THREE.Vector3());
+    copy.position.set(-mid.x, -box.min.y, -mid.z);
+    copy.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
+    n.obj.add(copy);
+    n.host.dirty = true;
+    emit('model', { id: n.id, size: [size.x, size.y, size.z] });
+  }, (err) => report(err, 'loading a model'));
+}
+
+const GLB_TYPES = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
+const GLB_SIZES = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
+
+function parseGlb(buf) {
+  const dv = new DataView(buf);
+  if (buf.byteLength < 20 || dv.getUint32(0, true) !== 0x46546c67) throw new Error("that file isn't a .glb model");
+  let json = null;
+  let bin = null;
+  for (let off = 12; off + 8 <= buf.byteLength;) {
+    const len = dv.getUint32(off, true);
+    const type = dv.getUint32(off + 4, true);
+    if (type === 0x4e4f534a) json = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, off + 8, len)));
+    else if (type === 0x004e4942) bin = buf.slice(off + 8, off + 8 + len);
+    off += 8 + len;
+  }
+  if (!json) throw new Error('the .glb file has no model in it');
+  const views = json.bufferViews || [];
+  const accessor = (i) => {
+    const a = json.accessors[i];
+    const T = GLB_TYPES[a.componentType];
+    const n = GLB_SIZES[a.type];
+    if (a.bufferView === undefined) return { array: new T(a.count * n), size: n, normalized: !!a.normalized };
+    const v = views[a.bufferView];
+    const start = (v.byteOffset || 0) + (a.byteOffset || 0);
+    const stride = v.byteStride || n * T.BYTES_PER_ELEMENT;
+    let array;
+    if (stride === n * T.BYTES_PER_ELEMENT) array = new T(bin.slice(start, start + a.count * stride));
+    else {
+      array = new T(a.count * n);
+      for (let k = 0; k < a.count; k++) array.set(new T(bin, start + k * stride, n), k * n);
+    }
+    return { array, size: n, normalized: !!a.normalized };
+  };
+  const pictures = new Map();
+  const picture = (index) => {
+    if (!pictures.has(index)) {
+      const tex = (json.textures || [])[index] || {};
+      const img = (json.images || [])[tex.source] || {};
+      let url = img.uri;
+      if (img.bufferView !== undefined) {
+        const v = views[img.bufferView];
+        url = URL.createObjectURL(new Blob([bin.slice(v.byteOffset || 0, (v.byteOffset || 0) + v.byteLength)], { type: img.mimeType || 'image/png' }));
+      }
+      const t = url ? new THREE.TextureLoader().load(url, () => { for (const s of scenes) s.dirty = true; }) : null;
+      if (t) {
+        t.flipY = false;
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      }
+      pictures.set(index, t);
+    }
+    return pictures.get(index);
+  };
+  const materials = (json.materials || []).map((m) => {
+    const pbr = m.pbrMetallicRoughness || {};
+    const f = pbr.baseColorFactor || [1, 1, 1, 1];
+    const mat = new THREE.MeshStandardMaterial({
+      metalness: pbr.metallicFactor ?? 1, roughness: pbr.roughnessFactor ?? 1, opacity: f[3],
+      transparent: f[3] < 1 || m.alphaMode === 'BLEND', side: m.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
+    });
+    mat.color.setRGB(f[0], f[1], f[2]);  // glTF colors are linear, like three's working colors
+    if (pbr.baseColorTexture) mat.map = picture(pbr.baseColorTexture.index);
+    if (m.emissiveFactor) mat.emissive.setRGB(m.emissiveFactor[0], m.emissiveFactor[1], m.emissiveFactor[2]);
+    return mat;
+  });
+  const plain = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+  const meshes = (json.meshes || []).map((mesh) => mesh.primitives.filter((pr) => (pr.mode ?? 4) === 4).map((pr) => {
+    const g = new THREE.BufferGeometry();
+    const set = (name, key) => {
+      if (pr.attributes[key] === undefined) return;
+      const a = accessor(pr.attributes[key]);
+      g.setAttribute(name, new THREE.BufferAttribute(a.array, a.size, a.normalized));
+    };
+    set('position', 'POSITION');
+    set('normal', 'NORMAL');
+    set('uv', 'TEXCOORD_0');
+    set('color', 'COLOR_0');
+    if (pr.indices !== undefined) g.setIndex(new THREE.BufferAttribute(accessor(pr.indices).array, 1));
+    if (pr.attributes.NORMAL === undefined) g.computeVertexNormals();
+    let mat = pr.material !== undefined ? materials[pr.material] : plain;
+    if (pr.attributes.COLOR_0 !== undefined) { mat = mat.clone(); mat.vertexColors = true; }
+    return new THREE.Mesh(g, mat);
+  }));
+  const node = (i) => {
+    const d = json.nodes[i];
+    const o = new THREE.Group();
+    if (d.matrix) new THREE.Matrix4().fromArray(d.matrix).decompose(o.position, o.quaternion, o.scale);
+    else {
+      if (d.translation) o.position.fromArray(d.translation);
+      if (d.rotation) o.quaternion.fromArray(d.rotation);
+      if (d.scale) o.scale.fromArray(d.scale);
+    }
+    if (d.mesh !== undefined) for (const m of meshes[d.mesh]) o.add(m.clone());
+    for (const c of d.children || []) o.add(node(c));
+    return o;
+  };
+  const root = new THREE.Group();
+  const scene = (json.scenes || [])[json.scene || 0];
+  for (const i of scene ? scene.nodes || [] : (json.nodes || []).map((_, k) => k)) root.add(node(i));
+  return root;
+}
+
+// ---------------------------------------------------------------- a picture of the window
+
+// Every canvas and 3D scene in the window, drawn as they are now into one PNG (a data: URL). Scenes are
+// rendered again first, in the same task, so their pictures are complete. DOM elements aren't included.
+function snapshot() {
+  const r = window.devicePixelRatio || 1;
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(innerWidth * r));
+  out.height = Math.max(1, Math.round(innerHeight * r));
+  const g = out.getContext('2d');
+  g.fillStyle = getComputedStyle(document.body).backgroundColor || '#000';
+  g.fillRect(0, 0, out.width, out.height);
+  for (const el of root.querySelectorAll('canvas')) {
+    const n = el._tv !== undefined ? objs.get(el._tv) : null;
+    if (!el.getClientRects().length || getComputedStyle(el).visibility === 'hidden') continue;
+    if (n && n.kind === 'scene') draw3d(n);
+    else if (n && n.kind === 'canvas') draw2d(n);
+    const b = el.getBoundingClientRect();
+    g.drawImage(el, b.left * r, b.top * r, b.width * r, b.height * r);
+  }
+  return out.toDataURL('image/png');
+}
+
+// ---------------------------------------------------------------- sound
+
+let audio = null;         // the AudioContext, made on first use
+let master = null;        // its main volume
+let masterVolume = 1;
+const playing = new Map(); // id -> HTMLAudioElement, for sound files
+let noise = null;
+
+function audioContext() {
+  if (!audio) {
+    audio = new AudioContext();
+    master = audio.createGain();
+    master.gain.value = masterVolume;
+    master.connect(audio.destination);
+  }
+  if (audio.state === 'suspended') audio.resume().catch(() => {});
+  return audio;
+}
+
+// Synthesised sound: a list of notes [frequency, start, seconds, wave, volume, end frequency]. wave is sine,
+// square, sawtooth, triangle or noise (frequency is then a low-pass cut-off). Starts are seconds from now.
+function tones(notes, volume = 0.3) {
+  const a = audioContext();
+  const t0 = a.currentTime + 0.005;
+  for (const [freq, start = 0, secs = 0.15, wave = 'square', vol = 1, end = null] of notes || []) {
+    const at = t0 + start;
+    const gain = a.createGain();
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, vol * volume), at + Math.min(0.01, secs / 4));
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + secs);
+    gain.connect(master);
+    let src;
+    if (wave === 'noise') {
+      if (!noise) {
+        noise = a.createBuffer(1, a.sampleRate, a.sampleRate);
+        const d = noise.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      }
+      src = a.createBufferSource();
+      src.buffer = noise;
+      src.loop = true;
+      const filter = a.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(freq, at);
+      if (end) filter.frequency.exponentialRampToValueAtTime(end, at + secs);
+      src.connect(filter);
+      filter.connect(gain);
+    } else {
+      src = a.createOscillator();
+      src.type = wave;
+      src.frequency.setValueAtTime(freq, at);
+      if (end) src.frequency.exponentialRampToValueAtTime(end, at + secs);
+      src.connect(gain);
+    }
+    src.start(at);
+    src.stop(at + secs + 0.02);
+  }
+  return null;
+}
+
+// A sound file (an address from view.url). id names it for sound_stop; loop repeats it.
+function sound(id, src, volume = 1, loop = false) {
+  const el = new Audio(src);
+  el.baseVolume = Math.max(0, Math.min(1, volume));
+  el.volume = el.baseVolume * masterVolume;
+  el.loop = !!loop;
+  el.onended = () => { if (playing.get(id) === el) playing.delete(id); };
+  el.onerror = () => report(new Error(`couldn't play the sound ${decodeURIComponent(src.split('/').pop())}`), 'playing a sound');
+  playing.set(id, el);
+  el.play().catch((err) => {
+    // Without a click or key press first, the browser may refuse to start sound: try again on the next one.
+    if (err && err.name === 'NotAllowedError') el.waiting = true;
+  });
+  return null;
+}
+
+function soundStop(id) {
+  for (const [key, el] of [...playing]) {
+    if (id == null || key === id) { el.pause(); playing.delete(key); }
+  }
+  return null;
+}
+
+function soundVolume(v) {
+  masterVolume = Math.max(0, Math.min(1, +v));
+  if (master) master.gain.value = masterVolume;
+  for (const el of playing.values()) el.volume = el.baseVolume * masterVolume;
+  return null;
+}
+
+function soundState() {
+  return { context: audio ? audio.state : 'none', files: playing.size, waiting: [...playing.values()].filter((el) => el.waiting).length };
+}
+
+function wakeSound() {
+  if (audio && audio.state === 'suspended') audio.resume().catch(() => {});
+  for (const el of playing.values()) if (el.waiting) { el.waiting = false; el.play().catch(() => {}); }
 }
 
 // ---------------------------------------------------------------- drawing, every animation frame
@@ -888,6 +1262,17 @@ document.addEventListener('pointerlockchange', () => emit('lock', { locked: !!do
 addEventListener('resize', () => { resized = true; });
 addEventListener('blur', () => emit('blur', {}));
 addEventListener('focus', () => emit('focus', {}));
+// A scene with `clicklock` locks the pointer when it's clicked (for mouse look); the browser only allows that
+// inside the click itself, so it can't wait for Python. Escape unlocks it.
+addEventListener('pointerdown', (e) => {
+  wakeSound();
+  const n = e.target && e.target._tv !== undefined ? objs.get(e.target._tv) : null;
+  if (n && n.kind === 'scene' && n.clicklock && document.pointerLockElement !== n.el) {
+    const p = n.el.requestPointerLock();
+    if (p && p.catch) p.catch(() => {});
+  }
+}, true);
+addEventListener('keydown', wakeSound, true);
 addEventListener('error', (e) => report(e.error || new Error(e.message), 'the page'));
 addEventListener('unhandledrejection', (e) => report(e.reason, 'the page'));
 

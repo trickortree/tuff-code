@@ -1,0 +1,51 @@
+mention tgame
+
+game = tgame.world("3D Snake", 960, 600)
+game:sky "sunset"
+game:ground("dark green", 60)
+game:plane(0, 0, 0, 21, "grass")
+for spot in [[0, 0, -11], [0, 0, 11]]:
+    game:box(spot, [23, 1, 1], "wood")
+for spot in [[-11, 0, 0], [11, 0, 0]]:
+    game:box(spot, [1, 1, 21], "wood")
+hud = game:hud()
+score_label = hud:text("Apples: 0", 100, 30, 26, "white")
+hud:text("Left and right arrows turn", 480, 575, 16, "white")
+apple = game:sphere(0, 0, -5, 0.8, "red")
+snake = []
+score = 0
+
+func start():
+    for part in snake:
+        part:remove()
+    snake = [game:box(0, 0, 3, 0.9, "gold"), game:box(0, 0, 4, 0.9, "lime")]
+    score = 0
+    score_label:set "Apples: 0"
+    apple:move_to(0, 0, -5)
+    game:follow(snake[0], 8, 6)
+
+func turn(key):
+    if key is "left":
+        snake[0]:turn(-90)
+    elif key is "right":
+        snake[0]:turn(90)
+
+func step():
+    head = snake[0]
+    tail = snake[-1]:spot()
+    for i in range(len(snake) - 1, 1, -1):
+        snake[i]:move_to(snake[i - 1]:spot())
+    head:forward(1)
+    if abs(head:x()) > 10 or abs(head:z()) > 10 or head:touches(snake):
+        game:sound "lose"
+        game:game_over("Apples: " + score, start)
+    elif head:touches(apple):
+        game:sound "coin"
+        score += 1
+        score_label:set "Apples: " + score
+        snake:add(game:box(tail, 0.9, "lime"))
+        apple:move_to(random(-9, 9), 0, random(-9, 9))
+
+start()
+game:on_key("any", turn)
+game:every(0.18, step)

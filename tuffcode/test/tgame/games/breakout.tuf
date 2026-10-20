@@ -1,0 +1,62 @@
+mention tgame
+
+game = tgame.window("Breakout", 640, 480)
+game:background "#101820"
+paddle = game:box(320, 450, 100, 14, "teal")
+paddle:on_edge "stop"
+ball = game:circle(320, 420, 8, "white")
+bricks = game:group()
+info = game:text("", 320, 18, 18, "white")
+vx = 0
+vy = 0
+score = 0
+lives = 3
+
+func start():
+    bricks:clear()
+    row = 0
+    for color in ["red", "orange", "yellow", "green", "blue"]:
+        for col in range(0, 7):
+            bricks:add(game:box(75 + col * 70, 60 + row * 26, 64, 20, color))
+        row += 1
+    score = 0
+    lives = 3
+    serve()
+
+func serve():
+    ball:move_to(paddle:x(), 420)
+    vx = 160
+    vy = -280
+
+start()
+while game:open():
+    dt = game:frame()
+    if game:held("left"):
+        paddle:move(-450 * dt, 0)
+    if game:held("right"):
+        paddle:move(450 * dt, 0)
+    ball:move(vx * dt, vy * dt)
+    if ball:x() < 8:
+        vx = abs(vx)
+    if ball:x() > 632:
+        vx = -abs(vx)
+    if ball:y() < 8:
+        vy = abs(vy)
+    if ball:touches(paddle) and vy > 0:
+        vy = -vy
+        vx = (ball:x() - paddle:x()) * 6
+        game:sound "pop"
+    brick = ball:touches(bricks)
+    if brick:
+        brick:remove()
+        vy = -vy
+        score += 10
+        game:sound "hit"
+    if ball:y() > 490:
+        lives -= 1
+        serve()
+    if lives is 0:
+        game:game_over("Score: " + score, start)
+    elif bricks:count() is 0:
+        game:game_over("You win! Score: " + score, start)
+    info:set "Score: " + score + "    Lives: " + lives

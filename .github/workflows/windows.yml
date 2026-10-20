@@ -35,11 +35,11 @@ jobs:
           cache-dependency-path: tuffcode/package-lock.json
 
       - name: Install PyInstaller
-        run: python -m pip install pyinstaller certifi
+        run: python -m pip install pyinstaller certifi pywebview
 
       # npm run build:runtime, but with the Python set up above: py -3 could pick another one.
       - name: Build the Tuff runtime
-        run: python -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --hidden-import tuff_tap --hidden-import ssl --hidden-import certifi --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py
+        run: python -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --hidden-import tuff_tap --hidden-import tuff_atgui --hidden-import ssl --hidden-import certifi --hidden-import tuff_view --add-data ../tuff_view_web:tuff_view_web --hidden-import tuff_tgame --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py
 
       - run: npm ci
 

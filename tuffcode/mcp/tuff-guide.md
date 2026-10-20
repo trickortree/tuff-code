@@ -31,6 +31,7 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `print(x, end="")` | an error: build the whole line with `+` first, or add to a shown line with `line:append(...)` |
 | `import random`, `import math` | nothing to import. Built in: `random(a, b)`, `sqrt`, `floor`, `ceil`, `round`, `abs`, `min`, `max`, `sum`, `average`, `pi`. There's no sin, cos, tan, log or exp, no `random.choice` (use `items[random(0, len(items) - 1)]`) and no shuffle |
 | `requests.get(url)`, `json.loads(...)` | `mention tap`, then `res = tap.get(url)` and `res:json` (see "tap") |
+| `import pygame` | `mention tgame`, then `game = tgame.window("Title", 800, 600)` (see "tgame") |
 | dictionaries, classes, `try`/`except`, `lambda`, slices like `s[1:3]`, `sort()`, `split()`, `exit()` | not in Tuff (see "What Tuff can't do") |
 
 These words are keywords and can't be names: `func return if elif else then while for in break continue and or not is true false nil say input flush import mention`.
@@ -183,6 +184,7 @@ clear(2)                    # remove the last 2 lines; clear(all) is the same as
 - **tgui**: real desktop app windows. **mtgui**: the same widgets with a modern look (gradients, gloss, glow). Use mtgui unless asked otherwise.
 - **tap** gets and sends things on the web (HTTP), like Python's requests. See below.
 - **atgui** ("advanced tgui") makes apps that look like the Claude or Codex desktop apps: sidebars, lists, chat bubbles, dashboards, menus and pop-ups, all styled from Tuff. See below.
+- **tgame** makes games, like pygame: 2D sprites, keys, the mouse, collisions and sounds, or a 3D world with a player. See below.
 
 ### tap
 ```tuff
@@ -293,6 +295,114 @@ func reset():
     shown:set "0"
     app:toast("Back to 0", "info")
 ```
+### tgame
+```tuff
+mention tgame
+
+game = tgame.window("Catch", 600, 400)        # title, width, height (all optional)
+game:background "navy"
+basket = game:box(300, 370, 80, 20, "gold")   # x, y (its middle), width, height, color
+basket:on_edge "stop"                         # it can't leave the screen
+star = game:circle(300, 0, 12, "yellow")      # x, y, radius, color
+score = 0
+label = game:text("Score: 0", 300, 24)        # words, x, y, then size and color if you like
+
+while game:open():                            # until the window is closed
+    dt = game:frame()                         # draws a frame; dt is the seconds since the last one
+    if game:held("left"):
+        basket:move(-400 * dt, 0)
+    if game:held("right"):
+        basket:move(400 * dt, 0)
+    star:move(0, 200 * dt)
+    if star:touches(basket):
+        score += 1
+        label:set "Score: " + score
+        game:sound "coin"
+        star:move_to(random(20, 580), 0)
+    elif star:y() > 400:
+        star:move_to(random(20, 580), 0)
+```
+- **Where things are:** x and y are the middle of a sprite. (0, 0) is the top-left corner, and y goes down. A spot like `[100, 50]` works anywhere x and y do: `food:move_to(game:random_spot())`.
+- **Sprites:** `game:box(x, y, width, height, color)`, `game:circle(x, y, radius, color)`, `game:line(x1, y1, x2, y2, color)`, `game:text(words, x, y, size, color)` and `game:image("ship.png", x, y, width)` (a .png, .jpg, .gif or .webp next to your .tuf file).
+- **Moving:** `:move(dx, dy)`, `:move_to(x, y)`, `:glide(x, y, seconds)`, `:turn(degrees)` (more than 0 turns right), `:turn_to`, `:point_at(x, y)`, `:forward(distance)` (the way it points), `:spin(degrees_per_second)`, and `:speed(vx, vy)`, which keeps it moving by itself. `:on_edge "bounce"` (or `"wrap"` or `"stop"`) says what it does at the screen's edge. Read where it is with `:x()`, `:y()`, `:spot()` and `:angle()`.
+- **Looks:** `:color`, `:size`, `:scale 2`, `:layer 2` (higher layers are on top), `:flip()`, `:hide`, `:show` and `:remove`. Text changes with `label:set "Hi"`, and `label:align "left"` makes x its left edge.
+- **Collisions:** `a:touches(b)` is true or false. Given a list or a group, it gives back the one it touches, or nil: `hit = ball:touches(bricks)`. Also `:distance(other)` and `:on_screen()`.
+- **Keys and the mouse:** `game:held("left")` is true while a key is down, and `game:pressed("space")` only in the frame it went down. Keys are letters, numbers, space, enter, escape, shift, up, down, left and right; `"mouse"` is the mouse button. `game:mouse_x()` and `game:mouse_y()`.
+- **Values on things:** `tree:set("hp", 3)` and `tree:get("hp")` (nil if it was never set).
+- **More:** `hud = game:hud()` is a layer on top for scores, `game:group()` holds things that move together (`:add`, `:move`, `:count`, `:clear`), `game:random_spot(20)` keeps to a grid of 20, `game:camera(x, y)` scrolls, `game:time()` and `game:fps()`.
+- **Sound:** `game:sound "coin"` plays beep, coin, jump, hit, boom, chop, laser, pop, click, step, powerup, win or lose, or a .wav, .mp3 or .ogg file. `game:music "song.mp3"` repeats, and `game:stop_music()`.
+- **Pause and game over:** `game:pause("Paused")`, `game:resume()` and `game:paused()`. `game:game_over("Score: 5", start)` stops the game and shows the message; pressing space then runs `start`, which should put everything back.
+
+**The callback style.** Instead of a loop, give tgame functions to run. The program then keeps going until its window closes.
+```tuff
+mention tgame
+
+game = tgame.window("Dodge", 400, 300)
+player = game:box(200, 270, 30, 30, "lime")
+player:on_edge "stop"
+rocks = game:group()
+
+func step(dt):                    # every frame, with the seconds since the last one
+    if game:held("left"):
+        player:move(-250 * dt, 0)
+    if game:held("right"):
+        player:move(250 * dt, 0)
+    if player:touches(rocks):
+        game:game_over("Hit by a rock!", start)
+
+func drop():                      # every second
+    rock = game:circle(random(10, 390), 0, 10, "gray")
+    rock:speed(0, 150)
+    rocks:add(rock)
+
+func start():                     # space after a game over runs this
+    rocks:clear()
+
+func dash(key):                   # gets the key's name
+    player:move_to(200, 270)
+
+game:every_frame step
+game:every(1, drop)
+game:on_key("space", dash)
+```
+- `game:on_key("any", fn)` runs for every key. `game:clicked fn` gets x and y, and `sprite:clicked fn` gets the sprite. `game:after(seconds, fn)` and `game:every(seconds, fn)` work like an app's, and pause with the game.
+- Don't use `wait` or `input` in a game: they freeze it. A game has one window.
+
+**3D.** `tgame.world` makes a 3D world. y is height, and an object's y is where its bottom is, so 0 sits on the ground.
+```tuff
+mention tgame
+
+game = tgame.world("Lumberjack")
+game:sky "sunset"                      # day, sunset, dawn, night, cloudy or space
+game:island(80)
+player = game:player("first person")   # WASD walks, Space jumps, click the game to look around
+axe = player:hold("axe")
+logs = 0
+logs_label = game:hud():text("Logs: 0", 90, 30)
+for i in range(1, 15):
+    tree = game:spawn("tree")           # somewhere random
+    tree:clicked chop
+game:spawn("hut", -6, 0, -10)          # x, y, z
+
+func chop(tree):
+    axe:swing()
+    if tree:distance(player) < 4 and not tree:fallen():
+        tree:shake()
+        tree:fall()
+        tree:regrow(5)
+        logs += 1
+        logs_label:set "Logs: " + logs
+
+while game:open():
+    game:frame()
+```
+- **The world:** `:sky`, `:fog(distance)` (0 is off), `:sun(brightness)`, `:light(x, y, z, color)`, `:ground(color)` and `:island(size)`.
+- **Shapes:** `game:box(x, y, z, size, color)`, and the same for `sphere`, `cylinder`, `cone` and `plane`. size is a number, or `[width, height, depth]`.
+- **Ready-made models:** `game:spawn("pine", x, y, z)` makes a tree, pine, rock, bush, flower, house, hut, sign, crate, fence or coin. Without a spot it picks a random one.
+- **Objects** have the sprites' methods with a z added (`:move(dx, dy, dz)`, `:glide(x, y, z, seconds)`...), plus `:shake()`, `:fall()`, `:fallen()`, `:regrow(seconds)`, `:grow()`, `:swing()`, `:glow "gold"`, `:label "Oak"` (text above it) and `:solid false` (the player walks through it).
+- **The player:** `"first person"` or `"third person"`. Solid things block the way and can be stood on. `player:walk_speed 6`, `:jump_height 2`, `:hold "sword"` (axe, pickaxe, sword, torch or hammer), and `game:looking_at()` is the object in the middle of the view, or nil.
+- **Without a player:** `game:camera_at(x, y, z)` with `game:look_at(thing)`, or `game:follow(thing)` (behind it), or `game:orbit(thing)` (drag to turn around it).
+- **Testing a game:** add `game:after(2, selftest)`, call your functions in `func selftest():`, `say` what you find, and end it with `game:close()`.
 
 ## App windows (tgui / mtgui)
 ```tuff
@@ -328,7 +438,7 @@ func clear_all():
   Popups wait until they're answered.
 - **Closing:** closing the first window ends the program.
 - **Errors:** if an event function hits an error, the error is shown, that function stops, and the app keeps running. A timer whose function errors stops for good.
-- **What windows can't do:** there's no drawing (no canvas, shapes or moving sprites) and no sound. The only keyboard input is typing in a text box and pressing Enter. The only mouse input is clicking buttons, switches, checkboxes, sliders and dropdowns. Keep this in mind before planning a game.
+- **What windows can't do:** there's no drawing (no canvas, shapes or moving sprites) and no sound. The only keyboard input is typing in a text box and pressing Enter. The only mouse input is clicking buttons, switches, checkboxes, sliders and dropdowns. For a game, use tgame instead.
 
 **Widgets** are made on the window, a row, a card or a page. They are `heading`, `text`, `small`, `button`, `input`, `toggle`, `checkbox`, `dropdown`, `slider`, `progress`, `spinner`, `clock`, `image`, `divider`, `space`, `row` and `card`.
 - **Variables:** keep the widgets you need later in variables: `score_label = app:text "0"`.
@@ -590,7 +700,7 @@ Tuff has none of these:
 - dictionaries, classes, sorting, or exceptions (`try`);
 - splitting, replacing or formatting text, or slices;
 - random decimals (divide a whole number instead), or sin, cos, tan, log or exp;
-- drawing, sound, or keyboard and mouse events in tgui and mtgui (see "How a window app runs"; atgui has key shortcuts, hover, and clicks on any widget);
+- drawing, sound, or keyboard and mouse events in tgui and mtgui (see "How a window app runs"). atgui has key shortcuts, hover and clicks on any widget, and a game made with `tgame` has all of them;
 - `exit()`, or Python modules.
 
 There's no date or time function either. A clock widget's `:value` gives the time of day, and `wait(seconds)` pauses a console program.

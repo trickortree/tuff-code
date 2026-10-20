@@ -1,0 +1,25 @@
+mention tgame
+
+# The callback style: no loop of your own, just functions for every frame, keys and timers.
+game = tgame.window("Callback style", 400, 300)
+player = game:box(200, 150, 30, 30, "lime")
+frames = 0
+jumps = 0
+
+func step(dt):
+    frames += 1
+    if game:held("right"):
+        player:move(150 * dt, 0)
+
+func jump(key):
+    jumps += 1
+    player:move(0, -10)
+
+func done():
+    say "frames " + (frames > 30) + ", jumps " + jumps + ", moved " + (player:x() > 200)
+    game:close()
+
+game:every_frame step
+game:on_key("space", jump)
+game:after(1.5, done)
+say "set up"

@@ -1,0 +1,99 @@
+mention tgame
+
+# The 3D parts of tgame without a player: shapes, the kit, labels, lights, the camera modes and picking.
+game = tgame.world("Features 3D", 900, 560)
+game:sky "sunset"
+game:fog 80
+game:sun 1.2
+game:ground "grass"
+lamp = game:light(0, 3, 0, "orange")
+red = game:box(0, 0, -4, 1, "red")
+blue = game:sphere([2, 0, -4], 1, "blue")
+tall = game:cylinder(-2, 0, -4, [0.6, 2], "white")
+hat = game:cone(4, 0, -4, 1, "purple")
+mat = game:plane(0, 0, 2, [3, 2], "sand")
+kit = game:group()
+x = -10
+for name in ["tree", "pine", "rock", "bush", "flower", "house", "hut", "sign", "crate", "fence", "coin"]:
+    kit:add(game:spawn(name, x, 0, -12))
+    x += 2.5
+tower = game:spawn("tower.glb", -3.5, 0, -6)
+red:label "Red box"
+tall:glow "white"
+hat:color "gold"
+hat:spin(90)
+blue:glide(2, 0, -6, 0.5)
+mat:solid false
+say "kit " + kit:count()
+say "spot " + red:spot()
+say "touch red blue " + red:touches(blue)
+say "touch red tall " + red:touches(tall)
+red:move(1.2, 0, 0)
+say "touch red blue now " + red:touches(blue)
+red:move(-1.2, 0, 0)
+say "distance " + red:distance(red:x() + 3, red:y() + 4, red:z())
+say "list hit " + (red:touches([hat, blue, tall]) is nil)
+red:set("hp", 5)
+say "hp " + red:get("hp")
+red:turn(90)
+red:turn(90)
+say "angle " + red:angle()
+red:look_at(0, 0, -10)
+say "look " + red:angle()
+red:look_at(4, 0, -4)
+say "look right " + red:angle()
+kit:move(0, 0, -1)
+say "say an object " + red
+game:camera_at(0, 2, 3)
+game:look_at(red)
+picked = 0
+red:clicked picked_red
+game:clicked clicked_world
+clicked_at = []
+
+func picked_red(thing):
+    picked += 1
+    thing:shake()
+
+func clicked_world(x, y, z):
+    clicked_at = [x, y, z]
+
+func look():
+    seen = game:looking_at()
+    say "looking at red " + (seen is red)
+    say "far " + (game:looking_at(1) is nil)
+    if len(clicked_at) is 3:
+        say "clicked red " + picked + " on its front " + (clicked_at[1] > 0 and clicked_at[1] < 1)
+
+func model_check():
+    near_top = game:box(-3.5, 1.8, -6, 0.2, "white")
+    above = game:box(-3.5, 2.2, -6, 0.2, "white")
+    say "the model is 2 tall " + tower:touches(near_top) + " " + tower:touches(above)
+    near_top:remove()
+    above:remove()
+
+func chop():
+    tall:fall()
+    say "fallen " + tall:fallen()
+    tall:regrow(0.5)
+
+func check_fall():
+    say "fallen now " + tall:fallen()
+
+func check_regrow():
+    say "regrown " + (not tall:fallen())
+    say "hat spun " + (hat:angle() > 0)
+    say "glided " + blue:spot()
+
+func orbit():
+    game:orbit(red)
+
+func follow():
+    game:follow(hat)
+
+func other_sky():
+    game:sky "night"
+    game:fog 0
+    lamp:hide()
+    red:hide()
+    say "hidden red " + (game:looking_at() is red)

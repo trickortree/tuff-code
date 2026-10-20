@@ -1,0 +1,28 @@
+mention tgame
+
+# A third-person player: walking, solid things in the way, jumping onto a crate, picking up a coin.
+game = tgame.world("Player 3D", 900, 560)
+game:sky "dawn"
+game:ground "grass"
+player = game:player("third person")
+sword = player:hold("sword")
+crate = game:spawn("crate", 0, 0, -3)
+coin = game:spawn("coin", 3, 0, 0)
+coin:spin(120)
+game:spawn("fence", -3, 0, -3)
+coins = 0
+hud = game:hud()
+coin_label = hud:text("Coins: 0", 80, 30, 22, "white")
+
+func where():
+    say "player " + player:spot() + " facing " + player:angle()
+
+while game:open():
+    dt = game:frame()
+    if player:touches(coin):
+        coin:remove()
+        coins += 1
+        coin_label:set "Coins: " + coins
+        game:sound "coin"
+        say "got the coin"
+say "the window closed, coins " + coins

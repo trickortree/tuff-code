@@ -1010,7 +1010,8 @@
 
   function handleOsc(kind, args) {
     if (kind === 'say') {
-      const span = appendOut(decode64(args[1] || ''), 'tline');
+      // say;<id>;<b64>[;<style>]: "notice" is the yellow line a tgame program starts with.
+      const span = appendOut(decode64(args[1] || ''), args[2] === 'notice' ? 'tline notice' : 'tline');
       runLines.set(args[0], span);
     } else if (kind === 'rewrite') {
       const span = runLines.get(args[0]);

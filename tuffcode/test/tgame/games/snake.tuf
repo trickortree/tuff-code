@@ -1,0 +1,54 @@
+mention tgame
+
+game = tgame.window("Snake", 600, 400)
+game:background "#14213d"
+score_label = game:text("Score: 0", 300, 20, 22, "white")
+food = game:box(0, 0, 18, 18, "red")
+snake = []
+dx = 1
+dy = 0
+score = 0
+
+func start():
+    for part in snake:
+        part:remove()
+    snake = [game:box(150, 210, 18, 18, "yellow"), game:box(130, 210, 18, 18, "lime")]
+    dx = 1
+    dy = 0
+    score = 0
+    score_label:set "Score: 0"
+    food:move_to(game:random_spot(20))
+
+func turn(key):
+    if key is "left" and dx is 0:
+        dx = -1
+        dy = 0
+    elif key is "right" and dx is 0:
+        dx = 1
+        dy = 0
+    elif key is "up" and dy is 0:
+        dx = 0
+        dy = -1
+    elif key is "down" and dy is 0:
+        dx = 0
+        dy = 1
+
+func step():
+    head = snake[0]
+    tail = snake[-1]:spot()
+    for i in range(len(snake) - 1, 1, -1):
+        snake[i]:move_to(snake[i - 1]:spot())
+    head:move(dx * 20, dy * 20)
+    if not head:on_screen() or head:touches(snake):
+        game:sound "lose"
+        game:game_over("Score: " + score, start)
+    elif head:touches(food):
+        game:sound "coin"
+        score += 1
+        score_label:set "Score: " + score
+        snake:add(game:box(tail, 18, 18, "lime"))
+        food:move_to(game:random_spot(20))
+
+start()
+game:on_key("any", turn)
+game:every(0.1, step)

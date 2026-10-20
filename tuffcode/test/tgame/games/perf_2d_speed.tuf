@@ -1,0 +1,18 @@
+mention tgame
+
+# The same 200 sprites, but each one moves by itself (:speed), so the Tuff loop does almost nothing.
+game = tgame.window("200 sprites, :speed", 800, 600)
+colors = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"]
+for n in range(0, 199):
+    s = game:circle(random(10, 790), random(10, 590), 7, colors[n % 8])
+    s:on_edge "wrap"
+    s:speed(random(-150, 150), random(-150, 150))
+fps_label = game:hud():text("fps", 400, 24, 22, "white")
+shown = 0
+
+while game:open():
+    dt = game:frame()
+    shown += dt
+    if shown > 0.5:
+        shown = 0
+        fps_label:set "fps: " + game:fps()
