@@ -382,6 +382,69 @@ export default async (t, ctx) => {
   await t.sleep(300);
   check('Saving over another picture asks first, and Cancel leaves it alone', asked && title === 'Replace sprites/coin.png?' && png('sprites/coin.png').w === 20, title);
 
+  // The "Replace?" question: its title, then Cancel. null when nothing asked.
+  const cancelAsk = async () => {
+    if (!(await waitFor(`!document.querySelector('#modal').classList.contains('hidden')`, 4000))) return null;
+    const asked = await ev(`document.querySelector('#modal-title').textContent`);
+    const c = await ev(`(() => { const r = document.querySelector('#modal-cancel').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    await t.click(c.x, c.y);
+    await t.sleep(300);
+    return asked;
+  };
+  const noAsk = async () => { await t.sleep(700); return ev(`document.querySelector('#modal').classList.contains('hidden')`); };
+  const openTuf = (...p) => ev(`(async () => { await window.TuffIDE.openFile(${JSON.stringify(P(...p))}); return 1; })()`);
+
+  // 14c. Undo after opening a picture brings back the sprite from before, and that sprite doesn't own the
+  // opened picture: saving it there asks first. Redo brings the opened picture back, which does own it.
+  await openTuf('main.tuf');
+  await clickEl('[data-a="new"]');
+  await clickEl('[data-size="16"]');
+  await tap(2, 2);
+  await clickEl('[data-a="open"]');
+  await waitFor(`[...${SS}.querySelectorAll('.ss-menu [data-open]')].some((b) => b.textContent === 'sprites/coin.png')`);
+  await openFromList('sprites/coin.png');
+  await waitFor(`${q('.ss-canvas')}.dataset.w === '20'`);
+  await focusPanel();
+  await ctrl('z');
+  await waitFor(`${q('.ss-canvas')}.dataset.w === '16'`);
+  await clickEl('[data-a="save"]');
+  const undoAsk = await cancelAsk();
+  check('Undo after Open, then Save over the opened picture: it asks first, and Cancel leaves it alone', undoAsk === 'Replace sprites/coin.png?' && png('sprites/coin.png').w === 20, undoAsk);
+  await focusPanel();
+  await ctrl('y');
+  await waitFor(`${q('.ss-canvas')}.dataset.w === '20'`);
+  await clickEl('[data-a="save"]');
+  check('Redo brings the opened picture back, and saving it there again doesn\'t ask', (await noAsk()) && png('sprites/coin.png').w === 20, null);
+
+  // 14d. "Try in a new file" again: no question while the file still holds just what it wrote. Once it has
+  // been changed (it's somebody's own code now), it asks first.
+  await clickEl('[data-a="try"]');
+  await waitFor(`/coin_game\\.tuf$/.test(window.TuffIDE.activeFile() || '')`);
+  const tried = fs.readFileSync(P('coin_game.tuf'), 'utf8');
+  await clickEl('[data-a="try"]');
+  check('"Try in a new file" twice in a row doesn\'t ask the second time', (await noAsk()) && fs.readFileSync(P('coin_game.tuf'), 'utf8') === tried, null);
+  fs.appendFileSync(P('coin_game.tuf'), 'say "my own code"\n');
+  await t.sleep(300);
+  await clickEl('[data-a="try"]');
+  const tryAsk = await cancelAsk();
+  check('After coin_game.tuf was changed, "Try in a new file" asks before replacing it, and Cancel keeps the changes', tryAsk === 'Replace coin_game.tuf?' && fs.readFileSync(P('coin_game.tuf'), 'utf8').includes('my own code'), tryAsk);
+
+  // 14e. Another project folder (the plugin keeps running when one is opened): its own sprites/coin.png
+  // and coin_game.tuf aren't this sprite's, so saving over them asks first.
+  const B = path.join(path.dirname(ctx.root), 'project-b');
+  fs.mkdirSync(path.join(B, 'sprites'), { recursive: true });
+  fs.writeFileSync(path.join(B, 'sprites', 'coin.png'), encodePng(8, 8, Buffer.alloc(8 * 8 * 4, 255)));
+  fs.writeFileSync(path.join(B, 'coin_game.tuf'), '# project B\'s own game\n');
+  await ev(`(() => { const B = ${JSON.stringify(B)}; window.__ssReal = [TuffIDE.root, TuffIDE.listFiles]; TuffIDE.root = () => B; TuffIDE.listFiles = () => window.tuff.fs.listAll(B); return 1; })()`);
+  await clickEl('[data-a="save"]');
+  const bSave = await cancelAsk();
+  await clickEl('[data-a="try"]');
+  const bTry = await cancelAsk();
+  await ev(`(() => { [TuffIDE.root, TuffIDE.listFiles] = window.__ssReal; return 1; })()`);
+  check('In another project, saving over its own sprites/coin.png and coin_game.tuf asks first, and Cancel leaves them alone',
+    bSave === 'Replace sprites/coin.png?' && bTry === 'Replace coin_game.tuf?' && decodePng(path.join(B, 'sprites', 'coin.png')).w === 8 && fs.readFileSync(path.join(B, 'coin_game.tuf'), 'utf8') === '# project B\'s own game\n', { bSave, bTry });
+  await openTuf('main.tuf');
+
   // 15. a little blinking smiley for the screenshots, at 400 px and then 300 px wide (where everything still fits)
   await clickEl('[data-a="new"]');
   await clickEl('[data-size="16"]');

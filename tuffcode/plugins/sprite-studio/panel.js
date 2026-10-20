@@ -70,8 +70,17 @@ TuffPlugins.register('sprite-studio', (t) => {
   const undos = [];
   const redos = [];
   let editRedo = null; // the redo list while an edit is going on, given back if the edit changed nothing
-  let mine = new Set(); // project paths (lower case) this sprite came from or went to: saving there again doesn't ask
-  let made = new Set(); // .tuf files "Try in a new file" made
+  // The project paths (lower case) this sprite came from or went to: saving there again doesn't ask. Undo and
+  // Redo bring back each sprite's own list with its pixels, and a list only counts in the project folder it
+  // was made in (opening another folder doesn't start the plugin again).
+  const ownList = (paths = []) => ({ root: t.project.root(), paths: new Set(paths.map((p) => p.toLowerCase())) });
+  let mine = ownList();
+  const isMine = (rel) => mine.root === t.project.root() && mine.paths.has(rel.toLowerCase());
+  function addMine(rel) {
+    if (mine.root !== t.project.root()) { mine.root = t.project.root(); mine.paths.clear(); }
+    mine.paths.add(rel.toLowerCase());
+  }
+  const made = new Map(); // .tuf files "Try in a new file" made: full path (lower case) -> the text it wrote
   let saved = null; // what the last save wrote, for "Use in code"
   let stroke = null; // the drag going on now
   let hover = null;
@@ -126,7 +135,7 @@ TuffPlugins.register('sprite-studio', (t) => {
   }
 
   // ---------------------------------------------------------------- undo
-  const snapshot = () => ({ w: doc.w, h: doc.h, cur: doc.cur, frames: doc.frames.map((f) => f.slice()) });
+  const snapshot = () => ({ w: doc.w, h: doc.h, cur: doc.cur, frames: doc.frames.map((f) => f.slice()), mine });
   const same = (a, b) => { if (a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; };
   const sameDoc = (s) => s.w === doc.w && s.h === doc.h && s.frames.length === doc.frames.length && s.frames.every((f, i) => same(f, doc.frames[i]));
 
@@ -149,6 +158,7 @@ TuffPlugins.register('sprite-studio', (t) => {
   function restore(s) {
     doc.w = s.w; doc.h = s.h; doc.cur = Math.min(s.cur, s.frames.length - 1);
     doc.frames = s.frames.map((f) => f.slice());
+    mine = s.mine;
   }
 
   function undo() {
@@ -457,7 +467,7 @@ TuffPlugins.register('sprite-studio', (t) => {
     doc.cur = 0;
     finish(false);
     $('[data-f="name"]').value = 'sprite';
-    mine = new Set();
+    mine = ownList();
     saved = null;
     renderCode();
   }
@@ -749,8 +759,8 @@ TuffPlugins.register('sprite-studio', (t) => {
       $('[data-f="name"]').value = group.length > 1 ? m[1] : baseOf(f.rel).replace(/\.png$/i, '');
       $('[data-f="folder"]').value = dir;
       setScale(sc);
-      mine = new Set(group.map((g) => g.rel.toLowerCase()));
-      if (group.length > 1) mine.add(`${dir ? dir + '/' : ''}${m[1]}_sheet.png`.toLowerCase()); // its sprite sheet is its own too
+      mine = ownList(group.map((g) => g.rel));
+      if (group.length > 1) addMine(`${dir ? dir + '/' : ''}${m[1]}_sheet.png`); // its sprite sheet is its own too
       saved = null;
       renderCode();
       const what = group.length > 1 ? `${group.length} frames of ${m[1]}` : f.rel;
@@ -799,7 +809,7 @@ TuffPlugins.register('sprite-studio', (t) => {
     const all = [...p.frames, ...(p.sheet ? [p.sheet] : [])];
     const files = (await t.project.files()).map((f) => slash(f.rel).toLowerCase());
     const existing = new Set(files);
-    const clash = all.filter((f) => existing.has(f.toLowerCase()) && !mine.has(f.toLowerCase()));
+    const clash = all.filter((f) => existing.has(f.toLowerCase()) && !isMine(f));
     if (clash.length) {
       const ok = await t.ask({ title: clash.length === 1 ? `Replace ${clash[0]}?` : `Replace ${clash.length} pictures in ${p.dir || 'the project'}?`, confirm: true, okLabel: 'Replace' });
       if (!ok) return;
@@ -812,7 +822,7 @@ TuffPlugins.register('sprite-studio', (t) => {
       for (const [path, pic] of jobs) {
         const bytes = await encodePng(pic.w * scale, pic.h * scale, upscale(pic.data, pic.w, pic.h, scale), scale);
         await t.project.write(path, base64(bytes), { encoding: 'base64' });
-        mine.add(path.toLowerCase());
+        addMine(path);
       }
       saved = { name: p.name, frames: p.frames, sheet: p.sheet, w: doc.w * scale, h: doc.h * scale, scale };
       const found = /^\s*(?:mention|import)\s+(tgame|atgui|mtgui|tgui)\b/m.exec(t.editor.code() || '');
@@ -932,14 +942,19 @@ TuffPlugins.register('sprite-studio', (t) => {
   async function tryFile() {
     if (!saved || !t.project.write) return;
     const rel = `${varName(saved.name)}_${lib === 'tgame' ? 'game' : 'app'}.tuf`;
-    const exists = (await t.project.files()).some((f) => slash(f.rel).toLowerCase() === rel.toLowerCase());
-    if (exists && !made.has(rel)) {
+    const there = (await t.project.files()).find((f) => slash(f.rel).toLowerCase() === rel.toLowerCase());
+    // A file this made can be made again without asking, but only while it still holds just what this wrote:
+    // once it's been changed (and autosave saves every change), it's somebody's own code.
+    let ours = false;
+    if (there) { try { ours = made.get(slash(there.path).toLowerCase()) === (await t.project.read(there.path)); } catch {} }
+    if (there && !ours) {
       const ok = await t.ask({ title: `Replace ${rel}?`, confirm: true, okLabel: 'Replace' });
       if (!ok) return;
     }
     try {
-      const full = await t.project.write(rel, program(lib, saved));
-      made.add(rel);
+      const text = program(lib, saved);
+      const full = await t.project.write(rel, text);
+      made.set(slash(full).toLowerCase(), text);
       await t.openFile(full);
       t.toast(`Made ${rel}. Press Run to try it.`, 'ok', 3000);
     } catch (err) {
