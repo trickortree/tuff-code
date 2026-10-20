@@ -711,7 +711,9 @@ body.enter #statusbar { animation: upin .55s .3s cubic-bezier(.2,.9,.25,1) both;
 #toolstrip-right { width: 40px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 0; background: var(--bg-panel); border-left: 1px solid var(--border); }
 .pi { width: 18px; height: 18px; display: block; background: currentColor; -webkit-mask: no-repeat center / contain; mask: no-repeat center / contain; }
 .pi.none { -webkit-mask: none; mask: none; border-radius: 4px; background: color-mix(in srgb, currentColor 40%, transparent); }
-#pl-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+#pl-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; scrollbar-gutter: stable; }
+/* Once the list is taller than the view, flex would squash the tabs and search box instead of scrolling. */
+#pl-body > * { flex-shrink: 0; }
 .pl-tabs { display: flex; gap: 4px; padding: 2px 10px 8px; }
 .pl-tabs button { flex: 1; height: 28px; border-radius: 7px; font-weight: 600; font-size: 12.5px; color: var(--text-dim); }
 .pl-tabs button:hover { background: var(--bg-hover); color: var(--text); }
