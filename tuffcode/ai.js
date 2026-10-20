@@ -32,7 +32,8 @@ let onProgress = () => {};
 let download = null; // { id, got, total, abort }
 let worker = null; // { proc, model, ready, info }
 let idleTimer = null;
-const runs = new Map(); // runId -> { emit, resolve }
+const runs = new Map(); // runId -> { emit, resolve }: questions the worker is answering
+const active = new Set(); // runIds of questions still going, from the first check to the last event
 
 function setup(opts) {
   if (opts.checkSource) checkSource = opts.checkSource;
@@ -153,13 +154,15 @@ function unload() {
   const w = worker;
   worker = null;
   try { w.proc.kill(); } catch {}
-  for (const [, r] of runs) r.emit({ kind: 'done', ok: false, error: 'Tuff AI stopped.' });
+  // Each question being answered then finishes with this, and sends its own done.
+  for (const [, r] of runs) r.resolve({ ok: false, error: 'Tuff AI stopped.' });
   runs.clear();
 }
 
+// The model is unloaded after 5 minutes without questions, but never while one is being answered.
 function touch() {
   clearTimeout(idleTimer);
-  idleTimer = setTimeout(unload, IDLE_MS);
+  if (!active.size) idleTimer = setTimeout(unload, IDLE_MS);
 }
 
 function start(m) {
@@ -202,6 +205,7 @@ function start(m) {
 }
 
 function ask(runId, type, payload, emit) {
+  if (!worker) return Promise.resolve({ ok: false, error: 'Tuff AI stopped unexpectedly. Try again.' });
   return new Promise((resolve) => {
     runs.set(runId, { emit, resolve });
     worker.proc.postMessage({ type, runId, maxTokens: MAX_TOKENS, ...payload });
@@ -258,7 +262,19 @@ function codeOf(text) {
 }
 
 // ---------------------------------------------------------------- runs (same events as the CLI agents)
-async function run({ runId, prompt, model }, emit) {
+async function run(params, emit) {
+  // While a question is going, the idle timer waits.
+  active.add(params.runId);
+  touch();
+  try {
+    await answerRun(params, emit);
+  } finally {
+    active.delete(params.runId);
+    touch();
+  }
+}
+
+async function answerRun({ runId, prompt, model }, emit) {
   const send = (e) => emit({ runId, ...e });
   const m = find(model);
   if (!(await runtimeAvailable())) { send({ kind: 'done', ok: false, error: "Tuff AI's engine isn't in this copy of TuffCode." }); return; }
@@ -278,7 +294,6 @@ async function run({ runId, prompt, model }, emit) {
     send({ kind: 'done', ok: false, error: String(err.message || err) });
     return;
   }
-  touch();
   const extra = relevant(prompt);
   const message = `${extra.length ? `More of the Tuff guide that may help:\n\n${extra.map((s) => s.text).join('\n\n')}\n\n---\n\n` : ''}${prompt}`;
   let r = await ask(runId, 'chat', { system: systemPrompt(), prompt: message }, send);
@@ -302,7 +317,6 @@ async function run({ runId, prompt, model }, emit) {
       }
     }
   }
-  touch();
   send({ kind: 'done', ok: !!r.ok || !!r.stopped, error: r.ok || r.stopped ? null : r.error });
 }
 
