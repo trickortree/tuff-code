@@ -144,6 +144,15 @@ export default async (t, ctx) => {
   // tuff --check outside the temp folder (it skips the "is the file there" check for files in temp).
   const checkDir = (name) => { const d = path.join(ctx.out, name); fs.rmSync(d, { recursive: true, force: true }); fs.mkdirSync(path.join(d, 'sounds'), { recursive: true }); return d; };
 
+  // The "Replace?" question: its title, then a click on Cancel or the OK button. null when nothing asked.
+  async function answerAsk(ok) {
+    if (!(await waitFor(`!document.querySelector('#modal').classList.contains('hidden')`, 4000))) return null;
+    const asked = await ev(`document.querySelector('#modal-title').textContent`);
+    await click(ok ? '#modal-ok' : '#modal-cancel');
+    await t.sleep(300);
+    return asked;
+  }
+
   // ---------------------------------------------------------------- 1. install from the marketplace
   const mainPath = path.join(ctx.root, 'main.tuf');
   fs.writeFileSync(mainPath, MAIN);
@@ -185,6 +194,11 @@ export default async (t, ctx) => {
   await t.sleep(200);
   const nameKeys = await ev(`({ focus: document.activeElement === ${P}.querySelector('.sl-name'), name: ${P}.querySelector('.sl-name').value })`);
   check('Ctrl+D, Ctrl+Y and Ctrl+Shift+Z in the name box leave the code file alone, and the box keeps the focus', (await t.code()) === nameKeysBefore && nameKeys.focus && nameKeys.name === 'e2e_random', { nameKeys, code: await t.code() });
+  await ev(`${P}.querySelector('.sl-name').select()`);
+  await t.type('Explosión boom', 15);
+  await t.key('Tab');
+  const accented = await ev(`${P}.querySelector('.sl-name').value`);
+  check('A name keeps letters like ó, and a space becomes _', accented === 'Explosión_boom', accented);
   const headerBad = all.filter(([, { wav: w }]) => !w || w.riff !== 'RIFF' || w.wave !== 'WAVE' || w.riffSize !== w.fileSize - 8 || w.endsAt !== w.fileSize
     || w.chunks.join() !== 'fmt ,data,LIST' || !w.fmt || w.fmt.format !== 1 || w.fmt.channels !== 1 || w.fmt.rate !== 44100 || w.fmt.bits !== 16 || w.fmt.byteRate !== 88200 || w.fmt.align !== 2);
   check('RIFF/WAVE header: PCM, mono, 44100 Hz, 16-bit, byte rate 88200, block align 2, RIFF size = file size - 8', !headerBad.length, headerBad.map(([k, f]) => [k, f.wav && { ...f.wav, data: undefined, list: undefined }]));
@@ -320,6 +334,28 @@ export default async (t, ctx) => {
   check('"Make a test game" makes sound_test.tuf, opens it, and it passes tuff --check', testName === 'sound_test.tuf' && opened2 && /^mention tgame/.test(testCode)
     && (testCode.match(/game:sound "sounds\/e2e_coin\.wav"/g) || []).length === 2 && tgCheck === 'OK', { testName, opened2, tgCheck, testCode });
 
+  // A sound file made somewhere else, with " in its name (a Mac allows that; Windows doesn't, so the project
+  // listing gets a made-up entry here): the line and the test game write it as \" so they still parse, and
+  // --check (outside the temp folder) then looks for exactly that file.
+  const QUOTED = 'sounds/my "big" boom.wav';
+  await ev(`(() => { const real = TuffIDE.listFiles; window.__slReal = real; TuffIDE.listFiles = async () => [...(await real()), { name: 'my "big" boom.wav', rel: ${JSON.stringify(QUOTED)}, path: ${JSON.stringify(path.join(ctx.root, 'sounds', 'my "big" boom.wav'))} }]; return 1; })()`);
+  await click(inPanel('[data-a="refresh"]'));
+  await waitFor(`[...${P}.querySelectorAll('.sl-item')].some((x) => x.dataset.rel === ${JSON.stringify(QUOTED)})`, 8000);
+  await click(inPanel(`.sl-item[data-rel='${QUOTED}'] [data-a="use"]`));
+  await t.sleep(200);
+  const qLine = await ev(`${P}.querySelector('.sl-code code')?.textContent`);
+  await click(inPanel('[data-a="testgame"]'));
+  await waitFor(`${P}.dataset.testGame === 'sound_test_2.tuf'`, 8000);
+  await ev(`(() => { TuffIDE.listFiles = window.__slReal; return 1; })()`);
+  await click(inPanel('[data-a="refresh"]'));
+  const qDir = checkDir('check-quoted');
+  fs.writeFileSync(path.join(qDir, 'main.tuf'), `${MAIN}${String(qLine).replace(/^\w+/, 'arcade')}\n`);
+  const qGame = fs.existsSync(path.join(ctx.root, 'sound_test_2.tuf')) ? fs.readFileSync(path.join(ctx.root, 'sound_test_2.tuf'), 'utf8') : '';
+  fs.writeFileSync(path.join(qDir, 'sound_test_2.tuf'), qGame);
+  const qChecks = [ctx.tuffCheck(path.join(qDir, 'main.tuf')), ctx.tuffCheck(path.join(qDir, 'sound_test_2.tuf'))];
+  check('A sound named my "big" boom.wav: the line and the test game write the name as \\" and parse, and --check looks for that very file',
+    /^\w+:sound "sounds\/my \\"big\\" boom\.wav"$/.test(qLine) && qGame.includes('game:sound "sounds/my \\"big\\" boom.wav"') && qChecks.every((c) => /Couldn't find the sound 'sounds\/my "big" boom\.wav'/.test(c)), { qLine, qChecks });
+
   // A game in a subfolder: tgame only finds files in the game's own folder.
   const levelPath = path.join(ctx.root, 'levels', 'level1.tuf');
   fs.mkdirSync(path.dirname(levelPath), { recursive: true });
@@ -330,8 +366,15 @@ export default async (t, ctx) => {
   await t.sleep(200);
   const warn = await ev(`${P}.querySelector('.sl-warn')?.textContent || ''`);
   check('For a game in a folder, it says the sound has to be in that folder too', /levels/.test(warn) && !!(await ev(`!!${P}.querySelector('[data-a="copyhere"]')`)), warn);
+  // A different sound already has that name in levels/sounds: "Save a copy" asks before replacing it.
+  fs.mkdirSync(file('levels/sounds'), { recursive: true });
+  fs.writeFileSync(file('levels/sounds/e2e_coin.wav'), plainWav());
   await click(inPanel('[data-a="copyhere"]'));
-  await waitFor(`!!${P}.querySelector('.sl-item[data-rel="levels/sounds/e2e_coin.wav"]')`, 8000);
+  const copyAsk = await answerAsk(false);
+  check('"Save a copy" over a different levels/sounds/e2e_coin.wav asks first, and Cancel leaves that file alone', copyAsk === 'Replace levels/sounds/e2e_coin.wav?' && fs.readFileSync(file('levels/sounds/e2e_coin.wav')).equals(plainWav()), copyAsk);
+  await click(inPanel('[data-a="copyhere"]'));
+  await answerAsk(true);
+  await waitFor(`!${P}.querySelector('.sl-warn') && !!${P}.querySelector('.sl-item[data-rel="levels/sounds/e2e_coin.wav"]')`, 8000);
   const lvLine = await ev(`${P}.querySelector('.sl-code code')?.textContent`);
   const lvDir = checkDir('check-level');
   fs.writeFileSync(path.join(lvDir, 'level1.tuf'), LEVEL + lvLine.replace(/^\w+/, 'game') + '\n');

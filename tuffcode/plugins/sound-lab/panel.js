@@ -328,9 +328,14 @@ TuffPlugins.register('sound-lab', (t) => {
   let resize = null;
   let rememberTimer = 0;
 
+  // Letters (of any alphabet, so "Explosión" keeps its ó), numbers, - and _; spaces become _.
   function cleanName(s) {
-    return String(s || '').trim().replace(/\.(wav|mp3|ogg|m4a)$/i, '').replace(/\s+/g, '_').replace(/[^\w-]/g, '').replace(/^[-_]+/, '').slice(0, 40);
+    return String(s || '').trim().replace(/\.(wav|mp3|ogg|m4a)$/i, '').replace(/\s+/g, '_').replace(/[^\p{L}\p{M}\p{N}_-]/gu, '').replace(/^[-_]+/, '').slice(0, 40);
   }
+
+  // A Tuff text literal for a file's name or path. A file made somewhere else can have " or \ in its name
+  // (a Mac allows them), and Tuff writes those as \" and \\.
+  const tuffText = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\t/g, '\\t')}"`;
 
   function remember(now) {
     clearTimeout(rememberTimer);
@@ -728,7 +733,7 @@ TuffPlugins.register('sound-lab', (t) => {
     } else {
       out.note = 'Open your game\'s .tuf file, click an empty line where the sound should play, then Insert.';
     }
-    out.line = `${game}:sound "${out.path}"`;
+    out.line = `${game}:sound ${tuffText(out.path)}`;
     return out;
   }
 
@@ -773,6 +778,10 @@ TuffPlugins.register('sound-lab', (t) => {
     const u = s && codeFor(s);
     if (!lab || !u?.dir) return;
     const rel = `${u.dir}/sounds/${s.name.replace(/\.\w+$/, '')}.wav`;
+    // Like Save: a different sound may already have that name in there.
+    await listSounds(false);
+    if (sounds.some((x) => x.rel.toLowerCase() === rel.toLowerCase())
+      && !(await t.ask({ title: `Replace ${rel}?`, confirm: true, okLabel: 'Replace' }))) { await listSounds(); return; }
     try { await writeSound(rel, lab); } catch (err) { t.toast(`Couldn't save ${rel}: ${err?.message || err}`, 'error'); return; }
     useRel = rel;
     t.toast(`Saved ${rel}.`, 'ok');
@@ -783,14 +792,14 @@ TuffPlugins.register('sound-lab', (t) => {
 
 game = tgame.window("Sound test", 500, 300)
 game:background "navy"
-game:text("Press space or click to play ${name}", 250, 135, 22, "white")
+game:text(${tuffText(`Press space or click to play ${name}`)}, 250, 135, 22, "white")
 game:text("Made with Sound Lab", 250, 175, 14, "gray")
 
 func play_it(key):
-    game:sound "${rel}"
+    game:sound ${tuffText(rel)}
 
 func on_click(x, y):
-    game:sound "${rel}"
+    game:sound ${tuffText(rel)}
 
 game:on_key("space", play_it)
 game:clicked on_click
