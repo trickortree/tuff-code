@@ -5,6 +5,8 @@ const fsp = fs.promises;
 const { spawn } = require('child_process');
 const builder = require('./build');
 const updater = require('./updater');
+const plugins = require('./plugins');
+const agents = require('./agents');
 
 const TUFF_INTERPRETER = app.isPackaged
   ? path.join(process.resourcesPath, 'runtime-src', 'tuff.py')
@@ -239,6 +241,20 @@ ipcMain.handle('tuff:check', async (_e, source) => {
   fsp.rm(file, { force: true }).catch(() => {});
   return result;
 });
+
+// plugins and Tuff Agents
+plugins.setup({ load: loadSettings, save: saveSettings });
+agents.setup({ tuffCommand: () => { const { cmd, args } = tuffCommand([]); return [cmd, ...args]; } });
+ipcMain.handle('plugins:list', (_e, force) => plugins.list(force));
+ipcMain.handle('plugins:install', (_e, id) => plugins.install(id));
+ipcMain.handle('plugins:uninstall', (_e, id) => plugins.uninstall(id));
+ipcMain.handle('plugins:setEnabled', (_e, id, on) => plugins.setEnabled(id, on));
+ipcMain.handle('agents:detect', () => agents.detect());
+ipcMain.handle('agents:connection', (_e, id) => agents.connection(id));
+ipcMain.handle('agents:connect', (_e, id, on) => agents.connect(id, on));
+ipcMain.handle('agents:mcpServer', () => agents.mcpServer());
+ipcMain.handle('agents:run', (_e, params) => { agents.run(params, (ev) => send('agents:event', ev)); return true; });
+ipcMain.handle('agents:stop', (_e, runId) => agents.stop(runId));
 
 ipcMain.handle('window:minimize', () => win.minimize());
 ipcMain.handle('window:toggleMaximize', () => (win.isMaximized() ? win.unmaximize() : win.maximize()));

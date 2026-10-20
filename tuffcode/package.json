@@ -23,6 +23,10 @@
       "preload.js",
       "build.js",
       "updater.js",
+      "agents.js",
+      "plugins.js",
+      "plugins/**/*",
+      "mcp/**/*",
       "renderer/**/*",
       "package.json"
     ],
@@ -59,6 +63,11 @@
         "owner": "trickortree",
         "repo": "tuff-code"
       }
+    ],
+    "asarUnpack": [
+      "mcp/**/*",
+      "renderer/js/tuff-lang.js",
+      "renderer/js/tuff-templates.js"
     ]
   },
   "devDependencies": {

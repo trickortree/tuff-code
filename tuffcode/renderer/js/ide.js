@@ -1097,12 +1097,12 @@
     sideView = view;
     sb.classList.toggle('collapsed', !show);
     sb.classList.toggle('learn', view === 'learn');
-    $('#view-project').classList.toggle('hidden', view !== 'project');
-    $('#view-learn').classList.toggle('hidden', view !== 'learn');
-    document.querySelectorAll('.ts-btn[data-tool="project"], .ts-btn[data-tool="learn"]').forEach((b) => {
+    document.querySelectorAll('#sidebar > .side-view').forEach((v) => v.classList.toggle('hidden', v.id !== `view-${view}`));
+    document.querySelectorAll('.ts-btn[data-tool="project"], .ts-btn[data-tool="learn"], .ts-btn[data-tool="plugins"]').forEach((b) => {
       b.classList.toggle('active', show && b.dataset.tool === view);
     });
     if (show && view === 'project') $('#tree').focus();
+    if (show && view === 'plugins') window.TuffPluginHost?.showMarket();
   }
   const toggleSidebar = (force) => showSideView('project', force);
 
@@ -1160,6 +1160,7 @@
     toggleProject: { label: 'Project Tool Window', sc: 'Alt+1', run: () => toggleSidebar() },
     toggleRun: { label: 'Run Tool Window', sc: 'Alt+4', run: toggleBottom },
     learn: { label: 'Learn Tuff', sc: 'Alt+2', run: () => showSideView('learn') },
+    plugins: { label: 'Plugins', sc: 'Alt+3', run: () => showSideView('plugins') },
     studio: { label: 'Design Studio', sc: 'Ctrl+Shift+D', run: () => openStudio() },
     searchEverywhere: { label: 'Search Everywhere', sc: 'Double Shift', run: () => openSearch('all') },
     goToFile: { label: 'Go to File…', sc: 'Ctrl+Shift+N', run: () => openSearch('files') },
@@ -1182,7 +1183,7 @@
 
   const keymap = {
     'Ctrl+Alt+S': 'settings', 'Ctrl+Alt+L': 'autoSort', 'Ctrl+S': 'saveAll', 'Ctrl+O': 'openFolder', 'Ctrl+Alt+N': 'newFile', 'Ctrl+F4': 'closeTab', 'Ctrl+W': 'closeTab',
-    'Ctrl+Shift+N': 'goToFile', 'Ctrl+E': 'goToFile', 'Alt+1': 'toggleProject', 'Alt+2': 'learn', 'Alt+4': 'toggleRun', 'Ctrl+Shift+D': 'studio',
+    'Ctrl+Shift+N': 'goToFile', 'Ctrl+E': 'goToFile', 'Alt+1': 'toggleProject', 'Alt+2': 'learn', 'Alt+3': 'plugins', 'Alt+4': 'toggleRun', 'Ctrl+Shift+D': 'studio',
     'Shift+F10': 'run', 'Ctrl+Shift+F10': 'run', 'Ctrl+F5': 'rerun', 'Ctrl+F2': 'stop', 'Ctrl+F9': 'build',
     'Ctrl+Tab': 'nextTab', 'Ctrl+Shift+Tab': 'prevTab', 'Ctrl+Shift+I': 'devtools', 'F12': 'devtools',
     'Ctrl+=': 'zoomIn', 'Ctrl++': 'zoomIn', 'Ctrl+Shift++': 'zoomIn', 'Ctrl+-': 'zoomOut', 'Ctrl+0': 'zoomReset',
@@ -1192,7 +1193,7 @@
   const menus = [
     ['File', ['newFile', 'newFolder', 'openFolder', 'sep', 'saveAll', 'closeTab', 'sep', 'settings', 'sep', 'exit']],
     ['Edit', ['undo', 'redo', 'sep', 'find', 'replace', 'sep', 'autoSort', 'comment', 'dupLine', 'deleteLine', 'selectAll']],
-    ['View', ['toggleProject', 'learn', 'toggleRun', 'studio', 'sep', 'searchEverywhere', 'goToFile', 'sep', 'zoomIn', 'zoomOut', 'zoomReset', 'sep', 'settings', 'devtools']],
+    ['View', ['toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'sep', 'searchEverywhere', 'goToFile', 'sep', 'zoomIn', 'zoomOut', 'zoomReset', 'sep', 'settings', 'devtools']],
     ['Run', ['run', 'rerun', 'stop', 'sep', 'build']],
     ['Help', ['learn', 'replayIntro', 'sep', 'checkUpdates', 'about']],
   ];
@@ -1546,9 +1547,10 @@
   $('#tree-refresh').onclick = refreshTree;
   $('#tree-collapse').onclick = () => { tree.expanded = new Set([state.root]); renderTree(); };
   document.querySelectorAll('.ts-btn').forEach((b) => {
-    b.onclick = () => ({ project: () => toggleSidebar(), learn: () => showSideView('learn'), studio: () => openStudio(), run: toggleBottom })[b.dataset.tool]();
+    b.onclick = () => ({ project: () => toggleSidebar(), learn: () => showSideView('learn'), studio: () => openStudio(), plugins: () => showSideView('plugins'), run: toggleBottom })[b.dataset.tool]();
   });
   $('#learn-hide').onclick = () => showSideView('learn', false);
+  $('#pl-hide').onclick = () => showSideView('plugins', false);
 
   $('#project-widget').onclick = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
@@ -1608,6 +1610,41 @@
     goToLine,
     ask,
     openStudio,
+    showSideView,
+    activeCode: () => activeTab()?.model.getValue() ?? '',
+    selectionText: () => (editor && activeTab() ? editor.getModel().getValueInRange(editor.getSelection()) : ''),
+    selectionLines: () => {
+      if (!editor || !activeTab()) return null;
+      const s = editor.getSelection();
+      return s.isEmpty() ? null : [s.startLineNumber, s.endLineNumber];
+    },
+    insertText: async (text, { snippet = false } = {}) => {
+      const t = activeTab();
+      if (!editor || !t) { toast('Open a file first.'); return false; }
+      if (studio.visible) activate(t);
+      editor.focus();
+      if (snippet) editor.getContribution('snippetController2').insert(text);
+      else editor.executeEdits('plugin', [{ range: editor.getSelection(), text, forceMoveMarkers: true }]);
+      editor.pushUndoStop();
+      return true;
+    },
+    // Reload open files that changed on disk (an agent edited them) unless they have unsaved changes.
+    reloadChanged: async () => {
+      for (const t of state.tabs) {
+        if (isDirty(t)) continue;
+        const disk = await api.fs.readFile(t.path).catch(() => null);
+        const norm = (s) => s.replace(/\r\n/g, '\n');
+        if (disk === null || norm(disk) === norm(t.model.getValue())) continue;
+        t.model.pushEditOperations([], [{ range: t.model.getFullModelRange(), text: disk }], () => null);
+        t.saved = t.model.getAlternativeVersionId();
+      }
+      renderTabs();
+      filesCache = null;
+      await refreshTree();
+    },
+    addCommand: (id, def) => { commands[id] = def; if (def.sc) keymap[def.sc] = id; },
+    removeCommand: (id) => { const sc = commands[id]?.sc; if (sc && keymap[sc] === id) delete keymap[sc]; delete commands[id]; },
+    openExternal: (url) => api.openRepo(url),
     studioVisible: () => studio.visible,
     activeFile: () => activeTab()?.path || null,
     monacoReady: () => monacoReady,
@@ -1649,6 +1686,7 @@
       enterIDE();
       editor?.focus();
     }
+    window.TuffPluginHost?.init(window.TuffIDE);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

@@ -100,184 +100,7 @@
   const kindInfo = (n) => (n.kind === 'window' ? WINDOW : KINDS[n.kind]);
   const tipFor = (kind) => window.TUFF_METHOD_DOCS?.[kind]?.[1] || '';
 
-  // ---------------------------------------------------------------- templates
-  const TEMPLATES = [
-    { id: 'counter', name: 'Counter', desc: 'Two buttons that count up and down.', code: `mention mtgui
-
-app = mtgui.window("Counter", 360, 400)
-app:accent "purple"
-app:heading "Counter"
-app:small "Press the buttons to count up and down."
-count = app:heading "0"
-row = app:row
-row:button("-", down, "secondary")
-row:button("+", up, "primary")
-app:button("Reset", reset, "ghost")
-
-n = 0
-
-func up():
-    n += 1
-    count:set text(n)
-
-func down():
-    n -= 1
-    count:set text(n)
-
-func reset():
-    n = 0
-    count:set "0"
-` },
-    { id: 'login', name: 'Sign in', desc: 'A username box, a password box and a sign-in button.', code: `mention mtgui
-
-app = mtgui.window("Sign in", 380, 470)
-app:accent "blue"
-app:heading "Welcome back"
-app:small "Sign in to continue."
-user = app:input "Username"
-password = app:input "Password"
-remember = app:checkbox("Remember me", true)
-app:button("Sign in", sign_in, "primary")
-status = app:small ""
-password:enter sign_in
-
-func sign_in():
-    if user:value is "":
-        status:set "Type your username first."
-    else:
-        status:set "Hi " + user:value + "! You're signed in."
-` },
-    { id: 'todo', name: 'To-do list', desc: 'Type tasks and tick them off.', code: `mention mtgui
-
-app = mtgui.window("To-do list", 420, 560)
-app:accent "green"
-app:heading "To-do list"
-app:small "Type a task, then press Enter or Add."
-row = app:row
-task = row:input "New task"
-row:button("Add", add_task, "primary")
-tasks = app:card
-summary = app:small "No tasks yet"
-task:enter add_task
-
-count = 0
-
-func add_task():
-    if task:value is "":
-        return
-    tasks:checkbox(task:value, false)
-    task:clear
-    count += 1
-    if count is 1:
-        summary:set "1 task"
-    else:
-        summary:set text(count) + " tasks"
-` },
-    { id: 'pizza', name: 'Pizza order', desc: 'A form with a dropdown, checkboxes and a slider.', code: `mention mtgui
-
-app = mtgui.window("Pizza order", 400, 600)
-app:accent "orange"
-app:heading "Build your pizza"
-app:small "Pick a size and toppings, then order."
-name = app:input "Your name"
-size = app:dropdown(["Small", "Medium", "Large"], "Medium")
-toppings = app:card
-cheese = toppings:checkbox("Extra cheese", true)
-pepperoni = toppings:checkbox("Pepperoni", false)
-app:small "How spicy?"
-spice = app:slider(0, 10, 3)
-row = app:row
-row:button("Order", order, "primary")
-row:button("Clear", clear, "ghost")
-status = app:text ""
-
-func order():
-    status:set "Thanks " + name:value + "! Your " + size:value + " pizza is on its way."
-
-func clear():
-    name:clear
-    status:set ""
-` },
-    { id: 'clock', name: 'Clock', desc: 'An analog and a digital clock you can pause and speed up.', code: `mention mtgui
-
-app = mtgui.window("Clock", 380, 560)
-app:accent "teal"
-app:heading "Clock"
-big = app:clock("analog", 200)
-small = app:clock("digital")
-row = app:row
-row:button("Pause", pause, "secondary")
-row:button("Resume", resume, "primary")
-fast = app:toggle("Super speed", false)
-fast:change speed_up
-
-func pause():
-    big:pause
-    small:pause
-
-func resume():
-    big:resume
-    small:resume
-
-func speed_up():
-    if fast:value:
-        big:speed 60
-        small:speed 60
-    else:
-        big:speed 1
-        small:speed 1
-` },
-    { id: 'settings', name: 'Settings page', desc: 'Switches, a volume slider and a language picker.', code: `mention mtgui
-
-app = mtgui.window("Settings", 420, 620)
-app:heading "Settings"
-card = app:card
-dark = card:toggle("Dark mode", true)
-sounds = card:toggle("Sound effects", true)
-card:divider
-card:small "Volume"
-volume = card:slider(0, 100, 70)
-level = card:progress(70)
-language = app:dropdown(["English", "Espanol", "Francais"], "English")
-app:button("Save", save, "primary")
-saved = app:small ""
-dark:change switch_theme
-volume:change show_volume
-
-func switch_theme():
-    if dark:value:
-        app:theme "dark"
-    else:
-        app:theme "light"
-
-func show_volume():
-    level:set volume:value
-
-func save():
-    saved:set "Saved! Language: " + language:value
-` },
-    { id: 'quiz', name: 'Quiz', desc: 'A question with answer buttons and a score bar.', code: `mention mtgui
-
-app = mtgui.window("Quick quiz", 420, 480)
-app:accent "pink"
-app:heading "Quick quiz"
-question = app:text "What is 7 x 8?"
-row = app:row
-row:button("54", wrong, "outline")
-row:button("56", right, "outline")
-row:button("63", wrong, "outline")
-result = app:text ""
-bar = app:progress(0)
-
-func right():
-    result:set "Correct!"
-    bar:set 100
-
-func wrong():
-    result:set "Not quite, try again."
-    bar:set 30
-` },
-  ];
+  const TEMPLATES = window.TUFF_TEMPLATES || [];
 
   // ---------------------------------------------------------------- parsing
   function stripComment(line) {
@@ -1105,7 +928,7 @@ func wrong():
     host().innerHTML = `
       <div class="sd">
         <div class="sd-bar">
-          <span class="sd-title">${UI.palette}<b>Design Studio</b></span>
+          <span class="sd-title" title="Design Studio">${UI.palette}<b>Design Studio</b></span>
           <select id="sd-file" title="Which file to design"></select>
           <div class="sd-seg" id="sd-libseg" title="Classic is tgui, Modern is mtgui (gradients, gloss and glow)">
             <button data-lib="tgui">Classic</button><button data-lib="mtgui">Modern</button>
@@ -1121,15 +944,15 @@ func wrong():
             <button class="sd-ib" id="sd-zfit" title="Fit to screen">${UI.fit}</button>
           </div>
           <div class="sd-bar-r">
-            <button class="btn sm" id="sd-templates">${UI.grid}Templates</button>
-            <button class="btn sm" id="sd-code">${UI.code}Code</button>
-            <button class="btn sm primary" id="sd-run">${UI.play}Run app</button>
+            <button class="btn sm" id="sd-templates" title="Templates">${UI.grid}<span class="lbl">Templates</span></button>
+            <button class="btn sm" id="sd-code" title="Show the code">${UI.code}<span class="lbl">Code</span></button>
+            <button class="btn sm primary" id="sd-run" title="Run app">${UI.play}<span class="lbl">Run app</span></button>
           </div>
         </div>
         <div class="sd-main">
           <aside class="sd-left">
             <div class="sd-tabs">
-              <button data-tab="add">Add</button><button data-tab="layers">Layers</button>
+              <button data-tab="add" title="Add widgets">${UI.plus}<span class="lbl">Add</span></button><button data-tab="layers" title="Layers">${UI.grid}<span class="lbl">Layers</span></button>
             </div>
             <div class="sd-pane" data-pane="add">
               <label class="sd-search">${UI.search}<input id="sd-search" placeholder="Search widgets" spellcheck="false"></label>
@@ -1167,6 +990,7 @@ func wrong():
 
   function setTab(tab) {
     S.tab = tab;
+    $('.sd-left')?.classList.toggle('layers', tab === 'layers');
     $$('.sd-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
     $$('.sd-pane').forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== tab));
     ide.saveSettings({ studioTab: tab });
@@ -1187,7 +1011,7 @@ func wrong():
         b.className = 'sd-tile';
         b.dataset.kind = kind;
         b.title = `${KINDS[kind].label}: ${tipFor(kind)}`;
-        b.innerHTML = `<span class="ic">${ICONS[kind]}</span><span>${esc(KINDS[kind].label)}</span>`;
+        b.innerHTML = `<span class="ic">${ICONS[kind]}</span><span class="lbl">${esc(KINDS[kind].label)}</span>`;
         b.addEventListener('pointerdown', (e) => press(e, { kind }));
         grid.appendChild(b);
       }
@@ -1219,7 +1043,12 @@ func wrong():
     }, 120));
     fillFiles();
     render(true);
-    requestAnimationFrame(() => $('#sd-canvas')?.focus({ preventScroll: true }));
+    requestAnimationFrame(() => {
+      $('#sd-canvas')?.focus({ preventScroll: true });
+      const win = $('#sd-stage .pv-window');
+      const c = $('#sd-canvas').getBoundingClientRect();
+      if (win && win.getBoundingClientRect().width > c.width - 48) fitZoom();
+    });
   }
 
   function apply(fn, rerenderForm = false) {
@@ -1401,16 +1230,18 @@ func wrong():
     $('[data-a="code"]', act).onclick = () => ide.goToLine(S.file, node.line);
   }
 
-  // Small toolbar floating above the selected widget.
+  // Selection bar docked at the top of the canvas: never covers a widget or a drop spot.
   function positionFloat() {
     const fl = $('#sd-float');
     if (!fl) return;
     const node = S.parsed && findByKey(S.parsed, S.sel);
     const el = node && node.kind !== 'window' && $(`#sd-stage .pv-node[data-key="${CSS.escape(S.sel)}"]`);
     if (!el || D.active) { fl.classList.add('hidden'); return; }
-    if (fl.dataset.key !== S.sel) {
+    const label = `${KINDS[node.kind].label}${node.var ? ` · ${node.var}` : ''}`;
+    if (fl.dataset.key !== S.sel || fl.dataset.label !== label) {
       fl.dataset.key = S.sel;
-      fl.innerHTML = `<button data-a="up" title="Move up (Alt+↑)">${UI.up}</button><button data-a="down" title="Move down (Alt+↓)">${UI.down}</button>
+      fl.dataset.label = label;
+      fl.innerHTML = `<span class="sd-float-l"><span class="ic">${ICONS[node.kind]}</span>${esc(label)}</span><i class="sd-float-sep"></i><button data-a="up" title="Move up (Alt+↑)">${UI.up}</button><button data-a="down" title="Move down (Alt+↓)">${UI.down}</button>
         <button data-a="dup" title="Duplicate (Ctrl+D)">${UI.dup}</button><button data-a="code" title="Show in code">${UI.code}</button><button data-a="del" class="danger" title="Delete (Del)">${UI.trash}</button>`;
       fl.onclick = (e) => {
         const a = e.target.closest('button')?.dataset.a;
@@ -1422,23 +1253,11 @@ func wrong():
         if (a === 'code') ide.goToLine(S.file, n.line);
       };
     }
-    const r = el.getBoundingClientRect();
     const c = $('#sd-canvas').getBoundingClientRect();
     const sdr = $('#studio').getBoundingClientRect();
-    if (r.bottom < c.top || r.top > c.bottom) { fl.classList.add('hidden'); return; }
     fl.classList.remove('hidden');
-    // Beside the widget (right of the window) so it never covers the widget or its name tag.
-    const winR = $('#sd-stage .pv-window').getBoundingClientRect();
-    let left = winR.right + 10;
-    let top = r.top + r.height / 2 - fl.offsetHeight / 2;
-    if (left + fl.offsetWidth > c.right - 4) {
-      // No room beside the window: sit above the widget's right end (clear of its name tag), or below a narrow one.
-      left = Math.min(Math.max(c.left + 4, r.right - fl.offsetWidth), c.right - fl.offsetWidth - 4);
-      top = r.width >= fl.offsetWidth + 120 ? r.top - fl.offsetHeight - 6 : r.bottom + 8;
-    }
-    top = Math.max(c.top + 4, Math.min(top, c.bottom - fl.offsetHeight - 4));
-    fl.style.top = `${top - sdr.top}px`;
-    fl.style.left = `${left - sdr.left}px`;
+    fl.style.top = `${c.top - sdr.top + 10}px`;
+    fl.style.left = `${c.left - sdr.left + Math.max(8, (c.width - fl.offsetWidth) / 2)}px`;
   }
 
   function select(key) {
