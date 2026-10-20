@@ -18,8 +18,8 @@ const usesLib = (src, lib) => new RegExp(`^\\s*(import|mention)\\s+${lib}\\b`, '
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // The files a program can use: the ones next to it, and everything in a folder its code names in a
-// path (like "sprites/hero.png", or "sounds/" + name), where Sprite Studio and Sound Lab save.
-// Gives paths relative to the program's folder, with / between folders.
+// path (like "sprites/hero.png", or "sounds/" + name) or on its own ("sprites"), where Sprite Studio
+// and Sound Lab save. Gives paths relative to the program's folder, with / between folders.
 async function programFiles(dir, src, wanted) {
   const found = [];
   const walk = async (folder, rel, all) => {
@@ -27,7 +27,7 @@ async function programFiles(dir, src, wanted) {
       const r = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name.toLowerCase())) continue;
-        if (all || new RegExp(`["'](\\./)?${escapeRe(entry.name)}[\\\\/]`, 'i').test(src)) await walk(path.join(folder, entry.name), r, true);
+        if (all || new RegExp(`["'](\\./)?${escapeRe(entry.name)}["'\\\\/]`, 'i').test(src)) await walk(path.join(folder, entry.name), r, true);
       } else if (entry.isFile() && wanted(path.extname(entry.name).toLowerCase())) {
         found.push(r);
       }
