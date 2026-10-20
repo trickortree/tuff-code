@@ -523,6 +523,10 @@ TGAME_NOTICE = "Tuff Engine is coming soon: a visual way to make games with Tuff
 TGAME_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+tgame\b", re.M)
 BUILTIN_NAMES = {"print", "number", "num", "text", "str", "int", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
                  "floor", "ceil", "min", "max", "sum", "average"}
+# Built-ins that are new in Tuff 1.0.4 and that people already use as their own variables (num = 0, err = "...").
+# Giving one a value inside a function makes that function's own variable, as it did before they were built in,
+# and the built-in stays for the rest of the program. At the top of the program it still replaces the built-in.
+OWN_NAME_BUILTINS = {"num", "int", "str", "err"}
 
 
 # return, break and continue on their way out. They keep their line, for when there's nothing to catch them.
@@ -679,9 +683,10 @@ class Console:
 
 
 class Env:
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, own_names=False):
         self.vars = {}
         self.parent = parent
+        self.own_names = own_names  # holds OWN_NAME_BUILTINS: giving one of them a value makes a new variable
 
     def find(self, name):
         env = self
@@ -707,7 +712,9 @@ class Env:
         return env.vars[name]
 
     def set(self, name, value):
-        env = self.find(name) or self
+        env = self.find(name)
+        if env is None or env.own_names:
+            env = self
         env.vars[name] = value
 
 
@@ -777,7 +784,8 @@ class Interpreter:
         self.base_dir = base_dir
         self.rt = Runtime(self)
         self.console = Console()
-        self.globals = Env()
+        self.own_names = Env(own_names=True)  # OWN_NAME_BUILTINS, just above the program's own top-level names
+        self.globals = Env(self.own_names)
         builtins = {
             "print": self.b_print,
             "number": self.b_number,
@@ -802,10 +810,10 @@ class Interpreter:
             "average": lambda *v: (lambda nums: sum(nums) / len(nums))(self.num_list("average", v)),
         }
         for name, fn in builtins.items():
-            self.globals.vars[name] = Builtin(name, fn)
+            (self.own_names if name in OWN_NAME_BUILTINS else self.globals).vars[name] = Builtin(name, fn)
         self.globals.vars["all"] = ALL
         self.globals.vars["pi"] = math.pi
-        self.globals.vars["err"] = ERR
+        self.own_names.vars["err"] = ERR
 
     # math helpers
     def num_arg(self, name, v):
@@ -1543,7 +1551,7 @@ class Checker:
         self.loop_vars = set()
         self.imports = set()
         self.interp = Interpreter()
-        self.builtins = dict(self.interp.globals.vars)
+        self.builtins = {**self.interp.own_names.vars, **self.interp.globals.vars}
         self.memo = {}
         self.anims = None
         self.calls = {}  # name -> every line it's called on, like name(...)
@@ -1637,6 +1645,8 @@ class Checker:
             return self.memo[name]
         if name in seen:
             return None
+        if name in OWN_NAME_BUILTINS and name in self.everywhere and name not in self.top.names:
+            return None  # only functions make their own variables with this name; everywhere else it's the built-in
         kinds = set()
         if name in self.imports:
             kinds.add("$module:" + name)
@@ -1917,11 +1927,12 @@ class Checker:
             if s.kind == "assign" and s.op == "=" and s.target.kind == "var" and isinstance(self.builtins.get(s.target.name), Builtin):
                 replaces(s, s.target.name, s.line)
             # f() at the top runs f, and f setting a built-in's name (not one of its inputs) replaces it for everyone
+            # (except the OWN_NAME_BUILTINS: there it's f's own variable)
             if s.kind == "expr" and s.expr.kind == "call" and s.expr.fn.kind == "var" and self.only_func(s.expr.fn.name):
                 f = self.func_nodes[s.expr.fn.name]
                 for t in f.body:
                     if t.kind == "assign" and t.op == "=" and t.target.kind == "var" and t.target.name not in f.params \
-                            and isinstance(self.builtins.get(t.target.name), Builtin):
+                            and t.target.name not in OWN_NAME_BUILTINS and isinstance(self.builtins.get(t.target.name), Builtin):
                         replaces(t, t.target.name, s.line)
             if s.kind == "func":
                 if s.name in made:
