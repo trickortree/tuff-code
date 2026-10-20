@@ -1,0 +1,12 @@
+{
+  "id": "sprite-studio",
+  "name": "Sprite Studio",
+  "version": "1.0.0",
+  "author": "trickortree",
+  "description": "Draw pixel-art sprites and icons for your games and apps. Animate them with frames, save them as PNG pictures in your project, and get the Tuff code that shows them in tgame, mtgui or atgui.",
+  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3.5\" y=\"3.5\" width=\"17\" height=\"17\" rx=\"2.5\"/><path d=\"M9.2 3.5v17M14.8 3.5v17M3.5 9.2h17M3.5 14.8h17\"/><path fill=\"#000\" stroke=\"none\" d=\"M9.2 9.2h5.6v5.6H9.2zM14.8 14.8h5.7v3.2a2.5 2.5 0 0 1-2.5 2.5h-3.2z\"/></svg>",
+  "main": "panel.js",
+  "style": "panel.css",
+  "permissions": ["files"],
+  "panels": [{ "id": "editor", "title": "Sprite Studio" }]
+}
