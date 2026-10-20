@@ -444,9 +444,15 @@ window.registerTuff = function registerTuff(monaco, accent) {
         return { suggestions: Object.keys(window.TUFF_LIBS).map((l) => ({ label: l, kind: K.Module, insertText: l, range, documentation: window.TUFF_DOCS[l]?.[1] })) };
       }
       if (/\w:$/.test(before)) {
-        // tgame's own methods (their docs start with "tgame") only crowd the list in files that use tgame.
-        const games = /^\s*(import|mention)\s+tgame\b/m.test(model.getValue());
-        const names = Object.keys(window.TUFF_METHOD_DOCS).filter((m) => games || !/^tgame\b/.test(window.TUFF_METHOD_DOCS[m][1]));
+        // atgui's and tgame's own methods (their docs start with "atgui" or "tgame") only crowd the list in files
+        // that use that library.
+        const src = model.getValue();
+        const games = /^\s*(import|mention)\s+tgame\b/m.test(src);
+        const modern = /^\s*(import|mention)\s+atgui\b/m.test(src);
+        const names = Object.keys(window.TUFF_METHOD_DOCS).filter((m) => {
+          const doc = window.TUFF_METHOD_DOCS[m][1] || '';
+          return (games || !/^tgame\b/.test(doc)) && (modern || !/^atgui\b/.test(doc));
+        });
         const methods = new Set([...names, 'clear', 'upper', 'lower', 'trim', 'has', 'add', 'pop']);
         return {
           suggestions: [...methods].map((m) => ({
