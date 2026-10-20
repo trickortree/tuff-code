@@ -425,8 +425,9 @@ TuffPlugins.register('sprite-studio', (t) => {
   }
 
   function resizeTo(nw, nh) {
-    nw = clamp(Math.round(nw) || 1, 1, MAX_SIDE);
-    nh = clamp(Math.round(nh) || 1, 1, MAX_SIDE);
+    // an empty or silly box keeps that side as it is
+    nw = Number.isFinite(nw) && nw >= 1 ? clamp(Math.round(nw), 1, MAX_SIDE) : doc.w;
+    nh = Number.isFinite(nh) && nh >= 1 ? clamp(Math.round(nh), 1, MAX_SIDE) : doc.h;
     if (nw === doc.w && nh === doc.h) return;
     // the drawing stays in the middle: bigger adds see-through space around it, smaller trims the edges
     const dx = Math.floor((nw - doc.w) / 2), dy = Math.floor((nh - doc.h) / 2);
@@ -722,8 +723,13 @@ TuffPlugins.register('sprite-studio', (t) => {
     }
     try {
       let pics = [];
-      for (const g of group) pics.push(await loadPng(g.path));
-      if (!pics.every((p) => p.w === pics[0].w && p.h === pics[0].h)) { group = [f]; pics = [await loadPng(f.path)]; }
+      try {
+        for (const g of group) pics.push(await loadPng(g.path));
+      } catch (err) {
+        if (group.length === 1) throw err;
+        pics = []; // one of its neighbours wouldn't load: open just this picture
+      }
+      if (!pics.length || !pics.every((p) => p.w === pics[0].w && p.h === pics[0].h)) { group = [f]; pics = [await loadPng(f.path)]; }
       let sc = pics[0].scale;
       let real = pics.map((p) => shrink(p, sc));
       if (real.some((p) => !p)) { sc = 1; real = pics; }
@@ -771,8 +777,8 @@ TuffPlugins.register('sprite-studio', (t) => {
   }
 
   function setScale(s) {
+    if (s !== scale) t.storage.set('scale', s);
     scale = s;
-    t.storage.set('scale', s);
     $$('[data-scale]').forEach((b) => b.classList.toggle('on', +b.dataset.scale === s));
     whereText();
   }
@@ -784,7 +790,7 @@ TuffPlugins.register('sprite-studio', (t) => {
     const p = plan();
     $('[data-f="name"]').value = p.name;
     $('[data-f="folder"]').value = p.dir;
-    t.storage.set('folder', p.dir);
+    if (p.dir !== t.storage.get('folder', 'sprites')) t.storage.set('folder', p.dir);
     const all = [...p.frames, ...(p.sheet ? [p.sheet] : [])];
     const files = (await t.project.files()).map((f) => slash(f.rel).toLowerCase());
     const existing = new Set(files);
@@ -902,8 +908,8 @@ TuffPlugins.register('sprite-studio', (t) => {
   }).join('');
 
   function setLib(id) {
+    if (id !== lib) t.storage.set('lib', id);
     lib = id;
-    t.storage.set('lib', id);
   }
 
   function renderCode() {
@@ -974,7 +980,9 @@ TuffPlugins.register('sprite-studio', (t) => {
       case 'add': case 'dup': case 'del': case 'left': case 'right': return frameOp(d.a);
       case 'play': return setPlaying(!playing);
       case 'save': return save();
-      case 'copy': navigator.clipboard.writeText(snippet(lib, saved, activeDir(), windowInfo(lib))); t.toast('Copied.', 'ok', 1500); return;
+      case 'copy':
+        navigator.clipboard.writeText(snippet(lib, saved, activeDir(), windowInfo(lib))).then(() => t.toast('Copied.', 'ok', 1500), () => t.toast('Couldn\'t copy. Select the code and copy it by hand.', 'error'));
+        return;
       case 'insert': t.editor.insert(snippet(lib, saved, activeDir(), windowInfo(lib)) + '\n'); return;
       case 'try': return tryFile();
     }
