@@ -495,7 +495,7 @@ class AllLines:
 
 
 ALL = AllLines()
-LIBRARIES = ("anims", "tgui", "mtgui", "tap")
+LIBRARIES = ("anims", "tgui", "mtgui", "tap", "tgame")
 # Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
@@ -814,6 +814,13 @@ class Interpreter:
         except ImportError as exc:
             raise TuffError(f"tap couldn't load ({exc}). Reinstall TuffCode.")
         return tuff_tap.make_library(self.rt)
+
+    def lib_tgame(self):
+        try:
+            import tuff_tgame
+        except ImportError as exc:
+            raise TuffError(f"tgame couldn't load ({exc}). Reinstall TuffCode.")
+        return tuff_tgame.make_library(self.rt)
 
     def lib_anims(self):
         con = self.console
