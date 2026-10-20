@@ -159,7 +159,15 @@ function createWindow() {
   win.once('ready-to-show', () => win.show());
   win.on('maximize', () => send('window:maximized', true));
   win.on('unmaximize', () => send('window:maximized', false));
-  win.on('blur', () => send('window:blur'));
+  win.on('blur', () => {
+    send('window:blur');
+    if (process.platform === 'win32') stopWatching();
+  });
+  win.on('focus', () => {
+    if (process.platform !== 'win32' || !watchedDir) return;
+    startWatching();
+    send('fs:changed', { root: watchedDir, paths: [], overflow: true }); // catch up on what changed meanwhile
+  });
   win.on('enter-full-screen', () => send('window:fullscreen', true));
   win.on('leave-full-screen', () => send('window:fullscreen', false));
 }
@@ -181,31 +189,59 @@ ipcMain.on('fs:writeFilesSync', (e, files) => {
 });
 
 // Watches the open folder, so files made, changed or deleted outside the editor (by an AI agent,
-// Explorer/Finder, a build) show up in the project tree right away. Changes are sent in batches.
+// Explorer/Finder, a build) show up in the project tree right away. Changes go out in batches at
+// most 150 ms apart. On Windows a recursive watch keeps the folder's parents from being renamed or
+// moved, so it only runs while TuffCode has focus and catches up when you come back.
 let watcher = null;
+let watchedDir = null;
 let watchTimer = null;
+let watchOverflow = false;
 const watchChanged = new Set();
-const WATCH_SKIP = /(^|[\\/])(\.git|node_modules|__pycache__|\.DS_Store)([\\/]|$)/;
-function watchFolder(dir) {
+const WATCH_SKIP = /(^|[\/])(\.git|node_modules|__pycache__|\.DS_Store)([\/]|$)/;
+function stopWatching() {
   try { watcher?.close(); } catch {}
   watcher = null;
+  clearTimeout(watchTimer);
+  watchTimer = null;
+  watchChanged.clear();
+  watchOverflow = false;
+}
+function flushWatch() {
+  watchTimer = null;
+  const paths = [...watchChanged];
+  const overflow = watchOverflow;
+  watchChanged.clear();
+  watchOverflow = false;
+  send('fs:changed', { root: watchedDir, paths, overflow });
+}
+function startWatching() {
+  stopWatching();
+  const dir = watchedDir;
   if (!dir || !fs.existsSync(dir)) return false;
+  if (process.platform === 'win32' && win && !win.isDestroyed() && !win.isFocused()) return true;
   try {
     watcher = fs.watch(dir, { recursive: true }, (_type, name) => {
-      if (name && WATCH_SKIP.test(String(name))) return;
-      watchChanged.add(name ? path.join(dir, String(name)) : dir);
-      clearTimeout(watchTimer);
-      watchTimer = setTimeout(() => {
-        const paths = [...watchChanged];
-        watchChanged.clear();
-        send('fs:changed', { root: dir, paths });
-      }, 150);
+      const n = name == null ? '' : String(name);
+      // The folder itself was deleted or moved: stop instead of erroring on every event.
+      if ((n && path.isAbsolute(n)) || !fs.existsSync(dir)) {
+        stopWatching();
+        send('fs:changed', { root: dir, paths: [dir], gone: true });
+        return;
+      }
+      if (n && WATCH_SKIP.test(n)) return;
+      if (n) watchChanged.add(path.join(dir, n));
+      else watchOverflow = true; // too many changes at once: the OS didn't say which
+      if (!watchTimer) watchTimer = setTimeout(flushWatch, 150);
     });
-    watcher.on('error', () => { try { watcher?.close(); } catch {} watcher = null; });
+    watcher.on('error', () => stopWatching());
     return true;
   } catch {
     return false;
   }
+}
+function watchFolder(dir) {
+  watchedDir = dir || null;
+  return startWatching();
 }
 ipcMain.handle('fs:watch', (_e, dir) => watchFolder(dir));
 ipcMain.handle('fs:createFile', async (_e, p) => {

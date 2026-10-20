@@ -51,7 +51,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     auth: {}, // agent id -> signed in? (true / false / null when it can't tell)
     pick: t.storage.get('pick', {}), // agent id -> { model, effort } chosen for it ('' = the agent's default)
     models: {}, // agent id -> what it offers, as it reports it: { models, efforts }, { loading } or { error }
-    used: {}, // agent id -> the model that answered last (from the agent itself), e.g. 'Opus 5.5'
+    used: {}, // agent id -> what its Default model turned out to be (from the agent itself), e.g. 'Opus 5.5'
   };
   let root = null;
   let dd = null; // the Model and Thinking dropdowns
@@ -292,7 +292,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     const used = S.used[S.agent];
     dd.model.set({
       list: [
-        { id: '', name: 'Default', sub: `${NAME[S.agent]} picks${used ? ` (last answer: ${used})` : ''}`, icon: MODEL_ICON },
+        { id: '', name: 'Default', sub: `${NAME[S.agent]} picks${used ? ` (last time: ${used})` : ''}`, icon: MODEL_ICON },
         ...(list.models || []).map((m) => ({ id: m.id, name: m.name, sub: m.sub || '', icon: MODEL_ICON })),
       ],
       val: model?.id || '',
@@ -432,7 +432,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     m.onclick = (e) => {
       const id = e.target.closest('button')?.dataset.m;
       m.classList.add('hidden');
-      if (id === 'new') { if (S.run) stop(); S.msgs = []; S.sessions = {}; renderMsgs(); }
+      if (id === 'new') { if (S.run) stop(); S.msgs = []; S.sessions = {}; S.used = {}; renderMsgs(); renderPick(); }
       if (id === 'setup') showSetup(true);
       if (id === 'connect') connect(true);
       if (id === 'disconnect') connect(false);
@@ -760,27 +760,42 @@ TuffPlugins.register('tuff-agents', (t) => {
     // One chat, several agents: whoever answers needs to know who said what, and what happened
     // while another agent had the floor.
     const me = S.agent;
-    const earlier = S.msgs.slice(0, -1).filter((m) => m.role === 'user' || m.status !== 'running');
+    // "Test it" runs are diagnostics, not part of the conversation.
+    const earlier = S.msgs.slice(0, -1).filter((m) => !m.test && (m.role === 'user' || m.status !== 'running'));
     const others = earlier.some((m) => m.role === 'agent' && m.agent !== me);
     const running = picked(me).model?.name || S.used[me];
     parts.push(`You are ${NAME[me]}${running ? `, running as ${running}` : ''}. ${others
       ? 'This chat is shared: the person can switch between AI agents (Claude Code, Codex and Antigravity) at any time, and you all work on the same project. Replies marked with another agent\'s name were written by that agent, not by you. Treat them as a teammate\'s work: build on it, and don\'t take credit for it or "correct" who wrote it.'
       : 'The person can also switch to other AI agents (Claude Code, Codex, Antigravity) in this chat.'}`);
     // Agents that keep their own session (Claude Code, Antigravity) already remember their turns,
-    // so they get what happened since they last answered. Others get the recent chat.
-    const mine = earlier.map((m) => m.role === 'agent' && m.agent === me).lastIndexOf(true);
+    // so they get what happened since they last answered. Only turns that really reached their
+    // session count (a run stopped or failed before it started doesn't). Others get the recent chat.
+    const mine = earlier.map((m) => m.role === 'agent' && m.agent === me && m.inSession).lastIndexOf(true);
     const resumes = ['claude', 'antigravity'].includes(me) && S.sessions[me] && mine >= 0;
-    const shown = resumes ? earlier.slice(mine + 1) : earlier.slice(-10);
     const who = (m) => {
       if (m.role === 'user') return 'Them';
-      const name = `${NAME[m.agent]}${m.model ? ` (${m.model.split(' · ')[0]})` : ''}`;
+      const name = `${NAME[m.agent]}${m.name ? ` (${m.name})` : ''}`;
       return m.agent === me ? `You (${name})` : name;
     };
-    const said = shown.map((m) => {
-      const did = m.role === 'agent' ? (m.tools || []).map((x) => x.text).filter((x) => /^(Wrote|Changed)\b/.test(x)) : [];
+    const line = (m) => {
+      const did = m.role === 'agent' ? [...new Set((m.tools || []).filter((x) => x.ok !== false && /^(Wrote|Changed)\b/.test(x.text)).map((x) => x.text))] : [];
       return `${who(m)}: ${trim(m.text || (m.error ? `(stopped: ${m.error})` : '(no reply)'), 1500)}${did.length ? `\n  [${did.join('; ')}]` : ''}`;
-    }).join('\n');
-    if (said) parts.push(`${resumes ? 'Since you last answered, this happened in the chat' : 'Earlier in this chat'} (for context only: all of it has been answered already):\n<chat>\n${said}\n</chat>`);
+    };
+    // Newest first until the budget is used up, so a long stretch with another agent can't make the
+    // prompt huge. Antigravity gets less: its prompt goes on the command line.
+    const pool = resumes ? earlier.slice(mine + 1) : earlier.slice(-10);
+    const budget = me === 'antigravity' ? 12000 : 30000;
+    const kept = [];
+    let used = 0;
+    for (let i = pool.length - 1; i >= 0; i--) {
+      const l = line(pool[i]);
+      if (used + l.length > budget && kept.length) break;
+      kept.unshift(l);
+      used += l.length;
+    }
+    const dropped = pool.length - kept.length;
+    const said = (dropped ? `(${dropped} earlier message${dropped > 1 ? 's' : ''} left out)\n` : '') + kept.join('\n');
+    if (kept.length) parts.push(`${resumes ? 'Since you last answered, this happened in the chat' : 'Earlier in this chat'} (for context only: all of it has been answered already):\n<chat>\n${said}\n</chat>`);
     parts.push(`Their new message. This is what to answer now:\n<message>\n${text}\n</message>`);
     return parts.join('\n\n');
   }
@@ -798,10 +813,11 @@ TuffPlugins.register('tuff-agents', (t) => {
     const file = t.editor.file();
     const lines = t.editor.selectionLines();
     const ctx = test ? '' : [file && S.useFile ? short(file) : '', lines && S.useSel ? `lines ${lines[0]}–${lines[1]}` : ''].filter(Boolean).join(', ');
-    S.msgs.push({ role: 'user', text: test ? `Test ${a.name}'s TuffCode tools` : text, ctx: ctx ? `with ${ctx}` : '' });
+    S.msgs.push({ role: 'user', text: test ? `Test ${a.name}'s TuffCode tools` : text, ctx: ctx ? `with ${ctx}` : '', test });
     const prompt = buildPrompt(text, { mode, bare: test });
     const { model, effort } = picked();
-    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running', model: [model?.name, effort?.name].filter(Boolean).join(' · '), picked: !!model, effort: effort?.name || '' };
+    // model: what the reply header shows ('Opus 5.5 · High'); name: just the model, for other agents.
+    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running', model: [model?.name, effort?.name].filter(Boolean).join(' · '), name: model?.name || '', picked: !!model, effort: effort?.name || '', test };
     S.msgs.push(msg);
     const runId = `run-${Date.now()}`;
     S.run = { id: runId, msg, changed: false, test, mcp: new Set() };
@@ -813,7 +829,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     renderMsgs();
     updateSend();
     try {
-      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode, session: ['claude', 'antigravity'].includes(S.agent) ? S.sessions[S.agent] : null, model: model?.id || '', effort: effort?.id || '' });
+      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode, session: !test && ['claude', 'antigravity'].includes(S.agent) ? S.sessions[S.agent] : null, model: model?.id || '', effort: effort?.id || '' });
     } catch (err) {
       onEvent({ runId, kind: 'done', ok: false, error: err.message });
     }
@@ -823,10 +839,12 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (!S.run || ev.runId !== S.run.id) return;
     const m = S.run.msg;
     switch (ev.kind) {
-      case 'session': S.sessions[m.agent] = ev.id; break;
+      case 'session': // the run reached the agent's session; a test run never becomes the chat's session
+        if (!S.run.test) { S.sessions[m.agent] = ev.id; m.inSession = true; }
+        break;
       case 'model': // the model that really answered (Claude Code says so when it starts)
-        S.used[m.agent] = ev.name;
-        if (!m.picked) m.model = [ev.name, m.effort].filter(Boolean).join(' · ');
+        // S.used is what Default turned out to be, so only a Default run updates it.
+        if (!m.picked) { S.used[m.agent] = ev.name; m.name = ev.name; m.model = [ev.name, m.effort].filter(Boolean).join(' · '); }
         renderPick();
         break;
       case 'delta': m.text += ev.text; break;
@@ -849,7 +867,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       case 'done':
         m.status = ev.ok ? 'done' : 'error';
         if (!ev.ok) m.error = m.error || ev.error || 'Something went wrong.';
-        if (ev.session) S.sessions[m.agent] = ev.session;
+        if (ev.session && !S.run.test) { S.sessions[m.agent] = ev.session; m.inSession = true; }
         for (const x of m.tools) if (x.ok === null) x.ok = ev.ok;
         finish();
         break;

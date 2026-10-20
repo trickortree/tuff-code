@@ -381,26 +381,37 @@
   // changes or deletes show up straight away, and open tabs follow along unless you've edited them.
   const norm = (s) => s.replace(/\r\n/g, '\n');
   async function reloadFromDisk(tabs) {
-    for (const t of tabs) {
-      if (isDirty(t)) continue;
+    for (const t of [...tabs]) { // a copy: closing a tab meanwhile changes state.tabs
+      if (t.model.isDisposed() || isDirty(t)) continue;
       const disk = await api.fs.readFile(t.path).catch(() => null);
+      // Check again: the tab may have been closed or typed in while the file was being read.
+      if (!state.tabs.includes(t) || t.model.isDisposed() || isDirty(t)) continue;
       if (disk === null || norm(disk) === norm(t.model.getValue())) continue;
+      t.model.pushStackElement(); // the reload is its own undo step
       t.model.pushEditOperations([], [{ range: t.model.getFullModelRange(), text: disk }], () => null);
+      t.model.pushStackElement();
       t.saved = t.model.getAlternativeVersionId();
     }
     state.tabs.forEach(syncDirty);
   }
   let diskTimer = null;
+  let diskAll = false;
   const diskChanged = new Set();
-  api.fs.onChanged?.(({ root, paths }) => {
+  api.fs.onChanged?.(({ root, paths, overflow, gone }) => {
     if (root !== state.root) return;
+    if (gone) toast(`The folder ${basename(root)} was moved or deleted. Open it again from File > Open Folder.`, 'error', 10000);
     for (const p of paths) diskChanged.add(p.toLowerCase());
+    if (overflow) diskAll = true;
     clearTimeout(diskTimer);
     diskTimer = setTimeout(async () => {
-      const changed = new Set(diskChanged);
+      const changed = [...diskChanged];
+      const all = diskAll;
       diskChanged.clear();
+      diskAll = false;
       await refreshTree();
-      await reloadFromDisk(state.tabs.filter((t) => changed.has(t.path.toLowerCase())));
+      // A changed folder counts for the files inside it (some systems only report the folder).
+      const hit = (p) => changed.some((c) => p === c || p.startsWith(c + SEP));
+      await reloadFromDisk(all ? state.tabs : state.tabs.filter((t) => hit(t.path.toLowerCase())));
     }, 120);
   });
 
@@ -1816,9 +1827,11 @@
       e.stopPropagation();
       return;
     }
-    // On a Mac, Option turns letters into symbols (Option+S is ß), so use the physical key there.
+    // On a Mac, Option turns keys into characters (Option+S is ß, Option+3 is # on a UK keyboard).
+    // With Cmd or Ctrl held nothing gets typed, so there the physical key names the shortcut; a bare
+    // Option+key is left alone so people can type those characters.
     const phys = /^Key([A-Z])$/.exec(e.code)?.[1] ?? /^Digit(\d)$/.exec(e.code)?.[1];
-    const key = (api.platform === 'darwin' && e.altKey && phys) || (e.key.length === 1 ? e.key.toUpperCase() : e.key);
+    const key = (api.platform === 'darwin' && e.altKey && (e.metaKey || e.ctrlKey) && phys) || (e.key.length === 1 ? e.key.toUpperCase() : e.key);
     const combo = [(e.ctrlKey || e.metaKey) && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', key].filter(Boolean).join('+');
     const id = keymap[combo];
     if (id) {

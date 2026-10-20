@@ -136,13 +136,19 @@ async function build(opts, emit) {
   if (process.platform !== 'win32') {
     const venv = path.join(app.getPath('userData'), 'build-python');
     const vpy = path.join(venv, 'bin', 'python3');
-    if ((await run(vpy, ['--version'])).code !== 0) {
+    // It's made in a temporary folder and only moved into place once complete, so a cancelled or
+    // failed setup can't leave a half-made one behind.
+    if ((await run(vpy, ['-m', 'pip', '--version'])).code !== 0) {
       step('tools', 'running', 'Getting the build tools ready', 'Setting up a Python just for building (first time only)');
-      await fsp.rm(venv, { recursive: true, force: true }).catch(() => {});
-      r = await run(PY.cmd, [...PY.args, '-m', 'venv', venv], { onLine: log });
+      const tmp = `${venv}.tmp`;
+      await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
+      r = await run(PY.cmd, [...PY.args, '-m', 'venv', tmp], { onLine: log });
       if (r.code !== 0) {
+        await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
         return fail('tools', 'Getting the build tools ready', "Python couldn't set up a place for the build tools. Reinstall Python 3 (from python.org, or with Homebrew: brew install python), then build again.");
       }
+      await fsp.rm(venv, { recursive: true, force: true }).catch(() => {});
+      await fsp.rename(tmp, venv);
     }
     py = { cmd: vpy, args: [] };
   }
@@ -166,6 +172,16 @@ async function build(opts, emit) {
   }
   step('tools', 'done', `Build tools ready (PyInstaller ${r.out.trim().split(/\s+/).pop()})`);
 
+  // A window app needs tkinter in the Python that builds it. Without it the app would build fine
+  // and then close straight away when opened, so check first.
+  const usesGuiEarly = /^\s*(import|mention)\s+m?tgui\b/m.test(await fsp.readFile(program, 'utf8'));
+  if (usesGuiEarly && (await run(py.cmd, [...py.args, '-c', 'import tkinter, _tkinter; tkinter.Tcl()'], { onLine: log })).code !== 0) {
+    const ver = (await run(PY.cmd, [...PY.args, '-c', 'import sys; print("%d.%d" % sys.version_info[:2])'])).out.trim().split(/\s+/).pop() || '3';
+    return fail('tools', 'Getting the build tools ready', WIN
+      ? 'Your Python doesn\'t include tkinter, which window apps need. Reinstall Python from python.org with "tcl/tk and IDLE" ticked, then build again.'
+      : `Your Python (${ver}) doesn't include tkinter, which window apps need. With Homebrew run: brew install python-tk@${ver} (or install Python from python.org), then build again.`);
+  }
+
   step('pack', 'running', 'Packing your program');
   const work = path.join(app.getPath('temp'), 'tuffcode-build', `${name.replace(/\s/g, '_')}-${Date.now()}`);
   await fsp.mkdir(work, { recursive: true });
@@ -178,9 +194,9 @@ async function build(opts, emit) {
   await fsp.writeFile(launcher, [
     'import os, sys',
     'base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))',
-    'for name, var in (("app_icon.png", "TUFF_APP_ICON"),):',
-    '    if os.path.isfile(os.path.join(base, name)):',
-    '        os.environ[var] = os.path.join(base, name)',
+    'icon = os.path.join(base, "_tuffcode", "app_icon.png")',
+    'if os.path.isfile(icon):',
+    '    os.environ["TUFF_APP_ICON"] = icon',
     'import tuff',
     'sys.argv = [sys.argv[0], os.path.join(base, "program.tuf")]',
     'sys.exit(tuff.main())',
@@ -204,13 +220,25 @@ async function build(opts, emit) {
   }
 
   const sep = process.platform === 'win32' ? ';' : ':';
-  const addData = [`${programCopy}${sep}.`, `${iconFile}${sep}.`];
-  if (fs.existsSync(iconPng)) addData.push(`${iconPng}${sep}.`);
+  // The icon goes in a folder of its own inside the app, so no project file can clash with it.
+  const addData = [`${programCopy}${sep}.`];
+  if (fs.existsSync(iconPng)) addData.push(`${iconPng}${sep}_tuffcode`);
   const assets = [];
   for (const entry of await fsp.readdir(path.dirname(program), { withFileTypes: true })) {
     if (entry.isFile() && ASSET_EXTS.has(path.extname(entry.name).toLowerCase())) {
       assets.push(entry.name);
       addData.push(`${path.join(path.dirname(program), entry.name)}${sep}.`);
+    }
+  }
+  // On a Mac the app's icon has to be .icns; macOS's own sips tool makes one from the PNG.
+  let macIcon = null;
+  if (process.platform === 'darwin') {
+    const img = nativeImage.createFromPath(opts.icon || DEFAULT_ICON);
+    const big = path.join(work, 'app_icon_512.png');
+    const icns = path.join(work, 'app_icon.icns');
+    if (!img.isEmpty()) {
+      await fsp.writeFile(big, img.resize({ width: 512, height: 512, quality: 'best' }).toPNG());
+      if ((await run('sips', ['-s', 'format', 'icns', big, '--out', icns])).code === 0 && fs.existsSync(icns)) macIcon = icns;
     }
   }
   const src = await fsp.readFile(program, 'utf8');
@@ -224,7 +252,7 @@ async function build(opts, emit) {
     ...py.args, '-m', 'PyInstaller', '--onefile', '--noconfirm', '--clean', '--log-level', 'INFO',
     '--name', name, '--distpath', distDir, '--workpath', path.join(work, 'work'), '--specpath', work,
     // A Mac app's icon has to be .icns; PyInstaller would need extra tools to convert ours.
-    ...(process.platform === 'win32' ? ['--icon', iconFile] : []), windowed ? '--windowed' : '--console',
+    ...(WIN ? ['--icon', iconFile] : macIcon ? ['--icon', macIcon] : []), windowed ? '--windowed' : '--console',
     ...addData.flatMap((d) => ['--add-data', d]),
     ...(usesGui ? ['--hidden-import', 'tuff_tgui'] : ['--exclude-module', 'tkinter', '--exclude-module', 'tuff_tgui']),
     launcher,

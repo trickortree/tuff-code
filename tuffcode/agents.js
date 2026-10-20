@@ -260,8 +260,10 @@ const safeArg = (s) => typeof s === 'string' && /^[\w.\-:/]{1,80}$/.test(s);
 const modelCache = {};
 
 // "claude-opus-5-5" -> "Opus 5.5"
+// Also reads IDs with a context tag ("claude-opus-5-5[1m]") or a cloud prefix/suffix
+// ("us.anthropic.claude-opus-5-5-v1:0"); the tag is left out so a model has one name.
 function claudeModelName(id) {
-  const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(String(id || ''));
+  const m = /claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?!\d)/.exec(String(id || '').replace(/(\[[^\]]*\])+$/, ''));
   return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ''}` : null;
 }
 
@@ -655,7 +657,13 @@ function codexParser() {
     else if (o.type === 'item.started' && it.type === 'mcp_tool_call') emit({ kind: 'tool', name: `mcp__${it.server}__${it.tool}`, input: it.arguments || {} });
     else if (o.type === 'item.completed') {
       if (it.type === 'agent_message' && it.text) emit({ kind: 'text', text: it.text });
-      else if (it.type === 'file_change') emit({ kind: 'tool', name: 'Edit', input: { file_path: (it.changes || []).map((c) => c.path).join(', ') } });
+      else if (it.type === 'file_change') {
+        // One step per file, each with its own result, so every changed file is named.
+        for (const c of it.changes || []) {
+          emit({ kind: 'tool', name: 'Edit', input: { file_path: c.path } });
+          emit({ kind: 'tool_result', ok: it.status !== 'failed' });
+        }
+      }
       else if (it.type === 'command_execution') emit({ kind: 'tool_result', ok: it.exit_code === 0 || it.status === 'completed' });
       else if (it.type === 'mcp_tool_call') emit({ kind: 'tool_result', ok: it.status !== 'failed' });
       else if (it.type === 'error') emit({ kind: 'error', text: it.message });
