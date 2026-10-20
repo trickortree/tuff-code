@@ -63,6 +63,13 @@ contextBridge.exposeInMainWorld('tuff', {
     run: invoke('agents:run'),
     stop: invoke('agents:stop'),
     onEvent: on('agents:event'),
+    ai: {
+      status: invoke('ai:status'),
+      download: invoke('ai:download'),
+      cancel: invoke('ai:cancel'),
+      remove: invoke('ai:remove'),
+      onProgress: on('ai:progress'),
+    },
   },
   version: invoke('app:version'),
   checkSource: invoke('tuff:check'),

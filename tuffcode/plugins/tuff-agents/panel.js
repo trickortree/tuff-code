@@ -9,15 +9,17 @@ TuffPlugins.register('tuff-agents', (t) => {
   const short = (p) => (p ? String(p).split(/[\\/]/).pop() : '');
   const trim = (s, n) => (s.length > n ? `${s.slice(0, n)}\n… (cut off, ${s.length - n} more characters)` : s);
 
-  const ORDER = ['claude', 'codex', 'antigravity'];
-  const SHORT = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity' };
+  const ORDER = ['claude', 'codex', 'antigravity', 'tuffai'];
+  const CLI = ['claude', 'codex', 'antigravity']; // the agents TuffCode's MCP tools get connected to
+  const SHORT = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', tuffai: 'Tuff AI' };
   const SUGGEST = [
     ['Explain this file', 'Explain what this file does, step by step, in simple words.'],
     ['Find bugs', 'Look for bugs or mistakes in this code and explain how to fix them.'],
     ['Make it nicer', 'Suggest ways to make this app look and feel nicer.'],
     ['Teach me something', 'Teach me one new Tuff trick that would help with this code, with a short example.'],
   ];
-  const NAME = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity' };
+  const NAME = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity', tuffai: 'Tuff AI' };
+  const GB = (n) => `${(n / 1e9).toFixed(1)} GB`;
   const PLUG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5M6.5 8h11v3.5a5.5 5.5 0 0 1-11 0z"/><path d="M12 17v4"/></svg>';
   const STEPS = {
     start: "TuffCode's tools start up",
@@ -52,6 +54,8 @@ TuffPlugins.register('tuff-agents', (t) => {
     pick: t.storage.get('pick', {}), // agent id -> { model, effort } chosen for it ('' = the agent's default)
     models: {}, // agent id -> what it offers, as it reports it: { models, efforts }, { loading } or { error }
     used: {}, // agent id -> what its Default model turned out to be (from the agent itself), e.g. 'Opus 5.5'
+    ai: null, // Tuff AI: { runtime, models, downloading, ram } from ai.js
+    aiProg: null, // the model download: { got, total, done, error }
   };
   let root = null;
   let dd = null; // the Model and Thinking dropdowns
@@ -75,6 +79,16 @@ TuffPlugins.register('tuff-agents', (t) => {
   t.command('fix', 'Tuff Agents: Find and fix bugs', () => quick('Look for bugs or mistakes in this code and explain how to fix them.'));
 
   const off = t.agents.onEvent(onEvent);
+  const offAi = t.agents.ai?.onProgress((p) => {
+    S.aiProg = p;
+    if (p.done) {
+      if (p.error) t.toast(p.error, 'error', 7000);
+      else if (!p.stopped) t.toast('Tuff AI is ready. Ask it anything about Tuff.', 'ok', 5000);
+      refreshAgents();
+    } else if (S.agent === 'tuffai') renderStatus();
+  });
+  // The Run panel's Explain button on a Tuff error.
+  window.tuffExplainError = (error) => quick(`I ran my program and got this error. Explain in simple words what's wrong and how to fix it:\n\`\`\`\n${error.trim()}\n\`\`\``);
 
   function quick(text) {
     panel.open();
@@ -169,6 +183,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       t.agents.signedIn(id).then((v) => { S.auth[id] = v; renderStatus(); renderSetup(); }).catch(() => {});
     }
     for (const a of S.agents.filter((x) => x.installed)) loadModels(a.id, true);
+    t.agents.ai?.status().then((s) => { S.ai = s; renderStatus(); }).catch(() => {});
     renderPick();
   }
 
@@ -374,7 +389,9 @@ TuffPlugins.register('tuff-agents', (t) => {
     const box = $('.ta-status', root);
     const a = current();
     if (!S.agents) { box.innerHTML = `<div class="ta-note">Looking for AI agents on this ${document.documentElement.classList.contains('mac') ? 'Mac' : 'PC'}…</div>`; return; }
-    if (!a?.installed) {
+    if (a?.local && !a.installed) {
+      box.innerHTML = aiCard();
+    } else if (!a?.installed) {
       box.innerHTML = `<div class="ta-card">
         <b>${esc(a?.name || S.agent)} isn't installed</b>
         <p>Install it once, then come back. TuffCode runs it for you right here.${INSTALL_TIP[S.agent] || ''}</p>
@@ -387,7 +404,7 @@ TuffPlugins.register('tuff-agents', (t) => {
         <p>${signInText(a)} A window opens and your browser does the rest.</p>
         <div class="ta-btns"><button class="btn sm primary" data-a="signin">Sign in</button><button class="btn sm" data-a="recheck">Check again</button></div>
       </div>`;
-    } else if (S.agent !== 'claude' && S.conn[S.agent] === false && !S.dismissed[S.agent]) {
+    } else if (CLI.includes(S.agent) && S.agent !== 'claude' && S.conn[S.agent] === false && !S.dismissed[S.agent]) {
       box.innerHTML = `<div class="ta-card">
         <b>Teach ${esc(a.name)} about Tuff</b>
         <p>Connect TuffCode's tools so ${esc(a.name)} can read the Tuff guide and check and run your programs. This adds a "tuffcode" tool server to its settings${S.agent === 'antigravity' ? ' and lets it use those tools without asking' : ''}. You can remove it any time from the ⋯ menu.</p>
@@ -405,7 +422,36 @@ TuffPlugins.register('tuff-agents', (t) => {
       if (act === 'connect') connect(true);
       if (act === 'setup') showSetup(true);
       if (act === 'signin') signInAgent(S.agent);
+      if (act === 'ai-get') {
+        S.aiProg = { got: 0, total: S.ai?.models[0]?.size || 0, done: false };
+        renderStatus();
+        t.agents.ai.download(S.ai?.models[0]?.id).catch(() => {});
+      }
+      if (act === 'ai-cancel') t.agents.ai.cancel();
     };
+  }
+
+  // Tuff AI before its model is downloaded: what it is, what it needs, and the download.
+  function aiCard() {
+    const s = S.ai;
+    if (!s) return '<div class="ta-note">Checking Tuff AI…</div>';
+    if (!s.runtime) return '<div class="ta-card"><b>Tuff AI isn\'t in this copy of TuffCode</b><p>Its engine wasn\'t included. Update TuffCode to get it.</p></div>';
+    const m = s.models[0];
+    const p = S.aiProg && !S.aiProg.done ? S.aiProg : null;
+    if (p) {
+      const pct = p.total ? Math.floor((100 * p.got) / p.total) : 0;
+      return `<div class="ta-card"><b>Downloading Tuff AI… ${pct}%</b>
+        <div class="ta-prog"><i style="width:${pct}%"></i></div>
+        <p>${GB(p.got)} of ${GB(p.total)}. You can keep coding. If it stops, it carries on from here next time.</p>
+        <div class="ta-btns"><button class="btn sm" data-a="ai-cancel">Stop</button></div></div>`;
+    }
+    const low = s.ram.free < s.ram.need;
+    return `<div class="ta-card">
+      <b>Tuff AI <span class="ta-tag">preview</span></b>
+      <p>Runs on this computer: no account, and no internet once it's downloaded. This preview uses ${esc(m.name)} before it's trained on Tuff, so expect mistakes. TuffCode checks every program it writes.</p>
+      <p class="${low ? 'ta-warn' : 'tas-small'}">Download: ${GB(m.size)}. It needs about ${GB(s.ram.need)} of free memory while it answers (${GB(s.ram.free)} free right now${low ? '. Close some apps first' : ''}).</p>
+      <div class="ta-btns"><button class="btn sm primary" data-a="ai-get">Download (${GB(m.size)})</button><button class="btn sm" data-a="recheck">Check again</button></div>
+    </div>`;
   }
 
   async function connect(on, id = S.agent) {
@@ -425,7 +471,8 @@ TuffPlugins.register('tuff-agents', (t) => {
     const m = $('.ta-menu', root);
     const a = current();
     const items = [['new', 'New chat'], ['setup', 'Agent tools: set up and check']];
-    if (a?.installed) items.push(S.conn[a.id] ? ['disconnect', `Remove TuffCode tools from ${a.name}`] : ['connect', `Add TuffCode tools to ${a.name}${a.id === 'claude' ? ' everywhere' : ''}`]);
+    if (a?.local && a.installed) items.push(['ai-remove', `Delete Tuff AI's model (${GB(S.ai?.models[0]?.size || 0)})`]);
+    else if (a?.installed) items.push(S.conn[a.id] ? ['disconnect', `Remove TuffCode tools from ${a.name}`] : ['connect', `Add TuffCode tools to ${a.name}${a.id === 'claude' ? ' everywhere' : ''}`]);
     items.push(['recheck', 'Look for agents again']);
     m.innerHTML = items.map(([id, label]) => `<button data-m="${id}">${esc(label)}</button>`).join('');
     m.classList.toggle('hidden');
@@ -437,6 +484,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       if (id === 'connect') connect(true);
       if (id === 'disconnect') connect(false);
       if (id === 'recheck') refreshAgents();
+      if (id === 'ai-remove') t.ask({ title: "Delete Tuff AI's model? You can download it again later.", confirm: true, okLabel: 'Delete' }).then((ok) => ok && t.agents.ai.remove(S.ai?.models[0]?.id).then(refreshAgents));
     };
   }
 
@@ -499,7 +547,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       </section>
       <section>
         <h4><span>2</span>Connect your agents</h4>
-        ${ORDER.map(agentSetupHtml).join('')}
+        ${CLI.map(agentSetupHtml).join('')}
       </section>
       <section>
         <h4><span>3</span>Or set it up by hand</h4>
@@ -552,7 +600,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (!m) return '<p>Loading…</p>';
     const cmd = (c, cls = '') => `<div class="ta-cmd${cls}"><code>${esc(c)}</code><button data-copy="${esc(c)}">Copy</button></div>`;
     const part = (key, title, inner) => `<details class="tas-man" data-m="${key}"${S.openMan.has(key) ? ' open' : ''}><summary>${esc(title)}</summary><div>${inner}</div></details>`;
-    return ORDER.map((id) => part(id, NAME[id], `
+    return CLI.map((id) => part(id, NAME[id], `
         <p>1. Add TuffCode's tools:</p>${cmd(m.agents[id].add)}
         <p>2. Check they're there:</p>${cmd(m.agents[id].check)}
         <p>3. Ask ${esc(NAME[id])}: <i>“Use the tuff_reference tool, then make me a small Tuff app.”</i> If it reads the Tuff guide first, it's working.</p>
@@ -663,6 +711,11 @@ TuffPlugins.register('tuff-agents', (t) => {
     const code = b.closest('.ta-code').querySelector('code').textContent;
     if (b.dataset.code === 'copy') { navigator.clipboard.writeText(code); t.toast('Copied.', 'ok', 1500); }
     if (b.dataset.code === 'insert') t.editor.insert(code);
+    if (b.dataset.code === 'apply') {
+      const file = t.editor.file();
+      if (!file) { t.toast('Open the file to change first.', 'error'); return; }
+      t.ask({ title: `Replace all of ${short(file)} with this code? Ctrl+Z undoes it.`, confirm: true, okLabel: 'Replace' }).then((ok) => ok && t.editor.replaceAll(code));
+    }
   }
 
   // Small markdown: code blocks (with Copy / Insert), headings, lists, `code`, **bold** and *italics*.
@@ -674,7 +727,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     let m;
     while ((m = re.exec(src))) {
       parts.push(prose(src.slice(last, m.index)));
-      parts.push(`<div class="ta-code"><div class="ta-code-h"><span>${esc(m[1] || 'code')}</span><button data-code="copy">Copy</button><button data-code="insert" title="Insert at the cursor in the editor">Insert</button></div><pre><code>${esc(m[2].replace(/\n$/, ''))}</code></pre></div>`);
+      parts.push(`<div class="ta-code"><div class="ta-code-h"><span>${esc(m[1] || 'code')}</span><button data-code="copy">Copy</button><button data-code="insert" title="Insert at the cursor in the editor">Insert</button>${/^(tuff)?$/i.test(m[1]) && t.editor.replaceAll ? '<button data-code="apply" title="Replace the open file with this code">Apply</button>' : ''}</div><pre><code>${esc(m[2].replace(/\n$/, ''))}</code></pre></div>`);
       last = re.lastIndex;
       if (m.index === re.lastIndex) break;
     }
@@ -739,8 +792,33 @@ TuffPlugins.register('tuff-agents', (t) => {
     return { text: map[n] || n.replace(/^mcp__\w+?__/, ''), changes: /^(Edit|MultiEdit|Write|NotebookEdit)$/.test(n) };
   }
 
+  // Tuff AI is a small model that reads slowly on a laptop CPU, so it gets a short prompt. ai.js adds the
+  // Tuff guide's basics and the sections that match the question.
+  function aiPrompt(text) {
+    const file = t.editor.file();
+    const fence = '```';
+    const parts = [];
+    if (file && S.useFile) parts.push(`Their open file, ${short(file)}:\n${fence}${/\.tuf$/i.test(file) ? 'tuff' : ''}\n${trim(t.editor.code(), 6000)}\n${fence}`);
+    const lines = t.editor.selectionLines();
+    if (S.useSel && lines) parts.push(`They selected lines ${lines[0]} to ${lines[1]}:\n${fence}\n${trim(t.editor.selection(), 3000)}\n${fence}`);
+    const earlier = S.msgs.slice(0, -1).filter((m) => !m.test && (m.role === 'user' || m.status !== 'running')).slice(-6);
+    const said = [];
+    let used = 0;
+    for (let i = earlier.length - 1; i >= 0; i--) {
+      const m = earlier[i];
+      const l = `${m.role === 'user' ? 'Them' : m.agent === 'tuffai' ? 'You' : NAME[m.agent]}: ${trim(m.text || '', 600)}`;
+      if (used + l.length > 2000) break;
+      said.unshift(l);
+      used += l.length;
+    }
+    if (said.length) parts.push(`Earlier in this chat (already answered):\n${said.join('\n')}`);
+    parts.push(`Their question:\n${text}`);
+    return parts.join('\n\n');
+  }
+
   // bare: just the message (no open file, selection or chat history), for the tools test.
   function buildPrompt(text, { mode = S.mode, bare = false } = {}) {
+    if (S.agent === 'tuffai' && !bare) return aiPrompt(text);
     const file = t.editor.file();
     const parts = [
       "You're helping someone inside TuffCode, the code editor for the Tuff programming language (.tuf files). They may be a beginner, so explain things simply and keep code short and readable. Write Tuff unless they ask for another language.",
@@ -809,7 +887,8 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (!a?.installed) { renderStatus(); t.toast(`${a?.name || 'That agent'} isn't installed yet.`, 'error'); return; }
     if (S.auth[a.id] === false) { showSetup(false); renderStatus(); t.toast(`Sign in to ${a.name} first (the card at the top).`, 'error'); return; }
     const test = !!opts.test;
-    const mode = test ? 'ask' : S.mode;
+    // Tuff AI never edits files itself: its code gets an Apply button instead.
+    const mode = test || a.local ? 'ask' : S.mode;
     const file = t.editor.file();
     const lines = t.editor.selectionLines();
     const ctx = test ? '' : [file && S.useFile ? short(file) : '', lines && S.useSel ? `lines ${lines[0]}–${lines[1]}` : ''].filter(Boolean).join(', ');
@@ -914,6 +993,8 @@ TuffPlugins.register('tuff-agents', (t) => {
 
   return () => {
     off?.();
+    offAi?.();
+    delete window.tuffExplainError;
     clearInterval(ctxTimer);
     if (S.run) t.agents.stop(S.run.id);
   };
