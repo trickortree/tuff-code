@@ -105,13 +105,17 @@ window.TUFF_DOCS = {
   if: ['if condition:', 'Runs the indented block only when the condition is true. `then` works instead of `:`.'],
   elif: ['elif condition:', 'Checked when the `if` above it was false.'],
   else: ['else:', 'Runs when nothing above it matched.'],
-  then: ['then', 'Starts a block, same as `:`.'],
+  then: ['then', 'Starts a block, same as `:`. Writing both (`then:`) works too.'],
   while: ['while condition:', 'Repeats the block as long as the condition stays true.'],
   for: ['for item in list:', 'Runs the block once for every item in a list, text or range().'],
   is: ['a is b', 'True when both sides are equal. Use `is not` for the opposite.'],
   print: ['print(a, b, ...)', 'Like `say`, but takes several values separated by commas.'],
-  number: ['number(text)', 'Turns text like "42" into the number 42.'],
+  number: ['number(text)', 'Turns text like "42" into the number 42. Text that is not a number gives err instead of stopping: check with `if number(t) is err:`.'],
+  num: ['num(text)', 'Short for number(): num("42") is 42, and text that is not a number gives err.'],
+  int: ['int(value)', 'A whole number, dropping any decimals: int("42") is 42, int(3.7) is 3. Text that is not a number gives err.'],
   text: ['text(value)', 'Turns any value into text.'],
+  str: ['str(value)', 'Same as text(): turns any value into text, like str(5) + " apples".'],
+  err: ['err', 'What number(), num() and int() give back for text that is not a number. Check with `if num(answer) is err:`. Using an err in maths stops the program and says why.'],
   len: ['len(value)', 'How many characters are in some text, or items in a list.'],
   round: ['round(number, digits)', 'Rounds a number. digits is optional.'],
   random: ['random(low, high)', 'A random whole number from low to high, both included.'],
@@ -139,7 +143,7 @@ window.TUFF_DOCS = {
   append: ['line:append value', 'Adds text to the end of a line you already said.'],
 };
 
-const TUFF_BUILTINS = ['print', 'number', 'text', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average'];
+const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average'];
 
 // A line that opens an indented block: if/elif/else/while/for/func ending in ':' or 'then'.
 const BLOCK_OPENER = /^\s*(if|elif|else|while|for|func)\b.*(:|\bthen)\s*(#.*)?$/;
@@ -180,7 +184,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
 
   monaco.languages.setMonarchTokensProvider('tuff', {
     keywords: window.TUFF_KEYWORDS.filter((k) => !['true', 'false', 'nil'].includes(k)),
-    constants: ['true', 'false', 'nil', 'all', 'pi'],
+    constants: ['true', 'false', 'nil', 'err', 'all', 'pi'],
     builtins: TUFF_BUILTINS,
     libs: Object.keys(window.TUFF_LIBS),
     operators: ['=', '==', '!=', '<', '>', '<=', '>=', '+', '-', '*', '/', '%', '^', '+=', '-=', '*=', '/='],
@@ -282,6 +286,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
         { label: 'while', kind: K.Snippet, insertText: 'while ${1:condition}:\n    $0', insertTextRules: R, detail: 'While loop', range },
         { label: 'for', kind: K.Snippet, insertText: 'for ${1:i} in range(${2:1}, ${3:10}):\n    $0', insertTextRules: R, detail: 'Count loop', range },
         { label: 'line', kind: K.Snippet, insertText: '${1:line} = say "${2:text}"\n${1:line}:rewrite "${3:new text}"', insertTextRules: R, detail: 'Say, then rewrite', range },
+        { label: 'ask number', kind: K.Snippet, insertText: '${1:n} = num(input "${2:A number?} ")\nwhile ${1:n} is err:\n    say "Please type a number."\n    ${1:n} = num(input "${2:A number?} ")\n$0', insertTextRules: R, detail: 'Ask until they type a number (err)', range },
         { label: 'import anims', kind: K.Snippet, insertText: 'import anims\n', range, detail: 'Load the animations library' },
         { label: 'tap', kind: K.Snippet, insertText: 'mention tap\n\nres = tap.get("${1:https://api.github.com/users/octocat}")\nif res:ok:\n    info = res:json\n    say info:get("${2:name}")\nelse:\n    say "Error " + res:status\n', insertTextRules: R, range, detail: 'Get JSON from the web' },
         { label: 'tgui app', kind: K.Snippet, insertText: 'import tgui\n\napp = tgui.window("${1:My App}")\napp:heading "${2:Hello!}"\n\nfunc ${3:clicked}():\n    $0\n\napp:button("${4:Click me}", ${3:clicked})\n', insertTextRules: R, range, detail: 'A starter app window' },

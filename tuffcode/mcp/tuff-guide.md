@@ -11,9 +11,9 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `True`, `False`, `None` | `true`, `false`, `nil` |
 | `x == y`, `x != y` | `x is y`, `x is not y` (`==` and `!=` also work) |
 | `x ** 2` | `x ^ 2` |
-| `x // 2`, `int(x)` on a number | `floor(x / 2)`, `floor(x)` (for numbers 0 or more) |
+| `x // 2` | `floor(x / 2)` (or `int(x / 2)`, which drops the decimals toward zero) |
 | `x++`, `x %= 3` | `x += 1`, `x = x % 3` (only `+= -= *= /=` exist) |
-| `str(x)`, `int(s)` or `float(s)` on text | `text(x)`, `number(s)` (whole only if the text has no ".") |
+| `str(x)`, `int(s)`, `float(s)` | `str(x)` and `text(x)` both work; `number(s)` or `num(s)` (a decimal only if the text has a "."); `int(s)` for a whole number. There's no `float`. |
 | `f"Hi {name}"`, `.format()` | `"Hi " + name`. Numbers join on their own (`"Score: " + 5`), but put sums in brackets: `"Score: " + (score + 1)` |
 | `items.append(x)` | `items:add(x)` |
 | `s.upper()`, `s.strip()` | `s:upper()`, `s:trim()` |
@@ -52,7 +52,7 @@ say level - 1
 **Rule 2: names are shared.** A variable made at the top of the program can be changed by any function. Inside a function, `x = 5` (or `for x in ...`) changes the top-level `x` if that already exists when the function runs. Otherwise `x` is a scratch name that only lives inside the function, and disappears when it ends. So:
 - give every top-level variable its starting value near the top of the program (`score = 0`), before calling functions that use it;
 - give each function's scratch values names that aren't used anywhere else (`total_count`, not `i`, if the top level has an `i`);
-- never use a built-in's name for your own variable: `sum = 0` replaces `sum()` everywhere. The built-ins are `print`, `text`, `number`, `len`, `round`, `random`, `wait`, `range`, `clear`, `sqrt`, `abs`, `floor`, `ceil`, `min`, `max`, `sum`, `average`, `pi` and `all`.
+- never use a built-in's name for your own variable: `sum = 0` replaces `sum()` everywhere. The built-ins are `print`, `text`, `str`, `number`, `num`, `int`, `len`, `round`, `random`, `wait`, `range`, `clear`, `sqrt`, `abs`, `floor`, `ceil`, `min`, `max`, `sum`, `average`, `pi`, `err` and `all`.
 
 ## Basics
 ```tuff
@@ -61,7 +61,7 @@ say "Hello"                 # show a line
 name = input "Your name? "  # ask a question (always gives back text)
 score = 10
 score += 5                  # also -= *= /=
-if score is 15:             # 'then' works instead of ':'
+if score is 15:             # 'then' works instead of ':' (so does 'then:')
     say "fifteen"
 elif score > 20:            # 'else if' works too
     say "big"
@@ -106,8 +106,10 @@ say double(4)
   - It needs whole numbers, and `random()` with no inputs is an error.
   - For a decimal, divide: `random(0, 100) / 100`.
 - **Typed numbers:** `input` always gives text, so `"5" + 1` is `"51"` and `"5" * 2` is `"55"`.
-  - Turn it into a number first: `number("42")` is 42 and `number("4.5")` is 4.5. Spaces around the number are ignored: `number(" 5 ")` is 5.
-  - But `number("abc")` **stops the program** with an error, so check typed text first (`is_number` in "Patterns").
+  - Turn it into a number first: `number("42")` is 42 and `number("4.5")` is 4.5. Spaces around the number are ignored: `number(" 5 ")` is 5. `num(...)` is a short name for `number(...)`.
+  - `int(...)` gives a whole number, dropping the decimals toward zero: `int("42")` is 42, `int(3.7)` and `int("3.7")` are 3, `int(-2.9)` is -2. `str(...)` is the same as `text(...)`.
+  - Text that isn't a number gives **`err`** instead of a number: `number("abc")`, `num("abc")` and `int("abc")` are all `err`. Check before using it: `if num(answer) is err:`. An `err` counts as false in an `if`.
+  - Using an `err` in maths or a function stops the program and says why: "Can't use + here, because one side is err: number() couldn't turn 'abc' into a number."
 
 ## Text
 - **Joining:** join with `+`: `"Hi " + name + "!"`. Anything joined with text becomes text: numbers, true/false, nil and even lists.
@@ -394,29 +396,17 @@ func menu_shown():
 ## Patterns
 Every one of these has been run and works. Their scratch names are unique (rule 2), so they never change your variables. Their own names (`is_number`, `as_money` and so on) become top-level names, so don't also use those names for variables.
 ```tuff
-# Is this text a number? (number() stops the program on bad text)
+# Is this text a number? (number() gives err when it isn't)
 func is_number(t):
-    t = t:trim()
-    num_digits = 0
-    num_dots = 0
-    num_pos = 0
-    for num_ch in t:
-        if "0123456789":has(num_ch):
-            num_digits += 1
-        elif num_ch is ".":
-            num_dots += 1
-        elif not (num_ch is "-" and num_pos is 0):
-            return false
-        num_pos += 1
-    return num_digits > 0 and num_dots <= 1
+    return number(t) is not err
 
 # Keep asking until the answer is a number (console programs)
 func ask_number(question):
-    an_asked = input question
-    while not is_number(an_asked):
+    an_asked = num(input question)
+    while an_asked is err:
         say "Please type a number."
-        an_asked = input question
-    return number(an_asked)
+        an_asked = num(input question)
+    return an_asked
 
 # Round like people expect: 2.25 -> 2.3, 1.005 -> 1.01 (always gives a decimal;
 # for a whole number use floor(x + 0.5))
@@ -465,7 +455,7 @@ func remove_at(items, position):
         ra_pos += 1
     return ra_kept
 ```
-In a window app, check a text box before using it: `if not is_number(bill:value()): status:set "Type a number"`.
+In a window app, check a text box before using it: `if num(bill:value()) is err: status:set "Type a number"`.
 
 ## Making a good program
 - Keep the program's state in a few top-level variables (`score`, `tasks`), each set near the top, and write one small function per action.

@@ -199,7 +199,9 @@ class Parser:
     def block(self, opener_optional=False):
         tok = self.peek()
         if self.at("COLON") or self.at("KW", "then"):
-            self.next()
+            # "then:" works too: people often write both.
+            if self.next().kind == "KW" and self.at("COLON"):
+                self.next()
         elif not (opener_optional and self.at("NEWLINE")):
             raise TuffError(f"Expected ':' or 'then' to start a block, but found {tok.show()}.", tok.line, tok.col)
         if not self.at("NEWLINE"):
@@ -495,12 +497,27 @@ class AllLines:
 
 
 ALL = AllLines()
+
+
+# err: what number(), int() and num() give back for text that isn't a number, so a program can check
+# (if num(bet) is err:) instead of stopping. Every err is "is err". Using one in maths, or anywhere a value
+# is needed, stops the program with the reason it's an err.
+class Err:
+    def __init__(self, why=""):
+        self.why = why
+
+    def stop(self, doing=""):
+        tip = " Check for it first with: if x is err" if self.why else ""
+        raise TuffError(f"{doing or 'That value'} is err{': ' + self.why if self.why else ''}.{tip}")
+
+
+ERR = Err()
 LIBRARIES = ("anims", "tgui", "mtgui", "tap")
 # Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
-VIEW_IMPORT = re.compile(r"^[ 	]*(?:import|mention)[ 	]+(?:" + "|".join(VIEW_LIBRARIES) + r")", re.M)
-BUILTIN_NAMES = {"print", "number", "text", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
+VIEW_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:" + "|".join(VIEW_LIBRARIES) + r")\b", re.M)
+BUILTIN_NAMES = {"print", "number", "num", "text", "str", "int", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
                  "floor", "ceil", "min", "max", "sum", "average"}
 
 
@@ -547,6 +564,8 @@ def to_text(v, nested=False):
         return v.show(nested) if v.show else f"<{v.kind}>"
     if v is ALL:
         return "all"
+    if isinstance(v, Err):
+        return "err"
     return str(v)
 
 
@@ -569,12 +588,16 @@ def type_name(v):
         return f"a {v.kind}"
     if v is ALL:
         return "all"
+    if isinstance(v, Err):
+        return "err"
     return "a function"
 
 
 def truthy(v):
     if isinstance(v, Line):
         return True
+    if isinstance(v, Err):
+        return False
     return v not in (None, False, 0, "") and v != []
 
 
@@ -751,6 +774,10 @@ class Interpreter:
             "print": self.b_print,
             "number": self.b_number,
             "text": lambda v: to_text(plain(v)),
+            # The names people bring from Python: str is text, int is a whole number.
+            "str": lambda v: to_text(plain(v)),
+            "int": self.b_int,
+            "num": lambda v: self.b_number(v, "num"),
             "len": self.b_len,
             "round": lambda v, digits=0: round(self.num_arg("round", v), int(digits)) if digits else round(self.num_arg("round", v)),
             "random": self.b_random,
@@ -770,10 +797,13 @@ class Interpreter:
             self.globals.vars[name] = Builtin(name, fn)
         self.globals.vars["all"] = ALL
         self.globals.vars["pi"] = math.pi
+        self.globals.vars["err"] = ERR
 
     # math helpers
     def num_arg(self, name, v):
         v = plain(v)
+        if isinstance(v, Err):
+            v.stop(f"The input to {name}()")
         if isinstance(v, bool) or not isinstance(v, (int, float)):
             raise TuffError(f"{name}() needs a number, not {type_name(v)}.")
         return v
@@ -876,15 +906,25 @@ class Interpreter:
     def b_print(self, *args):
         return self.console.say(" ".join(to_text(a) for a in args))
 
-    def b_number(self, v):
+    def b_number(self, v, name="number"):
+        # Text that isn't a number gives err (check with: if number(t) is err) instead of stopping the program.
         v = plain(v)
+        if isinstance(v, Err):
+            return v
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             return v
+        if not isinstance(v, str):
+            return Err(f"{name}() needs text or a number, not {type_name(v)}")
         try:
-            s = str(v).strip()
+            s = v.strip()
             return float(s) if "." in s else int(s)
         except ValueError:
-            raise TuffError(f"'{to_text(v)}' isn't a number.")
+            return Err(f"{name}() couldn't turn '{to_text(v)}' into a number")
+
+    def b_int(self, v):
+        # A whole number, dropping any decimals toward zero: int("42") is 42, int(3.7) and int("3.7") are 3.
+        n = self.b_number(v, "int")
+        return n if isinstance(n, Err) else int(n)
 
     def b_len(self, v):
         v = plain(v)
@@ -1075,6 +1115,13 @@ class Interpreter:
 
     def binop(self, op, a, b):
         a, b = plain(a), plain(b)
+        if isinstance(a, Err) or isinstance(b, Err):
+            # "x is err" is true for every err; anything else done with an err stops with its reason.
+            if op == "==":
+                return isinstance(a, Err) and isinstance(b, Err)
+            if op == "!=":
+                return not (isinstance(a, Err) and isinstance(b, Err))
+            (a if isinstance(a, Err) else b).stop(f"Can't use {op} here, because one side")
         num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
         if op == "+":
             if isinstance(a, str) or isinstance(b, str):
@@ -1115,7 +1162,7 @@ class Interpreter:
                 return a / b
             if op == "%":
                 return a % b
-        verb = {"+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "use %", "^": "use ^ on"}[op]
+        verb = {"+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "use % on", "^": "use ^ on"}[op]
         raise TuffError(f"Can't {verb} {type_name(a)} and {type_name(b)}.")
 
     def call(self, e, env):
@@ -1226,8 +1273,6 @@ PY_NAMES = {
     "True": "Tuff writes true in lowercase.",
     "False": "Tuff writes false in lowercase.",
     "None": "Tuff writes nil for 'nothing'.",
-    "str": "To turn a value into text, use text(value).",
-    "int": "To turn text into a number, use number(text).",
     "float": "To turn text into a number, use number(text).",
     "math": "sqrt, floor, ceil, abs, round and pi are built in, so there's nothing to import.",
     "time": "Use wait(seconds) to pause. In an app, app:every(seconds, fn) runs something again and again.",
@@ -1414,7 +1459,7 @@ class Checker:
     CONTAINERS = ("window", "row", "card", "page")
     TYPE = {"$text": "text", "$list": "a list", "$line": "a line", "$number": "a number", "$bool": "true/false",
             "$nil": "nil", "$func": "a function", "$builtin": "a function"}
-    NUMBER_FNS = {"number", "len", "random", "round", "sqrt", "abs", "floor", "ceil", "min", "max", "sum", "average"}
+    NUMBER_FNS = {"number", "num", "int", "len", "random", "round", "sqrt", "abs", "floor", "ceil", "min", "max", "sum", "average"}
     NUMBER_INPUT_FNS = {"round", "floor", "ceil", "abs", "sqrt", "min", "max", "sum", "average"}  # these fail on text
     MATHS = ("+", "-", "*", "/", "%", "^")
     COMPARE = ("==", "!=", "<", ">", "<=", ">=")
@@ -1591,7 +1636,7 @@ class Checker:
             return f"$libfn:{lib[8:]}.{e.name}" if lib and lib.startswith("$module:") else None
         if k == "call" and e.fn.kind == "var" and e.fn.name not in self.user:
             name = e.fn.name
-            return "$text" if name == "text" else "$list" if name == "range" else "$number" if name in self.NUMBER_FNS else None
+            return "$text" if name in ("text", "str") else "$list" if name == "range" else "$number" if name in self.NUMBER_FNS else None
         if k == "call" and e.fn.kind == "attr":
             lib = self.kind(e.fn.obj, seen)
             if lib in ("$module:tgui", "$module:mtgui") and e.fn.name == "window":
@@ -1847,7 +1892,7 @@ class Checker:
             word = "never" if op == "==" else "always"
             self.problem(e, f"Text is never equal to a number, so this is {word} true.{tip or ' Turn the text into a number with number(...) first.'}")
         elif op in ("-", "/", "%", "^") and "$text" in (a, b) and None not in (a, b):
-            verb = {"-": "subtract", "/": "divide", "%": "use %", "^": "use ^ on"}[op]
+            verb = {"-": "subtract", "/": "divide", "%": "use % on", "^": "use ^ on"}[op]
             first, second = self.TYPE[a], self.TYPE.get(b, self.what(b))
             hint = tip
             if e.left.kind == "binop" and e.left.op == "+" and a == "$text":

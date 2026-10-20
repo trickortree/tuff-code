@@ -17,6 +17,8 @@ TuffPlugins.register('snippets', (t) => {
     ['Text and lists', [
       ['Go through a list', '${1:fruits} = [${2:"apple", "banana", "cherry"}]\nfor ${3:item} in ${1:fruits}:\n    say ${3:item}'],
       ['Number from input', '${1:age} = number(input "${2:How old are you?} ")\nsay "Next year you will be " + text(${1:age} + 1)'],
+      ['Ask until it\'s a number (err)', '${1:bet} = num(input "${2:How many coins do you bet?} ")\nwhile ${1:bet} is err:\n    say "That isn\'t a number. Try again."\n    ${1:bet} = num(input "${2:How many coins do you bet?} ")\nsay "You bet " + str(${1:bet})'],
+      ['Whole numbers and text (int, str)', '${1:price} = ${2:4.99}\nsay "About $" + str(int(${1:price}))\nsay int("${3:42}") + 1'],
       ['Guessing game', 'secret = random(1, 10)\nguess = number(input "Guess 1 to 10: ")\nwhile guess is not secret:\n    if guess < secret:\n        say "Higher!"\n    else:\n        say "Lower!"\n    guess = number(input "Guess again: ")\nsay "You got it!"'],
     ]],
     ['Live lines', [
