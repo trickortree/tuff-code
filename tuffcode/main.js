@@ -295,8 +295,12 @@ ipcMain.handle('fs:replaceInFile', async (_e, file, source, flags, replacement, 
 });
 ipcMain.handle('shell:reveal', (_e, p) => shell.showItemInFolder(p));
 
+// Since Electron 43 the dialog opens in Downloads unless it's told where. It starts where the last
+// project was picked from (the folder it's in), which is what Windows and macOS used to remember.
 ipcMain.handle('dialog:openFolder', async () => {
-  const res = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
+  const last = loadSettings().lastFolder;
+  const from = typeof last === 'string' && last && fs.existsSync(path.dirname(last)) ? path.dirname(last) : app.getPath('home');
+  const res = await dialog.showOpenDialog(win, { defaultPath: from, properties: ['openDirectory'] });
   return res.canceled ? null : res.filePaths[0];
 });
 
