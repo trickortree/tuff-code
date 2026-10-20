@@ -27,6 +27,11 @@ Don't cover the windows while the tests run: a covered page stops drawing.
 | `player_3d` | Third person: solid things block the way, jumping onto a crate, picking up a coin, turning with D, and the code after the loop running once the window closes |
 | `callback` | The callback style: `every_frame`, `on_key`, `after`, and `game:close` ending the program |
 | `errors` | A failing every-frame function is reported once and switched off while the game goes on; an error in the main loop stops the program and closes its window |
+| `churn` | `games/churn.tuf`: 2,000 bullets made and removed (and still moved after `:remove`) leave only the live ones in tgame, the window engine and memory, with no errors; a ball shrunk below 0 vanishes without hiding the box drawn after it; text aligned left and right is clicked where its words are |
+| `pause_key` | `games/pause_key.tuf`: an every-frame function runs while the game is paused (with dt 0), so its P key pauses and resumes |
+| `close` | `games/close_wait.tuf`: a loop that waits instead of calling `game:frame()` still ends when a real WM_CLOSE (the X) closes the window |
+| `hud_3d` | `games/hud_3d.tuf`: a HUD button in a 3D world gets its click, not the box behind it; 300 coins made and removed (and moved and labelled after `:remove`) don't pile up; the guide's size lists for box, cylinder, cone and plane |
+| `no_webgl` | `hud_3d.tuf` with WebGL turned off (`--disable-3d-apis`, like a PC or VM without 3D graphics): one plain Tuff error on the `tgame.world` line, not one per object |
 | `notice` | The Tuff Engine line: first in the IDE's line protocol with the `notice` style, ANSI yellow in a terminal, plain in a pipe, never for `--check`, programs without tgame or a `--windowed` app |
 | `mcp` | `tuff_run` through the MCP server shows the notice as a plain first line |
 | `checker` | `--check` accepts every game here and correct snippets, and catches 34 kinds of mistake (wrong names with "Use :box instead", input counts, colors, keys, sounds, skies, missing files, event functions) |
@@ -37,8 +42,8 @@ Don't cover the windows while the tests run: a covered page stops drawing.
 ## Measured on this PC
 
 i9-12900K, RX 7900 XTX, Windows 11, a ~132 Hz display, Python 3.12.10, pywebview 6.2.1, WebView2 155.
-The last full runs: **228 passed, 0 failed** with Python + `tuff.py`, and the same 228 through the frozen runtime
-(`npm run build:runtime`). `build_exe_test.mjs`: 11/11. The IDE suite `e2e/suites/tgame.mjs`: 7/7.
+The suite has **256 checks**, all passing with Python + `tuff.py` (on a PC busy with other test runs, the frame-rate
+checks needed a rerun). The 228 before the 1.0.4 fixes also passed through the frozen runtime (`npm run build:runtime`). `build_exe_test.mjs`: 11/11. The IDE suite `e2e/suites/tgame.mjs`: 7/7.
 
 All four performance programs are Tuff programs in the pygame style (`while game:open(): dt = game:frame()`):
 
@@ -70,6 +75,7 @@ All four performance programs are Tuff programs in the pygame style (`while game
 Keys, clicks and mouse movement are made in the page, so they reach the game the same way real ones do.
 `lock` makes the game act as if the mouse were locked (a test can't lock it). `tuff` runs a line of Tuff at the top of the program.
 `dump` writes what the game is doing: frame rates, the page's own numbers, every sprite and object, the texts, the labels, the player and the camera.
+It also has `kept` (the sprites and objects tgame holds) and `view_nodes` (the ids the window engine knows); with `"memory": true` it adds `in_memory`, the sprites and objects still in Python's memory after a garbage collection.
 
 ## Example games
 

@@ -467,6 +467,147 @@ def t_errors(c):
     c.check(r.seconds < 15, f"and its window closes with it ({r.seconds:.1f} s)", r.seconds)
 
 
+def t_churn(c):
+    """A long 2D game: bullets made and removed all the time, and still moved after :remove; a ball shrunk below 0;
+    text aligned left and right."""
+    r = play("churn", game("churn.tuf"), [
+        {"at": 0.3, "click_world": [150, 40]}, {"at": 0.4, "call": "clicks"},
+        {"at": 0.5, "click_world": [5, 40]}, {"at": 0.6, "call": "clicks"},
+        {"at": 0.7, "click_world": [340, 260]}, {"at": 0.8, "call": "clicks"},
+        {"at": 0.9, "click_world": [395, 260]}, {"at": 1.0, "call": "clicks"},
+        {"at": 1.5, "dump": "churn_a.json", "memory": True},
+        {"at": 1.55, "shot": "churn.png"},
+        {"at": 3.5, "call": "report"},
+        {"at": 3.55, "dump": "churn_b.json", "memory": True},
+        {"at": 3.6, "close": True},
+    ])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    c.check(r.lines[1:5] == ['hits ["Start the game"]', "hits []", 'hits ["Quit"]', "hits []"],
+            "text aligned left or right is clicked where its words are drawn, not around x", r.lines[1:5])
+    c.check("made true, shrunk true" in r.lines, "over 1,000 bullets made and removed, and the ball shrank below 0", r.lines[-3:])
+    a, b = r.dumps.get("churn_a.json", {}), r.dumps.get("churn_b.json", {})
+    c.check(b.get("kept", 1e9) < 250 and b.get("view_nodes", 1e9) < 260,
+            f"after 2,000 bullets, tgame and the window only hold the live ones ({b.get('kept')} sprites, {b.get('view_nodes')} ids)",
+            (b.get("kept"), b.get("view_nodes"), b.get("things")))
+    c.check(a.get("in_memory", 1e9) < 400 and b.get("in_memory", 1e9) < 400,
+            f"memory stays flat: {a.get('in_memory')} sprites in memory at 1.5 s, {b.get('in_memory')} at 3.5 s",
+            (a.get("in_memory"), b.get("in_memory")))
+    shot = r.shots.get("churn.png")
+    c.check(shot and color_share(shot, hexrgb("#3574f0"), 30, (0.7, 0.42, 0.8, 0.58)) > 0.5,
+            "the box made after the shrunk ball is still drawn", shot)
+    c.check(shot and color_share(shot, hexrgb("#e5484d"), 30, (0.2, 0.43, 0.3, 0.57)) < 0.01, "and the ball is gone", shot)
+
+
+def t_pause_key(c):
+    r = play("pause_key", game("pause_key.tuf"), [
+        {"at": 0.4, "key": "p"}, {"at": 0.7, "call": "report"},
+        {"at": 0.9, "key": "p"}, {"at": 1.2, "call": "report"},
+        {"at": 1.3, "close": True},
+    ])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    c.check(r.lines[1:] == ["paused true, ran while paused true", "paused false, ran while paused true"],
+            "an every-frame function runs while paused, so its P key pauses and then resumes the game", r.lines)
+
+
+def window_of(pid, title):
+    """The visible top-level window with this title that belongs to this process (Windows), or None."""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    found = []
+
+    def each(hwnd, _):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid:
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(hwnd, buf, 256)
+            if buf.value == title and user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+        return True
+    user32.EnumWindows(ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)(each), 0)
+    return found[0] if found else None
+
+
+def t_close(c):
+    """A loop that never calls game:frame() (it waits instead) still ends when the window's X closes it."""
+    if os.name != "nt":
+        c.check(True, "not Windows: skipped the WM_CLOSE check")
+        return
+    env = {k: v for k, v in os.environ.items() if k not in ("TUFF_TGAME_AUTOPILOT", "TUFF_IDE")}
+    env["PYTHONIOENCODING"] = "utf-8"
+    import threading
+    proc = subprocess.Popen(tuff_cmd() + [game("close_wait.tuf")], cwd=GAMES, env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+    lines = []
+
+    def read():
+        for line in proc.stdout:
+            lines.append(line.rstrip("\n"))
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    hwnd = None
+    deadline = time.monotonic() + 30
+    while (hwnd is None or "looping" not in lines) and time.monotonic() < deadline and proc.poll() is None:
+        hwnd = hwnd or window_of(proc.pid, "tgame close without frame")
+        time.sleep(0.05)
+    c.check(hwnd is not None and "looping" in lines, "its window opened and the loop is running", lines)
+    time.sleep(0.5)
+    closed_at = time.monotonic()
+    if hwnd is not None:
+        import ctypes
+        ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE, what the X button sends
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    took = time.monotonic() - closed_at
+    reader.join(5)
+    err = proc.stderr.read()
+    c.check(proc.returncode == 0 and took < 5 and "the loop ended" in lines and "Tuff error" not in err,
+            f"closing the window ended game:open() and the program ({took:.1f} s, exit {proc.returncode})", (lines[-3:], err[-300:]))
+
+
+def t_hud_3d(c):
+    r = play("hud_3d", game("hud_3d.tuf"), [
+        {"at": 0.5, "click": [80, 40]}, {"at": 0.7, "say": "--"},
+        {"at": 0.8, "click_center": True}, {"at": 1.0, "say": "--"},
+        {"at": 1.2, "dump": "hud3d_a.json", "memory": True},
+        {"at": 1.25, "shot": "hud_3d.png"},
+        {"at": 2.6, "call": "report"},
+        {"at": 2.65, "dump": "hud3d_b.json", "memory": True},
+        {"at": 2.7, "close": True},
+    ])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    c.check(r.lines[1:4] == ["HUD button clicked", "world clicked", "--"],
+            "a click on a HUD button in 3D runs its :clicked (and the world's), not the box's behind it", r.lines[1:4])
+    c.check(r.lines[4:7] == ["red box clicked", "world clicked", "--"], "a click on the box still clicks the box", r.lines[4:7])
+    c.check("made true" in r.lines, "over 300 coins made and removed (and moved and labelled after :remove)", r.lines[-2:])
+    a, b = r.dumps.get("hud3d_a.json", {}), r.dumps.get("hud3d_b.json", {})
+    c.check(b.get("kept", 1e9) < 30 and b.get("view_nodes", 1e9) < 60,
+            f"tgame and the window only hold the live objects ({b.get('kept')} objects, {b.get('view_nodes')} ids)", b.get("objects"))
+    c.check(a.get("in_memory", 1e9) < 40 and b.get("in_memory", 1e9) < 40,
+            f"memory stays flat: {a.get('in_memory')} objects in memory at 1.2 s, {b.get('in_memory')} at 2.6 s",
+            (a.get("in_memory"), b.get("in_memory")))
+    shot = r.shots.get("hud_3d.png")
+    c.check(shot and color_share(shot, (180, 33, 24), 40, (0.4, 0.4, 0.6, 0.8)) > 0.01, "the shapes with size lists are drawn (the red box)", shot)
+
+
+def t_no_webgl(c):
+    """Without WebGL (as on some school PCs and virtual machines), a 3D world stops with one plain message."""
+    if os.name != "nt":
+        c.check(True, "not Windows: skipped the no-WebGL check")
+        return
+    r = play("no_webgl", game("hud_3d.tuf"), [{"at": 1.0, "close": True}],
+             env={"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS": "--disable-3d-apis"})
+    c.check(r.code == 1 and r.err.count("Tuff error") == 1 and "can't show 3D worlds" in r.err and "line 5" in r.err,
+            f"one clear error, on the tgame.world line, instead of one for every object (exit {r.code})", r.err[-600:])
+
+
 # ---------------------------------------------------------------- the yellow notice
 
 def t_notice(c):
@@ -643,7 +784,8 @@ def t_guide(c):
 # ---------------------------------------------------------------- the checker
 
 GOOD = ["snake.tuf", "breakout.tuf", "snake3d.tuf", "axe_sim.tuf", "features_2d.tuf", "features_3d.tuf", "player_3d.tuf",
-        "perf_2d.tuf", "perf_2d_speed.tuf", "perf_3d.tuf", "perf_3d_move.tuf", "callback.tuf", "errors.tuf", "top_error.tuf"]
+        "perf_2d.tuf", "perf_2d_speed.tuf", "perf_3d.tuf", "perf_3d_move.tuf", "callback.tuf", "errors.tuf", "top_error.tuf",
+        "churn.tuf", "pause_key.tuf", "hud_3d.tuf"]
 BAD = [
     ('game = tgame.window("x")\ngame:rect(1, 2)\n', "A game doesn't have :rect. Use :box instead."),
     ('game = tgame.window("x")\nb = game:box(1, 2)\nb:moov(1, 2)\n', "A sprite doesn't have :moov. Did you mean :move?"),
@@ -752,6 +894,7 @@ def t_perf(c):
 
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
+         "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "no_webgl": t_no_webgl,
          "notice": t_notice, "mcp": t_mcp, "checker": t_checker, "editor": t_editor, "guide": t_guide, "perf": t_perf}
 
 

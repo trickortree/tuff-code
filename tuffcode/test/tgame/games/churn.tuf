@@ -1,0 +1,44 @@
+mention tgame
+
+# What a long game does: bullets made and removed all the time (and still moved after :remove, as a list of
+# bullets often is), a ball that shrinks below 0, and text aligned left and right that can be clicked.
+game = tgame.window("Churn", 400, 300)
+bullets = []
+made = 0
+r = 20
+ball = game:circle(100, 150, r, "red")
+box = game:box(300, 150, 60, 60, "blue")      # made after the ball, so it's drawn after it
+menu = game:text("Start the game", 20, 40)
+menu:align "left"                             # x is its left edge
+quit = game:text("Quit", 380, 260)
+quit:align "right"                            # x is its right edge
+hits = []
+
+func picked(s):
+    hits:add(s:value())
+
+func report():
+    say "made " + (made > 1000) + ", shrunk " + (r < 0)
+
+func clicks():
+    say "hits " + hits
+    hits = []
+
+menu:clicked picked
+quit:clicked picked
+while game:open():
+    dt = game:frame()
+    still = []
+    for b in bullets:
+        b:move(0, -300 * dt)
+        b:color "orange"
+        if b:y() < 250:
+            b:remove()             # gone, but it stays in the list a while longer and is still moved
+        if b:y() > 150:
+            still:add(b)
+    bullets = still
+    for i in range(1, 10):
+        bullets:add(game:circle(random(10, 390), 290, 3, "yellow"))
+        made += 1
+    r -= 30 * dt
+    ball:size(r)

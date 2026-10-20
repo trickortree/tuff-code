@@ -1,0 +1,19 @@
+mention tgame
+
+# The callback style with the pause key in the every-frame function: P pauses, and P again goes on.
+game = tgame.window("Pause key", 400, 300)
+ran_paused = 0
+
+func step(dt):
+    if game:paused():
+        ran_paused += 1
+    if game:pressed("p"):
+        if game:paused():
+            game:resume()
+        else:
+            game:pause("Paused")
+
+func report():
+    say "paused " + game:paused() + ", ran while paused " + (ran_paused > 0)
+
+game:every_frame step

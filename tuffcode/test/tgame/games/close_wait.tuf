@@ -1,0 +1,10 @@
+mention tgame
+
+# A loop that waits instead of calling game:frame(): closing the window still ends it.
+game = tgame.window("tgame close without frame", 300, 200)
+ball = game:circle(20, 100, 10, "red")
+say "looping"
+while game:open():
+    ball:move(5, 0)
+    wait(0.05)
+say "the loop ended"
