@@ -317,7 +317,7 @@ CSS = """
 .at-tab::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;border-radius:2px;background:var(--accent);scale:0 1;transition:scale .2s}
 .at-tab.at-active{color:var(--text)}
 .at-tab.at-active::after{scale:1 1}
-.at-tabpage{flex:1 1 auto;min-height:0}
+.at-tabpage,.at-page{flex:1 1 auto;min-height:0}
 .at-icon{display:inline-grid;place-items:center;align-self:var(--self);color:inherit;line-height:0}
 .at-i{width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;overflow:visible}
 .at-icon .at-i{width:100%%;height:100%%}
@@ -2939,6 +2939,49 @@ class Titlebar(Container):
         return {**super().methods(), "set": self.set_title}
 
 
+class Page(Container):
+    """mtgui's pages: screens on the window, one showing at a time (the first one made shows first)."""
+    kind = "page"
+    cls = "at-col at-page"
+
+    def __init__(self, app, title):
+        self.title = title
+        self.opened_fn = None
+        super().__init__(app, show=not app.pages)
+        app.pages.append(self)
+        if app.current_page is None:
+            app.current_page = self
+
+    def open(self):
+        app = self.app
+        if app.current_page is self or self.dead:
+            return
+        for p in app.pages:
+            p.set(show=p is self)
+        app.current_page = self
+        if self.opened_fn is not None:
+            self.lib.fire(self.opened_fn)
+
+    def opened(self, fn):
+        self.opened_fn = self.lib.check_fn(fn, ":opened")
+        return self.native()
+
+    def showing(self):
+        return self.app.current_page is self
+
+    def remove(self):
+        Widget.remove(self)
+        if self in self.app.pages:
+            self.app.pages.remove(self)
+        if self.app.current_page is self:
+            self.app.current_page = None
+            if self.app.pages:
+                self.app.pages[0].open()
+
+    def methods(self):
+        return {**super().methods(), "open": self.open, "show": self.open, "opened": self.opened, "showing": self.showing}
+
+
 class Sidebar(Container):
     kind = "sidebar"
     cls = "at-col at-side"
@@ -2985,6 +3028,8 @@ class App(Container):
         self.maximized = False
         self.titlebar_widget = None
         self.sidebars = {}
+        self.pages = []
+        self.current_page = None
         self.hwnd = None
         self.scene.call(0, "css", CSS)
         self.scene.js("const ICONS = " + json.dumps(ICONS) + ";\n" + JS)
@@ -3084,6 +3129,7 @@ class App(Container):
         return {**self.child_methods(), "title": self.set_title, "size": self.set_size, "icon": self.icon,
                 "theme": self.set_theme, "accent": self.set_accent, "font": self.set_font, "frameless": self.set_frameless,
                 "titlebar": self.titlebar, "sidebar": self.sidebar, "modal": self.modal, "menu": self.menu,
+                "page": self.page, "gradient": self.set_gradient,
                 "toast": self.toast, "alert": self.alert, "confirm": self.confirm, "ask": self.ask, "every": self.every,
                 "after": self.after, "key": self.key, "closed": self.on_closed, "close": self.close,
                 "minimize": self.minimize, "maximize": self.maximize, "style": self.style, "css": self.global_css}
@@ -3150,6 +3196,13 @@ class App(Container):
         if second is not NOTHING:
             other = self.lib.color(second)
         self.set(style={"--accent": main, "--accent-2": other, "--on-accent": on_color(main) if is_hex(main) else "#fff"})
+
+    def set_gradient(self, first, second):
+        """mtgui's app:gradient: the accent and its gradient partner (gradient buttons, the progress bar)."""
+        self.set_accent(first, second)
+
+    def page(self, title="Page"):
+        return Page(self, self.lib.text(title)).native()
 
     def set_font(self, name):
         self.set(style={"--font": font_stack(self.lib.text(name))})
@@ -3335,7 +3388,7 @@ MAKES = {"heading": "heading", "text": "text", "small": "small", "button": "butt
          "avatar": "avatar", "progress": "progress", "spinner": "spinner", "divider": "divider", "space": "space",
          "badge": "badge", "markdown": "markdown", "code": "code", "html": "html", "chart": "chart"}
 # Methods of a particular kind that make something else.
-MAKES_ON = {"window": {"titlebar": "titlebar", "sidebar": "sidebar", "modal": "modal", "menu": "menu",
+MAKES_ON = {"window": {"titlebar": "titlebar", "sidebar": "sidebar", "modal": "modal", "menu": "menu", "page": "page",
                        "every": "timer", "after": "timer"},
             "list": {"add": "item"}, "table": {"add": "table row"}, "tabs": {"tab": "tab"}, "menu": {"item": "menu item"}}
 # Methods that give back the widget they were called on, so they can be chained.
@@ -3375,7 +3428,7 @@ def tables():
         kinds[kind] = blank(Check, kind=kind).methods()
     for kind in ("card", "row", "column", "grid"):
         kinds[kind] = blank(Box, kind=kind).methods()
-    for cls in (Button, Input, TextArea, Slider, Dropdown, ListBox, Item, Table, TableRow, Tabs, Tab, Scroll, Split,
+    for cls in (Button, Input, TextArea, Slider, Dropdown, ListBox, Item, Table, TableRow, Tabs, Tab, Page, Scroll, Split,
                 Image, Icon, Avatar, Progress, Spinner, Badge, Markdown, Code, Html, Chart, Modal, Titlebar, Sidebar,
                 Menu, MenuItem, Timer):
         kinds[cls.kind] = blank(cls).methods()

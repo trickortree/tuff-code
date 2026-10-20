@@ -96,6 +96,8 @@ def main():
 
     if wants("check"):
         print("== checker (check_test.py)", flush=True)
+        if os.path.exists(os.path.join(OUT, "check.json")):
+            os.remove(os.path.join(OUT, "check.json"))
         p = subprocess.run([sys.executable, os.path.join(HERE, "check_test.py"), "--out", os.path.join(OUT, "check.json")],
                            cwd=REPO, env=ENV, capture_output=True, text=True, encoding="utf-8")
         try:
@@ -134,7 +136,7 @@ def main():
     if wants("selftest"):
         print("== programs/selftest.tuf: a program that drives itself (no page driver)", flush=True)
         r = drive("selftest", "tuffcode/test/atgui/programs/selftest.tuf")
-        want = ["2", "Ada", "true", "C", '["B", "C"]', "[]", "Hello **there**", "true", "closed"]
+        want = ["2", "Ada", "true", "C", '["B", "C"]', "[]", "Hello **there**", "more opened", "false", "true", "closed"]
         R.check(r.get("code") == 0 and r.get("stderr") == "", "ran, closed itself, no errors", (r.get("exit"), r.get("stderr")))
         R.check(lines(r.get("stdout", "")) == want, ":set, :value, :add, :remove, :clear, timers and app:closed", lines(r.get("stdout", "")))
 

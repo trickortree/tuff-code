@@ -27,6 +27,7 @@ CATCH = [
     ("card method typo", APP + 'c = app:card\nc:buton("x")\n', "A card doesn't have :buton. Did you mean :button?"),
     ("chained item method typo", APP + 'nav = app:list()\nnav:add("x"):icn "sun"\n', "An item doesn't have :icn. Did you mean :icon?"),
     ("tab page method typo", APP + 't = app:tabs()\np = t:tab "A"\np:opne\n', "A tab doesn't have :opne. Did you mean"),
+    ("page in a card", APP + 'c = app:card\nc:page "P"\n', "A card doesn't have :page."),
     ("modal method typo", APP + 'd = app:modal("Rename")\nd:opne\n', "A modal doesn't have :opne. Did you mean :open?"),
     ("timer method typo", APP + 't = app:every(1, go)\nt:stopp' + GO, "A timer doesn't have :stopp. Did you mean :stop?"),
     ("menu method typo", APP + 'm = app:menu()\nm:itme("Copy", go)' + GO, "A menu doesn't have :itme. Did you mean :item?"),
@@ -219,6 +220,9 @@ func copied(what):
     ("frameless with a title bar", APP + 'app:frameless\nbar = app:titlebar("Notes")\nbar:input "Search"\nbar:set "Notes!"\napp:minimize\napp:maximize\n'),
     ("button functions with and without the text", APP + 'app:button("A", one)\napp:button("B", two)\nfunc one():\n    say 1\nfunc two(name):\n    say name\n'),
     ("the guide's habit: self-test", APP + 'n = app:text "0"\napp:after(0.5, selftest)\nfunc selftest():\n    say n:value()\n    app:close\n'),
+    ("mtgui's pages and gradient", APP + 'app:gradient("#00c6ff", "#7b2ff7")\nhome = app:page "Home"\nhome:heading "Home"\n'
+                                         'menu = app:page "Menu"\nmenu:opened shown\nhome:open\nsay menu:showing()\n'
+                                         'func shown():\n    say 1\n'),
     ("toggle (tgui's name for a switch)", APP + 't = app:toggle("Wi-Fi", true)\nsay t:value()\n'),
     ("window icon file in temp", APP + 'app:icon "logo.png"\n'),
     ("examples: chat", None, "examples/chat.tuf"),

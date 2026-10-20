@@ -25,7 +25,7 @@ SEP = ";" if os.name == "nt" else ":"
 EXE = ".exe" if os.name == "nt" else ""
 TUFF_VIEW = ["--hidden-import", "tuff_view", "--add-data", f"{os.path.join(REPO, 'tuff_view_web')}{SEP}tuff_view_web"]
 SELFTEST = os.path.join(HERE, "programs", "selftest.tuf")
-WANT = ["2", "Ada", "true", "C", '["B", "C"]', "[]", "Hello **there**", "true", "closed"]
+WANT = ["2", "Ada", "true", "C", '["B", "C"]', "[]", "Hello **there**", "more opened", "false", "true", "closed"]
 
 
 def pyinstaller(args, what):

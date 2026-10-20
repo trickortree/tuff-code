@@ -177,6 +177,8 @@ window.TUFF_DOCS = {
     after: 'atgui: gives back a timer with :stop.',
     title: 'atgui: also changes the title bar\'s text.',
     button: 'atgui: also the gradient style, and the function gets the button\'s text (or leave the input out).',
+    page: 'atgui: works the same, as screens in the window\'s main area (tabs show a tab bar instead).',
+    gradient: 'atgui: the accent and its partner color (gradient buttons, progress bars).',
   };
   for (const [name, text] of Object.entries(also)) if (docs[name] && text) docs[name] = [docs[name][0], `${docs[name][1]} ${text}`];
   Object.assign(docs, {

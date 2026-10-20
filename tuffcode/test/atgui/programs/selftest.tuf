@@ -11,6 +11,11 @@ box = app:input "Name"
 sw = app:switch("On", false)
 lst = app:list(["A", "B"])
 md = app:markdown ""
+home = app:page "Home"
+home:text "Home page"
+more = app:page "More"
+more:opened shown_more
+app:gradient("#00c6ff", "#7b2ff7")
 timer = app:every(0.05, tick)
 app:after(0.6, selftest)
 app:closed bye
@@ -40,9 +45,14 @@ func selftest():
     md:add "Hello"
     md:add " **there**"
     say md:value()
+    more:open
+    say home:showing()
     timer:stop
     say ticks > 4
     app:close
+
+func shown_more():
+    say "more opened"
 
 func bye():
     say "closed"
