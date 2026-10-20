@@ -1,0 +1,22 @@
+mention mtgui
+
+app = mtgui.window("Pizza Order")
+app:accent "orange"
+app:heading "Build your pizza"
+app:small "Pick a size and toppings, then order."
+name = app:input "Your name"
+size = app:dropdown(["Small", "Medium", "Large"], "Medium")
+card = app:card
+card:checkbox("Extra cheese", true)
+card:checkbox("Pepperoni", false)
+spice = app:slider(0, 10, 3)
+row = app:row
+row:button("Order", order, "primary")
+row:button("Clear", clear, "ghost")
+status = app:text ""
+
+func order():
+    status:set "Thanks " + name:value + "! Your " + size:value + " pizza is coming."
+
+func clear():
+    status:set ""

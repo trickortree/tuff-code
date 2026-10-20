@@ -45,7 +45,8 @@ if (platform !== 'win32') {
   check('No ".exe" wording on this system', await ev(`!document.body.innerText.includes('.exe')`), null);
 }
 const agents = await ev('window.tuff.agents.detect().then((a) => a.map((x) => x.id + ":" + x.installed))');
-check('Agent detection runs (Claude Code, Codex, Antigravity)', Array.isArray(agents) && agents.length === 3, agents);
+// At least these three: later versions may add more agents.
+check('Agent detection runs (Claude Code, Codex, Antigravity and any others)', Array.isArray(agents) && agents.length >= 3 && ['claude', 'codex', 'antigravity'].every((id) => agents.some((a) => a.startsWith(`${id}:`))), agents);
 const shotData = (await send('Page.captureScreenshot', { format: 'png' })).result?.data;
 if (shotData) fs.writeFileSync(shot, Buffer.from(shotData, 'base64'));
 check('Screenshot saved', !!shotData, null);

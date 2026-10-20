@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stand-in agy CLI for the e2e tests. MOCK_NODE is the Node the launcher runs on, since a Mac app gets a bare PATH.
+basedir=$(dirname "$0")
+exec "${MOCK_NODE:-node}" "$basedir/mock.js" agy "$@"

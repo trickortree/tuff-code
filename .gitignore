@@ -8,3 +8,6 @@ __pycache__/
 *.log
 .DS_Store
 Thumbs.db
+
+# IDE end-to-end test output (logs, screenshots, stand-in agent logs)
+tuffcode/test/e2e/out/

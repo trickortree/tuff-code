@@ -97,6 +97,10 @@ jobs:
       - name: Open the app and check the IDE
         run: node test/app-smoke.mjs "$APP/Contents/MacOS/TuffCode" "../build/installer/screenshot-${{ matrix.arch }}.png"
 
+      # Skips the suites that only run on Windows (they say why); output goes to tuffcode/test/e2e/out.
+      - name: Drive the app through the e2e suites that work on a Mac (stand-in agents)
+        run: node test/e2e/run.mjs --app "$APP/Contents/MacOS/TuffCode"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
