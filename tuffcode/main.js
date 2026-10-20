@@ -11,6 +11,7 @@ const builder = require('./build');
 const updater = require('./updater');
 const plugins = require('./plugins');
 const agents = require('./agents');
+const ai = require('./ai');
 
 const TUFF_INTERPRETER = app.isPackaged
   ? path.join(process.resourcesPath, 'runtime-src', 'tuff.py')
@@ -343,7 +344,8 @@ ipcMain.handle('update:install', () => updater.install());
 ipcMain.handle('update:restart', () => updater.restart());
 ipcMain.handle('update:reschedule', () => updater.reschedule());
 
-ipcMain.handle('tuff:check', async (_e, source) => {
+// Checks Tuff source with tuff.py --check. Used by live error checking and by Tuff AI.
+async function checkSource(source) {
   const dir = path.join(app.getPath('temp'), 'tuffcode-check');
   await fsp.mkdir(dir, { recursive: true });
   const file = path.join(dir, `check-${process.pid}-${Date.now()}.tuf`);
@@ -368,7 +370,8 @@ ipcMain.handle('tuff:check', async (_e, source) => {
   });
   fsp.rm(file, { force: true }).catch(() => {});
   return result;
-});
+}
+ipcMain.handle('tuff:check', (_e, source) => checkSource(source));
 
 // plugins and Tuff Agents
 plugins.setup({ load: loadSettings, save: saveSettings });
@@ -388,6 +391,11 @@ ipcMain.handle('agents:signIn', (_e, id) => agents.signIn(id));
 ipcMain.handle('agents:models', (_e, id, fresh) => agents.models(id, fresh));
 ipcMain.handle('agents:run', (_e, params) => { agents.run(params, (ev) => send('agents:event', ev)); return true; });
 ipcMain.handle('agents:stop', (_e, runId) => agents.stop(runId));
+ai.setup({ checkSource, settings: loadSettings, progress: (p) => send('ai:progress', p) });
+ipcMain.handle('ai:status', () => ai.status());
+ipcMain.handle('ai:download', (_e, id) => ai.fetchModel(id));
+ipcMain.handle('ai:cancel', () => ai.cancelDownload());
+ipcMain.handle('ai:remove', (_e, id) => ai.removeModel(id));
 
 ipcMain.handle('window:minimize', () => win.minimize());
 ipcMain.handle('window:toggleMaximize', () => (win.isMaximized() ? win.unmaximize() : win.maximize()));
@@ -413,6 +421,8 @@ app.whenReady().then(() => {
   updater.start((s) => send('update:status', s), loadSettings);
 });
 app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
+app.on('will-quit', () => ai.quit());
+
 app.on('window-all-closed', () => {
   if (runProc) runProc.kill();
   app.quit();

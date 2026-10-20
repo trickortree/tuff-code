@@ -13,7 +13,10 @@ const AGENTS = {
   claude: { name: 'Claude Code', bin: 'claude', install: 'npm install -g @anthropic-ai/claude-code', url: 'https://code.claude.com/docs' },
   codex: { name: 'Codex', bin: 'codex', install: 'npm install -g @openai/codex', url: 'https://developers.openai.com/codex' },
   antigravity: { name: 'Antigravity', bin: 'agy', install: 'Install Antigravity from antigravity.google, then run: agy install', url: 'https://antigravity.google' },
+  // Tuff AI runs a model on this computer (ai.js). "Installed" means its model is downloaded.
+  tuffai: { name: 'Tuff AI', local: true },
 };
+const ai = require('./ai');
 
 const runs = new Map();
 let tuffCommand = () => ['py', '-3', '-u', path.join(__dirname, '..', 'tuff.py')];
@@ -137,6 +140,11 @@ function killTree(proc) {
 
 async function detect() {
   return Promise.all(Object.entries(AGENTS).map(async ([id, a]) => {
+    if (a.local) {
+      const s = await ai.status();
+      const m = s.models[0];
+      return { id, name: a.name, local: true, installed: s.runtime && m.downloaded, runtime: s.runtime, path: null, version: m.downloaded ? m.name : null };
+    }
     const file = await resolveBin(id);
     const info = { id, name: a.name, bin: a.bin, install: a.install, url: a.url, installed: !!file, path: file, version: null };
     if (file) {
@@ -235,6 +243,7 @@ function setAgyAllow(on) {
 const agyHasTuffTools = () => fs.existsSync(path.join(AGY_DIR, 'mcp', MCP_NAME));
 
 async function connection(id) {
+  if (!CONNECT[id]) return { id, installed: true, connected: null };
   const file = await resolveBin(id);
   if (!file) return { id, installed: false, connected: false };
   let connected = await CONNECT[id].check(file);
@@ -376,6 +385,7 @@ const MODELS = {
 };
 
 async function models(id, fresh = false) {
+  if (id === 'tuffai') return { models: ai.MODELS.map((m) => ({ id: m.id, name: m.name, sub: m.sub, efforts: [] })), efforts: [] };
   if (!MODELS[id]) return { models: [], efforts: [] };
   if (modelCache[id] && !fresh) return modelCache[id];
   const file = await resolveBin(id);
@@ -741,6 +751,7 @@ function antigravityParser() {
 const PARSERS = { claude: claudeParser, codex: codexParser, antigravity: antigravityParser };
 
 async function run({ runId, agent, prompt, root, mode, session, model, effort }, emit) {
+  if (AGENTS[agent]?.local) return ai.run({ runId, prompt, model }, emit);
   const send = (e) => emit({ runId, ...e });
   const file = await resolveBin(agent);
   if (!file) { send({ kind: 'done', ok: false, error: `${AGENTS[agent].name} isn't installed. ${AGENTS[agent].install}` }); return; }
@@ -787,6 +798,7 @@ async function run({ runId, agent, prompt, root, mode, session, model, effort },
 }
 
 function stop(runId) {
+  ai.stop(runId);
   const proc = runs.get(runId);
   if (proc) killTree(proc);
   runs.delete(runId);

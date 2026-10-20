@@ -140,6 +140,7 @@
         file: () => ide.activeFile(),
         insert: (text) => ide.insertText(text),
         insertSnippet: (text) => ide.insertText(text, { snippet: true }),
+        replaceAll: (text) => ide.replaceAllText(text),
       },
       project: { root: () => ide.root(), files: () => ide.listFiles(), read: (path) => api.fs.readFile(path), rel: (path) => ide.rel(path) },
       openFile: (path) => ide.openFile(path),

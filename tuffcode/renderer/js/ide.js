@@ -1085,6 +1085,15 @@
       span.classList.add('clickable');
       span.title = 'Jump to this line';
       span.onclick = () => goToLine(file, +m[1]);
+      // Tuff Agents sets this when it's on: ask the chosen agent what the error means.
+      if (window.tuffExplainError) {
+        const b = document.createElement('button');
+        b.className = 'explain-err';
+        b.textContent = 'Explain';
+        b.title = 'Ask the AI in Tuff Agents what this error means';
+        b.onclick = (e) => { e.stopPropagation(); window.tuffExplainError?.(text); };
+        span.append(b);
+      }
     }
   }
 
@@ -1974,6 +1983,17 @@
       editor.focus();
       if (snippet) editor.getContribution('snippetController2').insert(text);
       else editor.executeEdits('plugin', [{ range: editor.getSelection(), text, forceMoveMarkers: true }]);
+      editor.pushUndoStop();
+      return true;
+    },
+    // Replaces the whole open file, as one step Ctrl+Z undoes.
+    replaceAllText: async (text) => {
+      const t = activeTab();
+      if (!editor || !t) { toast('Open a file first.'); return false; }
+      if (studio.visible) activate(t);
+      editor.focus();
+      editor.pushUndoStop();
+      editor.executeEdits('plugin', [{ range: t.model.getFullModelRange(), text, forceMoveMarkers: true }]);
       editor.pushUndoStop();
       return true;
     },

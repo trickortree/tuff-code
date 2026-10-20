@@ -18,6 +18,10 @@
 .ta-card { margin: 0 10px 10px; padding: 12px 14px; border-radius: 10px; background: var(--bg-editor); border: 1px solid #43454a; display: flex; flex-direction: column; gap: 6px; }
 .ta-card b { font-size: 13px; }
 .ta-card p { margin: 0; color: var(--text-dim); font-size: 12.5px; line-height: 1.45; }
+.ta-tag { margin-left: 4px; padding: 1px 6px; border-radius: 6px; background: var(--accent-soft); color: var(--text); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; vertical-align: 1px; }
+.ta-card p.ta-warn { color: var(--yellow); }
+.ta-prog { height: 6px; border-radius: 3px; background: var(--bg-active); overflow: hidden; }
+.ta-prog i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .25s; }
 .ta-cmd { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 10px; border-radius: 7px; background: #17181b; border: 1px solid #393b40; }
 .ta-cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: 12px var(--font-code); color: var(--text); }
 .ta-cmd button { flex: none; padding: 3px 9px; border-radius: 5px; font: 600 11.5px var(--font-ui); color: var(--text-dim); background: var(--bg-active); }
