@@ -237,6 +237,13 @@ class _Files(http.server.ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), _FileHandler)
         self.roots = {}  # secret token -> (page folder, assets folder or None)
 
+    def handle_error(self, request, client_address):
+        # The window dropping a connection (closing, reloading, or a kept-alive one it no longer wants) is
+        # normal. Python would print a traceback for it in the middle of the program's own output.
+        if isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
 
 class _FileHandler(http.server.BaseHTTPRequestHandler):
     """Serves tuff_view_web/ and the program's assets folder, only to this machine and only with the token.

@@ -24,13 +24,14 @@ The 2D, 3D and latency windows ask to stay on top.
 | `view_latency.py` | **(d)** one event, page → Python → page, in both loop styles, plus `ask()` |
 | `view_close_test.py` | Closing the window ends the program cleanly in every loop style; a crash closes it too |
 | `view_window_test.py` | Frameless, not resizable, `.png`/`.ico`/`TUFF_APP_ICON` icons, title, resize, no WebView2, no pywebview (Win32 checks) |
+| `view_server_test.py` | The page's file server, with no window: it serves a file with its token, and a dropped connection prints no traceback |
 | `freeze.py` | **(5)** The 3D test frozen with PyInstaller `--onefile --windowed`, then run |
 | `harness.py`, `run_all.py` | Shared helpers, the runner |
 
 ## Measured on this PC
 
 i9-12900K, RX 7900 XTX, Windows 11, a monitor that WebView2 drives at **~132 Hz**. Python 3.12.10, pywebview 6.2.1, WebView2 155.0.4283.62.
-The last full run: **67 checks passed, 0 failed**; the numbers below are from an earlier one (62 checks). The frozen exe passed 9/9.
+The last full run: **69 checks passed, 0 failed**; the numbers below are from an earlier one (62 checks). The frozen exe passed 9/9.
 
 **Target met: 60 fps for (b) and (c), with Python using about 3% of each frame.**
 

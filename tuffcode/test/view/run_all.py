@@ -14,7 +14,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TESTS = ["view_ui_test.py", "view_2d_stress.py", "view_3d_test.py", "view_latency.py", "view_close_test.py",
-         "view_window_test.py"]
+         "view_window_test.py", "view_server_test.py"]
 
 
 def main():
