@@ -43,12 +43,27 @@ export default async (t, ctx) => {
   const did = last('claude');
   check('"Edit it for me" sends one message in Edit mode, and the mode stays Ask', /make that change/.test(did.prompt || '') && (did.args || [])[did.args.indexOf('--permission-mode') + 1] === 'acceptEdits' && await ev(`document.querySelector('.ta-mode button.on')?.dataset.m === 'ask'`), did.args);
 
+  // Tab or Enter on a half-typed command fills it in and never runs it, so "/n" + Tab can't clear the chat.
+  const msgCount = () => ev(`document.querySelectorAll('.ta-msg').length`);
+  const keyIn = (text, key) => ev(`(() => { const ta = document.querySelector('.ta textarea'); ta.focus(); ta.value = ${JSON.stringify(text)}; ta.dispatchEvent(new Event('input', { bubbles: true })); ta.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true })); return ta.value; })()`);
+  const [msgsBefore, runsBefore] = [await msgCount(), runs('claude').length];
+  const tabbed = await keyIn('/n', 'Tab');
+  const entered = await keyIn('/c', 'Enter');
+  await t.sleep(300);
+  check('Tab or Enter on a half-typed command fills it in and runs nothing (#35)', tabbed === '/new' && entered === '/compact' && await msgCount() === msgsBefore && runs('claude').length === runsBefore, { tabbed, entered, msgs: [msgsBefore, await msgCount()] });
+  await keyIn('', 'Escape');
+
   // /plan switches to Plan; the plan gets "Go ahead".
   await send('/plan add a score counter');
   await idle();
   const plan = last('claude');
   check('/plan switches to Plan and sends the rest', await ev(`document.querySelector('.ta-mode button.on')?.dataset.m === 'plan'`) && /add a score counter/.test(plan.prompt || '') && (plan.args || [])[plan.args.indexOf('--permission-mode') + 1] === 'plan' && /numbered plan/.test(plan.prompt || ''), plan.args);
   check('A plan gets "Go ahead"', await ev(`!!document.querySelector('[data-act="go"]')`), null);
+  // It goes to the selected agent, so it hides while another agent's tab is selected.
+  await ev(`document.querySelector('.ta-agents button[data-id="codex"]').click()`);
+  const goOnCodex = await ev(`!!document.querySelector('[data-act="go"]')`);
+  await ev(`document.querySelector('.ta-agents button[data-id="claude"]').click()`);
+  check('"Go ahead" hides on another agent\'s tab and comes back on Claude\'s (#37)', !goOnCodex && await ev(`!!document.querySelector('[data-act="go"]')`), { goOnCodex });
   await ev(`document.querySelector('[data-act="go"]').click()`);
   await idle();
   const go = last('claude');

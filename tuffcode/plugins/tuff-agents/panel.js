@@ -500,9 +500,12 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
       e.preventDefault();
       // Enter on a command that's already typed out runs it; otherwise the highlighted one is filled in.
-      const typed = $('textarea', root).value.trim().toLowerCase();
+      // Filling in never runs anything, so /n + Tab can't clear the chat.
+      const ta = $('textarea', root);
+      const typed = ta.value.trim().toLowerCase();
+      const cmd = slash.list[slash.hot][0];
       if (e.key === 'Enter' && COMMANDS.some(([c]) => c === typed)) send(typed);
-      else pickSlash(slash.list[slash.hot][0]);
+      else { ta.value = TAKES_TEXT.has(cmd) ? `${cmd} ` : cmd; renderSlash(); }
       return true;
     }
     return false;
@@ -920,9 +923,10 @@ TuffPlugins.register('tuff-agents', (t) => {
 
   // Under the latest reply: Plan answers get "Go ahead", and an Ask answer that offers a change (code, or
   // "want me to…?") gets "Edit it for me". Both send one message in Edit mode; the chosen mode stays.
+  // They go to the selected agent, so they only show while the agent that wrote the reply is selected.
   const offersChange = (text) => /```/.test(text || '') || /\b(want|like) me to\b|\b(shall|should) I\b|make (that|this|the|these) changes?/i.test(text || '');
   function followUp(m, i) {
-    if (i !== S.msgs.length - 1 || m.test || S.run || m.status !== 'done' || !CLI.includes(m.agent)) return '';
+    if (i !== S.msgs.length - 1 || m.test || S.run || m.status !== 'done' || !CLI.includes(m.agent) || m.agent !== S.agent) return '';
     const act = m.mode === 'plan' ? ['go', 'Go ahead', 'The agent makes the planned changes'] : m.mode !== 'edit' && offersChange(m.text) ? ['do-edit', 'Edit it for me', 'The agent makes this change in your files'] : null;
     return act ? `<div class="ta-acts"><button class="btn sm primary" data-act="${act[0]}">${act[1]}</button><span>${act[2]}</span></div>` : '';
   }
