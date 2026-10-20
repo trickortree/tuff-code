@@ -146,6 +146,31 @@ def _prepare_process(title):
         pass
 
 
+WEBVIEW2_KEYS = ("{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}", "{2CD8A007-E189-409D-A2C8-9AF4EF3C72AA}",  # runtime, beta
+                 "{0D50BFEC-CD6A-4F9A-964C-C7416E3ACB10}", "{65C35B14-6C1D-4122-AC46-7148CC9D6497}")  # dev, canary
+
+
+def _webview2_version():
+    """The installed Edge WebView2 Runtime's version, or None (Windows).
+
+    Checked before pywebview loads its Windows backend: without WebView2 that backend falls back to
+    Internet Explorer's engine (which can't run the page) and switches python.exe to IE mode in the registry.
+    """
+    import winreg
+    for key in WEBVIEW2_KEYS:
+        for root, path in ((winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients"),
+                           (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\EdgeUpdate\Clients"),
+                           (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\EdgeUpdate\Clients")):
+            try:
+                with winreg.OpenKey(root, path + "\\" + key) as k:
+                    version = str(winreg.QueryValueEx(k, "pv")[0])
+            except OSError:
+                continue
+            if version and version != "0.0.0.0":
+                return version
+    return None
+
+
 PROFILES = os.path.join(tempfile.gettempdir(), "tuff-view")
 
 
@@ -408,6 +433,11 @@ class View:
         except ImportError:
             self._fail(ViewError("Windows need pywebview. Install it with:  py -m pip install pywebview"))
             return
+        if sys.platform == "win32" and not webview.settings.get("WEBVIEW2_RUNTIME_PATH"):
+            self.info["webview2"] = _webview2_version()
+            if not self.info["webview2"]:
+                self._fail(ViewError(WEBVIEW2_MISSING))
+                return
         _prepare_process(self.title)
         _fine_timers(True)
         if not self._debug:
@@ -449,7 +479,7 @@ class View:
             pass
 
     def _on_ready(self, info):
-        self.info = dict(info or {})
+        self.info.update(info or {})
         self.size = (self.info.get("w", self.size[0]), self.info.get("h", self.size[1]))
         self._ready.set()
 
