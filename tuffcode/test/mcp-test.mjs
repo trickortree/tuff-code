@@ -24,17 +24,19 @@ const init = await call('initialize', { protocolVersion: '2025-06-18', capabilit
 check('initialize returns server info + tools capability', init.result?.serverInfo?.name === 'tuffcode' && init.result.capabilities.tools && init.result.protocolVersion === '2025-06-18', init);
 proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
 const list = await call('tools/list', {});
-check('tools/list has 4 tools', list.result.tools.map((t) => t.name).join(',') === 'tuff_reference,tuff_examples,tuff_check,tuff_run', list.result.tools.map((t) => t.name));
+// "At least" checks for tools, libraries and templates: later versions add more of each.
+const names = list.result.tools.map((t) => t.name);
+check('tools/list has (at least) the 4 tools', ['tuff_reference', 'tuff_examples', 'tuff_check', 'tuff_run'].every((n) => names.includes(n)), names);
 const ref = await tool('tuff_reference');
 const refText = ref.content[0].text;
-check('tuff_reference includes guide, keywords, builtins, libraries, widget methods', /Tuff language guide/.test(refText) && /## Keywords\nsay, input/.test(refText) && /`range\(start, end\)`/.test(refText) && /### anims/.test(refText) && /`app:button\(/.test(refText), refText.slice(0, 300));
+check('tuff_reference includes guide, keywords, builtins, libraries (at least tgui, mtgui, anims), widget methods', /Tuff language guide/.test(refText) && /## Keywords\nsay, input/.test(refText) && /`range\(start, end\)`/.test(refText) && ['tgui', 'mtgui', 'anims'].every((lib) => refText.includes(`### ${lib}\n`)) && /`app:button\(/.test(refText), refText.slice(0, 300));
 check('tuff_reference topic=widgets is just the methods part', /^## Methods \(windows, widgets, lists, text and lines\)/.test((await tool('tuff_reference', { topic: 'widgets' })).content[0].text), null);
 const guide = (await tool('tuff_reference', { topic: 'guide' })).content[0].text;
 check('the guide has the Python table, events, patterns and limits', ['## Tuff is not Python', '### Events: what the function gets', '## Patterns', "## What Tuff can't do", 'func is_number(t):'].every((s) => guide.includes(s)), guide.slice(0, 200));
 const methodDocs = (await tool('tuff_reference', { topic: 'widgets' })).content[0].text;
 check('the methods list has list and text methods', ['items:add value', 'thing:has value', 'text:trim'].every((s) => methodDocs.includes(s)), null);
 const ex = (await tool('tuff_examples')).content[0].text;
-check('tuff_examples has all 8 templates', (ex.match(/^## /gm) || []).length === 8 && /func add_task\(\):/.test(ex), ex.slice(0, 200));
+check('tuff_examples has the templates (at least 8)', (ex.match(/^## /gm) || []).length >= 8 && /func add_task\(\):/.test(ex), ex.slice(0, 200));
 const good = await tool('tuff_check', { code: 'say "hi"\nfunc f(x):\n    x * 2\n' });
 check('tuff_check OK on good code', !good.isError && /OK/.test(good.content[0].text), good);
 const bad = await tool('tuff_check', { code: 'if x is 1\n    say 1\n' });
