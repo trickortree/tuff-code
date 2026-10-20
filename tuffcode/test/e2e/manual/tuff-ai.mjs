@@ -1,7 +1,8 @@
 // MANUAL: Tuff AI in the real IDE, with the real model. It needs the 1.3 GB model file, so it never runs on CI.
 // It checks:
-//   - the Tuff AI tab and a real answer whose code went through the checker;
-//   - a fast follow-up;
+//   - the Tuff AI tab, and Stop while the model is starting;
+//   - a real answer whose code went through the checker;
+//   - a fast follow-up, and /compact (which Tuff AI can't do);
 //   - Explain on a Run error;
 //   - Apply with one-step undo;
 //   - the download card, which starts a download and stops it straight away.
@@ -55,6 +56,13 @@ try {
   await t.sleep(500);
   check('Tuff AI has a tab, and with the model there, no download card', await ev(`!document.querySelector('.ta-status [data-a="ai-get"]')`), await ev(`document.querySelector('.ta-status')?.textContent`));
 
+  // Stop while the model is still starting. The question after it must not wait behind a hidden answer.
+  await send('Make a program that counts from 1 to 20.');
+  const starting = await waitFor(`/Starting Tuff AI/.test([...document.querySelectorAll('.ta-msg.agent')].pop()?.textContent || '')`, 20000);
+  await ev(`document.querySelector('.ta-send').click()`);
+  await t.sleep(300);
+  check('Stop while Tuff AI is starting says Stopped', starting && await ev(`/Stopped/.test([...document.querySelectorAll('.ta-msg.agent')].pop()?.textContent || '')`), await last());
+
   const t0 = Date.now();
   await send('How do I show the text Hello on the screen in Tuff? Give a tiny program.');
   await idle();
@@ -68,6 +76,10 @@ try {
   await idle();
   const ms = Date.now() - t1;
   check(`A follow-up is fast (${ms} ms)`, ms < 20000 && ((await last())?.text || '').length > 3, await last());
+
+  await send('/compact');
+  const note = await ev(`[...document.querySelectorAll('.ta-msg.note .ta-notebox')].pop()?.textContent || ''`);
+  check('/compact on Tuff AI says to switch agents instead of summing up', /can't sum up the chat/.test(note) && await ev(`!document.querySelector('.ta-msg.agent.summary')`), note);
 
   await ev(`document.querySelector('#btn-run').click()`);
   const hasBtn = await waitFor(`!!document.querySelector('#run-output .explain-err')`, 30000);
