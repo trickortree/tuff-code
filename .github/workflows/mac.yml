@@ -88,7 +88,7 @@ jobs:
         run: |
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dv "$APP" 2>&1 | grep -E "Identifier|Signature|Format"
-          codesign --verify --strict --verbose=2 "$APP/Contents/Resources/runtime/tuff-runtime/tuff-runtime"
+          codesign --verify --strict --verbose=2 "$APP/Contents/Resources/runtime/tuff-runtime"
           spctl --assess --type execute -vv "$APP" || echo "Gatekeeper: not notarized (expected without an Apple Developer ID)"
 
       - name: Test the Tuff tools inside the app (MCP server, checker, runtime)
