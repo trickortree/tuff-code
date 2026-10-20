@@ -540,6 +540,11 @@ class Game:
             elif t == "lock":
                 self.locked = bool(e.get("locked"))
                 self.lock_changed()
+            elif t == "model":  # a .glb finished loading: now its size is known, for collisions and its label
+                thing = self.by_node.get(e.get("id"))
+                if thing is not None and e.get("size"):
+                    thing.dims = tuple(max(0.01, float(v)) for v in e["size"])
+                    thing.push()
             elif t == "close":
                 self.closed = True
 

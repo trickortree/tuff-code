@@ -625,6 +625,7 @@ function makeObj(type) {
       break;
     case 'point': obj = new THREE.PointLight(0xffffff, 10, 0, 2); break;
     case 'label': return makeLabel(p);
+    case 'model': obj = new THREE.Group(); break;
     default: throw new Error(`there's no 3D object called '${type}'`);
   }
   const n = { obj, p, pick: true };
@@ -765,6 +766,10 @@ function setObj(n, props) {
         if (o.material) { o.material.depthTest = !v; o.material.needsUpdate = true; }
         o.renderOrder = v ? 1000 : 0;
         break;
+      case 'src':
+        if (n.type === 'model') loadModel(n, v);
+        else p[k] = v;
+        break;
       case 'x': o.position.x = v; break;
       case 'y': o.position.y = v; break;
       case 'z': o.position.z = v; break;
@@ -864,6 +869,139 @@ function project(n, x, y, z) {
   const v = new THREE.Vector3(x, y, z).project(n.camera);
   if (v.z > 1) return null;
   return [(v.x + 1) / 2 * n.el.clientWidth, (1 - v.y) / 2 * n.el.clientHeight];
+}
+
+// ---------------------------------------------------------------- .glb models
+
+// A 'model' object loads a binary glTF (.glb) from `src`: its meshes, node transforms, PBR base colors, and
+// pictures packed inside it. Skins, animations and morph targets are left out. The model is moved so its bottom
+// is at the object's position and it's centred over it, and a 'model' event tells Python its size.
+const models = new Map(); // src -> a promise of the loaded model, which each object copies
+
+function loadModel(n, src) {
+  n.p.src = src;
+  for (const c of [...n.obj.children]) n.obj.remove(c);
+  let job = models.get(src);
+  if (!job) {
+    job = fetch(src)
+      .then((r) => { if (!r.ok) throw new Error(`couldn't load the model ${decodeURIComponent(src.split('/').pop())} (${r.status})`); return r.arrayBuffer(); })
+      .then(parseGlb);
+    models.set(src, job);
+  }
+  job.then((model) => {
+    if (!objs.has(n.id) || n.p.src !== src) return;
+    const copy = model.clone(true);
+    const box = new THREE.Box3().setFromObject(copy);
+    const size = box.getSize(new THREE.Vector3());
+    const mid = box.getCenter(new THREE.Vector3());
+    copy.position.set(-mid.x, -box.min.y, -mid.z);
+    copy.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
+    n.obj.add(copy);
+    n.host.dirty = true;
+    emit('model', { id: n.id, size: [size.x, size.y, size.z] });
+  }, (err) => report(err, 'loading a model'));
+}
+
+const GLB_TYPES = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
+const GLB_SIZES = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
+
+function parseGlb(buf) {
+  const dv = new DataView(buf);
+  if (buf.byteLength < 20 || dv.getUint32(0, true) !== 0x46546c67) throw new Error("that file isn't a .glb model");
+  let json = null;
+  let bin = null;
+  for (let off = 12; off + 8 <= buf.byteLength;) {
+    const len = dv.getUint32(off, true);
+    const type = dv.getUint32(off + 4, true);
+    if (type === 0x4e4f534a) json = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, off + 8, len)));
+    else if (type === 0x004e4942) bin = buf.slice(off + 8, off + 8 + len);
+    off += 8 + len;
+  }
+  if (!json) throw new Error('the .glb file has no model in it');
+  const views = json.bufferViews || [];
+  const accessor = (i) => {
+    const a = json.accessors[i];
+    const T = GLB_TYPES[a.componentType];
+    const n = GLB_SIZES[a.type];
+    if (a.bufferView === undefined) return { array: new T(a.count * n), size: n, normalized: !!a.normalized };
+    const v = views[a.bufferView];
+    const start = (v.byteOffset || 0) + (a.byteOffset || 0);
+    const stride = v.byteStride || n * T.BYTES_PER_ELEMENT;
+    let array;
+    if (stride === n * T.BYTES_PER_ELEMENT) array = new T(bin.slice(start, start + a.count * stride));
+    else {
+      array = new T(a.count * n);
+      for (let k = 0; k < a.count; k++) array.set(new T(bin, start + k * stride, n), k * n);
+    }
+    return { array, size: n, normalized: !!a.normalized };
+  };
+  const pictures = new Map();
+  const picture = (index) => {
+    if (!pictures.has(index)) {
+      const tex = (json.textures || [])[index] || {};
+      const img = (json.images || [])[tex.source] || {};
+      let url = img.uri;
+      if (img.bufferView !== undefined) {
+        const v = views[img.bufferView];
+        url = URL.createObjectURL(new Blob([bin.slice(v.byteOffset || 0, (v.byteOffset || 0) + v.byteLength)], { type: img.mimeType || 'image/png' }));
+      }
+      const t = url ? new THREE.TextureLoader().load(url, () => { for (const s of scenes) s.dirty = true; }) : null;
+      if (t) {
+        t.flipY = false;
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      }
+      pictures.set(index, t);
+    }
+    return pictures.get(index);
+  };
+  const materials = (json.materials || []).map((m) => {
+    const pbr = m.pbrMetallicRoughness || {};
+    const f = pbr.baseColorFactor || [1, 1, 1, 1];
+    const mat = new THREE.MeshStandardMaterial({
+      metalness: pbr.metallicFactor ?? 1, roughness: pbr.roughnessFactor ?? 1, opacity: f[3],
+      transparent: f[3] < 1 || m.alphaMode === 'BLEND', side: m.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
+    });
+    mat.color.setRGB(f[0], f[1], f[2]);  // glTF colors are linear, like three's working colors
+    if (pbr.baseColorTexture) mat.map = picture(pbr.baseColorTexture.index);
+    if (m.emissiveFactor) mat.emissive.setRGB(m.emissiveFactor[0], m.emissiveFactor[1], m.emissiveFactor[2]);
+    return mat;
+  });
+  const plain = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+  const meshes = (json.meshes || []).map((mesh) => mesh.primitives.filter((pr) => (pr.mode ?? 4) === 4).map((pr) => {
+    const g = new THREE.BufferGeometry();
+    const set = (name, key) => {
+      if (pr.attributes[key] === undefined) return;
+      const a = accessor(pr.attributes[key]);
+      g.setAttribute(name, new THREE.BufferAttribute(a.array, a.size, a.normalized));
+    };
+    set('position', 'POSITION');
+    set('normal', 'NORMAL');
+    set('uv', 'TEXCOORD_0');
+    set('color', 'COLOR_0');
+    if (pr.indices !== undefined) g.setIndex(new THREE.BufferAttribute(accessor(pr.indices).array, 1));
+    if (pr.attributes.NORMAL === undefined) g.computeVertexNormals();
+    let mat = pr.material !== undefined ? materials[pr.material] : plain;
+    if (pr.attributes.COLOR_0 !== undefined) { mat = mat.clone(); mat.vertexColors = true; }
+    return new THREE.Mesh(g, mat);
+  }));
+  const node = (i) => {
+    const d = json.nodes[i];
+    const o = new THREE.Group();
+    if (d.matrix) new THREE.Matrix4().fromArray(d.matrix).decompose(o.position, o.quaternion, o.scale);
+    else {
+      if (d.translation) o.position.fromArray(d.translation);
+      if (d.rotation) o.quaternion.fromArray(d.rotation);
+      if (d.scale) o.scale.fromArray(d.scale);
+    }
+    if (d.mesh !== undefined) for (const m of meshes[d.mesh]) o.add(m.clone());
+    for (const c of d.children || []) o.add(node(c));
+    return o;
+  };
+  const root = new THREE.Group();
+  const scene = (json.scenes || [])[json.scene || 0];
+  for (const i of scene ? scene.nodes || [] : (json.nodes || []).map((_, k) => k)) root.add(node(i));
+  return root;
 }
 
 // ---------------------------------------------------------------- a picture of the window
