@@ -87,10 +87,16 @@ export default async (t, ctx) => {
 
   // ---------------------------------------------------------------- driving the panel
   // A real mouse click in the middle of what `expr` finds, after making sure nothing covers it.
+  // A toast can sit over the panel's bottom buttons for a few seconds, so wait for it to go first.
   async function click(expr, what = expr) {
-    const r = await ev(`(() => { const e = ${expr}; if (!e) return null; e.scrollIntoView({ block: 'nearest', inline: 'nearest' }); const b = e.getBoundingClientRect(); const x = b.x + Math.min(b.width / 2, 40), y = b.y + b.height / 2; const h = document.elementFromPoint(x, y); return { x, y, w: b.width, hit: !!h && (h === e || e.contains(h)) }; })()`);
-    if (!r || !r.w) throw new Error(`Nothing to click: ${what}`);
-    if (!r.hit) throw new Error(`Something covers ${what}`);
+    let r;
+    for (let i = 0; i < 30; i++) {
+      r = await ev(`(() => { const e = ${expr}; if (!e) return null; e.scrollIntoView({ block: 'nearest', inline: 'nearest' }); const b = e.getBoundingClientRect(); const x = b.x + Math.min(b.width / 2, 40), y = b.y + b.height / 2; const h = document.elementFromPoint(x, y); return { x, y, w: b.width, hit: !!h && (h === e || e.contains(h)), by: h ? (h.closest('[class]')?.getAttribute('class') || h.tagName) : null }; })()`);
+      if (!r || !r.w) throw new Error(`Nothing to click: ${what}`);
+      if (r.hit) break;
+      await sleep(200);
+    }
+    if (!r.hit) throw new Error(`Something covers ${what}: ${r.by}`);
     await t.click(r.x, r.y);
   }
   // Click a text box, select what's in it and type over it.
@@ -147,6 +153,8 @@ export default async (t, ctx) => {
   const until = async (fn) => { for (let i = 0; i < 40; i++) { if (fn()) return true; await sleep(150); } return false; };
   const setMethod = async (m, key) => {
     await ev(`document.querySelector('.ax-method').focus()`);
+    // On a Mac the arrow keys open a dropdown's system menu instead of changing it, so pick it as the menu would.
+    if (process.platform === 'darwin') { await ev(`(() => { const s = document.querySelector('.ax-method'); s.value = ${JSON.stringify(m)}; s.dispatchEvent(new Event('change', { bubbles: true })); })()`); return; }
     for (let i = 0; i < 4 && (await ev(`document.querySelector('.ax-method').value`)) !== m; i++) await t.key(key);
     if ((await ev(`document.querySelector('.ax-method').value`)) !== m) {
       t.info(`The arrow keys didn't pick ${m} in the closed dropdown here; picking it through its value`);

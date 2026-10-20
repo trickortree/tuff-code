@@ -219,7 +219,7 @@ export default async (t, ctx) => {
   check('Fill paints the see-through area around the shapes, not the inside of the rectangle', hero.at(12, 12) === YELLOW && hero.at(0, 0) === YELLOW && hero.at(15, 4) === YELLOW && hero.at(3, 8) === 'clear' && hero.at(3, 3) === RED, [hero.at(12, 12), hero.at(0, 0), hero.at(3, 8), hero.at(3, 3)]);
   // Ctrl+Z in the code editor is the editor's: it takes the inserted line back out and leaves the sprite alone
   await ev(`monaco.editor.getEditors()[0].focus(); 1`);
-  await ctrl('z');
+  await t.key('z', process.platform === 'darwin' ? 4 : 2); // the editor's own undo: Cmd+Z on a Mac
   await t.sleep(200);
   const afterEditorUndo = await t.code();
   await save();
