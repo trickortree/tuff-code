@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tuff</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  body { font: 14px/1.4 "Segoe UI", system-ui, -apple-system, sans-serif; color: #e3e5e8; user-select: none; -webkit-user-select: none; }
+  input, textarea, [contenteditable] { user-select: text; -webkit-user-select: text; }
+  #tv-root { position: absolute; inset: 0; overflow: hidden; }
+  .tv-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+</style>
+</head>
+<body>
+<div id="tv-root"></div>
+<script type="module" src="engine.js"></script>
+</body>
+</html>
