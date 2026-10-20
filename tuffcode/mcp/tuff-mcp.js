@@ -128,6 +128,8 @@ function screen(raw) {
   while ((m = re.exec(raw))) {
     plain(raw.slice(last, m.index));
     last = re.lastIndex;
+    // say;<id>;<b64>[;<style>]: a style (like "notice", the yellow line tgame programs start with) only colors
+    // the line in the IDE, so it's left out here and the line reads like any other.
     const [kind, a, b] = m[1].split(';');
     const text = (s) => Buffer.from(s || '', 'base64').toString('utf8');
     if (kind === 'say') {

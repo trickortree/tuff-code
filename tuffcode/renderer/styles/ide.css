@@ -191,6 +191,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #run-output .explain-err { margin-left: 8px; padding: 0 8px; border: 1px solid var(--border-soft); border-radius: 5px; background: var(--bg-panel); color: var(--text); font: 11.5px var(--font-ui); cursor: pointer; vertical-align: 1px; }
 #run-output .explain-err:hover { border-color: var(--accent); }
 #run-output .tline { border-radius: 3px; }
+#run-output .tline.notice { color: var(--yellow); }
 #run-output .tline.flash { animation: lineflash .7s ease-out; }
 @keyframes lineflash { from { background: color-mix(in srgb, var(--accent) 35%, transparent); } }
 #run-input { min-width: 40%; padding: 0; border: 0; outline: 0; background: transparent; color: var(--green); font: inherit; caret-color: var(--accent); }

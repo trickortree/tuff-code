@@ -500,6 +500,10 @@ LIBRARIES = ("anims", "tgui", "mtgui", "tap", "tgame")
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
 VIEW_IMPORT = re.compile(r"^[ 	]*(?:import|mention)[ 	]+(?:" + "|".join(VIEW_LIBRARIES) + r")\b", re.M)
+# The first line a tgame program shows, in yellow, before anything it prints. Change "is coming soon" to
+# "is available" here once Tuff Engine ships.
+TGAME_NOTICE = "Tuff Engine is coming soon: a visual way to make games with TuffCode."
+TGAME_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+tgame\b", re.M)
 BUILTIN_NAMES = {"print", "number", "text", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
                  "floor", "ceil", "min", "max", "sum", "average"}
 
@@ -599,19 +603,23 @@ def call_python(label, fn, args):
 
 
 class Console:
-    def __init__(self):
-        self.next_id = 1
+    def __init__(self, first_id=1):
+        self.next_id = first_id
         self.rows = 0
 
     def write(self, text):
         sys.stdout.write(text)
         sys.stdout.flush()
 
-    def say(self, text):
+    def say(self, text, style=None):
+        """Show a line. style "notice" shows it in yellow: through the line protocol in the IDE, with an ANSI
+        color in a terminal, and as plain text when the output goes to a file or a pipe."""
         line = Line(self.next_id, text, self.rows)
         self.next_id += 1
         if IDE:
-            self.write(f"\x1b]tuff;say;{line.id};{b64(text)}\x07\n")
+            self.write(f"\x1b]tuff;say;{line.id};{b64(text)}{';' + style if style else ''}\x07\n")
+        elif style == "notice" and sys.stdout.isatty():
+            self.write(f"\x1b[33m{text}\x1b[0m\n")
         else:
             self.write(text + "\n")
         self.rows += text.count("\n") + 1
@@ -2293,6 +2301,8 @@ def run_program(path):
         return 1
     if not VIEW_IMPORT.search(src):
         return run_file(path)
+    if TGAME_IMPORT.search(src) and not WINDOWED:
+        Console(first_id=0).say(TGAME_NOTICE, "notice")  # line 0: the program's own lines start at 1
     try:
         import tuff_view
     except ImportError:
