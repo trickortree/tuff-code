@@ -5,6 +5,7 @@ import inspect
 import math
 import os
 import random
+import re
 import sys
 import tempfile
 import time
@@ -495,6 +496,10 @@ class AllLines:
 
 ALL = AllLines()
 LIBRARIES = ("anims", "tgui", "mtgui", "tap")
+# Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
+# second thread, because the web view needs the main thread.
+VIEW_LIBRARIES = ("atgui", "tgame")
+VIEW_IMPORT = re.compile(r"^[ 	]*(?:import|mention)[ 	]+(?:" + "|".join(VIEW_LIBRARIES) + r")", re.M)
 BUILTIN_NAMES = {"print", "number", "text", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
                  "floor", "ceil", "min", "max", "sum", "average"}
 
@@ -2275,6 +2280,27 @@ def run_file(path):
     return 0
 
 
+def run_program(path):
+    src = read_source(path)
+    if src is None:
+        return 1
+    if not VIEW_IMPORT.search(src):
+        return run_file(path)
+    try:
+        import tuff_view
+    except ImportError:
+        report(TuffError("This program needs Tuff's window engine (tuff_view.py), which isn't installed next to tuff.py."), src)
+        return 1
+    try:
+        code = tuff_view.run(run_file, path)
+    except KeyboardInterrupt:
+        return 130
+    except tuff_view.ViewError as err:
+        report(TuffError(str(err)), src)
+        return 1
+    return 0 if code is None else code
+
+
 def check_file(path):
     src = read_source(path)
     if src is None:
@@ -2327,7 +2353,7 @@ def main():
     if args[0].startswith("--") and not os.path.exists(args[0]):
         sys.stderr.write(f"Unknown option '{args[0]}'.\n" + usage() + "\n")
         return 2
-    code = run_file(args[0])
+    code = run_program(args[0])
     if getattr(sys, "frozen", False) and not WINDOWED and not IDE:
         try:
             input("\nPress Enter to close...")
