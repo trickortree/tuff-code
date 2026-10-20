@@ -65,12 +65,20 @@ async function findLatest() {
   return null;
 }
 
+// npm is a .cmd file on Windows, which only cmd.exe can start. This is the command line Node's
+// shell: true would build, written out because shell: true with an args list is deprecated (DEP0190).
+// The arguments here are fixed words and paths.
+function spawnCmd(file, args, opts) {
+  const line = [file, ...args].map((a) => (/^[\w\-.:=\\]+$/.test(a) ? a : `"${a}"`)).join(' ');
+  return spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${line}"`], { ...opts, windowsVerbatimArguments: true });
+}
+
 function run(cmd, args, cwd) {
   return new Promise((resolve) => {
     let out = '';
     let proc;
     try {
-      proc = spawn(cmd, args, { cwd, windowsHide: true, shell: process.platform === 'win32' && /\.cmd$/i.test(cmd) });
+      proc = process.platform === 'win32' && /\.cmd$/i.test(cmd) ? spawnCmd(cmd, args, { cwd, windowsHide: true }) : spawn(cmd, args, { cwd, windowsHide: true });
     } catch (err) {
       resolve({ code: -1, out: String(err.message) });
       return;
