@@ -45,9 +45,11 @@ function pump() {
         return;
       }
       b.i++;
+      if (skip(c)) continue;
       try {
         run(c);
       } catch (err) {
+        if (c[0] === 'c' && !objs.has(c[1])) broken.add(c[1]);
         report(err, describe(c));
       }
     }
@@ -57,6 +59,18 @@ function pump() {
     stats.seq = b[0];
   }
   stats.applyMs += performance.now() - t0;
+}
+
+// Objects that couldn't be made. Commands for them, and for what goes inside them, are skipped quietly: the one
+// error that said why is enough, and a "there's no object" for each of them would bury it.
+const broken = new Set();
+
+function skip(c) {
+  if (!broken.size) return false;
+  if (c[0] === 'c' && broken.has(c[4])) { broken.add(c[1]); return true; }
+  if ((c[0] === 's' || (c[0] === 'k' && !c[4])) && broken.has(c[1])) return true;
+  if (c[0] === 'r' && broken.has(c[1])) { broken.delete(c[1]); return true; }
+  return false;
 }
 
 function loadThree() {
@@ -351,7 +365,7 @@ function textSize(ctx, s) {
 function shapeSize(ctx, s) {
   const p = s.p;
   switch (s.type) {
-    case 'circle': return [p.r * 2, p.r * 2];
+    case 'circle': return [Math.max(0, p.r) * 2, Math.max(0, p.r) * 2];
     case 'text': return [textSize(ctx, s), p.size];
     case 'image': {
       const img = images.get(p.src);
@@ -396,7 +410,15 @@ function draw2d(n) {
   if (n.bg) { ctx.fillStyle = n.bg; ctx.fillRect(0, 0, el.width, el.height); } else ctx.clearRect(0, 0, el.width, el.height);
   ctx.imageSmoothingEnabled = n.smooth;
   const [k, ox, oy] = view2d(n);
-  for (const s of n.shapes) if (s.p.visible && !s.dead) drawShape(ctx, s, k, ox, oy);
+  for (const s of n.shapes) {
+    if (!s.p.visible || s.dead) continue;
+    // One shape that can't be drawn mustn't hide the ones after it. Its error is reported once, not every frame.
+    try {
+      drawShape(ctx, s, k, ox, oy);
+    } catch (err) {
+      if (!s.failed) { s.failed = true; report(err, `drawing object ${s.id}`); }
+    }
+  }
 }
 
 function drawShape(ctx, s, k, ox, oy) {
@@ -414,7 +436,7 @@ function drawShape(ctx, s, k, ox, oy) {
       const y = -p.ay * p.h;
       if (p.radius) {
         ctx.beginPath();
-        ctx.roundRect(x, y, p.w, p.h, p.radius);
+        ctx.roundRect(x, y, p.w, p.h, Math.max(0, p.radius));
         fillStroke(ctx, p);
       } else {
         if (p.color) { ctx.fillStyle = p.color; ctx.fillRect(x, y, p.w, p.h); }
@@ -422,14 +444,16 @@ function drawShape(ctx, s, k, ox, oy) {
       }
       break;
     }
-    case 'circle':
+    case 'circle': {
+      const r = Math.max(0, p.r);  // a circle shrunk below 0 draws nothing (the canvas throws on a negative radius)
       ctx.beginPath();
-      ctx.arc((0.5 - p.ax) * 2 * p.r, (0.5 - p.ay) * 2 * p.r, p.r, 0, TAU);
+      ctx.arc((0.5 - p.ax) * 2 * r, (0.5 - p.ay) * 2 * r, r, 0, TAU);
       fillStroke(ctx, p);
       break;
+    }
     case 'ellipse':
       ctx.beginPath();
-      ctx.ellipse((0.5 - p.ax) * p.w, (0.5 - p.ay) * p.h, p.w / 2, p.h / 2, 0, 0, TAU);
+      ctx.ellipse((0.5 - p.ax) * p.w, (0.5 - p.ay) * p.h, Math.max(0, p.w / 2), Math.max(0, p.h / 2), 0, 0, TAU);
       fillStroke(ctx, p);
       break;
     case 'line':
@@ -1243,9 +1267,11 @@ addEventListener('wheel', (e) => {
   wheel.dx += e.deltaX;
   wheel.dy += e.deltaY;
 }, { passive: true });
+// In a game, Space and the arrows are for playing: they mustn't scroll the page or press a focused button. An app
+// turns this off (tv.gameKeys = false, as atgui does), so Space presses its buttons and the arrows scroll.
 const GAME_KEYS = new Set([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 addEventListener('keydown', (e) => {
-  if (GAME_KEYS.has(e.key) && !editable(e.target)) e.preventDefault();
+  if (api.gameKeys && GAME_KEYS.has(e.key) && !editable(e.target)) e.preventDefault();
   emit('keydown', { key: e.key, code: e.code, repeat: e.repeat, ...mods(e) });
 });
 addEventListener('keyup', (e) => emit('keyup', { key: e.key, code: e.code, ...mods(e) }));
@@ -1279,7 +1305,7 @@ addEventListener('unhandledrejection', (e) => report(e.reason, 'the page'));
 // ---------------------------------------------------------------- start up
 
 // What custom JS (view.js(...) in Python) gets as `tv`.
-const api = { objs, node, emit, three: () => THREE, loadThree, root };
+const api = { objs, node, emit, three: () => THREE, loadThree, root, gameKeys: true };
 window.__tv = { apply };
 window.tuffView = api;
 requestAnimationFrame(tick);

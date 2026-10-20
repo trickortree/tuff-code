@@ -422,6 +422,7 @@ CSS = """
 JS = r"""
 const at = window.__at = { keys: new Set(), menu: null, last: null, resize: null };
 const emit = tv.emit;
+tv.gameKeys = false;  // an app isn't a game: Space presses the focused button and the arrow keys scroll
 const pathOf = (el) => { const out = []; for (; el && el !== document.body; el = el.parentNode) if (el._tv !== undefined) out.push(el._tv); return out; };
 const near = (el, sel) => (el && el.closest ? el.closest(sel) : null);
 const P = HTMLElement.prototype;

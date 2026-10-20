@@ -326,7 +326,7 @@ while game:open():                            # until the window is closed
 - **Where things are:** x and y are the middle of a sprite. (0, 0) is the top-left corner, and y goes down. A spot like `[100, 50]` works anywhere x and y do: `food:move_to(game:random_spot())`.
 - **Sprites:** `game:box(x, y, width, height, color)`, `game:circle(x, y, radius, color)`, `game:line(x1, y1, x2, y2, color)`, `game:text(words, x, y, size, color)` and `game:image("ship.png", x, y, width)` (a .png, .jpg, .gif or .webp next to your .tuf file).
 - **Moving:** `:move(dx, dy)`, `:move_to(x, y)`, `:glide(x, y, seconds)`, `:turn(degrees)` (more than 0 turns right), `:turn_to`, `:point_at(x, y)`, `:forward(distance)` (the way it points), `:spin(degrees_per_second)`, and `:speed(vx, vy)`, which keeps it moving by itself. `:on_edge "bounce"` (or `"wrap"` or `"stop"`) says what it does at the screen's edge. Read where it is with `:x()`, `:y()`, `:spot()` and `:angle()`.
-- **Looks:** `:color`, `:size`, `:scale 2`, `:layer 2` (higher layers are on top), `:flip()`, `:hide`, `:show` and `:remove`. Text changes with `label:set "Hi"`, and `label:align "left"` makes x its left edge.
+- **Looks:** `:color`, `:size`, `:scale 2`, `:layer 2` (higher layers are on top), `:flip()`, `:hide`, `:show` and `:remove` (a removed sprite is gone for good: changing it does nothing). Text changes with `label:set "Hi"`, and `label:align "left"` makes x its left edge.
 - **Collisions:** `a:touches(b)` is true or false. Given a list or a group, it gives back the one it touches, or nil: `hit = ball:touches(bricks)`. Also `:distance(other)` and `:on_screen()`.
 - **Keys and the mouse:** `game:held("left")` is true while a key is down, and `game:pressed("space")` only in the frame it went down. Keys are letters, numbers, space, enter, escape, shift, up, down, left and right; `"mouse"` is the mouse button. `game:mouse_x()` and `game:mouse_y()`.
 - **Values on things:** `tree:set("hp", 3)` and `tree:get("hp")` (nil if it was never set).
@@ -366,7 +366,7 @@ game:every_frame step
 game:every(1, drop)
 game:on_key("space", dash)
 ```
-- `game:on_key("any", fn)` runs for every key. `game:clicked fn` gets x and y, and `sprite:clicked fn` gets the sprite. `game:after(seconds, fn)` and `game:every(seconds, fn)` work like an app's, and pause with the game.
+- `game:on_key("any", fn)` runs for every key. `game:clicked fn` gets x and y, and `sprite:clicked fn` gets the sprite. `game:after(seconds, fn)` and `game:every(seconds, fn)` work like an app's, and pause with the game. An every-frame function keeps running while the game is paused, with dt 0, so it can check for the key that resumes it.
 - Don't use `wait` or `input` in a game: they freeze it. A game has one window.
 
 **3D.** `tgame.world` makes a 3D world. y is height, and an object's y is where its bottom is, so 0 sits on the ground.
@@ -398,7 +398,7 @@ while game:open():
     game:frame()
 ```
 - **The world:** `:sky`, `:fog(distance)` (0 is off), `:sun(brightness)`, `:light(x, y, z, color)`, `:ground(color)` and `:island(size)`.
-- **Shapes:** `game:box(x, y, z, size, color)`, and the same for `sphere`, `cylinder`, `cone` and `plane`. size is a number, or `[width, height, depth]`.
+- **Shapes:** `game:box(x, y, z, size, color)`, and the same for `sphere`, `cylinder`, `cone` and `plane`. size is a number, or a list: `[width, height, depth]` for a box, `[width, height]` for a cylinder or cone, and `[width, depth]` for a plane.
 - **Ready-made models:** `game:spawn("pine", x, y, z)` makes a tree, pine, rock, bush, flower, house, hut, sign, crate, fence or coin. Without a spot it picks a random one.
 - **Objects** have the sprites' methods with a z added (`:move(dx, dy, dz)`, `:glide(x, y, z, seconds)`...), plus `:shake()`, `:fall()`, `:fallen()`, `:regrow(seconds)`, `:grow()`, `:swing()`, `:glow "gold"`, `:label "Oak"` (text above it) and `:solid false` (the player walks through it).
 - **The player:** `"first person"` or `"third person"`. Solid things block the way and can be stood on. `player:walk_speed 6`, `:jump_height 2`, `:hold "sword"` (axe, pickaxe, sword, torch or hammer), and `game:looking_at()` is the object in the middle of the view, or nil.

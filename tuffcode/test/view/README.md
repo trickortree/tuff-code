@@ -18,19 +18,19 @@ The 2D, 3D and latency windows ask to stay on top.
 
 | File | What it proves |
 | --- | --- |
-| `view_ui_test.py` | **(a)** 50 DOM widgets; click, type, tick and key round trips; bubbling; mouse and wheel; errors reported once |
-| `view_2d_stress.py` | **(b)** 300 sprites moved by Python every frame at 60 fps (`--sweep`: 1000, 2000, 5000) |
+| `view_ui_test.py` | **(a)** 50 DOM widgets; click, type, tick and key round trips; bubbling; mouse and wheel; errors reported once (an object that can't be made, once, not again for what's inside it) |
+| `view_2d_stress.py` | **(b)** 300 sprites moved by Python every frame at 60 fps (`--sweep`: 1000, 2000, 5000); a negative-radius circle; 1,000 shapes made and removed leave no ids behind |
 | `view_3d_test.py` | **(c)** three.js, 200 cubes, a first-person camera moved from Python, raycast clicks, crosshair picks |
 | `view_latency.py` | **(d)** one event, page → Python → page, in both loop styles, plus `ask()` |
 | `view_close_test.py` | Closing the window ends the program cleanly in every loop style; a crash closes it too |
-| `view_window_test.py` | Frameless, not resizable, `.png`/`.ico`/`TUFF_APP_ICON` icons, title, resize, no WebView2 (Win32 checks) |
+| `view_window_test.py` | Frameless, not resizable, `.png`/`.ico`/`TUFF_APP_ICON` icons, title, resize, no WebView2, no pywebview (Win32 checks) |
 | `freeze.py` | **(5)** The 3D test frozen with PyInstaller `--onefile --windowed`, then run |
 | `harness.py`, `run_all.py` | Shared helpers, the runner |
 
 ## Measured on this PC
 
 i9-12900K, RX 7900 XTX, Windows 11, a monitor that WebView2 drives at **~132 Hz**. Python 3.12.10, pywebview 6.2.1, WebView2 155.0.4283.62.
-These are from the last full run: **62 checks passed, 0 failed**. The frozen exe passed 9/9.
+The last full run: **67 checks passed, 0 failed**; the numbers below are from an earlier one (62 checks). The frozen exe passed 9/9.
 
 **Target met: 60 fps for (b) and (c), with Python using about 3% of each frame.**
 
@@ -117,6 +117,8 @@ window.run_js("__tv.apply([[seq, [cmd, ...]], ...])")      # a JS literal, no ev
 - **The page applies a batch as soon as it arrives.** Drawing happens at the next animation frame.
 - **When a command needs three.js** before it has loaded, the rest of the queue waits for it. Order is kept.
 - **A command that fails** sends an `error` event. It's reported once, and the batch goes on.
+- **An object that couldn't be made** (a 3D scene without WebGL, an unknown kind): commands for it, and for what goes inside it, are skipped quietly, so its one error isn't buried under a "there's no object N" for each of them.
+- **A 2D shape that can't be drawn** is reported once and skipped; the shapes after it are still drawn. A circle's negative radius draws nothing.
 
 **Page → Python.**
 
@@ -245,7 +247,7 @@ tv.ViewError, tv.ViewClosed (a BaseException), tv.FAILED, tv.WEB_DIR
    - Add `--add-data <runtime>/tuff_view_web;tuff_view_web` and `--hidden-import tuff_view`.
    - Make sure the build Python has pywebview (`pip install pywebview` next to `pyinstaller`).
    - **No other hidden imports are needed** (see below). Windowed by default.
-4. **Running from the IDE:** the user's Python needs pywebview too. With it missing, `View()` raises "Windows need pywebview. Install it with: py -m pip install pywebview". The IDE may want to install it on first use, like the build tools.
+4. **Running from the IDE:** the user's Python needs pywebview too. With it missing, `View()` raises "App and game windows need pywebview. Install it with:  py -m pip install pywebview" (`python3 -m pip ...` on a Mac). The IDE may want to install it on first use, like the build tools.
 
 ## Packaging proof (step 5)
 
@@ -337,7 +339,8 @@ The "missing module System.*" lines in PyInstaller's warnings are .NET namespace
 - **No packed bulk-move command.** It isn't needed at the targets: 5000 sprites still held 60 fps.
 - **No glTF models** (would need three's `GLTFLoader` from `examples/jsm`) and **no audio**. Those are for wave 2 if tgame needs them.
 - **Synthetic input:** the UI and 3D tests click and type with DOM events made in the page. The OS input layer was only exercised by the close test (a real WM_CLOSE) and the window test (real Win32 styles and icons).
-- **A removed object:** setting a property on an object after removing it reports one error ("there's no object N"). Python doesn't silently drop it.
+- **A removed object:** setting a property on an object after removing it reports one error ("there's no object N"). Python doesn't silently drop it. (tgame's sprites and objects don't send anything once removed.) `remove()` forgets the id everywhere in Python, so making and removing objects all day doesn't grow its bookkeeping.
+- **Space and the arrow keys** don't scroll the page or press a focused button, since games play with them. An app turns that off from its page JS with `tv.gameKeys = false`, as atgui does, so Space presses its buttons and the arrows scroll.
 - **A covered or minimized window** stops drawing (Chromium pauses animation frames). Python keeps running and the page should keep applying batches, so it catches up when shown. This wasn't measured.
 - **Ctrl+C:** pywebview swaps in its own Ctrl+C handler while the window is open, which closes the window. `tuff_view` puts the old handler back afterwards.
 - **What pywebview installs** (`py -3 -m pip install --user pywebview`): pywebview 6.2.1, pythonnet 3.2.1, clr_loader 0.3.1, cffi 2.1.1, pycparser 3.11, bottle 0.13.4, proxy_tools 0.1.0 and typing_extensions 4.16.0. That's 5.4 MB in the user site-packages. pywebview's 2.4 MB of that includes the WebView2 DLLs and an Android jar.

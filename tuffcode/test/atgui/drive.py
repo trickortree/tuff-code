@@ -81,6 +81,9 @@ const T = window.__T = {
     return { n: s.length, median: at(0.5), p95: at(0.95), max: s.length ? +s[s.length - 1].toFixed(2) : null };
   },
   shot(name) { return new Promise((r) => { T._ack = r; tv.emit('test-shot', { name }); }); },
+  // A real key press (a trusted event, from DevTools), so the browser's own default action runs: Space on a
+  // focused button presses it, which a KeyboardEvent made in the page never does.
+  press(key) { return new Promise((r) => { T._pressed = r; tv.emit('test-press', { key }); }); },
   log(...a) { tv.emit('test-log', { text: a.map(String).join(' ') }); },
   done(result) { tv.emit('test-done', { result }); },
 };
@@ -149,6 +152,29 @@ def screenshot(view, path):
     return path
 
 
+REAL_KEYS = {" ": ("Space", 32, " "), "Enter": ("Enter", 13, "\r")}
+
+
+def press(view, key):
+    """A real key press in the page (DevTools Input.dispatchKeyEvent): down, then up."""
+    from System import Func, Object  # pythonnet, loaded by pywebview
+    code, vk, text = REAL_KEYS[key]
+    form = view._win.native
+    web = form.browser.webview
+    for kind in ("keyDown", "keyUp"):
+        params = {"type": kind, "key": key, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk}
+        if kind == "keyDown":
+            params["text"] = text
+        box = {}
+
+        def start():
+            box["task"] = web.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", json.dumps(params))
+            return None
+        form.Invoke(Func[Object](start))
+        if not box["task"].Wait(5000):
+            raise RuntimeError("the key press didn't come back")
+
+
 def main():
     program = os.path.abspath(sys.argv[1])
     driver_path = arg("--driver")
@@ -169,6 +195,7 @@ def main():
             self.on("test-log", lambda e: (state["logs"].append(e.get("text")),
                                            print("  [page] " + str(e.get("text")), file=sys.__stdout__, flush=True)))
             self.on("test-shot", self.take)
+            self.on("test-press", self.press)
             self.on("test-done", self.finish)
             if driver is not None:
                 self.js(HELPERS + WRAP % driver)
@@ -184,6 +211,13 @@ def main():
             except Exception as exc:
                 state["logs"].append(f"screenshot failed: {exc}")
             self.js("window.__T._ack && window.__T._ack()")
+
+        def press(self, e):
+            try:
+                press(self, e.get("key"))
+            except Exception as exc:
+                state["logs"].append(f"key press failed: {exc}")
+            self.js("window.__T._pressed && window.__T._pressed()")
 
         def finish(self, e):
             state["result"] = e.get("result")

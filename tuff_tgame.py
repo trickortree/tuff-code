@@ -346,7 +346,9 @@ class Game:
         self.screen = []  # the pause / game over screen's shapes
         self.showing = None  # what that screen says
         self.movers = set()
-        self.things = []  # every sprite and object the program made, oldest first
+        # Every sprite and object the program made and hasn't removed, oldest first (a dict used as an ordered
+        # set, so :remove lets go of a thing at once: a game that makes and removes bullets all day stays small).
+        self.things = {}
         self.by_node = {}
         self.hud_layer = None
         self.wheel = 0.0
@@ -408,11 +410,13 @@ class Game:
         return self.rt.call(fn, *args)[0]
 
     def adopt(self, thing):
-        self.things.append(thing)
+        self.things[thing] = None
         return thing
 
     # ---- the loop
     def is_open(self):
+        if not self.view.is_open:  # closed with its X, even in a loop that never calls game:frame()
+            self.closed = True
         return not self.closed
 
     def frame(self):
@@ -457,10 +461,11 @@ class Game:
                     self.movers.discard(thing)
         self.update(dt, real)
         self.engine.append(time.perf_counter() - t)
-        if dt:
-            for fn in list(self.ticks):
-                if not self.fire(fn, dt) and fn in self.ticks:
-                    self.ticks.remove(fn)  # a function that fails is switched off, like tgui's :every
+        # Every-frame functions run while the game is paused too, with dt 0 (what game:frame() gives a loop then),
+        # so a step function can still see the key that resumes the game.
+        for fn in list(self.ticks):
+            if not self.fire(fn, dt) and fn in self.ticks:
+                self.ticks.remove(fn)  # a function that fails is switched off, like tgui's :every
         self.work_from = time.perf_counter()
         return dt
 
@@ -687,7 +692,7 @@ class Game:
         """Removes every sprite and object the program made (the player stays)."""
         for thing in list(self.things):
             thing.remove()
-        self.things = []
+        self.things = {}
         self.movers = set()
 
     def stats(self):
@@ -726,6 +731,15 @@ class Layer:
         k = min(w / g.W, h / g.H) or 1
         ox, oy = (w - g.W * k) / 2, (h - g.H * k) / 2
         return (x - self.cx) * k + ox, (y - self.cy) * k + oy
+
+    def sprite_at(self, e):
+        """The topmost sprite on this layer that has a :clicked function, under a click (window pixels), or None."""
+        x, y = self.to_layer(e.get("x", 0), e.get("y", 0))
+        for s in sorted((s for s in self.sprites if s.alive and not s.hidden and s.click_fns),
+                        key=lambda s: (s.z, s.order), reverse=True):
+            if s.contains(x, y):
+                return s
+        return None
 
     def make(self, shape, x, y, props, own=True):
         """A sprite on this layer. own=False: one of tgame's own (the pause screen, the crosshair), which
@@ -766,7 +780,7 @@ class Layer:
     def circle(self, x=MISSING, y=MISSING, radius=MISSING, color=MISSING):
         g = self.game
         x, y, (radius, color) = self.place([x, y, radius, color], (20, "white"), "circle")
-        return self.make("circle", x, y, {"r": g.num(radius, ":circle"), "color": g.color(color)}).native
+        return self.make("circle", x, y, {"r": max(0, g.num(radius, ":circle")), "color": g.color(color)}).native
 
     def line(self, x1=0, y1=0, x2=100, y2=100, color="white"):
         g = self.game
@@ -857,14 +871,8 @@ class Game2D(Game, Layer):
         if self.is_paused:
             return
         hit = None
-        layers = ([self.hud_layer] if self.hud_layer else []) + [self]
-        for layer in layers:
-            x, y = layer.to_layer(e.get("x", 0), e.get("y", 0))
-            for s in sorted((s for s in layer.sprites if s.alive and not s.hidden and s.click_fns),
-                            key=lambda s: (s.z, s.order), reverse=True):
-                if s.contains(x, y):
-                    hit = s
-                    break
+        for layer in ([self.hud_layer] if self.hud_layer else []) + [self]:
+            hit = layer.sprite_at(e)
             if hit:
                 break
         if hit:
@@ -909,6 +917,7 @@ class Sprite:
         self.points = props.get("points")
         self.words = props.get("text", "")
         self.size_ = props.get("size", 24)
+        self.ax = props.get("ax", 0.5)  # where x is across a text: 0 its left edge, 0.5 its middle, 1 its right edge
         self.file = props.pop("file", None)
         self.vx = self.vy = self.spin_speed = 0.0
         self.edge = "none"
@@ -931,8 +940,14 @@ class Sprite:
     def num(self, v, what):
         return self.rt.number(v, what)
 
+    def send(self, **props):
+        """Send changes to the page. A removed sprite sends nothing: the page has let it go, and a bullet that is
+        still in the program's list after :remove just stays gone."""
+        if self.alive:
+            self.game.view.set(self.node, **props)
+
     def push(self):
-        self.game.view.set(self.node, x=self.x + self.dx, y=self.y + self.dy)
+        self.send(x=self.x + self.dx, y=self.y + self.dy)
 
     def moved(self):
         if self.edge != "none":
@@ -961,6 +976,8 @@ class Sprite:
         if self.shape == "line":
             (ax, ay), (bx, by) = self.points
             return self.x + (ax + bx) / 2 * self.k, self.y + (ay + by) / 2 * self.k
+        if self.shape == "text" and self.ax != 0.5:  # aligned left or right: the words sit beside x, not around it
+            return self.x + (0.5 - self.ax) * 2 * self.half()[0] * self.mirror, self.y
         return self.x, self.y
 
     def contains(self, x, y):
@@ -1038,12 +1055,12 @@ class Sprite:
 
     def turn(self, degrees):
         self.rot = (self.rot + self.num(degrees, ":turn")) % 360
-        self.game.view.set(self.node, rot=self.rot)
+        self.send(rot=self.rot)
         return self.native
 
     def turn_to(self, degrees):
         self.rot = self.num(degrees, ":turn_to") % 360
-        self.game.view.set(self.node, rot=self.rot)
+        self.send(rot=self.rot)
         return self.native
 
     def angle(self):
@@ -1063,7 +1080,7 @@ class Sprite:
         cx, cy = self.center()
         if tx != cx or ty != cy:
             self.rot = math.degrees(math.atan2(ty - cy, tx - cx)) % 360
-            self.game.view.set(self.node, rot=self.rot)
+            self.send(rot=self.rot)
         return self.native
 
     def speed(self, vx, vy=0):
@@ -1149,34 +1166,34 @@ class Sprite:
         a = self.num(a, ":size")
         if self.shape in ("rect", "image"):
             self.w, self.h = a, (self.num(b, ":size") if b is not MISSING else a)
-            self.game.view.set(self.node, w=self.w, h=self.h)
+            self.send(w=self.w, h=self.h)
         elif self.shape == "circle":
-            self.r = a
-            self.game.view.set(self.node, r=a)
+            self.r = max(0, a)  # shrunk below 0 it's gone: nothing to see, click or touch
+            self.send(r=self.r)
         elif self.shape == "text":
             self.size_ = a
-            self.game.view.set(self.node, size=a)
+            self.send(size=a)
         else:
-            self.game.view.set(self.node, lw=a)
+            self.send(lw=a)
         return self.native
 
     def set_scale(self, k):
         self.k = self.num(k, ":scale")
-        self.game.view.set(self.node, scale=self.k)
+        self.send(scale=self.k)
         return self.native
 
     def set_color(self, color):
-        self.game.view.set(self.node, color=self.game.color(color))
+        self.send(color=self.game.color(color))
         return self.native
 
     def set_layer(self, n):
         self.z = self.num(n, ":layer")
-        self.game.view.set(self.node, z=self.z)
+        self.send(z=self.z)
         return self.native
 
     def flip(self):
         self.mirror = -self.mirror
-        self.game.view.set(self.node, sx=self.mirror)
+        self.send(sx=self.mirror)
         return self.native
 
     def align(self, how):
@@ -1185,17 +1202,18 @@ class Sprite:
             raise self.rt.error(":align can be \"left\", \"center\" or \"right\".")
         if self.shape != "text":
             raise self.rt.error("Only text can be aligned.")
-        self.game.view.set(self.node, ax={"left": 0, "right": 1}.get(a, 0.5))
+        self.ax = {"left": 0, "right": 1}.get(a, 0.5)
+        self.send(ax=self.ax)  # clicks, :touches and :on_edge follow it through center()
         return self.native
 
     def hide(self):
         self.hidden = True
-        self.game.view.set(self.node, visible=False)
+        self.send(visible=False)
         return self.native
 
     def show(self):
         self.hidden = False
-        self.game.view.set(self.node, visible=True)
+        self.send(visible=True)
         return self.native
 
     def remove(self):
@@ -1204,6 +1222,7 @@ class Sprite:
             self.game.view.remove(self.node)
             self.game.movers.discard(self)
             self.game.by_node.pop(int(self.node), None)
+            self.game.things.pop(self, None)
             if self in self.layer.sprites:
                 self.layer.sprites.remove(self)
 
@@ -1217,10 +1236,10 @@ class Sprite:
             return self.native
         if self.shape == "text":
             self.words = self.rt.text(a)
-            self.game.view.set(self.node, text=self.words)
+            self.send(text=self.words)
         elif self.shape == "image":
             url, full = self.game.file_url(a, "picture", IMAGE_FILES)
-            self.game.view.set(self.node, src=url)
+            self.send(src=url)
         else:
             raise self.rt.error("Only text and pictures can :set something new. To keep a value on a sprite, "
                                 "give it a name, like sprite:set(\"hp\", 3).")
@@ -1253,7 +1272,7 @@ class Sprite:
             moved = True
         if self.spin_speed:
             self.rot = (self.rot + self.spin_speed * dt) % 360
-            self.game.view.set(self.node, rot=self.rot)
+            self.send(rot=self.rot)
         for a in list(self.anims):
             a[1] += dt
             t = min(1.0, a[1] / a[2])
@@ -1364,6 +1383,10 @@ class World3D(Game):
 
     def setup(self):
         v = self.view
+        if v.info.get("webgl") is False:  # the page found no WebGL: three.js can't draw anything here
+            v.close()
+            raise self.rt.error("This computer can't show 3D worlds: its 3D graphics (WebGL) aren't working. "
+                                "2D games (tgame.window) still work, and updating the graphics driver may help.")
         self.cam = [0.0, 1.7, 8.0]
         self.cam_yaw = 0.0  # heading, degrees clockwise from looking down -z
         self.cam_pitch = -8.0
@@ -1479,7 +1502,8 @@ class World3D(Game):
                 return nums
             if not three and len(nums) == 2:
                 return nums
-            raise self.rt.error(f":{what}'s size is one number, or {'[width, height, depth]' if three else '[width, height]'}.")
+            shape = "[width, height, depth]" if three else "[width, depth]" if what == "plane" else "[width, height]"
+            raise self.rt.error(f":{what}'s size is one number, or {shape}.")
         n = self.num(v, f":{what}")
         return [n, n, n] if three else [n, n]
 
@@ -1668,10 +1692,19 @@ class World3D(Game):
             return
         if self.is_paused:
             return
-        t = self.thing_at(e.get("path") or [])
-        if t is not None and t.click_fns:
-            for fn in list(t.click_fns):
-                self.fire(fn, t.native)
+        # The HUD is on top, so a button on it gets the click instead of the object behind it. Not while the mouse
+        # is locked for looking around: then the pointer is hidden and a click aims with the middle of the view.
+        hit = None
+        if self.hud_layer is not None and not (self.locked or self.fake_lock):
+            hit = self.hud_layer.sprite_at(e)
+        if hit is not None:
+            for fn in list(hit.click_fns):
+                self.fire(fn, hit.native)
+        else:
+            t = self.thing_at(e.get("path") or [])
+            if t is not None and t.click_fns:
+                for fn in list(t.click_fns):
+                    self.fire(fn, t.native)
         if self.click_fns:
             pt = e.get("point")
             args = [tidy(v) for v in pt] if pt else [None, None, None]
@@ -1906,18 +1939,23 @@ class Thing:
         return self.dims[1] * self.k[1]
 
     # ---- sending changes
+    def send(self, node, **props):
+        """Send changes to one of its parts in the page. A removed object sends nothing: the page has let it go."""
+        if self.alive:
+            self.world.view.set(node, **props)
+
     def push(self):
-        self.world.view.set(self.node, x=self.x, y=self.y, z=self.z)
+        self.send(self.node, x=self.x, y=self.y, z=self.z)
         if self.label_node is not None:
             top = self.y + (0.9 if self.fallen else self.height() + 0.25)
-            self.world.view.set(self.label_node, x=self.x, y=top, z=self.z)
+            self.send(self.label_node, x=self.x, y=top, z=self.z)
 
     def push_rotation(self):
         rx, ry, rz = euler(self.heading, self.tilt_axis, self.tilt, self.pitch)
-        self.world.view.set(self.node, rx=rx, ry=ry, rz=rz)
+        self.send(self.node, rx=rx, ry=ry, rz=rz)
 
     def push_scale(self):
-        self.world.view.set(self.node, sx=self.k[0], sy=self.k[1], sz=self.k[2])
+        self.send(self.node, sx=self.k[0], sy=self.k[1], sz=self.k[2])
 
     def busy(self):
         if self.vx or self.vy or self.vz or self.spin_speed or self.anims:
@@ -2152,7 +2190,7 @@ class Thing:
         c = self.world.color(color)
         for node, main in self.parts:
             if main:
-                self.world.view.set(node, color=c)
+                self.send(node, color=c)
         return self.native
 
     def glow(self, color="white"):
@@ -2160,21 +2198,21 @@ class Thing:
         c = "#000000" if name in ("none", "off", "") else self.world.color(color)
         for node, main in self.parts:
             if main:
-                self.world.view.set(node, emissive=c)
+                self.send(node, emissive=c)
         return self.native
 
     def hide(self):
         self.hidden = True
-        self.world.view.set(self.node, visible=False)
+        self.send(self.node, visible=False)
         if self.label_node is not None:
-            self.world.view.set(self.label_node, visible=False)
+            self.send(self.label_node, visible=False)
         return self.native
 
     def show(self):
         self.hidden = False
-        self.world.view.set(self.node, visible=True)
+        self.send(self.node, visible=True)
         if self.label_node is not None and self.label_text:
-            self.world.view.set(self.label_node, visible=True)
+            self.send(self.label_node, visible=True)
         return self.native
 
     def remove(self):
@@ -2186,6 +2224,7 @@ class Thing:
         if self.label_node is not None:
             w.view.remove(self.label_node)
         w.movers.discard(self)
+        w.things.pop(self, None)
         for node in [self.node] + [n for n, _ in self.parts]:
             w.by_node.pop(int(node), None)
 
@@ -2233,13 +2272,13 @@ class Thing:
         self.label_text = t
         w = self.world
         if self.label_node is None:
-            if not t:
+            if not t or not self.alive:
                 return self.native
             self.label_node = w.view.obj(w.scene, "label", text=t)
             self.push()
         else:
-            w.view.set(self.label_node, text=t)
-        w.view.set(self.label_node, visible=bool(t) and not self.hidden)
+            self.send(self.label_node, text=t)
+        self.send(self.label_node, visible=bool(t) and not self.hidden)
         return self.native
 
     def clicked(self, fn):
@@ -2304,7 +2343,7 @@ class Player:
                 ("box", {"w": 0.28, "h": 0.08, "d": 0.06, "y": 1.52, "z": -0.2, "color": "#2b2b2b"}, False),
             ], pick=False)
             self.body.solid_ = False
-            world.things.remove(self.body)
+            world.things.pop(self.body, None)
         hud = world.hud()
         if mode == "first person":
             world.crosshair = hud.make("circle", world.W / 2, world.H / 2, {"r": 3.5, "color": "#ffffff", "stroke": "#000000",
@@ -2547,7 +2586,7 @@ class Autopilot:
         {"at": 2, "click": [x, y]} (window pixels), {"click_world": [x, y]} (a 2D game's own units),
         {"click_center": true}, {"look": [dx, dy]} (mouse movement), {"lock": true} (act as if the mouse were locked),
         {"call": "tuff_function"}, {"say": "text"}, {"mark": true} (start measuring), {"shot": "name.png"},
-        {"dump": "name.json"}, {"close": true}]}
+        {"dump": "name.json"} (add "memory": true to count the sprites and objects still in memory), {"close": true}]}
 
     Keys, clicks and mouse movement are made in the page, so they travel the same way real ones do.
     """
@@ -2662,13 +2701,19 @@ class Autopilot:
                     f.write(base64.b64decode(data.split(",", 1)[1]))
         if "dump" in step:
             with open(os.path.join(self.out, step["dump"]), "w", encoding="utf-8") as f:
-                json.dump(self.state(), f, indent=2)
+                json.dump(self.state(step.get("memory")), f, indent=2)
         if step.get("close"):
             g.close()
 
-    def state(self):
+    def state(self, memory=False):
         g = self.game
         out = g.stats()
+        out["kept"] = len(g.things)  # sprites and objects tgame still holds (removed ones shouldn't be here)
+        out["view_nodes"] = len(g.view._parents)  # objects the window engine still knows about
+        if memory:  # sprites and objects still in Python's memory, after a garbage collection (slow: tests only)
+            import gc
+            gc.collect()
+            out["in_memory"] = sum(1 for o in gc.get_objects() if isinstance(o, (Sprite, Thing)))
         if self.marked is not None:
             secs = time.perf_counter() - self.marked
             out["measured_seconds"] = round(secs, 2)

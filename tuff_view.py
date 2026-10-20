@@ -135,6 +135,12 @@ def _stuck_threads(timeout):
     return pywebview_threads()
 
 
+def _no_pywebview():
+    """What to do when pywebview isn't installed, with the command for this computer (a Mac has python3, not py)."""
+    python = "py" if sys.platform == "win32" else "python3"
+    return f"App and game windows need pywebview. Install it with:  {python} -m pip install pywebview"
+
+
 def _prepare_process(title):
     if sys.platform != "win32":
         return
@@ -384,7 +390,8 @@ class View:
         self._ids = itertools.count(1)
         self._cmds = []
         self._sets = {}
-        self._kids = {}
+        self._kids = {}     # id -> the ids made inside it
+        self._parents = {}  # id -> the id it was made in (0: the window)
         self._seq = 0
         self._outbox = []
         self._queued = self._sent = 0
@@ -431,7 +438,7 @@ class View:
         try:
             import webview
         except ImportError:
-            self._fail(ViewError("Windows need pywebview. Install it with:  py -m pip install pywebview"))
+            self._fail(ViewError(_no_pywebview()))
             return
         if sys.platform == "win32" and not webview.settings.get("WEBVIEW2_RUNTIME_PATH"):
             self.info["webview2"] = _webview2_version()
@@ -546,6 +553,7 @@ class View:
         parent = int(parent or 0)
         self._cmds.append(["c", int(node), kind, type_, parent, _props(props) or None])
         self._kids.setdefault(parent, set()).add(int(node))
+        self._parents[int(node)] = parent
         return node
 
     def el(self, tag="div", parent=0, **props):
@@ -580,10 +588,16 @@ class View:
         if self._sets:
             self._move_sets()
         self._cmds.append(["r", id_])
+        # Forget it everywhere, its parent's list too, so a program that makes and removes things all the time
+        # doesn't keep every id it ever made.
+        siblings = self._kids.get(self._parents.get(id_))
+        if siblings is not None:
+            siblings.discard(id_)
         stack = [id_]
         while stack:
             i = stack.pop()
             stack.extend(self._kids.pop(i, ()))
+            self._parents.pop(i, None)
             self._handlers.pop(i, None)
             self.values.pop(i, None)
 

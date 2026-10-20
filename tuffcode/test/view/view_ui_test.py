@@ -117,6 +117,9 @@ def main():
 
     broken = view.el("button", grid, cls="w", text="Broken handler")
     broken.on("click", lambda e: 1 / 0)
+    unmade = view.create("nonsense")          # can't be made: one error says why
+    view.el("div", unmade, text="inside it")  # these are skipped quietly, not one "there's no object" each
+    view.set(unmade, text="changed")
     ticks = {"n": 0}
 
     def bad_tick(dt):
@@ -163,6 +166,9 @@ def main():
     tick_reports = [w for w, m in errors if "every-frame" in w]
     checks.check(len(broken_reports) == 1, f"a handler failing 3 times is reported once ({len(broken_reports)})")
     checks.check(len(tick_reports) == 1 and ticks["n"] == 1, f"a failing every-frame function is reported once and switched off (ran {ticks['n']}x)")
+    unmade_reports = [m for w, m in errors if w.endswith(f"object {int(unmade)})") or f"no object {int(unmade)} " in m]
+    checks.check(len(unmade_reports) == 1 and "unknown kind" in unmade_reports[0],
+                 f"an object that can't be made is reported once, not again for what's inside it ({unmade_reports})")
     checks.check(not view.is_open, "closing the window ended loop()")
     numbers = {"open_seconds": round(open_s, 3), "driver_seconds": round(run_s, 3),
                "round_trip_ms": spread([x for x in lat if x >= 0]), "python": view.stats}

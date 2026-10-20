@@ -1,0 +1,41 @@
+mention tgame
+
+# A 3D world with a fixed camera: a button on the HUD gets its own clicks (not the box behind it), and coins
+# made and removed all the time don't pile up. The shapes use the guide's size lists.
+game = tgame.world("HUD and churn", 600, 400)
+game:ground()
+red = game:box(0, 0, 0, [2, 2, 2], "red")
+game:cylinder(3, 0, 0, [1, 2], "green")
+game:cone(-3, 0, 0, [1, 2], "blue")
+game:plane(0, 0, 3, [4, 2], "gray")
+game:camera_at(0, 2, 6)
+game:look_at(red)
+button = game:hud():box(80, 40, 120, 40, "blue")
+coins = []
+made = 0
+
+func pressed(b):
+    say "HUD button clicked"
+
+func box_clicked(o):
+    say "red box clicked"
+
+func world_clicked(x, y, z):
+    say "world clicked"
+
+func report():
+    say "made " + (made > 300)
+
+button:clicked pressed
+red:clicked box_clicked
+game:clicked world_clicked
+while game:open():
+    game:frame()
+    for c in coins:
+        c:remove()
+        c:move(0, 1, 0)
+        c:label "gone"
+    coins = []
+    for i in range(1, 5):
+        coins:add(game:spawn("coin", random(-5, 5), 0, random(-12, -4)))
+        made += 1
