@@ -265,6 +265,27 @@ def main():
             R.check(r.get("code") == 0 and r.get("stderr") == "" and (r.get("result") or {}).get("ok"),
                     f"example {i}: runs in a real window, no errors", (r.get("exit"), r.get("stderr"), r.get("result")))
 
+    if wants("compat"):
+        print("== the guide's mtgui examples, with mention atgui", flush=True)
+        with open(GUIDE, encoding="utf-8") as f:
+            guide = f.read().replace("\r\n", "\n")
+        blocks = [b for b in re.findall(r"```tuff\n(.*?)```", guide, re.S) if "mention mtgui" in b]
+        R.check(len(blocks) >= 3, f"the guide has {len(blocks)} mtgui examples")
+        cdir = os.path.join(OUT, "compat")
+        os.makedirs(cdir, exist_ok=True)
+        for i, code in enumerate(blocks, 1):
+            prog = os.path.join(cdir, f"mtgui{i}.tuf")
+            with open(prog, "w", encoding="utf-8") as f:
+                f.write(code.replace("mention mtgui", "mention atgui").replace("mtgui.window", "atgui.window"))
+            chk = subprocess.run([sys.executable, TUFF, "--check", prog], cwd=REPO, env=ENV, capture_output=True, text=True, encoding="utf-8")
+            R.check(chk.returncode == 0 and chk.stdout.strip() == "OK", f"mtgui example {i}: --check says OK as atgui", chk.stdout + chk.stderr)
+            driver = os.path.join(cdir, f"mtgui{i}.js")
+            with open(driver, "w", encoding="utf-8") as f:
+                f.write(CLOSE_AFTER_PAINT.replace("SHOT", json.dumps(f"compat-mtgui{i}")))
+            r = drive(f"compat{i}", prog, driver)
+            R.check(r.get("code") == 0 and r.get("stderr") == "" and (r.get("result") or {}).get("ok"),
+                    f"mtgui example {i}: runs as atgui, no errors", (r.get("exit"), r.get("stderr"), r.get("result")))
+
     took = time.perf_counter() - started
     print(f"\natgui: {R.passed} passed, {R.failed} failed in {took:.0f} s (results and screenshots in {OUT})", flush=True)
     print("NUMBERS " + json.dumps(R.numbers), flush=True)
