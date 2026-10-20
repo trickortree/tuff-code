@@ -470,8 +470,9 @@ class Func:
 
 
 class Builtin:
-    def __init__(self, name, fn):
+    def __init__(self, name, fn, takes_err=False):
         self.name, self.fn = name, fn
+        self.takes_err = takes_err  # number(), text(), print()...: an err given to them doesn't stop the program
 
 
 class Line:
@@ -613,7 +614,7 @@ def plain(v):
     return v.text if isinstance(v, Line) else v
 
 
-def call_python(label, fn, args):
+def call_python(label, fn, args, takes_err=False):
     """Call a built-in written in Python, turning Python problems into friendly Tuff errors."""
     try:
         inspect.signature(fn).bind(*args)
@@ -621,6 +622,10 @@ def call_python(label, fn, args):
         raise TuffError(f"{label} got the wrong number of inputs ({len(args)}).")
     except ValueError:
         pass
+    if not takes_err:  # an err stops here with the reason it's an err, before Python can say something confusing
+        for a in args:
+            if isinstance(plain(a), Err):
+                plain(a).stop(f"The input to {label}")
     try:
         return fn(*args)
     except (TuffError, ReturnSignal, BreakSignal, ContinueSignal, KeyboardInterrupt, SystemExit, RecursionError):
@@ -809,8 +814,9 @@ class Interpreter:
             "sum": lambda *v: sum(self.num_list("sum", v, allow_empty=True)),
             "average": lambda *v: (lambda nums: sum(nums) / len(nums))(self.num_list("average", v)),
         }
+        takes_err = {"number", "num", "int", "text", "str", "print"}  # they hand an err back, or show it as "err"
         for name, fn in builtins.items():
-            (self.own_names if name in OWN_NAME_BUILTINS else self.globals).vars[name] = Builtin(name, fn)
+            (self.own_names if name in OWN_NAME_BUILTINS else self.globals).vars[name] = Builtin(name, fn, name in takes_err)
         self.globals.vars["all"] = ALL
         self.globals.vars["pi"] = math.pi
         self.own_names.vars["err"] = ERR
@@ -937,13 +943,17 @@ class Interpreter:
 
     def b_number(self, v, name="number"):
         # Text that isn't a number gives err (check with: if number(t) is err) instead of stopping the program.
+        # Anything else that isn't a number (a text box, nil, a list...) is a mistake in the program, so it stops.
         v = plain(v)
         if isinstance(v, Err):
             return v
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             return v
+        if isinstance(v, Native) and "value" in v.methods:  # a text box, a slider... (or a tgame text sprite)
+            thing = "sprite" if v.kind == "sprite" else f"{v.kind} widget"
+            raise TuffError(f"{name}() needs text or a number, not the {thing}. Add :value() to get what's in it.")
         if not isinstance(v, str):
-            return Err(f"{name}() needs text or a number, not {type_name(v)}")
+            raise TuffError(f"{name}() needs text or a number, not {type_name(v)}.")
         try:
             s = v.strip()
             return float(s) if "." in s else int(s)
@@ -1203,7 +1213,7 @@ class Interpreter:
 
     def invoke(self, fn, args, loose=False):
         if isinstance(fn, Builtin):
-            return call_python(fn.name + "()", fn.fn, args)
+            return call_python(fn.name + "()", fn.fn, args, fn.takes_err)
         if isinstance(fn, Func):
             if loose and len(args) > len(fn.params):
                 args = args[: len(fn.params)]
@@ -2051,6 +2061,8 @@ class Checker:
                             tip = f" Use number({who})." if who and self.typed(a) else ""
                             self.problem(a, f"{name}() needs a number, not text.{tip}")
                             break
+                elif name in ("number", "num", "int") and n == 1:
+                    self.check_number_input(e.args[0], name)
             elif name not in self.builtins and not local:
                 kind = self.var_kind(name, frozenset())
                 if kind and not kind.startswith(("$module:", "$libfn:")) and kind not in ("$func", "$builtin"):
@@ -2061,6 +2073,20 @@ class Checker:
                 members = self.lib_members(lib[8:]) or {}
                 if fn.name in members and not accepts(members[fn.name], n):
                     self.problem(e, f"{lib[8:]}.{fn.name}() got the wrong number of inputs ({n}).")
+
+    def check_number_input(self, a, name):
+        """number(), num() and int() give err for text that isn't a number, but anything else that isn't text or a
+        number (a text box itself, a list, nil...) stops the program."""
+        kind = self.kind(a)
+        if kind is None or kind in ("$text", "$number", "$line"):
+            return
+        widget = kind.lstrip("@")
+        gui, at = gui_tables(), atgui_tables()
+        kinds = (at or {}).get("kinds", {}) if kind.startswith("@") else (gui or {}).get("kinds", {})
+        if "value" in kinds.get(widget, {}) and a.kind == "var":
+            self.problem(a, f"{name}() needs text or a number, not the {widget} widget. Use {name}({a.name}:value()) to get what's in it.")
+        else:
+            self.problem(a, f"{name}() needs text or a number, not {'a library' if kind.startswith('$module:') else self.what(kind)}.")
 
     def check_gives_back(self, e, name):
         """The answer of name() is used, but name() can't give one back."""
