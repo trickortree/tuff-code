@@ -498,17 +498,20 @@ BUILTIN_NAMES = {"print", "number", "text", "len", "round", "random", "wait", "r
                  "floor", "ceil", "min", "max", "sum", "average"}
 
 
+# return, break and continue on their way out. They keep their line, for when there's nothing to catch them.
 class ReturnSignal(Exception):
-    def __init__(self, value):
-        self.value = value
+    def __init__(self, value, line=None, col=None):
+        self.value, self.line, self.col = value, line, col
 
 
 class BreakSignal(Exception):
-    pass
+    def __init__(self, line=None, col=None):
+        self.line, self.col = line, col
 
 
 class ContinueSignal(Exception):
-    pass
+    def __init__(self, line=None, col=None):
+        self.line, self.col = line, col
 
 
 def b64(text):
@@ -719,8 +722,8 @@ class Runtime:
             report(err, self.interp.src)
         except RecursionError:
             report(TuffError(f"{getattr(fn, 'name', 'This function')}() called itself too many times."), self.interp.src)
-        except (BreakSignal, ContinueSignal):
-            report(TuffError("'break' and 'continue' can only be used inside a loop."), self.interp.src)
+        except (BreakSignal, ContinueSignal) as sig:
+            report(TuffError("'break' and 'continue' can only be used inside a loop.", sig.line, sig.col), self.interp.src)
         return False, None
 
 
@@ -974,13 +977,13 @@ class Interpreter:
         return None
 
     def s_return(self, s, env):
-        raise ReturnSignal(None if s.value is None else self.eval(s.value, env))
+        raise ReturnSignal(None if s.value is None else self.eval(s.value, env), s.line, s.col)
 
     def s_break(self, s, env):
-        raise BreakSignal()
+        raise BreakSignal(s.line, s.col)
 
     def s_continue(self, s, env):
-        raise ContinueSignal()
+        raise ContinueSignal(s.line, s.col)
 
     # expressions
     def eval(self, e, env):
@@ -2181,9 +2184,25 @@ def setup_streams():
             os.system("")
 
 
+def read_source(path):
+    """The program's text, or None after a one-line message when the file can't be read."""
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            return f.read()
+    except FileNotFoundError:
+        msg = f"There's no file called '{path}'."
+    except UnicodeDecodeError:
+        msg = f"'{path}' isn't a text file, so it can't be a Tuff program."
+    except OSError as exc:
+        msg = f"'{path}' is a folder, not a .tuf file." if os.path.isdir(path) else f"Couldn't open '{path}': {exc.strerror or exc}."
+    report(TuffError(msg), "")
+    return None
+
+
 def run_file(path):
-    with open(path, encoding="utf-8-sig") as f:
-        src = f.read()
+    src = read_source(path)
+    if src is None:
+        return 1
     try:
         program = Parser(tokenize(src)).program()
         interp = Interpreter(src, os.path.dirname(os.path.abspath(path)))
@@ -2198,7 +2217,7 @@ def run_file(path):
         return 1
     except (ReturnSignal, BreakSignal, ContinueSignal) as sig:
         word = {"ReturnSignal": "return", "BreakSignal": "break", "ContinueSignal": "continue"}[type(sig).__name__]
-        report(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}."), src)
+        report(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}.", sig.line, sig.col), src)
         return 1
     except KeyboardInterrupt:
         return 130
@@ -2206,8 +2225,9 @@ def run_file(path):
 
 
 def check_file(path):
-    with open(path, encoding="utf-8-sig") as f:
-        src = f.read()
+    src = read_source(path)
+    if src is None:
+        return 1
     try:
         program = Parser(tokenize(src)).program()
     except TuffError as err:
@@ -2230,6 +2250,13 @@ def check_file(path):
     return 0
 
 
+def usage():
+    me = os.path.basename(sys.executable) if getattr(sys, "frozen", False) else "python tuff.py"
+    return ("Usage:\n"
+            f"  {me} yourfile.tuf            run a Tuff program\n"
+            f"  {me} --check yourfile.tuf    check it for mistakes without running it")
+
+
 def main():
     setup_streams()
     args = sys.argv[1:]
@@ -2238,8 +2265,17 @@ def main():
         print("TuffCode runs on its own coding language called Tuff, files end in .tuf")
         print("Run a program with: python tuff.py yourfile.tuf")
         return 0
-    if args[0] == "--check" and len(args) > 1:
+    if args[0] in ("--help", "-h", "/?"):
+        print(usage())
+        return 0
+    if args[0] == "--check":
+        if len(args) < 2:
+            sys.stderr.write("--check needs a file to check.\n" + usage() + "\n")
+            return 2
         return check_file(args[1])
+    if args[0].startswith("--") and not os.path.exists(args[0]):
+        sys.stderr.write(f"Unknown option '{args[0]}'.\n" + usage() + "\n")
+        return 2
     code = run_file(args[0])
     if getattr(sys, "frozen", False) and not WINDOWED and not IDE:
         try:
