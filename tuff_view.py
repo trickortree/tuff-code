@@ -12,6 +12,7 @@ per-frame function runs on the Tuff thread, inside frame() or loop(). Other thre
 import http.server
 import itertools
 import json
+import logging
 import mimetypes
 import os
 import queue
@@ -19,6 +20,7 @@ import secrets
 import shutil
 import signal
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -142,6 +144,39 @@ def _prepare_process(title):
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
     except Exception:
         pass
+
+
+PROFILES = os.path.join(tempfile.gettempdir(), "tuff-view")
+
+
+def _profile_dir():
+    """A fresh WebView2 profile folder for this run (Windows). pywebview deletes it when the window closes;
+    when that fails because a browser process still holds a file, a later program sweeps it up."""
+    try:
+        for name in os.listdir(PROFILES):
+            pid = name.split("-")[0]
+            if pid.isdigit() and not _running(int(pid)):
+                shutil.rmtree(os.path.join(PROFILES, name), ignore_errors=True)
+    except OSError:
+        pass
+    return os.path.join(PROFILES, f"{os.getpid()}-{secrets.token_hex(4)}")
+
+
+def _running(pid):
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    code = wintypes.DWORD()
+    try:
+        k32.GetExitCodeProcess(handle, ctypes.byref(code))
+    finally:
+        k32.CloseHandle(handle)
+    return code.value == 259  # STILL_ACTIVE
 
 
 def _fine_timers(on):
@@ -375,13 +410,17 @@ class View:
             return
         _prepare_process(self.title)
         _fine_timers(True)
+        if not self._debug:
+            # pywebview warns on stderr when it can't delete the profile folder; _profile_dir cleans those up.
+            logging.getLogger("pywebview").setLevel(logging.ERROR)
         sigint = signal.getsignal(signal.SIGINT)
         try:
             self._win = webview.create_window(self.title, self._base + "index.html", js_api=_Api(self), **self._window_args)
             self._win.events.initialized += self._on_initialized
             self._win.events.before_show += self._on_before_show
             self._win.events.closed += self._on_closed
-            webview.start(private_mode=True, debug=self._debug)
+            webview.start(private_mode=True, debug=self._debug,
+                          storage_path=_profile_dir() if sys.platform == "win32" else None)
         except Exception as exc:
             self._fail(ViewError(f"The window couldn't open: {exc}"))
         finally:
