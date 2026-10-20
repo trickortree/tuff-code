@@ -622,7 +622,7 @@ function argsFor(agent, { mode, session, prompt, model, effort }) {
   const pick = modelArgs(agent, model, effort);
   if (agent === 'claude') {
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-      '--mcp-config', claudeMcpConfigFile(), '--allowedTools', `mcp__${MCP_NAME}`, '--permission-mode', edit ? 'acceptEdits' : 'default', ...pick];
+      '--mcp-config', claudeMcpConfigFile(), '--allowedTools', `mcp__${MCP_NAME}`, '--permission-mode', edit ? 'acceptEdits' : mode === 'plan' ? 'plan' : 'default', ...pick];
     if (session) args.push('--resume', session);
     return { args, stdin: true };
   }

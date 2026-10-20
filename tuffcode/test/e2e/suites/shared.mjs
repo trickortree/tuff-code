@@ -31,7 +31,7 @@ export default async (t, ctx) => {
   await send('what context do you have and what model are you');
   await idle();
   const p2 = last('codex').prompt || '';
-  check('Codex is told it is Codex, in a shared chat', /You are Codex/.test(p2) && /This chat is shared/.test(p2), p2.slice(0, 800));
+  check('Codex is told it is Codex, in a shared chat', /You are Codex/.test(p2) && /shared memory/.test(p2) && /I'm Opus 5.5/.test(p2), p2.slice(0, 800));
   check("Claude's earlier reply is labelled as Claude's (with its model), not as Codex's own", /Claude Code \(Opus 5\.5\): Here's a \*\*friendlier\*\*/.test(p2) && !/\nYou: /.test(p2), p2.slice(p2.indexOf('Earlier in this chat')).slice(0, 600));
 
   // "Test it" for Claude in between must not make Claude lose what Codex did (review finding).

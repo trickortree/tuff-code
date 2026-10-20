@@ -64,7 +64,7 @@ export default async (t, ctx) => {
     a.includes('-p') && a.includes('stream-json') && a.includes('--verbose') && a.includes('--mcp-config') && a[a.indexOf('--allowedTools') + 1] === 'mcp__tuffcode' && a[a.indexOf('--permission-mode') + 1] === 'default', a);
   check('The prompt carries the open file and the question (sent through stdin)', /Open file: main\.tuf/.test(claude1.prompt) && /app:heading "Hi there!"/.test(claude1.prompt) && /Make my greeting friendlier/.test(claude1.prompt) && /Don't change any files/.test(claude1.prompt), (claude1.prompt || '').slice(0, 500));
   check('The agent runs in the project folder', ctx.samePath(claude1.cwd, ctx.root), { cwd: claude1.cwd, root: ctx.root });
-  const msg = await ev(`(() => { const m = [...document.querySelectorAll('.ta-msg.agent')].pop(); return { html: m.innerHTML.slice(0, 900), tools: [...m.querySelectorAll('.ta-tool')].map(x => x.className + '|' + x.textContent), code: m.querySelector('.ta-code code')?.textContent, bold: m.querySelector('.ta-md b')?.textContent, li: m.querySelectorAll('.ta-md li').length }; })()`);
+  const msg = await ev(`(() => { const m = [...document.querySelectorAll('.ta-msg.agent')].pop(); return { tools: [...m.querySelectorAll('.ta-tool')].map(x => x.className + '|' + x.textContent), code: m.querySelector('.ta-code code')?.textContent, bold: m.querySelector('.ta-md b')?.textContent, li: m.querySelectorAll('.ta-md li').length }; })()`);
   check('Reply streams in with tool steps, a code block, bold and a list', msg.tools.length === 2 && /ok\|Read the Tuff guide/.test(msg.tools[0]) && /ok\|Read main\.tuf/.test(msg.tools[1]) && msg.code === 'say "Hi there!"' && msg.bold === 'friendlier' && msg.li === 2, msg);
   await t.shot('p_chat.png');
 

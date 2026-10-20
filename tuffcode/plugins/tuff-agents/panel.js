@@ -13,11 +13,55 @@ TuffPlugins.register('tuff-agents', (t) => {
   const CLI = ['claude', 'codex', 'antigravity']; // the agents TuffCode's MCP tools get connected to
   const SHORT = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', tuffai: 'Tuff AI' };
   const SUGGEST = [
-    ['Explain this file', 'Explain what this file does, step by step, in simple words.'],
-    ['Find bugs', 'Look for bugs or mistakes in this code and explain how to fix them.'],
-    ['Make it nicer', 'Suggest ways to make this app look and feel nicer.'],
-    ['Teach me something', 'Teach me one new Tuff trick that would help with this code, with a short example.'],
+    ['Explain this file', 'Explain what this file does, step by step, in simple words.', 'book', 'Step by step, in simple words'],
+    ['Find bugs', 'Look for bugs or mistakes in this code and explain how to fix them.', 'bug', 'And how to fix them'],
+    ['Make it nicer', 'Suggest ways to make this app look and feel nicer.', 'spark', 'Ideas for looks and feel'],
+    ['Teach me something', 'Teach me one new Tuff trick that would help with this code, with a short example.', 'cap', 'One new Tuff trick'],
   ];
+  // Small line icons (16x16, stroked).
+  const ICONS = {
+    book: '<path d="M3 3.5h4a2 2 0 0 1 2 2V13a1.5 1.5 0 0 0-1.5-1.5H3zM13 3.5H9a2 2 0 0 0-2 2V13a1.5 1.5 0 0 1 1.5-1.5H13z"/>',
+    bug: '<rect x="5" y="5.5" width="6" height="7.5" rx="3"/><path d="M8 5.5V13M5 8.5H2.5M13.5 8.5H11M5.5 11.5l-2 1.5M10.5 11.5l2 1.5M6 5.5 4.5 3.5M10 5.5l1.5-2"/>',
+    spark: '<path d="M8 2.5l1.3 3.7 3.7 1.3-3.7 1.3L8 12.5l-1.3-3.7L3 7.5l3.7-1.3z"/><path d="M12.5 11.5l.5 1.5 1.5.5-1.5.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5z"/>',
+    cap: '<path d="M1.5 6.5 8 3.5l6.5 3L8 9.5z"/><path d="M4 8v3c1 1 2.5 1.5 4 1.5s3-.5 4-1.5V8M14.5 6.5v4"/>',
+    file: '<path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/>',
+    pencil: '<path d="M10.5 3 13 5.5 6 12.5H3.5V10z"/>',
+    play: '<path d="M5 3.5v9l7-4.5z"/>',
+    check: '<path d="M8 2 13 4v4c0 3-2.2 5-5 6-2.8-1-5-3-5-6V4z"/><path d="m5.8 8 1.6 1.6L10.4 6.4"/>',
+    search: '<circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/>',
+    list: '<path d="M6 4h7.5M6 8h7.5M6 12h7.5M2.5 4h.01M2.5 8h.01M2.5 12h.01"/>',
+    globe: '<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c1.8 2 1.8 9 0 11M8 2.5c-1.8 2-1.8 9 0 11"/>',
+    copy: '<rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1.5"/><path d="M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/>',
+    insert: '<path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/>',
+    apply: '<path d="m3.5 8.5 3 3 6-7"/>',
+    cloud: '<path d="M4.5 12.5a3 3 0 0 1-.4-6 4 4 0 0 1 7.8.8 2.6 2.6 0 0 1-.4 5.2z"/><path d="M8 7v4M6.5 9.5 8 11l1.5-1.5"/>',
+    chip: '<rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6 1.5V4M10 1.5V4M6 12v2.5M10 12v2.5M1.5 6H4M1.5 10H4M12 6h2.5M12 10h2.5"/>',
+    offline: '<path d="M2.5 8a8 8 0 0 1 11 0M4.5 10a5 5 0 0 1 7 0M8 12.5h.01"/><path d="M2.5 2.5l11 11"/>',
+    info: '<circle cx="8" cy="8" r="5.5"/><path d="M8 7.5v3.5M8 5h.01"/>',
+    warn: '<path d="M8 2.5 14 13H2z"/><path d="M8 6.5v3M8 11.5h.01"/>',
+  };
+  const icon = (n, cls = 'ta-ic') => `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+  const toolIcon = (text) => icon(/^(Changed|Wrote)\b/.test(text) ? 'pencil' : /^Ran\b/.test(text) ? 'play' : /^Checked\b/.test(text) ? 'check'
+    : /^(Searched the project|Looked through)/.test(text) ? 'search' : /web/i.test(text) ? 'globe' : /^Planned/.test(text) ? 'list'
+      : /Tuff (guide|examples)/.test(text) ? 'book' : 'file', 'ta-tool-ic');
+  // Tuff code in replies is coloured like the editor. Monaco colours it once; the result is kept, so a
+  // reply that's still streaming doesn't flicker.
+  const lit = new Map();
+  function colorize(scope) {
+    const m = window.monaco;
+    if (!m?.editor?.colorize) return;
+    for (const el of scope.querySelectorAll('.ta-code[data-lang="tuff"] pre code:not(.lit)')) {
+      const src = decodeURIComponent(el.closest('.ta-code').dataset.src || '');
+      if (lit.has(src)) { el.innerHTML = lit.get(src); el.classList.add('lit'); continue; }
+      m.editor.colorize(src, 'tuff', { tabSize: 4 }).then((raw) => {
+        // Plain spaces and newlines (not &nbsp; and <br>), so code copied by hand from the chat runs.
+        const html = raw.replace(/&nbsp;| /g, ' ').replace(/<br\/?>/g, '\n').replace(/\n$/, '');
+        if (lit.size > 300) lit.clear();
+        lit.set(src, html);
+        if (el.isConnected) { el.innerHTML = html; el.classList.add('lit'); }
+      }).catch(() => {});
+    }
+  }
   const NAME = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity', tuffai: 'Tuff AI' };
   const GB = (n) => `${(n / 1e9).toFixed(1)} GB`;
   const PLUG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5M6.5 8h11v3.5a5.5 5.5 0 0 1-11 0z"/><path d="M12 17v4"/></svg>';
@@ -109,28 +153,38 @@ TuffPlugins.register('tuff-agents', (t) => {
         <div class="ta-msgs" aria-live="polite"></div>
         <div class="ta-setup hidden"></div>
         <div class="ta-compose">
+          <div class="ta-slash hidden" role="listbox" aria-label="Commands"></div>
           <div class="ta-ctx"></div>
           <textarea rows="3" spellcheck="true" placeholder="Ask about your code…"></textarea>
-          <div class="ta-opts">
-            <div class="ta-dd" data-o="model"></div>
-            <div class="ta-dd" data-o="effort"></div>
-          </div>
           <div class="ta-row">
             <div class="ta-mode" role="radiogroup" aria-label="What the agent may do">
-              <button data-m="ask" title="Explains and suggests. Won't change your files.">Ask</button>
-              <button data-m="edit" title="Can change files in this project to do what you ask.">Edit</button>
+              <button data-m="ask" title="Ask: explains and suggests, and asks before changing anything. Won't change your files.">Ask</button>
+              <button data-m="plan" title="Plan: makes a step-by-step plan first. Nothing changes until you click Go ahead.">Plan</button>
+              <button data-m="edit" title="Edit: can change files in this project to do what you ask.">Edit</button>
+            </div>
+            <div class="ta-opts">
+              <div class="ta-dd" data-o="model"></div>
+              <div class="ta-dd" data-o="effort"></div>
             </div>
             <span class="ta-hint"></span>
-            <button class="ta-send" title="Send (Enter)">Send</button>
+            <button class="ta-send" title="Send (Enter)" aria-label="Send">Send</button>
           </div>
         </div>
       </div>`;
     const ta = $('textarea', root);
     ta.addEventListener('keydown', (e) => {
       e.stopPropagation();
+      if (slashKey(e)) return;
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(ta.value); }
     });
-    ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(220, ta.scrollHeight)}px`; });
+    ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(220, ta.scrollHeight)}px`; renderSlash(); });
+    ta.addEventListener('blur', () => setTimeout(() => { slash.open = false; renderSlash(); }, 120));
+    $('.ta-slash', root).addEventListener('mousedown', (e) => {
+      const b = e.target.closest('[data-cmd]');
+      if (!b) return;
+      e.preventDefault();
+      pickSlash(b.dataset.cmd);
+    });
     ta.addEventListener('focus', updateCtx);
     $('.ta-send', root).onclick = () => (S.run ? stop() : send(ta.value));
     $$('.ta-mode button', root).forEach((b) => (b.onclick = () => { S.mode = b.dataset.m; t.storage.set('mode', S.mode); renderMode(); }));
@@ -185,6 +239,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     for (const a of S.agents.filter((x) => x.installed)) loadModels(a.id, true);
     t.agents.ai?.status().then((s) => { S.ai = s; renderStatus(); }).catch(() => {});
     renderPick();
+    renderMode();
   }
 
   // Asks the agent which models and thinking levels it offers.
@@ -365,24 +420,177 @@ TuffPlugins.register('tuff-agents', (t) => {
       const state = !S.agents ? 'checking' : a?.installed ? 'ready' : 'missing';
       const title = !S.agents ? 'Checking…' : a?.installed ? `${a.name}${a.version ? ` ${a.version}` : ''}` : `${a?.name || id} isn't installed`;
       const locked = !!S.run && id !== S.agent;
-      return `<button role="tab" data-id="${id}" class="${id === S.agent ? 'on' : ''}" data-title="${esc(title)}" title="${esc(locked ? 'Wait for the reply to finish, or press Stop' : title)}" aria-selected="${id === S.agent}"${locked ? ' disabled' : ''}><i class="dot ${state}"></i>${SHORT[id]}</button>`;
+      return `<button role="tab" data-id="${id}" class="${id === S.agent ? 'on' : ''}" data-title="${esc(title)}" title="${esc(locked ? 'Wait for the reply to finish, or press Stop' : title)}" aria-selected="${id === S.agent}"${locked ? ' disabled' : ''}><i class="dot ${state}"></i><span class="ta-tab-n">${SHORT[id]}</span></button>`;
     }).join('');
-    $$('button', box).forEach((b) => (b.onclick = () => {
-      if (S.run && b.dataset.id !== S.agent) return;
-      S.agent = b.dataset.id;
-      t.storage.set('agent', S.agent);
-      if (S.view === 'setup') showSetup(false);
-      renderAgents();
-      renderStatus();
-      renderMsgs();
-      renderPick();
-    }));
+    $$('button', box).forEach((b) => (b.onclick = () => selectAgent(b.dataset.id)));
+  }
+
+  function selectAgent(id) {
+    if (S.run && id !== S.agent) return;
+    S.agent = id;
+    t.storage.set('agent', S.agent);
+    if (S.view === 'setup') showSetup(false);
+    renderAgents();
+    renderStatus();
+    renderMsgs();
+    renderPick();
+    renderMode();
+  }
+
+  function newChat() {
+    if (S.run) stop();
+    S.msgs = [];
+    S.sessions = {};
+    S.used = {};
+    renderMsgs();
+    renderPick();
+  }
+
+  // ---------------------------------------------------------------- "/" commands in the message box
+  const COMMANDS = [
+    ['/help', 'Show these commands'],
+    ['/new', 'Start a new chat'],
+    ['/compact', 'Shrink the chat into a short summary every agent shares'],
+    ['/ask', 'Ask mode. Add a message to send it, like /ask why is this slow?'],
+    ['/plan', 'Plan mode: a plan first, nothing changes until Go ahead'],
+    ['/edit', 'Edit mode: the agent may change your files'],
+    ['/claude', 'Switch to Claude Code'],
+    ['/codex', 'Switch to Codex'],
+    ['/antigravity', 'Switch to Antigravity'],
+    ['/tuffai', 'Switch to Tuff AI (runs on this computer)'],
+    ['/model', 'Pick a model by name, like /model opus'],
+    ['/explain', 'Explain the open file'],
+    ['/fix', 'Find and fix bugs in the open file'],
+    ['/tools', 'Set up and check agent tools'],
+  ];
+  const TAKES_TEXT = new Set(['/ask', '/plan', '/edit', '/claude', '/codex', '/antigravity', '/tuffai', '/model']);
+  const slash = { open: false, hot: 0, list: [] };
+
+  function renderSlash() {
+    const box = $('.ta-slash', root);
+    const v = $('textarea', root).value;
+    const m = /^\/(\S*)$/.exec(v);
+    slash.list = m ? COMMANDS.filter(([c]) => c.startsWith(`/${m[1].toLowerCase()}`)) : [];
+    slash.open = !!slash.list.length && document.activeElement === $('textarea', root);
+    slash.hot = Math.min(slash.hot, Math.max(0, slash.list.length - 1));
+    box.classList.toggle('hidden', !slash.open);
+    box.innerHTML = slash.list.map(([c, d], i) => `<div role="option" class="ta-slash-opt${i === slash.hot ? ' hot' : ''}" data-cmd="${c}" aria-selected="${i === slash.hot}"><b>${c}</b><span>${esc(d)}</span></div>`).join('');
+  }
+
+  // Arrow keys, Tab and Enter in the command list. Returns true when it handled the key.
+  function slashKey(e) {
+    renderSlash(); // the list must match what's in the box right now
+    if (!slash.open) return false;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      slash.hot = (slash.hot + (e.key === 'ArrowDown' ? 1 : -1) + slash.list.length) % slash.list.length;
+      renderSlash();
+      return true;
+    }
+    if (e.key === 'Escape') { e.preventDefault(); slash.open = false; $('.ta-slash', root).classList.add('hidden'); return true; }
+    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+      e.preventDefault();
+      // Enter on a command that's already typed out runs it; otherwise the highlighted one is filled in.
+      const typed = $('textarea', root).value.trim().toLowerCase();
+      if (e.key === 'Enter' && COMMANDS.some(([c]) => c === typed)) send(typed);
+      else pickSlash(slash.list[slash.hot][0]);
+      return true;
+    }
+    return false;
+  }
+
+  function pickSlash(cmd) {
+    const ta = $('textarea', root);
+    if (TAKES_TEXT.has(cmd)) {
+      ta.value = `${cmd} `;
+      ta.focus();
+      renderSlash();
+      return;
+    }
+    send(cmd);
+  }
+
+  // A line from TuffCode itself in the chat (not sent to any agent).
+  function note(text) {
+    S.msgs.push({ role: 'note', text });
+    renderMsgs();
+  }
+
+  function clearInput() {
+    const ta = $('textarea', root);
+    ta.value = '';
+    ta.style.height = 'auto';
+    slash.open = false;
+    renderSlash();
+  }
+
+  function command(text) {
+    const cmd = text.split(/\s/)[0].toLowerCase();
+    const arg = text.slice(cmd.length).trim();
+    clearInput();
+    if (cmd === '/help') return note(`Commands:\n${COMMANDS.map(([c, d]) => `${c}: ${d}`).join('\n')}`);
+    if (cmd === '/new' || cmd === '/clear') return newChat();
+    if (cmd === '/compact') return compact();
+    if (['/ask', '/plan', '/edit'].includes(cmd)) {
+      if (current()?.local && cmd !== '/ask') return note("Tuff AI only answers. Click Apply on its code to use it, or switch to another agent to plan or edit.");
+      S.mode = cmd.slice(1);
+      t.storage.set('mode', S.mode);
+      renderMode();
+      return arg ? send(arg) : null;
+    }
+    const agent = { '/claude': 'claude', '/codex': 'codex', '/antigravity': 'antigravity', '/agy': 'antigravity', '/tuffai': 'tuffai', '/tuff': 'tuffai' }[cmd];
+    if (agent) {
+      if (S.run) return note('Wait for the reply to finish, or press Stop, before switching agents.');
+      selectAgent(agent);
+      return arg ? send(arg) : null;
+    }
+    if (cmd === '/model') return pickModel(arg);
+    if (cmd === '/explain') return send(SUGGEST[0][1]);
+    if (cmd === '/fix') return send(SUGGEST[1][1]);
+    if (cmd === '/tools' || cmd === '/setup') return showSetup(true);
+    return note(`There's no ${cmd} command. Type /help to see them all.`);
+  }
+
+  function pickModel(name) {
+    const list = S.models[S.agent]?.models || [];
+    if (!name) return note(`Models for ${NAME[S.agent]}: ${list.map((m) => m.name).join(', ') || 'none listed'}. Pick one with /model <name>.`);
+    const q = name.toLowerCase();
+    const m = list.find((x) => x.name.toLowerCase() === q || x.id.toLowerCase() === q) || list.find((x) => x.name.toLowerCase().includes(q) || x.id.toLowerCase().includes(q));
+    if (!m) return note(`${NAME[S.agent]} has no model called "${name}". It has: ${list.map((x) => x.name).join(', ') || 'none listed'}.`);
+    S.pick = { ...S.pick, [S.agent]: { ...(S.pick[S.agent] || {}), model: m.id } };
+    t.storage.set('pick', S.pick);
+    renderPick();
+    return note(`${NAME[S.agent]} will use ${m.name}.`);
+  }
+
+  // /compact: the agent sums up the chat so far. From then on, agents get that summary plus what came after,
+  // and agents that keep their own session start a fresh one from it.
+  const COMPACT_PROMPT = 'Summarize this whole chat so far for the team of agents, so the summary can replace it. In at most 10 short bullet points: what the person is making and asked for, what was decided, what each agent did (name them, and the files they changed), and what is still open. Write only the summary.';
+  function compact() {
+    if (S.run) return;
+    if (chatSoFar(true).length < 2) return note('Nothing to compact yet.');
+    send(COMPACT_PROMPT, { compact: true });
+  }
+
+  // What the agents get as the chat so far: from the last /compact summary on, without TuffCode's own notes,
+  // "Test it" runs, or a reply still being written. all: including the newest message.
+  function chatSoFar(all = false) {
+    const msgs = all ? S.msgs : S.msgs.slice(0, -1);
+    const from = msgs.map((m) => !!m.summary).lastIndexOf(true);
+    return msgs.slice(Math.max(0, from)).filter((m) => m.role !== 'note' && !m.test && !(m.compacting && !m.summary) && (m.role === 'user' || m.status !== 'running'));
   }
 
   function renderMode() {
-    $$('.ta-mode button', root).forEach((b) => { b.classList.toggle('on', b.dataset.m === S.mode); b.setAttribute('aria-checked', b.dataset.m === S.mode); });
-    $('.ta-hint', root).textContent = S.mode === 'edit' ? 'Can change your files' : "Won't change your files";
-    $('textarea', root).placeholder = S.mode === 'edit' ? 'Tell the agent what to change…' : 'Ask about your code…';
+    // Tuff AI only answers: it doesn't change files itself (its code gets an Apply button).
+    const local = !!current()?.local;
+    const mode = local ? 'ask' : S.mode;
+    $$('.ta-mode button', root).forEach((b) => {
+      b.classList.toggle('on', b.dataset.m === mode);
+      b.setAttribute('aria-checked', b.dataset.m === mode);
+      b.disabled = local && b.dataset.m !== 'ask';
+    });
+    $('.ta-hint', root).textContent = mode === 'edit' ? 'Can change your files' : mode === 'plan' ? 'Plans first, changes nothing yet' : "Won't change your files";
+    $('textarea', root).placeholder = mode === 'edit' ? 'Tell the agent what to change…' : mode === 'plan' ? 'What should the agent plan?' : 'Ask about your code…';
   }
 
   function renderStatus() {
@@ -393,20 +601,20 @@ TuffPlugins.register('tuff-agents', (t) => {
       box.innerHTML = aiCard();
     } else if (!a?.installed) {
       box.innerHTML = `<div class="ta-card">
-        <b>${esc(a?.name || S.agent)} isn't installed</b>
+        <b class="ta-card-h">${esc(a?.name || S.agent)} isn't installed</b>
         <p>Install it once, then come back. TuffCode runs it for you right here.${INSTALL_TIP[S.agent] || ''}</p>
         <div class="ta-cmd"><code>${esc(a?.install || '')}</code><button data-a="copy-install">Copy</button></div>
         <div class="ta-btns"><button class="btn sm" data-a="site">Website</button><button class="btn sm" data-a="recheck">Check again</button></div>
       </div>`;
     } else if (S.auth[S.agent] === false) {
       box.innerHTML = `<div class="ta-card">
-        <b>Sign in to ${esc(a.name)}</b>
+        <b class="ta-card-h">Sign in to ${esc(a.name)}</b>
         <p>${signInText(a)} A window opens and your browser does the rest.</p>
         <div class="ta-btns"><button class="btn sm primary" data-a="signin">Sign in</button><button class="btn sm" data-a="recheck">Check again</button></div>
       </div>`;
     } else if (CLI.includes(S.agent) && S.agent !== 'claude' && S.conn[S.agent] === false && !S.dismissed[S.agent]) {
       box.innerHTML = `<div class="ta-card">
-        <b>Teach ${esc(a.name)} about Tuff</b>
+        <b class="ta-card-h">Teach ${esc(a.name)} about Tuff</b>
         <p>Connect TuffCode's tools so ${esc(a.name)} can read the Tuff guide and check and run your programs. This adds a "tuffcode" tool server to its settings${S.agent === 'antigravity' ? ' and lets it use those tools without asking' : ''}. You can remove it any time from the ⋯ menu.</p>
         <div class="ta-btns"><button class="btn sm primary" data-a="connect">Connect</button><button class="btn sm" data-a="setup">How it works</button><button class="btn sm" data-a="dismiss">Not now</button></div>
       </div>`;
@@ -440,16 +648,21 @@ TuffPlugins.register('tuff-agents', (t) => {
     const p = S.aiProg && !S.aiProg.done ? S.aiProg : null;
     if (p) {
       const pct = p.total ? Math.floor((100 * p.got) / p.total) : 0;
-      return `<div class="ta-card"><b>Downloading Tuff AI… ${pct}%</b>
+      return `<div class="ta-card ta-ai"><b class="ta-card-h">Downloading Tuff AI… ${pct}%</b>
         <div class="ta-prog"><i style="width:${pct}%"></i></div>
         <p>${GB(p.got)} of ${GB(p.total)}. You can keep coding. If it stops, it carries on from here next time.</p>
         <div class="ta-btns"><button class="btn sm" data-a="ai-cancel">Stop</button></div></div>`;
     }
     const low = s.ram.free < s.ram.need;
-    return `<div class="ta-card">
-      <b>Tuff AI <span class="ta-tag">preview</span></b>
+    return `<div class="ta-card ta-ai">
+      <b class="ta-card-h">Tuff AI <span class="ta-tag">preview</span></b>
       <p>Runs on this computer: no account, and no internet once it's downloaded. This preview uses ${esc(m.name)} before it's trained on Tuff, so expect mistakes. TuffCode checks every program it writes.</p>
-      <p class="${low ? 'ta-warn' : 'tas-small'}">Download: ${GB(m.size)}. It needs about ${GB(s.ram.need)} of free memory while it answers (${GB(s.ram.free)} free right now${low ? '. Close some apps first' : ''}).</p>
+      <div class="ta-chips">
+        <span>${icon('cloud')}Download: ${GB(m.size)}</span>
+        <span class="${low ? 'ta-warn' : ''}">${icon('chip')}Needs ${GB(s.ram.need)} free memory</span>
+        <span>${icon('offline')}Works offline</span>
+      </div>
+      <p class="${low ? 'ta-warn' : 'tas-small'}">It needs about ${GB(s.ram.need)} of free memory while it answers (${GB(s.ram.free)} free right now${low ? '. Close some apps first' : ''}).</p>
       <div class="ta-btns"><button class="btn sm primary" data-a="ai-get">Download (${GB(m.size)})</button><button class="btn sm" data-a="recheck">Check again</button></div>
     </div>`;
   }
@@ -479,7 +692,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     m.onclick = (e) => {
       const id = e.target.closest('button')?.dataset.m;
       m.classList.add('hidden');
-      if (id === 'new') { if (S.run) stop(); S.msgs = []; S.sessions = {}; S.used = {}; renderMsgs(); renderPick(); }
+      if (id === 'new') newChat();
       if (id === 'setup') showSetup(true);
       if (id === 'connect') connect(true);
       if (id === 'disconnect') connect(false);
@@ -665,29 +878,42 @@ TuffPlugins.register('tuff-agents', (t) => {
       box.innerHTML = `<div class="ta-empty">
         <div class="ta-empty-ic"></div>
         <b>Ask ${esc(a?.name || 'an agent')} anything about your Tuff code</b>
-        <span>It can see the file you have open. Switch to <b>Edit</b> to let it change files for you.</span>
-        <div class="ta-sugg">${SUGGEST.map(([label], i) => `<button data-s="${i}">${esc(label)}</button>`).join('')}</div>
+        <span>${a?.local ? 'It runs on this computer and checks the code it writes. Its code gets an <b>Apply</b> button.' : 'It can see the file you have open. Switch to <b>Edit</b> to let it change files for you.'}</span>
+        <div class="ta-sugg">${SUGGEST.map(([label, , ic, sub], i) => `<button data-s="${i}">${icon(ic)}<span><b>${esc(label)}</b><small>${esc(sub)}</small></span></button>`).join('')}</div>
         <button class="ta-link" data-setup>${PLUG}Set up and check agent tools</button>
       </div>`;
       return;
     }
     box.innerHTML = S.msgs.map((m, i) => msgHtml(m, i)).join('');
+    colorize(box);
     box.scrollTop = box.scrollHeight;
   }
 
   function msgHtml(m, i) {
+    // Messages before the latest /compact summary stay visible, faded: agents now get the summary instead.
+    const old = i < S.msgs.map((x) => !!x.summary).lastIndexOf(true) ? ' ta-old' : '';
+    if (m.role === 'note') return `<div class="ta-msg note${old}" data-i="${i}"><div class="ta-notebox">${esc(m.text)}</div></div>`;
     if (m.role === 'user') {
-      return `<div class="ta-msg user" data-i="${i}"><div class="ta-bubble">${esc(m.text).replace(/\n/g, '<br>')}</div>${m.ctx ? `<div class="ta-with">${esc(m.ctx)}</div>` : ''}</div>`;
+      return `<div class="ta-msg user${old}" data-i="${i}"><div class="ta-bubble">${esc(m.text).replace(/\n/g, '<br>')}</div>${m.ctx ? `<div class="ta-with">${esc(m.ctx)}</div>` : ''}</div>`;
     }
-    const tools = m.tools.map((x) => `<div class="ta-tool ${x.ok === false ? 'bad' : x.ok ? 'ok' : 'run'}"><i></i><span>${esc(x.text)}</span></div>`).join('');
-    const status = m.status === 'running' ? '<div class="ta-typing"><i></i><i></i><i></i></div>'
-      : m.status === 'stopped' ? '<div class="ta-small">Stopped.</div>'
-        : m.status === 'error' ? `<div class="ta-err">${esc(m.error)}</div>` : '';
-    const notes = (m.notes || []).map((n) => `<div class="ta-small">${esc(n)}</div>`).join('');
-    return `<div class="ta-msg agent" data-i="${i}">
-      <div class="ta-who">${esc(SHORT[m.agent])}${m.model ? ` · ${esc(m.model)}` : ''}${m.mode === 'edit' ? ' · Edit' : ''}</div>
-      ${tools ? `<div class="ta-tools">${tools}</div>` : ''}
-      <div class="ta-md">${md(m.text)}</div>${notes}${status}</div>`;
+    const tools = m.tools.map((x) => `<div class="ta-tool ${x.ok === false ? 'bad' : x.ok ? 'ok' : 'run'}">${toolIcon(x.text)}<span>${esc(x.text)}</span><i></i></div>`).join('');
+    const status = m.status === 'running' ? `<div class="ta-typing"><i></i><i></i><i></i><span>${m.text ? 'Writing' : m.tools.length ? 'Working' : 'Thinking'}</span></div>`
+      : m.status === 'stopped' ? '<div class="ta-small ta-stopped">Stopped.</div>'
+        : m.status === 'error' ? `<div class="ta-err">${icon('warn')}<span>${esc(m.error)}</span></div>` : '';
+    const notes = (m.notes || []).map((n) => `<div class="ta-small ta-note-l">${icon('info')}<span>${esc(n)}</span></div>`).join('');
+    return `<div class="ta-msg agent${m.status === 'running' ? ' live' : ''}${m.summary ? ' summary' : ''}${old}" data-i="${i}">
+      <div class="ta-head"><div class="ta-who">${m.summary ? '<span class="ta-who-s">Chat summary · </span>' : ''}<span class="ta-who-n">${esc(SHORT[m.agent])}</span>${m.model ? `<span class="ta-who-m"> · ${esc(m.model)}</span>` : ''}${m.mode === 'edit' ? '<span class="ta-who-e"> · Edit</span>' : m.mode === 'plan' ? '<span class="ta-who-p"> · Plan</span>' : ''}</div></div>
+      <div class="ta-body">${tools ? `<div class="ta-tools">${tools}</div>` : ''}
+      <div class="ta-md">${md(m.text)}</div>${notes}${status}${followUp(m, i)}</div></div>`;
+  }
+
+  // Under the latest reply: Plan answers get "Go ahead", and an Ask answer that offers a change (code, or
+  // "want me to…?") gets "Edit it for me". Both send one message in Edit mode; the chosen mode stays.
+  const offersChange = (text) => /```/.test(text || '') || /\b(want|like) me to\b|\b(shall|should) I\b|make (that|this|the|these) changes?/i.test(text || '');
+  function followUp(m, i) {
+    if (i !== S.msgs.length - 1 || m.test || S.run || m.status !== 'done' || !CLI.includes(m.agent)) return '';
+    const act = m.mode === 'plan' ? ['go', 'Go ahead', 'The agent makes the planned changes'] : m.mode !== 'edit' && offersChange(m.text) ? ['do-edit', 'Edit it for me', 'The agent makes this change in your files'] : null;
+    return act ? `<div class="ta-acts"><button class="btn sm primary" data-act="${act[0]}">${act[1]}</button><span>${act[2]}</span></div>` : '';
   }
 
   function rerender(m) {
@@ -698,17 +924,21 @@ TuffPlugins.register('tuff-agents', (t) => {
       const el = box.querySelector(`.ta-msg[data-i="${i}"]`);
       const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
       if (el) el.outerHTML = msgHtml(m, i); else renderMsgs();
+      colorize(box);
       if (atBottom) box.scrollTop = box.scrollHeight;
     });
   }
 
   function onMsgClick(e) {
     if (e.target.closest('[data-setup]')) { showSetup(true); return; }
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (act === 'go') { send('Go ahead with the plan.', { mode: 'edit' }); return; }
+    if (act === 'do-edit') { send('Yes please, make that change for me.', { mode: 'edit' }); return; }
     const s = e.target.closest('[data-s]');
     if (s) { send(SUGGEST[+s.dataset.s][1]); return; }
     const b = e.target.closest('[data-code]');
     if (!b) return;
-    const code = b.closest('.ta-code').querySelector('code').textContent;
+    const code = decodeURIComponent(b.closest('.ta-code').dataset.src || '');
     if (b.dataset.code === 'copy') { navigator.clipboard.writeText(code); t.toast('Copied.', 'ok', 1500); }
     if (b.dataset.code === 'insert') t.editor.insert(code);
     if (b.dataset.code === 'apply') {
@@ -727,7 +957,10 @@ TuffPlugins.register('tuff-agents', (t) => {
     let m;
     while ((m = re.exec(src))) {
       parts.push(prose(src.slice(last, m.index)));
-      parts.push(`<div class="ta-code"><div class="ta-code-h"><span>${esc(m[1] || 'code')}</span><button data-code="copy">Copy</button><button data-code="insert" title="Insert at the cursor in the editor">Insert</button>${/^(tuff)?$/i.test(m[1]) && t.editor.replaceAll ? '<button data-code="apply" title="Replace the open file with this code">Apply</button>' : ''}</div><pre><code>${esc(m[2].replace(/\n$/, ''))}</code></pre></div>`);
+      const code = m[2].replace(/\n$/, '');
+      const lang = (m[1] || '').toLowerCase() || (/^\s*(say|mention|import|func)\b/m.test(code) ? 'tuff' : '');
+      const html = lang === 'tuff' && lit.has(code) ? lit.get(code) : esc(code);
+      parts.push(`<div class="ta-code" data-lang="${esc(lang || 'code')}" data-src="${encodeURIComponent(code)}"><div class="ta-code-h"><span class="ta-lang"><i></i>${esc(lang === 'tuff' ? 'Tuff' : lang || 'code')}</span><button data-code="copy" title="Copy">${icon('copy')}Copy</button><button data-code="insert" title="Insert at the cursor in the editor">${icon('insert')}Insert</button>${/^(tuff)?$/i.test(lang) && t.editor.replaceAll ? `<button data-code="apply" class="ta-apply" title="Replace the open file with this code">${icon('apply')}Apply</button>` : ''}</div><pre><code${html !== esc(code) ? ' class="lit"' : ''}>${html}</code></pre></div>`);
       last = re.lastIndex;
       if (m.index === re.lastIndex) break;
     }
@@ -801,12 +1034,12 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (file && S.useFile) parts.push(`Their open file, ${short(file)}:\n${fence}${/\.tuf$/i.test(file) ? 'tuff' : ''}\n${trim(t.editor.code(), 6000)}\n${fence}`);
     const lines = t.editor.selectionLines();
     if (S.useSel && lines) parts.push(`They selected lines ${lines[0]} to ${lines[1]}:\n${fence}\n${trim(t.editor.selection(), 3000)}\n${fence}`);
-    const earlier = S.msgs.slice(0, -1).filter((m) => !m.test && (m.role === 'user' || m.status !== 'running')).slice(-6);
+    const earlier = chatSoFar().slice(-6);
     const said = [];
     let used = 0;
     for (let i = earlier.length - 1; i >= 0; i--) {
       const m = earlier[i];
-      const l = `${m.role === 'user' ? 'Them' : m.agent === 'tuffai' ? 'You' : NAME[m.agent]}: ${trim(m.text || '', 600)}`;
+      const l = m.summary ? `Summary of the chat before this: ${trim(m.text, 1200)}` : `${m.role === 'user' ? 'Them' : m.agent === 'tuffai' ? 'You' : NAME[m.agent]}: ${trim(m.text || '', 600)}`;
       if (used + l.length > 2000) break;
       said.unshift(l);
       used += l.length;
@@ -817,7 +1050,8 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
 
   // bare: just the message (no open file, selection or chat history), for the tools test.
-  function buildPrompt(text, { mode = S.mode, bare = false } = {}) {
+  // full: the whole chat since the last summary (for /compact), not just what's new to this agent.
+  function buildPrompt(text, { mode = S.mode, bare = false, full = false } = {}) {
     if (S.agent === 'tuffai' && !bare) return aiPrompt(text);
     const file = t.editor.file();
     const parts = [
@@ -825,7 +1059,9 @@ TuffPlugins.register('tuff-agents', (t) => {
       "TuffCode gives you MCP tools named tuffcode: call tuff_reference before writing Tuff, tuff_examples for app patterns, and tuff_check on any Tuff code you write or change. If those tools aren't there: Tuff is like Python but uses say to print, 'is' for ==, func instead of def, ':' for methods (app:button) and range(1, 3) includes 3.",
       mode === 'edit'
         ? 'You may change files in the project folder to do what they ask. Afterwards, say in a sentence or two what you changed.'
-        : "Don't change any files. Answer in the chat, and put code in ```tuff blocks so they can insert it.",
+        : mode === 'plan'
+          ? "Don't change any files yet. Make a short, numbered plan in plain words: what you'd change, in which files, and why. Then ask if they want you to go ahead."
+          : "Don't change any files. Answer and explain in the chat. If their code needs changing, say briefly what you'd change and why (a short ```tuff snippet is fine), then ask if they'd like you to make the change for them. Don't paste a whole rewritten program unless they ask for one.",
       `Project folder: ${t.project.root()}`,
     ];
     if (bare) {
@@ -839,29 +1075,30 @@ TuffPlugins.register('tuff-agents', (t) => {
     // while another agent had the floor.
     const me = S.agent;
     // "Test it" runs are diagnostics, not part of the conversation.
-    const earlier = S.msgs.slice(0, -1).filter((m) => !m.test && (m.role === 'user' || m.status !== 'running'));
+    const earlier = chatSoFar();
     const others = earlier.some((m) => m.role === 'agent' && m.agent !== me);
     const running = picked(me).model?.name || S.used[me];
-    parts.push(`You are ${NAME[me]}${running ? `, running as ${running}` : ''}. ${others
-      ? 'This chat is shared: the person can switch between AI agents (Claude Code, Codex and Antigravity) at any time, and you all work on the same project. Replies marked with another agent\'s name were written by that agent, not by you. Treat them as a teammate\'s work: build on it, and don\'t take credit for it or "correct" who wrote it.'
-      : 'The person can also switch to other AI agents (Claude Code, Codex, Antigravity) in this chat.'}`);
+    parts.push(`You are ${NAME[me]}${running ? `, running as ${running}` : ''}. You're one of a team of AI agents in TuffCode (Claude Code, Codex, Antigravity and Tuff AI) that work on the same project together, one at a time: the person picks who answers each message. This chat is the team's shared memory. Every earlier line below is labelled with who wrote it ("Them" is the person; "You" is you).${others
+      ? ' Lines labelled with another agent\'s name were written by that agent. When one of them says something about itself, like "I\'m Opus 5.5" or "I\'m Codex", it\'s true for that agent: it isn\'t about you, and it isn\'t a mistake to correct. Treat their work as a teammate\'s: build on it, and don\'t take credit for it or argue about who wrote it.'
+      : ''}`);
     // Agents that keep their own session (Claude Code, Antigravity) already remember their turns,
     // so they get what happened since they last answered. Only turns that really reached their
     // session count (a run stopped or failed before it started doesn't). Others get the recent chat.
     const mine = earlier.map((m) => m.role === 'agent' && m.agent === me && m.inSession).lastIndexOf(true);
-    const resumes = ['claude', 'antigravity'].includes(me) && S.sessions[me] && mine >= 0;
+    const resumes = !full && ['claude', 'antigravity'].includes(me) && S.sessions[me] && mine >= 0;
     const who = (m) => {
       if (m.role === 'user') return 'Them';
       const name = `${NAME[m.agent]}${m.name ? ` (${m.name})` : ''}`;
       return m.agent === me ? `You (${name})` : name;
     };
     const line = (m) => {
+      if (m.summary) return `Summary of the chat before this point, written by ${who(m)} when the person used /compact:\n${trim(m.text, 4000)}`;
       const did = m.role === 'agent' ? [...new Set((m.tools || []).filter((x) => x.ok !== false && /^(Wrote|Changed)\b/.test(x.text)).map((x) => x.text))] : [];
       return `${who(m)}: ${trim(m.text || (m.error ? `(stopped: ${m.error})` : '(no reply)'), 1500)}${did.length ? `\n  [${did.join('; ')}]` : ''}`;
     };
     // Newest first until the budget is used up, so a long stretch with another agent can't make the
     // prompt huge. Antigravity gets less: its prompt goes on the command line.
-    const pool = resumes ? earlier.slice(mine + 1) : earlier.slice(-10);
+    const pool = full ? earlier : resumes ? earlier.slice(mine + 1) : earlier.slice(-10);
     const budget = me === 'antigravity' ? 12000 : 30000;
     const kept = [];
     let used = 0;
@@ -884,19 +1121,22 @@ TuffPlugins.register('tuff-agents', (t) => {
     text = String(text || '').trim();
     const a = current();
     if (!text || S.run) return;
+    if (text.startsWith('/') && !opts.test && !opts.compact) { command(text); return; }
     if (!a?.installed) { renderStatus(); t.toast(`${a?.name || 'That agent'} isn't installed yet.`, 'error'); return; }
     if (S.auth[a.id] === false) { showSetup(false); renderStatus(); t.toast(`Sign in to ${a.name} first (the card at the top).`, 'error'); return; }
     const test = !!opts.test;
+    const compacting = !!opts.compact;
     // Tuff AI never edits files itself: its code gets an Apply button instead.
-    const mode = test || a.local ? 'ask' : S.mode;
+    const mode = test || compacting || a.local ? 'ask' : opts.mode || S.mode;
     const file = t.editor.file();
     const lines = t.editor.selectionLines();
-    const ctx = test ? '' : [file && S.useFile ? short(file) : '', lines && S.useSel ? `lines ${lines[0]}–${lines[1]}` : ''].filter(Boolean).join(', ');
-    S.msgs.push({ role: 'user', text: test ? `Test ${a.name}'s TuffCode tools` : text, ctx: ctx ? `with ${ctx}` : '', test });
-    const prompt = buildPrompt(text, { mode, bare: test });
+    const ctx = test || compacting ? '' : [file && S.useFile ? short(file) : '', lines && S.useSel ? `lines ${lines[0]}–${lines[1]}` : ''].filter(Boolean).join(', ');
+    if (compacting) S.msgs.push({ role: 'note', text: `${a.name} is summing up the chat (/compact)…` });
+    else S.msgs.push({ role: 'user', text: test ? `Test ${a.name}'s TuffCode tools` : text, ctx: ctx ? `with ${ctx}` : '', test });
+    const prompt = buildPrompt(text, { mode, bare: test, full: compacting });
     const { model, effort } = picked();
     // model: what the reply header shows ('Opus 5.5 · High'); name: just the model, for other agents.
-    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running', model: [model?.name, effort?.name].filter(Boolean).join(' · '), name: model?.name || '', picked: !!model, effort: effort?.name || '', test };
+    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running', model: [model?.name, effort?.name].filter(Boolean).join(' · '), name: model?.name || '', picked: !!model, effort: effort?.name || '', test, compacting };
     S.msgs.push(msg);
     const runId = `run-${Date.now()}`;
     S.run = { id: runId, msg, changed: false, test, mcp: new Set() };
@@ -908,7 +1148,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     renderMsgs();
     updateSend();
     try {
-      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode, session: !test && ['claude', 'antigravity'].includes(S.agent) ? S.sessions[S.agent] : null, model: model?.id || '', effort: effort?.id || '' });
+      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode, session: !test && !compacting && ['claude', 'antigravity'].includes(S.agent) ? S.sessions[S.agent] : null, model: model?.id || '', effort: effort?.id || '' });
     } catch (err) {
       onEvent({ runId, kind: 'done', ok: false, error: err.message });
     }
@@ -919,7 +1159,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     const m = S.run.msg;
     switch (ev.kind) {
       case 'session': // the run reached the agent's session; a test run never becomes the chat's session
-        if (!S.run.test) { S.sessions[m.agent] = ev.id; m.inSession = true; }
+        if (!S.run.test && !m.compacting) { S.sessions[m.agent] = ev.id; m.inSession = true; }
         break;
       case 'model': // the model that really answered (Claude Code says so when it starts)
         // S.used is what Default turned out to be, so only a Default run updates it.
@@ -946,7 +1186,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       case 'done':
         m.status = ev.ok ? 'done' : 'error';
         if (!ev.ok) m.error = m.error || ev.error || 'Something went wrong.';
-        if (ev.session && !S.run.test) { S.sessions[m.agent] = ev.session; m.inSession = true; }
+        if (ev.session && !S.run.test && !m.compacting) { S.sessions[m.agent] = ev.session; m.inSession = true; }
         for (const x of m.tools) if (x.ok === null) x.ok = ev.ok;
         finish();
         break;
@@ -960,6 +1200,13 @@ TuffPlugins.register('tuff-agents', (t) => {
     const changed = r.changed || r.msg.mode === 'edit';
     S.run = null;
     updateSend();
+    // A finished /compact: its reply becomes the summary every agent gets instead of the chat before it, and
+    // agents that keep their own session start a new one from it.
+    if (r.msg.compacting && r.msg.status === 'done' && r.msg.text.trim()) {
+      r.msg.summary = true;
+      S.sessions = {};
+      renderMsgs();
+    }
     if (changed) t.reloadChanged();
     if (r.test) {
       const id = r.msg.agent;
