@@ -365,7 +365,7 @@ game:every_frame step
 game:every(1, drop)
 game:on_key("space", dash)
 ```
-- `game:on_key("any", fn)` runs for every key. `game:clicked fn` gets x and y, and `sprite:clicked fn` gets the sprite. `game:after(seconds, fn)` and `game:every(seconds, fn)` work like an app's, and pause with the game.
+- `game:on_key("any", fn)` runs for every key. `game:clicked fn` gets x and y, and `sprite:clicked fn` gets the sprite. `game:after(seconds, fn)` and `game:every(seconds, fn)` work like an app's, and pause with the game. An every-frame function keeps running while the game is paused, with dt 0, so it can check for the key that resumes it.
 - Don't use `wait` or `input` in a game: they freeze it. A game has one window.
 
 **3D.** `tgame.world` makes a 3D world. y is height, and an object's y is where its bottom is, so 0 sits on the ground.

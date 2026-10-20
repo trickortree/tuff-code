@@ -459,10 +459,11 @@ class Game:
                     self.movers.discard(thing)
         self.update(dt, real)
         self.engine.append(time.perf_counter() - t)
-        if dt:
-            for fn in list(self.ticks):
-                if not self.fire(fn, dt) and fn in self.ticks:
-                    self.ticks.remove(fn)  # a function that fails is switched off, like tgui's :every
+        # Every-frame functions run while the game is paused too, with dt 0 (what game:frame() gives a loop then),
+        # so a step function can still see the key that resumes the game.
+        for fn in list(self.ticks):
+            if not self.fire(fn, dt) and fn in self.ticks:
+                self.ticks.remove(fn)  # a function that fails is switched off, like tgui's :every
         self.work_from = time.perf_counter()
         return dt
 
