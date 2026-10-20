@@ -26,7 +26,7 @@ Get the newest version from the [Releases page](https://github.com/trickortree/t
 | **Mac with Apple Silicon** (M1 and newer) | `TuffCode-<version>-mac-arm64.dmg` |
 | **Mac with an Intel chip** | `TuffCode-<version>-mac-x64.dmg` |
 
-The Mac files are built on GitHub's Macs and added to a release after the Windows installer. If a release doesn't list them yet, check back later.
+The Mac version needs macOS 13 (Ventura) or newer. The Mac files are built on GitHub's Macs and added to a release after the Windows installer. If a release doesn't list them yet, check back later.
 
 To find which Mac you have, open the Apple menu and choose **About This Mac**. The **Chip** line says Apple (M1, M2…) or Intel.
 
@@ -67,7 +67,7 @@ In TuffCode, open Tuff Agents and click the plug button. There you can check the
 
 ## Running it
 
-You need [Node.js](https://nodejs.org) (for the IDE) and [Python 3](https://python.org) (to run Tuff programs).
+You need [Node.js](https://nodejs.org) 22.12 or newer (for the IDE) and [Python 3](https://python.org) (to run Tuff programs).
 
 ```bash
 cd tuffcode
@@ -75,7 +75,7 @@ npm install
 npm start
 ```
 
-On Windows you can also double-click `tuffcode/TuffCode.cmd` after `npm install`.
+`npm start` downloads Electron the first time (`npm install` doesn't, since Electron 42). On Windows you can also just double-click `tuffcode/TuffCode.cmd`: it runs `npm install` and gets Electron by itself when they're needed.
 
 You can also run a Tuff program without the IDE:
 
