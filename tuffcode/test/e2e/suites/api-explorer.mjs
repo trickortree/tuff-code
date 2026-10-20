@@ -521,7 +521,11 @@ export default async (t, ctx) => {
         const rows = await ev(`document.querySelectorAll('.ax-tree .ax-row').length`);
         results.push({ name, status: s?.text, rows, error: (await errorShown())?.title });
       }
-      const bad = results.filter((r) => !/^2\d\d /.test(r.status || '') || r.rows < 2);
+      // GitHub turns away anonymous requests (403 or 429) once an address has made 60 in an hour, and CI machines
+      // share their addresses, so that one is reported rather than counted.
+      const limited = (r) => /GitHub/.test(r.name) && /^(403|429) /.test(r.status || '');
+      for (const r of results.filter(limited)) t.info(`${r.name}: GitHub answered "${r.status}" (its limit for shared addresses); not counted`);
+      const bad = results.filter((r) => !limited(r) && (!/^2\d\d /.test(r.status || '') || r.rows < 2));
       check(`Every example (${results.length}) answers 2xx with JSON`, results.length >= 6 && bad.length === 0, results);
       // Two of them as whole programs, run with tap over the internet
       const runs = [];
