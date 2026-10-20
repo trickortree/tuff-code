@@ -232,7 +232,7 @@ class Container:
         if widget.hidden:
             return
         if self.side == "top":
-            widget.outer.pack(side="top", anchor="w", fill="x" if widget.fill else None, pady=(0, px(10)))
+            widget.outer.pack(side="top", anchor="w", fill="x" if widget.fill else None, pady=(0, px(widget.gap)))
         else:
             widget.outer.pack(side="left", anchor="center", padx=(0, px(10)))
 
@@ -277,6 +277,9 @@ class Container:
             chosen = rt.text(value) if value is not None else items[0]
             return make(Dropdown, items, chosen)
 
+        def page(*_args):
+            raise rt.error(f"A {self.kind} doesn't have :page. Pages go straight on the window, like: home = app:page \"Home\"")
+
         return {
             "heading": lambda text="": make(Label, rt.text(text), "heading"),
             "text": lambda text="": make(Label, rt.text(text), "text"),
@@ -295,6 +298,7 @@ class Container:
             "space": lambda size=12: make(Space, rt.number(size, "A space")),
             "row": lambda: make(Row),
             "card": lambda: make(Card),
+            "page": page,
             "clear": self.clear_children,
         }
 
@@ -309,6 +313,7 @@ def rt_list(rt, value, what):
 
 class Widget:
     fill = False
+    gap = 10
     kind = "widget"
     speed = 1.0
 
@@ -446,6 +451,57 @@ class Card(Widget, Container):
 
     def methods(self):
         return {**self.child_methods(), **Widget.methods(self)}
+
+
+class Page(Widget, Container):
+    """One screen of a window. Only one page per window shows at a time; the first one made starts on screen."""
+    kind = "page"
+    fill = True
+    gap = 0  # its children already leave a gap under themselves
+
+    def __init__(self, parent, title):
+        Widget.__init__(self, parent)
+        self.children = []
+        self.title = title
+        self.on_open = None
+        self.hidden = bool(self.app.pages)
+        self.app.pages.append(self)
+        self.outer = self.inner = tk.Frame(parent.inner, bd=0, highlightthickness=0)
+        self.attach()
+
+    def bg(self):
+        return self.bgc()
+
+    def paint(self):
+        self.outer.configure(bg=self.bgc())
+
+    def showing(self):
+        return not self.hidden and self in self.app.pages
+
+    def open(self):
+        if self not in self.app.pages:
+            raise self.lib.rt.error(f"The page '{self.title}' was removed, so it can't be opened.")
+        if not self.hidden:
+            return
+        for page in self.app.pages:
+            if page is not self and not page.hidden:
+                page.hidden = True
+                page.outer.pack_forget()
+        self.hidden = False
+        self.parent.repack()
+        self.lib.fire(self.on_open)
+
+    def show(self):
+        self.open()
+
+    def remove(self):
+        if self in self.app.pages:
+            self.app.pages.remove(self)
+        Widget.remove(self)
+
+    def methods(self):
+        return {**self.child_methods(), **Widget.methods(self), "open": self.open, "showing": self.showing,
+                "opened": lambda fn: setattr(self, "on_open", self.lib.check_fn(fn, ":opened"))}
 
 
 # ---------------------------------------------------------------- widgets
@@ -1314,6 +1370,7 @@ class App(Container):
         self.app = self
         self.children = []
         self.widgets = []
+        self.pages = []
         self.themes = MODERN_THEMES if lib.modern else THEMES
         self.t = self.themes["dark"]
         self.accent, self.accent2 = GRADIENTS["blue"] if lib.modern else (ACCENTS["blue"], ACCENTS["blue"])
@@ -1400,6 +1457,9 @@ class App(Container):
         self.accent2 = self.lib.color(second, self) if self.lib.modern else self.accent
         self.paint_all()
 
+    def add_page(self, title="Page"):
+        return Page(self, self.lib.rt.text(title)).native()
+
     def every(self, seconds, fn):
         fn = self.lib.check_fn(fn, ":every")
         ms = max(10, int(self.lib.rt.number(seconds, ":every") * 1000))
@@ -1470,6 +1530,7 @@ class App(Container):
     def native(self):
         return self.lib.rt.native("window", {
             **self.child_methods(),
+            "page": self.add_page,
             "title": self.set_title, "icon": self.set_icon, "size": self.set_size,
             "theme": self.set_theme, "accent": self.set_accent, "gradient": self.set_gradient,
             "every": self.every, "after": self.after, "close": self.close,

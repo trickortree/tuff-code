@@ -29,6 +29,18 @@ app:button("Say hi", greet)
 - **Auto Code Sort** (`Ctrl+Alt+L`): fixes indentation, puts imports first and functions last, tidies spacing and adds notes. It checks the result with the interpreter first, so it never breaks working code.
 - **Build .exe** (`Ctrl+F9`): turn any program into a Windows app with your own name and icon. The build log explains each step in plain English.
 - **Auto-updates:** checks this repo for new releases every 1, 2, 4 or 8 hours (2 by default) and can install them in the background.
+- **Plugins** (`Alt+3`): a marketplace for extra tools in a sidebar on the right, like the Snippet Library.
+- **Tuff Agents** (`Ctrl+Shift+A`): an AI chat sidebar that runs Claude Code, Codex or Antigravity on your project. They learn Tuff through TuffCode's MCP tools (see below).
+
+## Using AI agents with Tuff (MCP)
+
+AI agents don't know Tuff, so TuffCode includes an MCP server that teaches them. MCP is the standard way agents plug into tools. It gives an agent:
+- the Tuff guide;
+- 8 example apps;
+- a checker that catches unknown names and methods that don't exist;
+- a runner.
+
+In TuffCode, open Tuff Agents and click the plug button. There you can check the tools work, connect each agent with one click, or copy the commands to set it up by hand. Full instructions, including Claude Desktop, Cursor and VS Code, are in [tuffcode/mcp/README.md](tuffcode/mcp/README.md).
 
 ## Running it
 

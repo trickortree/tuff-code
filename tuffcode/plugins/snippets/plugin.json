@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "author": "trickortree",
   "description": "Ready-made bits of Tuff you can drop into your code: loops, functions, live lines, app windows, buttons, timers and more. Save your own from any selection too.",
-  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.9\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 7l-5 5 5 5M16 7l5 5-5 5\"/><path d=\"M13.5 4.5l-3 15\"/></svg>",
+  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"6.5\" cy=\"6.5\" r=\"2.7\"/><circle cx=\"6.5\" cy=\"17.5\" r=\"2.7\"/><path d=\"M8.6 15.6L21 5.5M8.6 8.4l3.4 2.8M14.1 12.9L21 18.5\"/></svg>",
   "main": "panel.js",
   "style": "panel.css",
   "panels": [{ "id": "library", "title": "Snippets" }]

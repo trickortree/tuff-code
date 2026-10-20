@@ -33,6 +33,8 @@
     space: { label: 'Space', name: null, args: [A('size', 'Size', 'number', 12, { init: 20, section: 'look' })], props: [] },
     row: { label: 'Row', name: 'row', container: true, args: [], props: [] },
     card: { label: 'Card', name: 'card', container: true, args: [], props: [] },
+    // A page of the window: only one shows at a time. Widgets on the window itself show on every page.
+    page: { label: 'Page', name: 'page', container: true, args: [A('title', 'Page name', 'text', '', { init: 'Page 2' })], props: ['opened'] },
   };
   const WINDOW = { label: 'Window', args: [A('title', 'Title', 'text', 'My App'), A('width', 'Width', 'number', 420, { section: 'size' }), A('height', 'Height', 'number', 520, { section: 'size' })], props: ['theme', 'accent', 'gradient'] };
   const PROPS = {
@@ -43,6 +45,7 @@
     accent: { label: 'Accent color', type: 'accent', method: 'accent', section: 'look' },
     gradient: { label: 'Custom gradient', type: 'gradient', method: 'gradient', section: 'look', modernOnly: true, hint: 'Overrides the accent colors in mtgui' },
     change: { label: 'When it changes', type: 'fn', method: 'change', section: 'events' },
+    opened: { label: 'When this page opens', type: 'fn', method: 'opened', section: 'events' },
     enter: { label: 'When Enter is pressed', type: 'fn', method: 'enter', section: 'events' },
   };
   const CHANGE_LABELS = { input: 'When the text changes', toggle: 'When switched on or off', checkbox: 'When ticked or unticked', dropdown: 'When a choice is picked', slider: 'When it moves' };
@@ -52,7 +55,7 @@
     ['Text', ['heading', 'text', 'small']],
     ['Buttons and inputs', ['button', 'input', 'toggle', 'checkbox', 'dropdown', 'slider']],
     ['Progress and time', ['progress', 'spinner', 'clock']],
-    ['Layout', ['card', 'row', 'divider', 'space']],
+    ['Layout', ['page', 'card', 'row', 'divider', 'space']],
     ['Media', ['image']],
   ];
   // Which bit of a widget's preview is its label, for double-click editing (argument index).
@@ -77,6 +80,7 @@
     space: svg('<path d="M8 2v12M5.5 4.5L8 2l2.5 2.5M5.5 11.5L8 14l2.5-2.5"/>'),
     row: svg('<rect x="1.5" y="4" width="5.6" height="8" rx="1.4"/><rect x="8.9" y="4" width="5.6" height="8" rx="1.4"/>'),
     card: svg('<rect x="1.5" y="2.5" width="13" height="11" rx="2.6"/><path d="M4.5 6h7M4.5 9h4.5"/>'),
+    page: svg('<path d="M4 1.8h5.5L13 5.3v8.9H4z"/><path d="M9.5 1.8v3.5H13"/><path d="M2.5 4v11.5h8"/>'),
     window: svg('<rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M1.5 5.5h13"/>'),
   };
   const UI = {
@@ -96,6 +100,8 @@
     palette: svg('<path d="M8 1.8a6.2 6.2 0 100 12.4c1 0 1.4-.6 1.4-1.3 0-.9-.8-1.2-.8-2 0-.7.6-1.2 1.4-1.2h1.6a2.6 2.6 0 002.6-2.6C14.2 4.3 11.4 1.8 8 1.8z"/><circle cx="5" cy="7" r=".9" fill="currentColor"/><circle cx="7.6" cy="4.6" r=".9" fill="currentColor"/><circle cx="10.6" cy="5.6" r=".9" fill="currentColor"/>'),
     fit: svg('<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/>'),
     arrow: svg('<path d="M6 3.5L10.5 8 6 12.5"/>'),
+    expand: svg('<path d="M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9"/>'),
+    shrink: svg('<path d="M13.5 6.5h-4v-4M9.5 6.5l4.5-4.5M2.5 9.5h4v4M6.5 9.5L2 14"/>'),
   };
   const kindInfo = (n) => (n.kind === 'window' ? WINDOW : KINDS[n.kind]);
   const tipFor = (kind) => window.TUFF_METHOD_DOCS?.[kind]?.[1] || '';
@@ -182,7 +188,7 @@
   }
 
   const UI_RE = new RegExp(`^(?:([A-Za-z_]\\w*)\\s*=\\s*)?([A-Za-z_]\\w*):(${Object.keys(KINDS).join('|')})\\b\\s*(.*)$`);
-  const PROP_RE = /^([A-Za-z_]\w*):(speed|color|set|theme|accent|gradient|change|enter)\b\s*(.*)$/;
+  const PROP_RE = /^([A-Za-z_]\w*):(speed|color|set|theme|accent|gradient|change|enter|opened)\b\s*(.*)$/;
 
   function parse(code) {
     const lines = code.split(/\r?\n/);
@@ -202,7 +208,7 @@
       }
       if ((m = line.match(UI_RE))) {
         const parent = res.byVar[m[2]];
-        if (parent && (parent.kind === 'window' || KINDS[parent.kind]?.container)) {
+        if (parent && (parent.kind === 'window' || KINDS[parent.kind]?.container) && (m[3] !== 'page' || parent.kind === 'window')) {
           const node = { kind: m[3], var: m[1] || null, parentVar: m[2], parent, line: ln, comment, values: valuesFor(KINDS[m[3]], parseArgs(m[4])), props: {}, children: [] };
           res.nodes.push(node);
           parent.children.push(node);
@@ -279,7 +285,7 @@
       return `${varName}:set(${h}, ${m})`;
     }
     if (key === 'speed') return `${varName}:speed ${Number(value) || 1}`;
-    if (key === 'change' || key === 'enter') return `${varName}:${key} ${value}`;
+    if (key === 'change' || key === 'enter' || key === 'opened') return `${varName}:${key} ${value}`;
     if (key === 'gradient') return `${varName}:gradient(${JSON.stringify(value[0])}, ${JSON.stringify(value[1])})`;
     return `${varName}:${p.method} ${JSON.stringify(String(value))}`;
   }
@@ -421,6 +427,13 @@
 
   const keyAt = (varName, line) => (varName ? `v:${varName}` : `l:${line}`);
 
+  // Point a widget's line at a new container, keeping everything else exactly as it was typed:
+  // "name = app:input ..." -> "name = home:input ...".
+  function reparentLine(text, node, parentVar) {
+    const re = new RegExp(`^(\s*(?:[A-Za-z_]\w*\s*=\s*)?)${node.parentVar}:`);
+    return re.test(text) ? text.replace(re, `$1${parentVar}:`) : lineFor({ ...node, parentVar });
+  }
+
   const Edits = {
     setValue(model, node, index, value) {
       const ed = makeEditor(model);
@@ -466,13 +479,13 @@
       return name;
     },
 
-    insertAt(model, parsed, kind, container, index = Infinity) {
+    insertAt(model, parsed, kind, container, index = Infinity, opts = {}) {
       const info = KINDS[kind];
       const ed = makeEditor(model);
       const code = model.getValue();
       const parentVar = Edits.ensureVar(ed, parsed, container, code);
-      const varName = info.name ? uniqueVar(parsed, info.name, code, [parentVar]) : null;
-      const node = { kind, parentVar, values: info.args.map((a) => a.init ?? undefined), comment: '' };
+      const varName = opts.name || (info.name ? uniqueVar(parsed, info.name, code, [parentVar]) : null);
+      const node = { kind, parentVar, values: opts.values || info.args.map((a) => a.init ?? undefined), comment: '' };
       const id = ed.insertAfter(insertLine(parsed, container, index, null), lineFor(node, varName));
       const at = ed.commit();
       return keyAt(varName, at[id]);
@@ -484,7 +497,7 @@
       const lines = linesOf(node);
       const target = insertLine(parsed, container, index, node);
       const parentVar = container === node.parent ? node.parentVar : Edits.ensureVar(ed, parsed, container, model.getValue());
-      const texts = lines.map((ln) => (ln === node.line && parentVar !== node.parentVar ? lineFor({ ...node, parentVar }) : ed.line(ln)));
+      const texts = lines.map((ln) => (ln === node.line && parentVar !== node.parentVar ? reparentLine(ed.line(ln), node, parentVar) : ed.line(ln)));
       for (const ln of lines) ed.remove(ln);
       const id = ed.insertAfter(target, texts.join(ed.eol));
       const at = ed.commit();
@@ -514,7 +527,7 @@
       const ed = makeEditor(model);
       const name = uniqueVar(parsed, KINDS[kind].name, model.getValue());
       ed.insertAfter(Math.min(...linesOf(node)) - 1, `${name} = ${node.parentVar}:${kind}`);
-      ed.replace(node.line, lineFor({ ...node, parentVar: name }));
+      ed.replace(node.line, reparentLine(ed.line(node.line), node, name));
       ed.commit();
       return `v:${name}`;
     },
@@ -532,6 +545,26 @@
       }
       ed.commit();
       return `v:${name}`;
+    },
+
+    // First pages for a one-page app: what's already on the window moves onto a "Home" page,
+    // and an empty second page is added after it. One undo step.
+    makePages(model, parsed, homeName, secondName) {
+      const ed = makeEditor(model);
+      const win = parsed.win;
+      const kids = win.children;
+      const home = { kind: 'page', parentVar: win.var, values: ['Home'], comment: '' };
+      const second = { kind: 'page', parentVar: win.var, values: ['Page 2'], comment: '' };
+      if (kids.length) {
+        ed.insertAfter(Math.min(...kids.flatMap(linesOf)) - 1, lineFor(home, homeName));
+        for (const k of kids) ed.replace(k.line, reparentLine(ed.line(k.line), k, homeName));
+        const id = ed.insertAfter(uiLast(parsed), lineFor(second, secondName));
+        const at = ed.commit();
+        return keyAt(secondName, at[id]);
+      }
+      ed.insertAfter(uiLast(parsed), [lineFor(home, homeName), lineFor(second, secondName)].join(ed.eol));
+      ed.commit();
+      return `v:${homeName}`;
     },
 
     remove(model, node) {
@@ -675,10 +708,14 @@
       el = document.createElement('div');
       el.className = 'pf-fn';
       const sel = document.createElement('select');
-      for (const o of ['', ...opts.funcs, '+new']) {
+      const opens = opts.opens || {};
+      const pages = (opts.pages || []).filter((pg) => !Object.values(opens).includes(pg.var));
+      for (const o of ['', ...opts.funcs, ...pages.map((pg) => `+page:${pg.var}`), '+new']) {
         const op = document.createElement('option');
         op.value = o;
-        op.textContent = o === '' ? '(nothing)' : o === '+new' ? '+ New function…' : `${o}()`;
+        const pg = o.startsWith('+page:') && opts.pages.find((x) => `+page:${x.var}` === o);
+        op.textContent = o === '' ? '(nothing)' : o === '+new' ? '+ New function…' : pg ? `→ Open page "${pg.title}"`
+          : opens[o] ? `${o}() → opens page "${(opts.pages || []).find((x) => x.var === opens[o])?.title || opens[o]}"` : `${o}()`;
         sel.appendChild(op);
       }
       sel.value = value || '';
@@ -715,6 +752,13 @@
     const info = kindInfo(node);
     const groups = Object.fromEntries(SECTIONS.map(([k]) => [k, []]));
     const funcs = parsed.funcs.map((f) => f.name);
+    const pages = (parsed.win?.children || []).filter((c) => c.kind === 'page' && c.var && c !== node).map((c) => ({ var: c.var, title: typeof c.values[0] === 'string' ? c.values[0] : c.var }));
+    const opens = pageOpeners(ctx.model.getValue());
+    // "Open page X": reuse a func that only opens that page, or write one like go_menu().
+    const opener = (pageVar) => {
+      const have = Object.keys(opens).find((f) => opens[f] === pageVar);
+      return { name: have || freeName(parsed, `go_${pageVar}`, ctx.model.getValue()), make: !have, pageVar };
+    };
     const goToFunc = ctx.goToFunc ? (name) => { const f = parsed.funcs.find((x) => x.name === name); if (f) ctx.goToFunc(f.line); } : null;
     const label = (typeof node.values[0] === 'string' && node.values[0]) || KINDS[node.kind]?.label || 'it';
 
@@ -738,8 +782,14 @@
         value = value.raw;
       }
       const shown = value === undefined ? (['bool', 'select', 'style', 'segment'].includes(a.type) ? a.def : '') : value;
-      const ctl = control(type === 'raw' ? 'text' : type, shown, { options: a.options, funcs, goToFunc }, (v) => {
+      const ctl = control(type === 'raw' ? 'text' : type, shown, { options: a.options, funcs, goToFunc, pages, opens }, (v) => {
         if (type === 'raw') return ctx.apply((m, p, n) => Edits.setValue(m, n, i, v === '' ? undefined : { raw: v }));
+        if (a.type === 'fn' && v.startsWith('+page:')) {
+          const o = opener(v.slice(6));
+          ctx.apply((m, p, n) => { Edits.setValue(m, n, i, o.name); if (o.make) Edits.addFunction(m, o.name, `${o.pageVar}:open`); }, true);
+          if (o.make) ctx.toast?.(`Added func ${o.name}() that opens the page.`);
+          return;
+        }
         if (a.type === 'fn' && v === '+new') {
           const fname = freeName(parsed, `${node.var || 'button'}_clicked`, ctx.model.getValue());
           ctx.apply((m, p, n) => { Edits.setValue(m, n, i, fname); Edits.addFunction(m, fname, `say ${JSON.stringify(`${label} was clicked`)}`); }, true);
@@ -755,12 +805,21 @@
       const p = PROPS[key];
       if (p.modernOnly && parsed.win?.lib !== 'mtgui') continue;
       const title = key === 'change' ? CHANGE_LABELS[node.kind] || p.label : p.label;
-      const ctl = control(p.type, propValue(node, key), { options: p.options, names: p.names, funcs, goToFunc }, (v) => {
+      const ctl = control(p.type, propValue(node, key), { options: p.options, names: p.names, funcs, goToFunc, pages, opens }, (v) => {
+        if (p.type === 'fn' && v.startsWith('+page:')) {
+          const o = opener(v.slice(6));
+          ctx.apply((m, pr, n) => {
+            const name = Edits.setProp(m, pr, n, key, o.name);
+            if (o.make) Edits.addFunction(m, o.name, `${o.pageVar}:open`);
+            if (name && !n.var) ctx.rekey(`v:${name}`);
+          }, true);
+          return;
+        }
         if (p.type === 'fn' && v === '+new') {
-          const fname = freeName(parsed, `${node.var || KINDS[node.kind].name}_${key === 'enter' ? 'entered' : 'changed'}`, ctx.model.getValue());
+          const fname = freeName(parsed, `${node.var || KINDS[node.kind].name}_${key === 'enter' ? 'entered' : key === 'opened' ? 'opened' : 'changed'}`, ctx.model.getValue());
           ctx.apply((m, pr, n) => {
             const name = Edits.setProp(m, pr, n, key, fname);
-            Edits.addFunction(m, fname, `say ${name}:value`);
+            Edits.addFunction(m, fname, key === 'opened' ? `say ${JSON.stringify(`${label} opened`)}` : `say ${name}:value`);
             if (name && !n.var) ctx.rekey(`v:${name}`);
           }, true);
           ctx.toast?.(`Added func ${fname}() at the bottom of your code.`);
@@ -849,10 +908,11 @@
       case 'divider': el.innerHTML = '<div class="pv-divider"></div>'; break;
       case 'space': el.innerHTML = `<div class="pv-space" style="height:${Math.max(4, num(0, 12))}px"></div>`; break;
       case 'row':
-      case 'card': {
+      case 'card':
+      case 'page': {
         const box = document.createElement('div');
-        box.className = node.kind === 'row' ? 'pv-row' : 'pv-card';
-        if (!node.children.length) box.innerHTML = `<div class="pv-empty-slot">Drop things into this ${node.kind}</div>`;
+        box.className = node.kind === 'row' ? 'pv-row' : node.kind === 'page' ? 'pv-page' : 'pv-card';
+        if (!node.children.length) box.innerHTML = `<div class="pv-empty-slot">Drop things ${node.kind === 'page' ? 'onto this page' : `into this ${node.kind}`}</div>`;
         for (const c of node.children) box.appendChild(previewNode(c, sel));
         el.appendChild(box);
         break;
@@ -862,7 +922,9 @@
     return el;
   }
 
-  function previewWindow(p, sel) {
+  function previewWindow(p, sel, pageKey) {
+    const pages = p.win.children.filter((c) => c.kind === 'page');
+    const showPage = pageKey !== undefined ? pageKey : pages[0] ? keyOf(pages[0]) : null;
     const modern = p.win.lib === 'mtgui';
     const theme = propValue(p.win, 'theme') || 'dark';
     const accent = propValue(p.win, 'accent') || 'blue';
@@ -879,10 +941,10 @@
     win.style.width = `${Math.max(240, Math.min(1200, w))}px`;
     win.style.minHeight = `${Math.max(160, Math.min(1200, h))}px`;
     const title = typeof p.win.values[0] === 'string' ? p.win.values[0] : 'My App';
-    win.innerHTML = `<div class="pv-titlebar" data-key="window"><img src="assets/icon.svg" alt=""><span>${esc(title)}</span><i></i><i></i><i></i></div><div class="pv-body" data-key="window"></div>`;
+    win.innerHTML = `<div class="pv-titlebar" data-key="window"><img src="assets/icon.png" alt=""><span>${esc(title)}</span><i></i><i></i><i></i></div><div class="pv-body" data-key="window"></div>`;
     const body = win.querySelector('.pv-body');
     if (!p.win.children.length) body.innerHTML = '<div class="pv-empty-slot big">Drag widgets here from the left</div>';
-    for (const n of p.win.children) body.appendChild(previewNode(n, sel));
+    for (const n of p.win.children) if (n.kind !== 'page' || keyOf(n) === showPage) body.appendChild(previewNode(n, sel));
     return win;
   }
 
@@ -942,6 +1004,7 @@
             <button class="sd-zval" id="sd-zval" title="Reset zoom (Ctrl+0)">100%</button>
             <button class="sd-ib" id="sd-zin" title="Zoom in (Ctrl+=)">${UI.plus}</button>
             <button class="sd-ib" id="sd-zfit" title="Fit to screen">${UI.fit}</button>
+            <button class="sd-ib" id="sd-full" title="Full size: give the Studio the whole window (F11)">${UI.expand}</button>
           </div>
           <div class="sd-bar-r">
             <button class="btn sm" id="sd-templates" title="Templates">${UI.grid}<span class="lbl">Templates</span></button>
@@ -976,6 +1039,8 @@
     $('#sd-zin').onclick = () => setZoom(S.zoom + 0.1);
     $('#sd-zval').onclick = () => setZoom(1);
     $('#sd-zfit').onclick = fitZoom;
+    $('#sd-full').onclick = toggleFull;
+    syncFull();
     $('#sd-templates').onclick = openTemplates;
     $$('#sd-libseg button').forEach((b) => (b.onclick = () => switchLib(b.dataset.lib)));
     $$('.sd-tabs button').forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
@@ -1087,9 +1152,13 @@
     const target = sel.kind === 'window' || KINDS[sel.kind]?.container ? sel : sel.parent;
     $('#sd-target').textContent = target.kind === 'window' ? 'the window' : `${target.var || KINDS[target.kind].label.toLowerCase()}`;
 
-    const win = previewWindow(p, S.sel);
+    const page = currentPage(p);
+    const win = previewWindow(p, S.sel, page ? keyOf(page) : null);
+    const wrap = document.createElement('div');
+    wrap.className = 'sd-pagewrap';
+    wrap.append(pagesBar(p, page), win);
     stage.innerHTML = '';
-    stage.appendChild(win);
+    stage.appendChild(wrap);
     stage.style.zoom = S.zoom;
     $('#sd-zval').textContent = `${Math.round(S.zoom * 100)}%`;
     wireStage(stage);
@@ -1266,6 +1335,64 @@
     render(true);
   }
 
+  // ---------------------------------------------------------------- pages
+  const pagesOf = (p) => (p?.win ? p.win.children.filter((c) => c.kind === 'page') : []);
+  const pageOf = (node) => { for (let n = node; n; n = n.parent) if (n.kind === 'page') return n; return null; };
+  const slug = (t) => String(t).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').replace(/^(\d)/, 'p$1') || 'page';
+
+  // The page showing in the canvas: the one holding the selection, else the last one picked, else the first.
+  function currentPage(p) {
+    const pages = pagesOf(p);
+    if (!pages.length) return null;
+    const fromSel = pageOf(findByKey(p, S.sel));
+    if (fromSel) { S.page = keyOf(fromSel); return fromSel; }
+    return pages.find((x) => keyOf(x) === S.page) || pages[0];
+  }
+
+  // Funcs whose whole body is "somepage:open", so events can say which page they open.
+  function pageOpeners(code) {
+    const out = {};
+    for (const m of code.matchAll(/^func\s+([A-Za-z_]\w*)\s*\(\s*\)\s*:\s*\r?\n[ \t]+([A-Za-z_]\w*):open[ \t]*(?:#.*)?(?:\r?\n(?![ \t]+\S)|$)/gm)) out[m[1]] = m[2];
+    return out;
+  }
+
+  function pagesBar(p, page) {
+    const bar = document.createElement('div');
+    bar.className = 'sd-pages';
+    const pages = pagesOf(p);
+    bar.innerHTML = pages.map((pg) => `<button class="sd-pg${pg === page ? ' on' : ''}" data-page="${esc(keyOf(pg))}" title="${esc(pg.var ? `${pg.var}  (open it with ${pg.var}:open)` : '')}">${ICONS.page}<span>${esc(typeof pg.values[0] === 'string' && pg.values[0] ? pg.values[0] : pg.var || 'Page')}</span></button>`).join('')
+      + `<button class="sd-pg add" data-page="+" title="${pages.length ? 'Add another page' : 'Split this app into pages. What is here now becomes the Home page.'}">${UI.plus}<span>${pages.length ? 'Page' : 'Add pages'}</span></button>`;
+    bar.onclick = (e) => {
+      e.stopPropagation(); // the canvas treats clicks on empty space as "select the window"
+      const b = e.target.closest('[data-page]');
+      if (!b) return;
+      if (b.dataset.page === '+') { addPage(); return; }
+      S.page = b.dataset.page;
+      S.sel = b.dataset.page;
+      render(true);
+    };
+    return bar;
+  }
+
+  function addPage() {
+    const p = S.parsed;
+    if (!p?.win) return;
+    const pages = pagesOf(p);
+    const code = S.model.getValue();
+    if (!pages.length) {
+      const home = freeName(p, 'home', code);
+      const second = freeName({ ...p, byVar: { ...p.byVar, [home]: 1 } }, 'page_2', code);
+      edit(() => { const key = Edits.makePages(S.model, p, home, second); S.page = key; return key; });
+      ide.toast('Made pages: everything that was here is on Home now. Buttons can open a page from their When clicked event.', 'ok', 5000);
+      return;
+    }
+    let n = pages.length + 1;
+    while (pages.some((pg) => pg.values[0] === `Page ${n}`)) n++;
+    const title = `Page ${n}`;
+    const name = freeName(p, slug(title), code);
+    edit(() => { const key = Edits.insertAt(S.model, p, 'page', p.win, Infinity, { values: [title], name }); S.page = key; return key; });
+  }
+
   function selectedContainer() {
     const sel = findByKey(S.parsed, S.sel) || S.parsed?.win;
     return sel.kind === 'window' || KINDS[sel.kind]?.container ? sel : sel.parent;
@@ -1273,6 +1400,7 @@
 
   function add(kind) {
     if (!S.parsed?.win) return ide.toast('Add a window first.');
+    if (kind === 'page') { addPage(); return; }
     const target = selectedContainer();
     const sel = findByKey(S.parsed, S.sel);
     // Clicking a tile adds it right after the selected widget, or at the end of the selected card/row/window.
@@ -1322,6 +1450,21 @@
     $('#sd-zval').textContent = `${Math.round(S.zoom * 100)}%`;
     ide.saveSettings({ studioZoom: S.zoom });
     positionFloat();
+  }
+
+  function toggleFull() {
+    ide.setStudioFull(!ide.studioFull());
+    syncFull();
+    requestAnimationFrame(() => { positionFloat(); if (ide.studioFull()) fitZoom(); });
+  }
+
+  function syncFull() {
+    const b = $('#sd-full');
+    if (!b) return;
+    const on = ide.studioFull();
+    b.innerHTML = on ? UI.shrink : UI.expand;
+    b.classList.toggle('on', on);
+    b.title = on ? 'Exit full size (F11)' : 'Full size: give the Studio the whole window (F11)';
   }
 
   function fitZoom() {
@@ -1390,7 +1533,8 @@
     D.justDropped = true;
     setTimeout(() => { D.justDropped = false; }, 0);
     if (!target) { positionFloat(); return; }
-    if (src.kind) edit(() => Edits.insertAt(S.model, S.parsed, src.kind, target.container, target.index));
+    if (src.kind === 'page') addPage();
+    else if (src.kind) edit(() => Edits.insertAt(S.model, S.parsed, src.kind, target.container, target.index));
     else {
       const node = findByKey(S.parsed, src.key);
       if (node) edit(() => Edits.moveTo(S.model, S.parsed, node, target.container, target.index));
@@ -1399,6 +1543,7 @@
 
   function allowed(container) {
     const n = dragNode();
+    if ((n?.kind === 'page' || D.src?.kind === 'page') && container.kind !== 'window') return false;
     return !(n && (container === n || isInside(container, n)));
   }
 
@@ -1562,6 +1707,7 @@
     if (ctrl && (k === '=' || k === '+')) { setZoom(S.zoom + 0.1); return true; }
     if (ctrl && k === '-') { setZoom(S.zoom - 0.1); return true; }
     if (ctrl && k === '0') { setZoom(1); return true; }
+    if (k === 'F11') { toggleFull(); return true; }
     if (ctrl || e.altKey && !['ArrowUp', 'ArrowDown'].includes(k)) return false;
     if (k === 'Delete' || k === 'Backspace') { if (widget) removeNode(widget); return true; }
     if (e.altKey && (k === 'ArrowUp' || k === 'ArrowDown')) { if (widget) moveBy(widget, k === 'ArrowUp' ? -1 : 1); return true; }

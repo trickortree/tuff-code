@@ -38,7 +38,8 @@
         ? '<svg class="fi" viewBox="0 0 16 16"><path style="fill:#9aa7b0;stroke:none" d="M1.5 3.5a1 1 0 011-1h3.6l1.5 1.5h5.4a1 1 0 011 1V6H4.2a1 1 0 00-.95.68L1.5 12z"/><path style="fill:#b6c2cb;stroke:none" d="M3.6 6.5h11.3l-2 6.3a1 1 0 01-.95.7H1.6z"/></svg>'
         : '<svg class="fi" viewBox="0 0 16 16"><path style="fill:#9aa7b0;stroke:none" d="M1.5 3.5a1 1 0 011-1h3.6l1.5 1.5h5.9a1 1 0 011 1v7.5a1 1 0 01-1 1h-11a1 1 0 01-1-1z"/></svg>';
     }
-    switch (ext(name)) {
+    const n = name.toLowerCase();
+    switch (n.startsWith('.env') ? 'env' : n === 'makefile' ? 'makefile' : ext(name)) {
       case 'tuf':
         return '<svg class="fi" viewBox="0 0 16 16"><rect x="1.5" y="1.5" width="13" height="13" rx="3.5" style="fill:var(--accent);stroke:none"/><path d="M5 5.2h6M8 5.2v6.3" style="stroke:#fff;stroke-width:1.9"/></svg>';
       case 'py':
@@ -49,8 +50,26 @@
         return '<svg class="fi" viewBox="0 0 16 16"><path d="M5.5 2.5c-1.5 0-2 .5-2 2v1.5c0 1-.5 2-1.5 2 1 0 1.5 1 1.5 2v1.5c0 1.5.5 2 2 2M10.5 2.5c1.5 0 2 .5 2 2v1.5c0 1 .5 2 1.5 2-1 0-1.5 1-1.5 2v1.5c0 1.5-.5 2-2 2" style="stroke:#e5a64b;stroke-width:1.5"/></svg>';
       case 'md':
         return '<svg class="fi" viewBox="0 0 16 16"><rect x="1.5" y="3.5" width="13" height="9" rx="1.5" style="stroke:#6ea8f0"/><path d="M4 10V6l2 2 2-2v4M11 6v4m-1.5-1.5L11 10l1.5-1.5" style="stroke:#6ea8f0"/></svg>';
-      default:
+      case 'env': case 'ini': case 'cfg': case 'conf': case 'toml': case 'yml': case 'yaml': case 'properties': case 'editorconfig':
+        return '<svg class="fi" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.3" style="stroke:#8fa1b3;stroke-width:2.4;stroke-dasharray:2.08 2.08;stroke-dashoffset:1.04;stroke-linecap:butt"/><circle cx="8" cy="8" r="2.9" style="stroke:#8fa1b3;stroke-width:2.4"/></svg>';
+      case 'png': case 'jpg': case 'jpeg': case 'gif': case 'bmp': case 'ico': case 'webp': case 'svg':
+        return '<svg class="fi" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" style="stroke:#4fb39a"/><circle cx="5.5" cy="6" r="1.3" style="fill:#4fb39a;stroke:none"/><path d="M2 12.5l4-4 3 3 2-2 3.5 3.5" style="stroke:#4fb39a"/></svg>';
+      case 'makefile':
+        return '<svg class="fi" viewBox="0 0 16 16"><rect x="1.5" y="1.5" width="13" height="13" rx="2" style="fill:#6d8086;stroke:none"/><path d="M4.5 11V5l3.5 4 3.5-4v6" style="stroke:#fff;stroke-width:1.5"/></svg>';
+      case 'gitignore': case 'gitattributes': case 'gitmodules':
+        return '<svg class="fi" viewBox="0 0 16 16"><circle cx="5" cy="3.8" r="1.6" style="stroke:#f0643c"/><circle cx="5" cy="12.2" r="1.6" style="stroke:#f0643c"/><circle cx="11" cy="6" r="1.6" style="stroke:#f0643c"/><path d="M5 5.4v5.2M11 7.6c0 2.2-2.6 2.6-4.6 3.6" style="stroke:#f0643c"/></svg>';
+      case 'sh': case 'bat': case 'cmd':
+        return '<svg class="fi" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="2" style="stroke:#7fb36a"/><path d="M4.5 6.5l2 1.5-2 1.5M8 10h3.5" style="stroke:#7fb36a"/></svg>';
+      case 'ps1':
+        return '<svg class="fi" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="2" style="fill:#2c5a9e;stroke:none"/><path d="M4.5 6.5l2 1.5-2 1.5M8 10h3.5" style="stroke:#fff"/></svg>';
+      case 'html': case 'htm': case 'xml':
+        return '<svg class="fi" viewBox="0 0 16 16"><path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5M9 3l-2 10" style="stroke:#e8774c"/></svg>';
+      case 'css':
+        return '<svg class="fi" viewBox="0 0 16 16"><path d="M6.5 2.5l-1.5 11M11 2.5l-1.5 11M3 6h10.5M2.5 10h10.5" style="stroke:#57a6e8"/></svg>';
+      case 'txt': case 'log':
         return '<svg class="fi" viewBox="0 0 16 16"><path d="M4 1.5h5l3.5 3.5v9a.5.5 0 01-.5.5H4a.5.5 0 01-.5-.5V2a.5.5 0 01.5-.5z" style="stroke:#9da0a8"/><path d="M9 1.5V5h3.5M5.5 8h5M5.5 10.5h5" style="stroke:#9da0a8"/></svg>';
+      default:
+        return '<svg class="fi" viewBox="0 0 16 16"><path d="M4 1.5h5l3.5 3.5v9a.5.5 0 01-.5.5H4a.5.5 0 01-.5-.5V2a.5.5 0 01.5-.5z" style="stroke:#9da0a8"/><path d="M9 1.5V5h3.5" style="stroke:#9da0a8"/></svg>';
     }
   }
 
@@ -489,6 +508,8 @@
   // ---------- tabs / editor ----------
   const activeTab = () => state.tabs.find((t) => t.path === state.active) || null;
   const isDirty = (t) => t.model.getAlternativeVersionId() !== t.saved;
+  // Updates just the unsaved dot, so typing and saving don't rebuild (and re-animate) the tab bar.
+  const syncDirty = (t) => t.el?.classList.toggle('dirty', isDirty(t));
 
   async function openFile(p, { focus = true, quiet = false, background = false } = {}) {
     let t = state.tabs.find((x) => x.path === p);
@@ -511,7 +532,7 @@
       model.onDidChangeContent(() => scheduleCheck(tab));
       scheduleCheck(tab);
       model.onDidChangeContent(() => {
-        renderTabs();
+        syncDirty(tab);
         autosave();
         window.monaco.editor.setModelMarkers(model, 'tuff', []);
       });
@@ -526,11 +547,12 @@
   }
 
   // ---------- design studio view ----------
-  const studio = { open: false, visible: false, file: null };
+  const studio = { open: false, visible: false, file: null, el: null };
 
   function showStudio(file) {
     studio.open = true;
     studio.visible = true;
+    $('#app').classList.add('studio-on');
     if (file) studio.file = file;
     $('#studio').classList.remove('hidden');
     $('#monaco').classList.add('hidden');
@@ -545,6 +567,7 @@
   function hideStudio() {
     if (!studio.visible) return;
     studio.visible = false;
+    $('#app').classList.remove('studio-on');
     $('#studio').classList.add('hidden');
     $('#monaco').classList.remove('hidden');
     $('#breadcrumbs').classList.remove('hidden');
@@ -602,6 +625,7 @@
 
   async function saveTab(t) {
     const version = t.model.getAlternativeVersionId();
+    t.model.pushStackElement(); // the next edit starts a new undo step, so Ctrl+Z lands on exactly what was saved
     try {
       await api.fs.writeFile(t.path, t.model.getValue());
       t.saved = version;
@@ -612,16 +636,26 @@
 
   async function saveAll() {
     await Promise.all(state.tabs.filter(isDirty).map(saveTab));
-    renderTabs();
+    state.tabs.forEach(syncDirty);
   }
   const autosave = debounce(saveAll, 1500);
 
+  // A tab element for renderTabs. Only a tab that wasn't there before (no previous element) gets the
+  // 'enter' fade-in. It keeps 'enter' until the fade ends, so a second rebuild straight away doesn't cancel it.
+  function tabEl(prev, cls) {
+    const tab = document.createElement('div');
+    const fresh = !prev || prev.classList.contains('enter');
+    tab.className = cls + (fresh ? ' enter' : '');
+    if (fresh) tab.onanimationend = (e) => e.animationName === 'tabin' && tab.classList.remove('enter');
+    return tab;
+  }
+
+  // Rebuilds the tab bar (when tabs open, close, rename or switch). Typing and saving only call syncDirty.
   function renderTabs() {
     const el = $('#tabs');
     el.innerHTML = '';
     if (studio.open) {
-      const tab = document.createElement('div');
-      tab.className = 'tab studio-tab' + (studio.visible ? ' active' : '');
+      const tab = studio.el = tabEl(studio.el, 'tab studio-tab' + (studio.visible ? ' active' : ''));
       tab.title = 'Design Studio';
       tab.innerHTML = '<span class="fl st-ic">&#xE790;</span><span>Design Studio</span><button class="x" title="Close"><svg viewBox="0 0 10 10"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>';
       tab.onmousedown = (e) => {
@@ -630,10 +664,9 @@
       };
       tab.querySelector('.x').onclick = (e) => { e.stopPropagation(); closeStudio(); };
       el.appendChild(tab);
-    }
+    } else studio.el = null;
     for (const t of state.tabs) {
-      const tab = document.createElement('div');
-      tab.className = 'tab' + (t.path === state.active && !studio.visible ? ' active' : '') + (isDirty(t) ? ' dirty' : '');
+      const tab = t.el = tabEl(t.el, 'tab' + (t.path === state.active && !studio.visible ? ' active' : '') + (isDirty(t) ? ' dirty' : ''));
       tab.title = t.path;
       tab.innerHTML = `${fileIcon(basename(t.path))}<span>${esc(basename(t.path))}</span><button class="x" title="Close (Ctrl+F4)"><svg viewBox="0 0 10 10"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>`;
       tab.onmousedown = (e) => {
@@ -846,7 +879,7 @@
         await api.fs.replaceInFile(g.path, p.source, p.flags, rep, find.re);
       }
     }
-    renderTabs();
+    state.tabs.forEach(syncDirty);
     toast(`Replaced in ${files} file${files === 1 ? '' : 's'}. Ctrl+Z undoes it in open files.`, 'ok', 4000);
     runFind();
   }
@@ -1125,7 +1158,7 @@
   }
 
   async function refreshIconPreview() {
-    $('#bd-icon').src = (await api.build.iconPreview(bd.icon)) || 'assets/icon.svg';
+    $('#bd-icon').src = (await api.build.iconPreview(bd.icon)) || 'assets/icon.png';
   }
 
   function updateBuildDialog() {
@@ -1175,7 +1208,7 @@
     bd.steps = Object.fromEntries(BUILD_STEPS.map(([id, label]) => [id, { state: 'pending', label }]));
     $('#bo-empty').classList.add('hidden');
     $('#bo-main').classList.remove('hidden');
-    $('#bo-icon').src = params.iconSrc || 'assets/icon.svg';
+    $('#bo-icon').src = params.iconSrc || 'assets/icon.png';
     $('#bo-title').textContent = `Building ${params.name}.exe`;
     $('#bo-sub').textContent = `${rel(params.file)} · ${params.windowed ? 'Window app' : 'Console app'}`;
     $('#bo-result').innerHTML = '';
@@ -1791,7 +1824,7 @@
   async function playIntro() {
     await saveAll();
     await window.TuffIntro.play({ initial: state.accent, onReveal: enterIDE });
-    await saveSettings({ introSeen: true });
+    await saveSettings({ introSeen: true, introVersion: state.version });
     editor?.focus();
   }
 
@@ -1814,6 +1847,13 @@
     ask,
     openStudio,
     showSideView,
+    // Full size: the Studio takes over everything but the title bar and the right sidebar.
+    studioFull: () => $('#app').classList.contains('studio-full'),
+    setStudioFull: (on) => {
+      $('#app').classList.toggle('studio-full', on);
+      saveSettings({ studioFull: on });
+      editor?.layout();
+    },
     activeCode: () => activeTab()?.model.getValue() ?? '',
     selectionText: () => (editor && activeTab() ? editor.getModel().getValueInRange(editor.getSelection()) : ''),
     selectionLines: () => {
@@ -1841,7 +1881,7 @@
         t.model.pushEditOperations([], [{ range: t.model.getFullModelRange(), text: disk }], () => null);
         t.saved = t.model.getAlternativeVersionId();
       }
-      renderTabs();
+      state.tabs.forEach(syncDirty);
       filesCache = null;
       await refreshTree();
     },
@@ -1865,6 +1905,7 @@
     if (s.sidebarW) rootStyle.setProperty('--sidebar-w', s.sidebarW);
     if (s.bottomH) rootStyle.setProperty('--bottom-h', s.bottomH);
     applyAccent(accentById(s.accent));
+    $('#app').classList.toggle('studio-full', !!s.studioFull);
     $('#sb-indent').textContent = `${tabSize()} spaces`;
     buildMenubar();
     api.win.isMaximized().then(setMaxIcon);
@@ -1873,6 +1914,9 @@
     const last = s.lastFolder && (await api.fs.exists(s.lastFolder)) ? s.lastFolder : null;
     const root = last || (await api.project.default());
     const firstRun = !s.introSeen;
+    // After an update the intro plays once more, but nothing else starts over: the folder, tabs,
+    // Learn Tuff progress, settings and plugins all carry on (they live in userData, which updates keep).
+    const updated = !firstRun && s.introVersion !== state.version;
 
     window.TuffStudio.init(window.TuffIDE);
     if (firstRun) {
@@ -1883,11 +1927,16 @@
       await openFile(join(root, 'main.tuf'), { focus: false, quiet: true });
       await introDone;
     } else {
+      const introDone = updated ? playIntro() : null;
       window.TuffLearn.init(window.TuffIDE);
       await openFolder(root, { restore: last ? { tabs: s.openTabs, active: s.activeTab } : null });
       if (!state.tabs.length && !last) await openFile(join(root, 'main.tuf'), { quiet: true });
-      enterIDE();
-      editor?.focus();
+      if (introDone) {
+        await introDone;
+      } else {
+        enterIDE();
+        editor?.focus();
+      }
     }
     window.TuffPluginHost?.init(window.TuffIDE);
   }

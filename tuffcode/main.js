@@ -299,6 +299,8 @@ ipcMain.handle('agents:detect', () => agents.detect());
 ipcMain.handle('agents:connection', (_e, id) => agents.connection(id));
 ipcMain.handle('agents:connect', (_e, id, on) => agents.connect(id, on));
 ipcMain.handle('agents:mcpServer', () => agents.mcpServer());
+ipcMain.handle('agents:mcpSetup', () => agents.mcpSetup());
+ipcMain.handle('agents:mcpCheck', () => agents.mcpCheck());
 ipcMain.handle('agents:run', (_e, params) => { agents.run(params, (ev) => send('agents:event', ev)); return true; });
 ipcMain.handle('agents:stop', (_e, runId) => agents.stop(runId));
 

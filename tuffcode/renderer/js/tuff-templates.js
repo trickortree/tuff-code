@@ -176,4 +176,63 @@ func wrong():
     result:set "Not quite, try again."
     bar:set 30
 ` },
-  ];
+    { id: 'shop', name: 'Pizza shop (pages)', desc: 'Three pages: Home, Menu and Cart. Buttons switch between them.', code: `mention mtgui
+
+app = mtgui.window("Pizza shop", 400, 560)
+app:accent "orange"
+app:heading "Tony's Pizza"
+home = app:page "Home"
+home:text "Hot pizza, made to order."
+home:button("See the menu", go_menu, "primary")
+home:button("Your cart", go_cart, "ghost")
+menu = app:page "Menu"
+menu:small "Pick a pizza to put it in your cart."
+menu:button("Margherita  $8", add_margherita, "outline")
+menu:button("Pepperoni  $10", add_pepperoni, "outline")
+menu:button("Back", go_home, "ghost")
+cart = app:page "Cart"
+summary = cart:text "Your cart is empty."
+cart:button("Order now", order, "primary")
+cart:button("Keep shopping", go_menu, "ghost")
+cart:opened show_cart
+
+items = 0
+total = 0
+
+func go_home():
+    home:open
+
+func go_menu():
+    menu:open
+
+func go_cart():
+    cart:open
+
+func add_margherita():
+    items += 1
+    total += 8
+    go_cart()
+
+func add_pepperoni():
+    items += 1
+    total += 10
+    go_cart()
+
+func show_cart():
+    if items is 0:
+        summary:set "Your cart is empty."
+    elif items is 1:
+        summary:set "1 pizza, $" + text(total)
+    else:
+        summary:set text(items) + " pizzas, $" + text(total)
+
+func order():
+    if items is 0:
+        app:alert "Add a pizza first!"
+    else:
+        app:alert "Thanks! Your order is on its way."
+        items = 0
+        total = 0
+        home:open
+` },
+];

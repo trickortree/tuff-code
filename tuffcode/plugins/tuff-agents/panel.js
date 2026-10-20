@@ -1,5 +1,7 @@
 // Tuff Agents: a chat sidebar that runs Claude Code, Codex or Antigravity on your project.
 // The agents get TuffCode's MCP tools (the Tuff language guide, examples, check and run).
+// The plug button opens "Agent tools": a check that the tools work, connecting each agent, and
+// commands for setting the tools up by hand.
 TuffPlugins.register('tuff-agents', (t) => {
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const $ = (s, el) => el.querySelector(s);
@@ -15,6 +17,18 @@ TuffPlugins.register('tuff-agents', (t) => {
     ['Make it nicer', 'Suggest ways to make this app look and feel nicer.'],
     ['Teach me something', 'Teach me one new Tuff trick that would help with this code, with a short example.'],
   ];
+  const NAME = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity' };
+  const PLUG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5M6.5 8h11v3.5a5.5 5.5 0 0 1-11 0z"/><path d="M12 17v4"/></svg>';
+  const STEPS = {
+    start: "TuffCode's tools start up",
+    tools: 'Agents can see all 4 tools',
+    guide: 'The Tuff guide loads',
+    examples: 'The example apps load',
+    check: 'The checker spots a mistake',
+    run: 'A Tuff program runs',
+  };
+  const TEST_PROMPT = 'This is a quick test of your TuffCode tools. 1) Call the tuff_reference tool. 2) Call the tuff_check tool on this code: say "Hello". 3) Reply with one short sentence saying which TuffCode tools worked. Don\'t change any files.';
+  const cleanErr = (err) => String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
   const S = {
     agents: null,
@@ -28,6 +42,12 @@ TuffPlugins.register('tuff-agents', (t) => {
     useFile: true,
     useSel: true,
     busy: false,
+    view: 'chat', // or 'setup'
+    check: null, // last tools check: { running } or { ok, steps }
+    setup: null, // commands for setting the tools up by hand
+    tested: {}, // agent id -> { ok, text } from "Test it"
+    openMan: new Set(), // which "by hand" sections are open
+    busyAgent: null, // agent being connected or removed
   };
   let root = null;
   let ctxTimer = null;
@@ -62,11 +82,13 @@ TuffPlugins.register('tuff-agents', (t) => {
       <div class="ta">
         <div class="ta-top">
           <div class="ta-agents" role="tablist" aria-label="Agent"></div>
+          <button class="ta-ib" data-a="setup" title="Agent tools: set up and check (MCP)">${PLUG}</button>
           <button class="ta-ib" data-a="menu" title="More">⋯</button>
           <div class="ta-menu hidden"></div>
         </div>
         <div class="ta-status"></div>
         <div class="ta-msgs" aria-live="polite"></div>
+        <div class="ta-setup hidden"></div>
         <div class="ta-compose">
           <div class="ta-ctx"></div>
           <textarea rows="3" spellcheck="true" placeholder="Ask about your code…"></textarea>
@@ -90,6 +112,13 @@ TuffPlugins.register('tuff-agents', (t) => {
     $('.ta-send', root).onclick = () => (S.run ? stop() : send(ta.value));
     $$('.ta-mode button', root).forEach((b) => (b.onclick = () => { S.mode = b.dataset.m; t.storage.set('mode', S.mode); renderMode(); }));
     $('[data-a="menu"]', root).onclick = (e) => { e.stopPropagation(); toggleMenu(); };
+    $('[data-a="setup"]', root).onclick = () => showSetup(S.view !== 'setup');
+    const setupBox = $('.ta-setup', root);
+    setupBox.addEventListener('click', onSetupClick);
+    setupBox.addEventListener('toggle', (e) => {
+      const d = e.target.closest?.('details[data-m]');
+      if (d) d.open ? S.openMan.add(d.dataset.m) : S.openMan.delete(d.dataset.m);
+    }, true);
     root.addEventListener('mousedown', (e) => { if (!e.target.closest('.ta-menu, [data-a="menu"]')) $('.ta-menu', root).classList.add('hidden'); });
     $('.ta-msgs', root).addEventListener('click', onMsgClick);
     renderAgents();
@@ -112,8 +141,9 @@ TuffPlugins.register('tuff-agents', (t) => {
     }
     renderAgents();
     renderStatus();
+    renderSetup();
     for (const a of S.agents.filter((x) => x.installed)) {
-      t.agents.connection(a.id).then((c) => { S.conn[a.id] = c.connected; renderStatus(); }).catch(() => {});
+      t.agents.connection(a.id).then((c) => { S.conn[a.id] = c.connected; renderStatus(); renderSetup(); }).catch(() => {});
     }
   }
 
@@ -125,7 +155,14 @@ TuffPlugins.register('tuff-agents', (t) => {
       const title = !S.agents ? 'Checking…' : a?.installed ? `${a.name}${a.version ? ` ${a.version}` : ''}` : `${a?.name || id} isn't installed`;
       return `<button role="tab" data-id="${id}" class="${id === S.agent ? 'on' : ''}" title="${esc(title)}" aria-selected="${id === S.agent}"><i class="dot ${state}"></i>${SHORT[id]}</button>`;
     }).join('');
-    $$('button', box).forEach((b) => (b.onclick = () => { S.agent = b.dataset.id; t.storage.set('agent', S.agent); renderAgents(); renderStatus(); renderMsgs(); }));
+    $$('button', box).forEach((b) => (b.onclick = () => {
+      S.agent = b.dataset.id;
+      t.storage.set('agent', S.agent);
+      if (S.view === 'setup') showSetup(false);
+      renderAgents();
+      renderStatus();
+      renderMsgs();
+    }));
   }
 
   function renderMode() {
@@ -149,7 +186,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       box.innerHTML = `<div class="ta-card">
         <b>Teach ${esc(a.name)} about Tuff</b>
         <p>Connect TuffCode's tools so ${esc(a.name)} can read the Tuff guide and check and run your programs. This adds a "tuffcode" tool server to its settings. You can remove it any time from the ⋯ menu.</p>
-        <div class="ta-btns"><button class="btn sm primary" data-a="connect">Connect</button><button class="btn sm" data-a="dismiss">Not now</button></div>
+        <div class="ta-btns"><button class="btn sm primary" data-a="connect">Connect</button><button class="btn sm" data-a="setup">How it works</button><button class="btn sm" data-a="dismiss">Not now</button></div>
       </div>`;
     } else {
       box.innerHTML = '';
@@ -161,17 +198,19 @@ TuffPlugins.register('tuff-agents', (t) => {
       if (act === 'recheck') refreshAgents();
       if (act === 'dismiss') { S.dismissed[S.agent] = true; t.storage.set('dismissed', S.dismissed); renderStatus(); }
       if (act === 'connect') connect(true);
+      if (act === 'setup') showSetup(true);
     };
   }
 
-  async function connect(on) {
-    const a = current();
+  async function connect(on, id = S.agent) {
+    const a = S.agents?.find((x) => x.id === id);
+    if (!a) return;
     try {
       const c = await t.agents.connect(a.id, on);
       S.conn[a.id] = c.connected;
       t.toast(on ? `${a.name} can now use TuffCode's Tuff tools.` : `Removed TuffCode's tools from ${a.name}.`, 'ok');
     } catch (err) {
-      t.toast(String(err.message).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error', 7000);
+      t.toast(cleanErr(err), 'error', 7000);
     }
     renderStatus();
   }
@@ -179,7 +218,7 @@ TuffPlugins.register('tuff-agents', (t) => {
   function toggleMenu() {
     const m = $('.ta-menu', root);
     const a = current();
-    const items = [['new', 'New chat']];
+    const items = [['new', 'New chat'], ['setup', 'Agent tools: set up and check']];
     if (a?.installed) items.push(S.conn[a.id] ? ['disconnect', `Remove TuffCode tools from ${a.name}`] : ['connect', `Add TuffCode tools to ${a.name}${a.id === 'claude' ? ' everywhere' : ''}`]);
     items.push(['recheck', 'Look for agents again']);
     m.innerHTML = items.map(([id, label]) => `<button data-m="${id}">${esc(label)}</button>`).join('');
@@ -188,10 +227,151 @@ TuffPlugins.register('tuff-agents', (t) => {
       const id = e.target.closest('button')?.dataset.m;
       m.classList.add('hidden');
       if (id === 'new') { if (S.run) stop(); S.msgs = []; S.sessions = {}; renderMsgs(); }
+      if (id === 'setup') showSetup(true);
       if (id === 'connect') connect(true);
       if (id === 'disconnect') connect(false);
       if (id === 'recheck') refreshAgents();
     };
+  }
+
+  // ---------------------------------------------------------------- agent tools: set up and check (MCP)
+  function showSetup(on) {
+    S.view = on ? 'setup' : 'chat';
+    for (const sel of ['.ta-status', '.ta-msgs', '.ta-compose']) $(sel, root).classList.toggle('hidden', on);
+    $('.ta-setup', root).classList.toggle('hidden', !on);
+    $('[data-a="setup"]', root).classList.toggle('on', on);
+    if (!on) { setTimeout(() => $('textarea', root)?.focus(), 30); return; }
+    renderSetup();
+    if (!S.setup) t.agents.mcpSetup().then((x) => { S.setup = x; renderSetup(); }).catch(() => {});
+    for (const a of (S.agents || []).filter((x) => x.installed)) {
+      t.agents.connection(a.id).then((c) => { S.conn[a.id] = c.connected; renderSetup(); renderStatus(); }).catch(() => {});
+    }
+    if (!S.check) runCheck();
+  }
+
+  async function runCheck() {
+    S.check = { running: true };
+    renderSetup();
+    try {
+      S.check = await t.agents.mcpCheck();
+    } catch (err) {
+      S.check = { ok: false, steps: [{ id: 'start', ok: false, detail: cleanErr(err), ms: 0 }] };
+    }
+    renderSetup();
+  }
+
+  function testAgent(id) {
+    if (S.run) { t.toast('Wait until the agent has finished first.'); return; }
+    S.agent = id;
+    t.storage.set('agent', id);
+    showSetup(false);
+    renderAgents();
+    renderStatus();
+    send(TEST_PROMPT, { test: true });
+  }
+
+  function renderSetup() {
+    if (S.view !== 'setup' || !root) return;
+    const box = $('.ta-setup', root);
+    const scroll = box.scrollTop;
+    const c = S.check;
+    const steps = c?.running
+      ? '<li class="run"><i></i><div><b>Checking…</b><span>Starting the tools the way your agents do.</span></div></li>'
+      : (c?.steps || []).map((st) => `<li class="${st.ok ? 'ok' : 'bad'}"><i></i><div><b>${esc(STEPS[st.id] || 'Check')}</b>`
+        + `<span>${esc(st.detail)}${st.ms >= 500 ? ` (${(st.ms / 1000).toFixed(1)} s)` : ''}</span></div></li>`).join('');
+    const verdict = !c || c.running ? ''
+      : c.ok ? '<p class="tas-ok">All good. Every agent connected below can use these tools.</p>'
+        : "<p class=\"tas-bad\">Something isn't working. The red step says what went wrong. If it keeps happening, reinstall TuffCode.</p>";
+    box.innerHTML = `
+      <div class="tas-head"><button class="ta-ib" data-s="back" title="Back to the chat">←</button><b>Agent tools</b></div>
+      <p class="tas-intro">AI agents learn Tuff from TuffCode's tools: the Tuff guide, example apps, a checker and a runner. They plug in through <b>MCP</b>, the standard way AI agents use tools.</p>
+      <section>
+        <h4><span>1</span>Check the tools work</h4>
+        <p>Starts TuffCode's tools exactly the way your agents do, then tries every one.</p>
+        <button class="btn sm primary" data-s="check"${c?.running ? ' disabled' : ''}>${c && !c.running ? 'Check again' : 'Run the check'}</button>
+        ${steps ? `<ol class="tas-steps">${steps}</ol>` : ''}${verdict}
+      </section>
+      <section>
+        <h4><span>2</span>Connect your agents</h4>
+        ${ORDER.map(agentSetupHtml).join('')}
+      </section>
+      <section>
+        <h4><span>3</span>Or set it up by hand</h4>
+        <p>For an agent you use in a terminal, or another app. Paste a command into Command Prompt or PowerShell.</p>
+        ${manualHtml()}
+      </section>`;
+    box.scrollTop = scroll;
+  }
+
+  function agentSetupHtml(id) {
+    const a = S.agents?.find((x) => x.id === id);
+    const name = a?.name || NAME[id];
+    const conn = S.conn[id];
+    let state = 'Looking…';
+    let ok = false;
+    let body = '';
+    let btns = [];
+    if (S.agents && !a?.installed) {
+      state = 'Not installed';
+      body = `<p>Install it once, then come back here.</p><div class="ta-cmd"><code>${esc(a?.install || '')}</code><button data-copy="${esc(a?.install || '')}">Copy</button></div>`;
+      btns = [['site', 'Website']];
+    } else if (a?.installed && id === 'claude') {
+      ok = true;
+      state = conn ? 'Ready here and in the terminal' : 'Ready in this panel';
+      body = `<p>Claude gets the tools automatically in this panel. ${conn ? 'They’re also added for <code>claude</code> in your terminal.' : 'Add them to your terminal too if you use <code>claude</code> there.'}</p>`;
+      btns = [['test', 'Test it', 'primary'], conn ? ['off', 'Remove from terminal'] : ['on', 'Add to terminal']];
+    } else if (a?.installed) {
+      ok = !!conn;
+      state = conn === undefined ? 'Checking…' : conn ? 'Connected' : 'Not connected';
+      body = conn ? `<p>${esc(name)} can use the Tuff tools, here and in your terminal.</p>`
+        : `<p>Connect once so ${esc(name)} can read the Tuff guide and check and run your programs. This adds a "tuffcode" tool server to its settings.</p>`;
+      btns = conn ? [['test', 'Test it', 'primary'], ['off', 'Remove']] : conn === false ? [['on', 'Connect', 'primary']] : [];
+    }
+    const test = S.tested[id];
+    return `<div class="tas-agent" data-id="${id}">
+      <div class="tas-ah"><i class="dot${a?.installed ? ' ready' : ''}"></i><b>${esc(name)}</b><span class="tas-state${ok ? ' ok' : ''}">${esc(state)}</span></div>
+      ${body}
+      ${btns.length ? `<div class="ta-btns">${btns.map(([act, label, cls]) => `<button class="btn sm${cls ? ` ${cls}` : ''}" data-s="${act}" data-id="${id}"${S.busyAgent === id || (act === 'test' && S.run) ? ' disabled' : ''}>${esc(label)}</button>`).join('')}</div>` : ''}
+      ${test ? `<div class="tas-test ${test.ok ? 'ok' : 'bad'}">${esc(test.text)}</div>` : ''}
+    </div>`;
+  }
+
+  function manualHtml() {
+    const m = S.setup;
+    if (!m) return '<p>Loading…</p>';
+    const cmd = (c, cls = '') => `<div class="ta-cmd${cls}"><code>${esc(c)}</code><button data-copy="${esc(c)}">Copy</button></div>`;
+    const part = (key, title, inner) => `<details class="tas-man" data-m="${key}"${S.openMan.has(key) ? ' open' : ''}><summary>${esc(title)}</summary><div>${inner}</div></details>`;
+    return ORDER.map((id) => part(id, NAME[id], `
+        <p>1. Add TuffCode's tools:</p>${cmd(m.agents[id].add)}
+        <p>2. Check they're there:</p>${cmd(m.agents[id].check)}
+        <p>3. Ask ${esc(NAME[id])}: <i>“Use the tuff_reference tool, then make me a small Tuff app.”</i> If it reads the Tuff guide first, it's working.</p>
+        <p class="tas-small">To remove them: <code>${esc(m.agents[id].remove)}</code></p>`)).join('')
+      + part('other', 'Other apps (Claude Desktop, Cursor, Windsurf…)', `
+        <p>Add this to the app's MCP settings file, for example <code>claude_desktop_config.json</code> or <code>.cursor/mcp.json</code>, then restart the app. In VS Code's <code>mcp.json</code>, write <code>"servers"</code> instead of <code>"mcpServers"</code>.</p>
+        ${cmd(m.json, ' tall')}`)
+      + '<p class="tas-small">These paths point at this copy of TuffCode. If you move or reinstall it, connect again or copy the new commands.</p>';
+  }
+
+  async function onSetupClick(e) {
+    const b = e.target.closest('button');
+    if (!b || b.disabled) return;
+    if (b.dataset.copy !== undefined) { navigator.clipboard.writeText(b.dataset.copy); t.toast('Copied. Paste it in a terminal.', 'ok', 2500); return; }
+    const id = b.dataset.id;
+    switch (b.dataset.s) {
+      case 'back': showSetup(false); break;
+      case 'check': runCheck(); break;
+      case 'test': testAgent(id); break;
+      case 'site': t.openExternal(S.agents?.find((x) => x.id === id)?.url); break;
+      case 'on':
+      case 'off':
+        S.busyAgent = id;
+        renderSetup();
+        await connect(b.dataset.s === 'on', id);
+        S.busyAgent = null;
+        renderSetup();
+        break;
+      default: break;
+    }
   }
 
   // ---------------------------------------------------------------- context chips
@@ -226,6 +406,7 @@ TuffPlugins.register('tuff-agents', (t) => {
         <b>Ask ${esc(a?.name || 'an agent')} anything about your Tuff code</b>
         <span>It can see the file you have open. Switch to <b>Edit</b> to let it change files for you.</span>
         <div class="ta-sugg">${SUGGEST.map(([label], i) => `<button data-s="${i}">${esc(label)}</button>`).join('')}</div>
+        <button class="ta-link" data-setup>${PLUG}Set up and check agent tools</button>
       </div>`;
       return;
     }
@@ -261,6 +442,7 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
 
   function onMsgClick(e) {
+    if (e.target.closest('[data-setup]')) { showSetup(true); return; }
     const s = e.target.closest('[data-s]');
     if (s) { send(SUGGEST[+s.dataset.s][1]); return; }
     const b = e.target.closest('[data-code]');
@@ -344,16 +526,21 @@ TuffPlugins.register('tuff-agents', (t) => {
     return { text: map[n] || n.replace(/^mcp__\w+?__/, ''), changes: /^(Edit|MultiEdit|Write|NotebookEdit)$/.test(n) };
   }
 
-  function buildPrompt(text) {
+  // bare: just the message (no open file, selection or chat history), for the tools test.
+  function buildPrompt(text, { mode = S.mode, bare = false } = {}) {
     const file = t.editor.file();
     const parts = [
       "You're helping someone inside TuffCode, the code editor for the Tuff programming language (.tuf files). They may be a beginner, so explain things simply and keep code short and readable. Write Tuff unless they ask for another language.",
       "TuffCode gives you MCP tools named tuffcode: call tuff_reference before writing Tuff, tuff_examples for app patterns, and tuff_check on any Tuff code you write or change. If those tools aren't there: Tuff is like Python but uses say to print, 'is' for ==, func instead of def, ':' for methods (app:button) and range(1, 3) includes 3.",
-      S.mode === 'edit'
+      mode === 'edit'
         ? 'You may change files in the project folder to do what they ask. Afterwards, say in a sentence or two what you changed.'
         : "Don't change any files. Answer in the chat, and put code in ```tuff blocks so they can insert it.",
       `Project folder: ${t.project.root()}`,
     ];
+    if (bare) {
+      parts.push(`Their message:\n${text}`);
+      return parts.join('\n\n');
+    }
     if (file && S.useFile) parts.push(`Open file: ${t.project.rel(file)}\n\`\`\`${/\.tuf$/i.test(file) ? 'tuff' : ''}\n${trim(t.editor.code(), 24000)}\n\`\`\``);
     const lines = t.editor.selectionLines();
     if (S.useSel && lines) parts.push(`They selected lines ${lines[0]} to ${lines[1]}:\n\`\`\`\n${trim(t.editor.selection(), 8000)}\n\`\`\``);
@@ -365,27 +552,33 @@ TuffPlugins.register('tuff-agents', (t) => {
     return parts.join('\n\n');
   }
 
-  async function send(text) {
+  // opts.test: the "Test it" run from Agent tools. It always asks (never edits), sends no file or
+  // history, keeps whatever you were typing, and reports which TuffCode tools the agent used.
+  async function send(text, opts = {}) {
     text = String(text || '').trim();
     const a = current();
     if (!text || S.run) return;
     if (!a?.installed) { renderStatus(); t.toast(`${a?.name || 'That agent'} isn't installed yet.`, 'error'); return; }
+    const test = !!opts.test;
+    const mode = test ? 'ask' : S.mode;
     const file = t.editor.file();
     const lines = t.editor.selectionLines();
-    const ctx = [file && S.useFile ? short(file) : '', lines && S.useSel ? `lines ${lines[0]}–${lines[1]}` : ''].filter(Boolean).join(', ');
-    S.msgs.push({ role: 'user', text, ctx: ctx ? `with ${ctx}` : '' });
-    const prompt = buildPrompt(text);
-    const msg = { role: 'agent', agent: S.agent, mode: S.mode, text: '', tools: [], status: 'running' };
+    const ctx = test ? '' : [file && S.useFile ? short(file) : '', lines && S.useSel ? `lines ${lines[0]}–${lines[1]}` : ''].filter(Boolean).join(', ');
+    S.msgs.push({ role: 'user', text: test ? `Test ${a.name}'s TuffCode tools` : text, ctx: ctx ? `with ${ctx}` : '' });
+    const prompt = buildPrompt(text, { mode, bare: test });
+    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running' };
     S.msgs.push(msg);
     const runId = `run-${Date.now()}`;
-    S.run = { id: runId, msg, changed: false };
-    const ta = $('textarea', root);
-    ta.value = '';
-    ta.style.height = 'auto';
+    S.run = { id: runId, msg, changed: false, test, mcp: new Set() };
+    if (!test) {
+      const ta = $('textarea', root);
+      ta.value = '';
+      ta.style.height = 'auto';
+    }
     renderMsgs();
     updateSend();
     try {
-      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode: S.mode, session: S.agent === 'claude' ? S.sessions.claude : null });
+      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode, session: S.agent === 'claude' ? S.sessions.claude : null });
     } catch (err) {
       onEvent({ runId, kind: 'done', ok: false, error: err.message });
     }
@@ -403,6 +596,7 @@ TuffPlugins.register('tuff-agents', (t) => {
         const d = describeTool(ev.name, ev.input);
         m.tools.push({ text: d.text, ok: null });
         if (d.changes) S.run.changed = true;
+        if (/^mcp__tuffcode__/.test(ev.name || '')) S.run.mcp.add(ev.name.replace(/^mcp__tuffcode__/, ''));
         break;
       }
       case 'tool_result': {
@@ -425,10 +619,22 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
 
   function finish() {
-    const changed = S.run.changed || S.run.msg.mode === 'edit';
+    const r = S.run;
+    const changed = r.changed || r.msg.mode === 'edit';
     S.run = null;
     updateSend();
     if (changed) t.reloadChanged();
+    if (r.test) {
+      const id = r.msg.agent;
+      const used = [...r.mcp];
+      const ok = used.length > 0 && r.msg.status === 'done';
+      const text = ok ? `Test passed: ${NAME[id]} used ${used.join(' and ')}.`
+        : used.length ? `${NAME[id]} reached the tools, but the test didn't finish.`
+          : `${NAME[id]} didn't use TuffCode's tools.${id === 'claude' ? '' : ' Connect them first.'}`;
+      S.tested[id] = { ok, text };
+      t.toast(text, ok ? 'ok' : 'error', 6000);
+      renderSetup();
+    }
   }
 
   function stop() {

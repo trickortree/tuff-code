@@ -129,6 +129,130 @@ async function connect(id, on = true) {
   return state;
 }
 
+// What to type to set the tools up by hand: the same commands the Connect buttons run, plus the
+// JSON other MCP apps (Claude Desktop, Cursor...) want.
+function mcpSetup() {
+  const s = mcpServer();
+  const show = (bin, args) => [bin, ...args].map((a) => (/^[\w\-.:=/\\@]+$/.test(a) ? a : `"${a}"`)).join(' ');
+  const agents = {};
+  for (const id of Object.keys(CONNECT)) {
+    agents[id] = {
+      add: show(AGENTS[id].bin, CONNECT[id].add()),
+      check: show(AGENTS[id].bin, id === 'antigravity' ? ['mcp', 'list'] : ['mcp', 'get', MCP_NAME]),
+      remove: show(AGENTS[id].bin, CONNECT[id].remove()),
+    };
+  }
+  const json = JSON.stringify({ mcpServers: { [MCP_NAME]: { command: s.command, args: s.args, env: { ELECTRON_RUN_AS_NODE: '1' } } } }, null, 2);
+  return { command: s.command, args: s.args, agents, json };
+}
+
+// Starts the TuffCode MCP server the way connected agents do (only ELECTRON_RUN_AS_NODE, so it has
+// to find the Tuff interpreter by itself) and uses every tool once, like an agent would.
+// Resolves to { ok, steps: [{ id, ok, detail, ms }] }.
+function mcpCheck() {
+  const s = mcpServer();
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
+  delete env.TUFF_CMD;
+  const steps = [];
+  return new Promise((resolve) => {
+    let proc;
+    try {
+      proc = spawn(s.command, s.args, { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    } catch (err) {
+      resolve({ ok: false, steps: [{ id: 'start', ok: false, detail: err.message, ms: 0 }] });
+      return;
+    }
+    const waiting = new Map();
+    let nextId = 0;
+    let buf = '';
+    let errText = '';
+    proc.stdout.setEncoding('utf8');
+    proc.stdout.on('data', (d) => {
+      buf += d;
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+        waiting.get(msg.id)?.resolve(msg);
+      }
+    });
+    proc.stderr.on('data', (d) => { errText = (errText + d).slice(-1500); });
+    const failAll = (why) => { for (const w of [...waiting.values()]) w.reject(new Error(why)); };
+    proc.on('error', (err) => failAll(`The tools couldn't start: ${err.message}`));
+    proc.on('close', (code) => failAll(`The tools stopped (exit code ${code}).${errText.trim() ? `\n${errText.trim()}` : ''}`));
+
+    const call = (method, params, ms) => new Promise((res, rej) => {
+      const id = ++nextId;
+      const timer = setTimeout(() => { waiting.delete(id); rej(new Error(`No answer after ${ms / 1000} seconds.`)); }, ms);
+      waiting.set(id, {
+        resolve: (m) => { clearTimeout(timer); waiting.delete(id); res(m); },
+        reject: (e) => { clearTimeout(timer); waiting.delete(id); rej(e); },
+      });
+      proc.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+    });
+    const tool = async (name, args, ms = 15000) => {
+      const m = await call('tools/call', { name, arguments: args }, ms);
+      if (m.error) throw new Error(m.error.message);
+      return { text: (m.result?.content || []).map((c) => c.text).join('\n'), bad: !!m.result?.isError };
+    };
+    const step = async (id, fn) => {
+      const t0 = Date.now();
+      try {
+        steps.push({ id, ok: true, detail: await fn(), ms: Date.now() - t0 });
+        return true;
+      } catch (err) {
+        steps.push({ id, ok: false, detail: err.message, ms: Date.now() - t0 });
+        return false;
+      }
+    };
+
+    (async () => {
+      const started = await step('start', async () => {
+        const m = await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'tuffcode-check', version: app.getVersion() } }, 20000);
+        const info = m.result?.serverInfo;
+        if (info?.name !== MCP_NAME) throw new Error(m.error?.message || "The tools didn't say who they are.");
+        proc.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+        return `TuffCode tools ${info.version}`;
+      });
+      if (started) {
+        await step('tools', async () => {
+          const names = ((await call('tools/list', {}, 10000)).result?.tools || []).map((x) => x.name);
+          const missing = ['tuff_reference', 'tuff_examples', 'tuff_check', 'tuff_run'].filter((n) => !names.includes(n));
+          if (missing.length) throw new Error(`Missing: ${missing.join(', ')}`);
+          return names.join(', ');
+        });
+        await step('guide', async () => {
+          const r = await tool('tuff_reference', {});
+          if (r.bad || r.text.length < 2000) throw new Error(r.text.slice(0, 300) || 'The guide came back empty.');
+          return `${r.text.length.toLocaleString('en-US')} characters, ${(r.text.match(/^## /gm) || []).length} sections`;
+        });
+        await step('examples', async () => {
+          const r = await tool('tuff_examples', {});
+          const n = (r.text.match(/^## /gm) || []).length;
+          if (r.bad || !n) throw new Error(r.text.slice(0, 300) || 'No examples came back.');
+          return `${n} example apps`;
+        });
+        await step('check', async () => {
+          const good = await tool('tuff_check', { code: 'say "Hello"\n' }, 30000);
+          if (good.bad || !/^OK\b/.test(good.text.trim())) throw new Error(`Correct code wasn't OK: ${good.text.slice(0, 300)}`);
+          const bad = await tool('tuff_check', { code: 'say "Hello" +\n' }, 30000);
+          if (!bad.bad || !/line 1/i.test(bad.text)) throw new Error(`It missed a mistake on purpose: ${bad.text.slice(0, 300)}`);
+          return bad.text.split('\n')[0];
+        });
+        await step('run', async () => {
+          const r = await tool('tuff_run', { code: 'name = input "Name? "\nsay "Hi " + name + "!"\n', input: 'Sam', timeout_seconds: 20 }, 40000);
+          if (r.bad || !/Hi Sam!/.test(r.text)) throw new Error(r.text.slice(0, 400) || 'It printed nothing.');
+          return 'It asked for a name and printed "Hi Sam!"';
+        });
+      }
+      killTree(proc);
+      resolve({ ok: steps.length === 6 && steps.every((x) => x.ok), steps });
+    })();
+  });
+}
+
 // ---------------------------------------------------------------- running a prompt
 function claudeMcpConfigFile() {
   const file = path.join(os.tmpdir(), `tuffcode-mcp-${process.pid}.json`);
@@ -262,4 +386,4 @@ function stop(runId) {
   runs.delete(runId);
 }
 
-module.exports = { AGENTS, setup, detect, run, stop, connection, connect, mcpServer };
+module.exports = { AGENTS, setup, detect, run, stop, connection, connect, mcpServer, mcpSetup, mcpCheck };
