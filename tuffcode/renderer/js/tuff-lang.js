@@ -18,7 +18,7 @@ window.TUFF_METHOD_DOCS = {
   start: ['spinner:start', 'Starts a spinner spinning.'],
   stop: ['spinner:stop', 'Stops a spinner.'],
   heading: ['app:heading "Text"', 'Big bold title text.'],
-  text: ['app:text "Text"', 'Normal text. Change it later with :set.'],
+  text: ['app:text "Text"', 'Normal text. Change it later with :set. On a tap response, res:text gives back what the server sent, as text.'],
   small: ['app:small "Text"', 'Small grey text for hints and captions.'],
   button: ['app:button("Text", clicked, "primary")', 'A button. clicked is the function to run. Styles: primary, secondary, outline, ghost, success, danger.'],
   input: ['app:input "Hint"', 'A text box. Read it with :value.'],
@@ -36,7 +36,7 @@ window.TUFF_METHOD_DOCS = {
   showing: ['home:showing', 'Gives back true if this page is the one on screen.'],
   title: ['app:title "Title"', 'Changes the window title, even while running.'],
   icon: ['app:icon "icon.png"', 'Changes the window icon (.png, .gif or .ico in your project folder).'],
-  size: ['app:size(width, height)', 'Resizes the window.'],
+  size: ['app:size(width, height)', 'Resizes the window. On a tap data object, data:size gives how many names it has.'],
   theme: ['app:theme "light"', 'Switches between "dark" and "light".'],
   accent: ['app:accent "purple"', 'Changes the highlight color: blue, purple, pink, red, orange, yellow, green, teal or a hex code.'],
   every: ['app:every(seconds, tick)', 'Runs a function again and again, like a clock. To pause it, check a variable at the top of the function: if not running: return'],
@@ -45,7 +45,7 @@ window.TUFF_METHOD_DOCS = {
   confirm: ['app:confirm "Are you sure?"', 'Pops up Yes/No and gives back true or false.'],
   ask: ['app:ask "Question?"', 'Pops up a text box and gives back what was typed.'],
   close: ['app:close', 'Closes the window.'],
-  set: ['thing:set value', 'Changes the text or value: of a label, button, text box, slider, progress bar, switch or dropdown. It doesn\'t run :change (for a switch or checkbox, switch:set(true, true) does). A clock takes :set(hours, minutes, seconds); an image takes a new picture file.'],
+  set: ['thing:set value', 'Changes the text or value: of a label, button, text box, slider, progress bar, switch or dropdown. It doesn\'t run :change (for a switch or checkbox, switch:set(true, true) does). A clock takes :set(hours, minutes, seconds); an image takes a new picture file. On a tap data object, data:set("name", value) adds or changes a value.'],
   value: ['thing:value', 'Gives back the current value: the text of a label, button or text box; the chosen option of a dropdown; true or false for a switch or checkbox; a number for a slider or progress bar; "14:05:09" for a clock.'],
   change: ['thing:change fn', 'Runs fn when the value changes: on every key typed in a text box, or when a dropdown, switch, checkbox or slider changes. If fn has an input, it gets the new value, like func moved(v):'],
   enter: ['box:enter fn', 'Runs fn when Enter is pressed in a text box. If fn has an input, it gets the text.'],
@@ -63,10 +63,16 @@ window.TUFF_METHOD_DOCS = {
   append: ['line:append value', 'Adds text to the end of a line you already said.'],
   add: ['items:add value', 'Lists: adds value to the end of the list.'],
   pop: ['items:pop', 'Lists: takes the last item off the list and gives it back.'],
-  has: ['thing:has value', 'Lists: true if the list holds value. Text: true if the text contains it, like name:has "a".'],
+  has: ['thing:has value', 'Lists: true if the list holds value. Text: true if the text contains it, like name:has "a". Data objects (tap): true if it has that name, like user:has "email".'],
   upper: ['text:upper', 'Text: gives back the text in CAPITAL letters.'],
   lower: ['text:lower', 'Text: gives back the text in small letters.'],
   trim: ['text:trim', 'Text: gives back the text without spaces at the start and end.'],
+  status: ['res:status', 'tap responses: the status code, like 200 (it worked) or 404 (not found).'],
+  ok: ['res:ok', 'tap responses: true if the request worked (a status from 200 to 299). Errors like 404 don\'t stop the program, so check this.'],
+  json: ['res:json', 'tap responses: reads what the server sent as JSON. An object {...} gives a data object (read it with :get), an array [...] gives a list.'],
+  header: ['res:header("Content-Type")', 'tap responses: one header the server sent, or nil if it didn\'t send it.'],
+  get: ['data:get("name")', 'tap data objects: the value with that name, or nil if there isn\'t one. Objects inside are data objects too, and arrays are lists.'],
+  keys: ['data:keys', 'tap data objects: a list of all its names. Loop over it with: for name in data:keys():'],
 };
 
 window.TUFF_LIBS = {
@@ -81,6 +87,13 @@ window.TUFF_LIBS = {
     bar: ['anims.bar(text, seconds, width)', 'A progress bar that fills from 0% to 100%. width is how many blocks wide it is (20 by default).'],
     type: ['anims.type(text, speed)', 'Types text out one letter at a time. speed is seconds per letter (0.04 by default), so a bigger number is slower.'],
     countdown: ['anims.countdown(start, then)', 'Counts down on one line, then shows the `then` text.'],
+  },
+  tap: {
+    get: ['tap.get(url, headers)', 'Gets a web page or API and gives back a response: res:status, res:ok, res:text, res:json, res:header(name). headers is optional: a data object.'],
+    post: ['tap.post(url, body, headers)', 'Sends body to url and gives back a response. Text goes as plain text; a data object or a list goes as JSON. headers is optional.'],
+    put: ['tap.put(url, body, headers)', 'Like tap.post, but for replacing what is at url. headers is optional.'],
+    delete: ['tap.delete(url, headers)', 'Asks the server to delete what is at url, and gives back a response. headers is optional.'],
+    data: ['tap.data()', 'Makes an empty data object, for a JSON body or headers. Fill it with :set("name", value).'],
   },
 };
 
@@ -111,6 +124,7 @@ window.TUFF_DOCS = {
   anims: ['import anims', 'Ready-made animations: loading, bar, type, countdown.'],
   tgui: ['import tgui', 'Tuff GUI: make real app windows with buttons, text boxes, toggles and more.'],
   mtgui: ['mention mtgui', 'Modern Tuff GUI: like tgui with gradients, gloss, shine and glow.'],
+  tap: ['mention tap', 'Get and send things on the web (HTTP), like Python\'s requests: tap.get, post, put, delete. JSON comes back as data objects.'],
   mention: ['mention library', 'Loads a library. Works exactly like import.'],
   sqrt: ['sqrt(number)', 'Square root: sqrt(81) is 9.'],
   abs: ['abs(number)', 'Removes the minus sign: abs(-5) is 5.'],
@@ -269,6 +283,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
         { label: 'for', kind: K.Snippet, insertText: 'for ${1:i} in range(${2:1}, ${3:10}):\n    $0', insertTextRules: R, detail: 'Count loop', range },
         { label: 'line', kind: K.Snippet, insertText: '${1:line} = say "${2:text}"\n${1:line}:rewrite "${3:new text}"', insertTextRules: R, detail: 'Say, then rewrite', range },
         { label: 'import anims', kind: K.Snippet, insertText: 'import anims\n', range, detail: 'Load the animations library' },
+        { label: 'tap', kind: K.Snippet, insertText: 'mention tap\n\nres = tap.get("${1:https://api.github.com/users/octocat}")\nif res:ok:\n    info = res:json\n    say info:get("${2:name}")\nelse:\n    say "Error " + res:status\n', insertTextRules: R, range, detail: 'Get JSON from the web' },
         { label: 'tgui app', kind: K.Snippet, insertText: 'import tgui\n\napp = tgui.window("${1:My App}")\napp:heading "${2:Hello!}"\n\nfunc ${3:clicked}():\n    $0\n\napp:button("${4:Click me}", ${3:clicked})\n', insertTextRules: R, range, detail: 'A starter app window' },
       ];
       const kws = window.TUFF_KEYWORDS.map((k) => ({ label: k, kind: K.Keyword, insertText: k, range, documentation: window.TUFF_DOCS[k]?.[1] }));

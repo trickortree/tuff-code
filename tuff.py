@@ -484,8 +484,9 @@ class Module:
 class Native:
     """An object made by a library (like a tgui button) with its own :methods."""
 
-    def __init__(self, kind, methods):
+    def __init__(self, kind, methods, show=None):
         self.kind, self.methods = kind, methods
+        self.show = show  # show(nested) gives the text say shows for it, like a tap data object's JSON
 
 
 class AllLines:
@@ -493,22 +494,25 @@ class AllLines:
 
 
 ALL = AllLines()
-LIBRARIES = ("anims", "tgui", "mtgui")
+LIBRARIES = ("anims", "tgui", "mtgui", "tap")
 BUILTIN_NAMES = {"print", "number", "text", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
                  "floor", "ceil", "min", "max", "sum", "average"}
 
 
+# return, break and continue on their way out. They keep their line, for when there's nothing to catch them.
 class ReturnSignal(Exception):
-    def __init__(self, value):
-        self.value = value
+    def __init__(self, value, line=None, col=None):
+        self.value, self.line, self.col = value, line, col
 
 
 class BreakSignal(Exception):
-    pass
+    def __init__(self, line=None, col=None):
+        self.line, self.col = line, col
 
 
 class ContinueSignal(Exception):
-    pass
+    def __init__(self, line=None, col=None):
+        self.line, self.col = line, col
 
 
 def b64(text):
@@ -535,7 +539,7 @@ def to_text(v, nested=False):
     if isinstance(v, Module):
         return f"<library {v.name}>"
     if isinstance(v, Native):
-        return f"<{v.kind}>"
+        return v.show(nested) if v.show else f"<{v.kind}>"
     if v is ALL:
         return "all"
     return str(v)
@@ -681,6 +685,13 @@ class Runtime:
     def text(self, v):
         return to_text(plain(v))
 
+    def plain(self, v):
+        return plain(v)
+
+    def what(self, v):
+        """'text', 'a number', 'a data object'... for messages."""
+        return type_name(plain(v))
+
     def number(self, v, what="This"):
         v = plain(v)
         if isinstance(v, bool) or not isinstance(v, (int, float)):
@@ -696,8 +707,8 @@ class Runtime:
     def error(self, msg):
         return TuffError(msg)
 
-    def native(self, kind, methods):
-        return Native(kind, methods)
+    def native(self, kind, methods, show=None):
+        return Native(kind, methods, show)
 
     def builtin(self, name, fn):
         return Builtin(name, fn)
@@ -719,8 +730,8 @@ class Runtime:
             report(err, self.interp.src)
         except RecursionError:
             report(TuffError(f"{getattr(fn, 'name', 'This function')}() called itself too many times."), self.interp.src)
-        except (BreakSignal, ContinueSignal):
-            report(TuffError("'break' and 'continue' can only be used inside a loop."), self.interp.src)
+        except (BreakSignal, ContinueSignal) as sig:
+            report(TuffError("'break' and 'continue' can only be used inside a loop.", sig.line, sig.col), self.interp.src)
         return False, None
 
 
@@ -791,6 +802,13 @@ class Interpreter:
         except ImportError:
             raise TuffError("mtgui needs Python's tkinter, which isn't installed. Reinstall Python and tick 'tcl/tk and IDLE'.")
         return tuff_tgui.make_library(self.rt, modern=True)
+
+    def lib_tap(self):
+        try:
+            import tuff_tap
+        except ImportError as exc:
+            raise TuffError(f"tap couldn't load ({exc}). Reinstall TuffCode.")
+        return tuff_tap.make_library(self.rt)
 
     def lib_anims(self):
         con = self.console
@@ -946,7 +964,9 @@ class Interpreter:
         if isinstance(items, bool) or isinstance(items, (int, float)):
             raise TuffError(f"Can't loop over a number. Try: for {s.name} in range({to_text(items)}):")
         if not isinstance(items, (list, str)):
-            raise TuffError(f"Can't loop over {type_name(items)}.")
+            owner = s.items.name if s.items.kind == "var" else "thing"
+            tip = f" Loop over its names instead: for {s.name} in {owner}:keys():" if isinstance(items, Native) and "keys" in items.methods else ""
+            raise TuffError(f"Can't loop over {type_name(items)}.{tip}")
         for item in list(items):
             env.set(s.name, item)
             try:
@@ -974,13 +994,13 @@ class Interpreter:
         return None
 
     def s_return(self, s, env):
-        raise ReturnSignal(None if s.value is None else self.eval(s.value, env))
+        raise ReturnSignal(None if s.value is None else self.eval(s.value, env), s.line, s.col)
 
     def s_break(self, s, env):
-        raise BreakSignal()
+        raise BreakSignal(s.line, s.col)
 
     def s_continue(self, s, env):
-        raise ContinueSignal()
+        raise ContinueSignal(s.line, s.col)
 
     # expressions
     def eval(self, e, env):
@@ -1022,7 +1042,9 @@ class Interpreter:
         if k == "index":
             obj = plain(self.eval(e.obj, env))
             if not isinstance(obj, (list, str)):
-                raise TuffError(f"Can't use [ ] on {type_name(obj)}.")
+                owner = e.obj.name if e.obj.kind == "var" else "thing"
+                tip = f" Use :get instead, like {owner}:get(\"name\")." if isinstance(obj, Native) and "keys" in obj.methods else ""
+                raise TuffError(f"Can't use [ ] on {type_name(obj)}.{tip}")
             return obj[self.list_index(obj, self.eval(e.index, env))]
         if k == "call":
             return self.call(e, env)
@@ -1310,6 +1332,22 @@ def gui_tables():
     return _GUI or None
 
 
+_TAP = None
+
+
+def tap_tables():
+    """tap's functions ("lib") and the methods of its responses and data objects ("kinds"), read from
+    the library itself without going online. None when it can't be loaded."""
+    global _TAP
+    if _TAP is None:
+        try:
+            import tuff_tap
+            _TAP = tuff_tap.tables()
+        except Exception:
+            _TAP = {}
+    return _TAP or None
+
+
 def nodes(x):
     """Every node inside a node, or inside a list of nodes."""
     if isinstance(x, N):
@@ -1383,6 +1421,10 @@ class Checker:
     EVENT_GIVES = {"click": (0, "a button click"), "button": (0, "a button click"), "opened": (0, ":opened"),
                    "every": (0, ":every"), "after": (0, ":after"), "change": (1, ":change"), "enter": (1, ":enter")}
     HANDLER_POS = {"click": 0, "opened": 0, "change": 0, "enter": 0, "button": 1, "every": 1, "after": 1}
+    # What tap's functions make, and what the methods of those give back (left out: it depends, like :json).
+    TAP_MAKES = {"get": "response", "post": "response", "put": "response", "delete": "response", "data": "data object"}
+    TAP_GIVES = {"response": {"status": "$number", "ok": "$bool", "text": "$text"},
+                 "data object": {"has": "$bool", "keys": "$list", "size": "$number", "set": "data object"}}
 
     def __init__(self, program, base_dir=None):
         self.program = program
@@ -1549,9 +1591,13 @@ class Checker:
             lib = self.kind(e.fn.obj, seen)
             if lib in ("$module:tgui", "$module:mtgui") and e.fn.name == "window":
                 return "window"
+            if lib == "$module:tap":
+                return self.TAP_MAKES.get(e.fn.name)
             return None
         if k == "method":
             obj = self.kind(e.obj, seen)
+            if obj in self.TAP_GIVES:
+                return self.TAP_GIVES[obj].get(e.name)
             gui = gui_tables()
             if obj in self.CONTAINERS and gui and e.name in gui["kinds"] and e.name != "window" and (e.name != "page" or obj == "window"):
                 return e.name
@@ -1629,6 +1675,9 @@ class Checker:
             self.expr(s.items, scope)
             if self.kind(s.items) == "$number":
                 self.problem(s, f"Can't loop over a number. Try: for {s.name} in range(...):")
+            elif self.kind(s.items) == "data object":
+                owner = s.items.name if s.items.kind == "var" else "thing"
+                self.problem(s, f"Can't loop over a data object. Loop over its names instead: for {s.name} in {owner}:keys():")
             self.check_range_len(s)
             self.body(s.body, scope, True, in_func)
         elif k == "return":
@@ -1723,6 +1772,9 @@ class Checker:
             if self.anims is None:
                 self.anims = {n: b.fn for n, b in self.interp.lib_anims().items()}
             return self.anims
+        if lib == "tap":
+            tap = tap_tables()
+            return tap["lib"] if tap else None
         gui = gui_tables()
         return gui["libs"].get(lib) if gui else None
 
@@ -1833,8 +1885,9 @@ class Checker:
         gui = gui_tables()
         if gui is None:
             return True
+        tap = tap_tables()
         return name in SIMPLE_METHODS["text"] or name in SIMPLE_METHODS["list"] or name in SIMPLE_METHODS["line"] or \
-            any(name in m for m in gui["kinds"].values())
+            any(name in m for m in gui["kinds"].values()) or (tap is None or any(name in m for m in tap["kinds"].values()))
 
     def check_call(self, e, scope):
         fn, n = e.fn, len(e.args)
@@ -1922,7 +1975,7 @@ class Checker:
             return
         # Unknown value: only a library can use '.', and libraries only have these.
         gui = gui_tables()
-        members = {"window"} | set(self.lib_members("anims") or {})
+        members = {"window"} | set(self.lib_members("anims") or {}) | set(self.lib_members("tap") or {})
         if gui is not None and e.name not in members and e.obj.kind == "var" and e.obj.name not in self.imports:
             self.problem(e, dot_help("not a library", e.obj, e.name))
 
@@ -1966,7 +2019,8 @@ class Checker:
             self.problem(e, f"{self.TYPE[obj].capitalize()} doesn't have any :methods.")
             return
         gui = gui_tables()
-        methods = gui["kinds"].get(obj) if gui else None
+        tap = tap_tables() if obj in self.TAP_GIVES else None
+        methods = tap["kinds"].get(obj) if tap else gui["kinds"].get(obj) if gui else None
         if methods is None:
             return
         if name == "page" and obj in ("row", "card", "page"):
@@ -2181,9 +2235,25 @@ def setup_streams():
             os.system("")
 
 
+def read_source(path):
+    """The program's text, or None after a one-line message when the file can't be read."""
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            return f.read()
+    except FileNotFoundError:
+        msg = f"There's no file called '{path}'."
+    except UnicodeDecodeError:
+        msg = f"'{path}' isn't a text file, so it can't be a Tuff program."
+    except OSError as exc:
+        msg = f"'{path}' is a folder, not a .tuf file." if os.path.isdir(path) else f"Couldn't open '{path}': {exc.strerror or exc}."
+    report(TuffError(msg), "")
+    return None
+
+
 def run_file(path):
-    with open(path, encoding="utf-8-sig") as f:
-        src = f.read()
+    src = read_source(path)
+    if src is None:
+        return 1
     try:
         program = Parser(tokenize(src)).program()
         interp = Interpreter(src, os.path.dirname(os.path.abspath(path)))
@@ -2198,7 +2268,7 @@ def run_file(path):
         return 1
     except (ReturnSignal, BreakSignal, ContinueSignal) as sig:
         word = {"ReturnSignal": "return", "BreakSignal": "break", "ContinueSignal": "continue"}[type(sig).__name__]
-        report(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}."), src)
+        report(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}.", sig.line, sig.col), src)
         return 1
     except KeyboardInterrupt:
         return 130
@@ -2206,8 +2276,9 @@ def run_file(path):
 
 
 def check_file(path):
-    with open(path, encoding="utf-8-sig") as f:
-        src = f.read()
+    src = read_source(path)
+    if src is None:
+        return 1
     try:
         program = Parser(tokenize(src)).program()
     except TuffError as err:
@@ -2230,6 +2301,13 @@ def check_file(path):
     return 0
 
 
+def usage():
+    me = os.path.basename(sys.executable) if getattr(sys, "frozen", False) else "python tuff.py"
+    return ("Usage:\n"
+            f"  {me} yourfile.tuf            run a Tuff program\n"
+            f"  {me} --check yourfile.tuf    check it for mistakes without running it")
+
+
 def main():
     setup_streams()
     args = sys.argv[1:]
@@ -2238,8 +2316,17 @@ def main():
         print("TuffCode runs on its own coding language called Tuff, files end in .tuf")
         print("Run a program with: python tuff.py yourfile.tuf")
         return 0
-    if args[0] == "--check" and len(args) > 1:
+    if args[0] in ("--help", "-h", "/?"):
+        print(usage())
+        return 0
+    if args[0] == "--check":
+        if len(args) < 2:
+            sys.stderr.write("--check needs a file to check.\n" + usage() + "\n")
+            return 2
         return check_file(args[1])
+    if args[0].startswith("--") and not os.path.exists(args[0]):
+        sys.stderr.write(f"Unknown option '{args[0]}'.\n" + usage() + "\n")
+        return 2
     code = run_file(args[0])
     if getattr(sys, "frozen", False) and not WINDOWED and not IDE:
         try:

@@ -5,7 +5,7 @@ const fsp = fs.promises;
 const { spawn } = require('child_process');
 
 const RUNTIME_DIR = app.isPackaged ? path.join(process.resourcesPath, 'runtime-src') : path.join(__dirname, '..');
-const RUNTIME_FILES = ['tuff.py', 'tuff_tgui.py'];
+const RUNTIME_FILES = ['tuff.py', 'tuff_tgui.py', 'tuff_tap.py'];
 const DEFAULT_ICON = path.join(__dirname, 'renderer', 'assets', 'icon.png');
 const ASSET_EXTS = new Set(['.png', '.gif', '.ico', '.jpg', '.jpeg', '.txt', '.json', '.csv', '.wav']);
 const PY = process.platform === 'win32' ? { cmd: 'py', args: ['-3'] } : { cmd: 'python3', args: [] };
@@ -243,6 +243,8 @@ async function build(opts, emit) {
   }
   const src = await fsp.readFile(program, 'utf8');
   const usesGui = /^\s*(import|mention)\s+m?tgui\b/m.test(src);
+  // tap needs Python's ssl (and certifi, where installed, for a Mac app's https:// certificates).
+  const usesTap = /^\s*(import|mention)\s+tap\b/m.test(src);
   const windowed = opts.windowed ?? usesGui;
   step('pack', 'done', `Packed your program${assets.length ? ` and ${assets.length} file${assets.length > 1 ? 's' : ''} (${assets.slice(0, 3).join(', ')}${assets.length > 3 ? '…' : ''})` : ''}`);
 
@@ -255,6 +257,7 @@ async function build(opts, emit) {
     ...(WIN ? ['--icon', iconFile] : macIcon ? ['--icon', macIcon] : []), windowed ? '--windowed' : '--console',
     ...addData.flatMap((d) => ['--add-data', d]),
     ...(usesGui ? ['--hidden-import', 'tuff_tgui'] : ['--exclude-module', 'tkinter', '--exclude-module', 'tuff_tgui']),
+    ...(usesTap ? ['--hidden-import', 'tuff_tap', '--hidden-import', 'ssl', '--hidden-import', 'certifi'] : ['--exclude-module', 'tuff_tap']),
     launcher,
   ];
   let lastDetail = '';

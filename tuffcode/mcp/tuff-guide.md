@@ -28,13 +28,15 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `.5`, `1e3`, `1_000` | `0.5`, `1000` |
 | `[0] * 3` | `[0, 0, 0]` |
 | default or keyword inputs, `global` | plain inputs only; `global` isn't needed (see rule 2) |
+| `print(x, end="")` | an error: build the whole line with `+` first, or add to a shown line with `line:append(...)` |
 | `import random`, `import math` | nothing to import. Built in: `random(a, b)`, `sqrt`, `floor`, `ceil`, `round`, `abs`, `min`, `max`, `sum`, `average`, `pi`. There's no sin, cos, tan, log or exp, no `random.choice` (use `items[random(0, len(items) - 1)]`) and no shuffle |
+| `requests.get(url)`, `json.loads(...)` | `mention tap`, then `res = tap.get(url)` and `res:json` (see "tap") |
 | dictionaries, classes, `try`/`except`, `lambda`, slices like `s[1:3]`, `sort()`, `split()`, `exit()` | not in Tuff (see "What Tuff can't do") |
 
 These words are keywords and can't be names: `func return if elif else then while for in break continue and or not is true false nil say input flush import mention`.
 
 ## Two rules that trip everyone up
-**Rule 1: a method's input without brackets takes the rest of the line.** `items:has x and ready` means `items:has(x and ready)`, and `say slider:value - 1` gives the slider an input of `-1`. So whenever more of the line follows a method call, put its inputs in brackets, even empty ones:
+**Rule 1: a method's input without brackets takes the rest of the line.** When what follows a method's name could start a value (a name, a number, text, `-`, `[`, `not`, `true`, `false` or `nil`), that and the rest of the line are the method's input. `items:has x and ready` means `items:has(x and ready)`, and `say slider:value - 1` gives the slider an input of `-1`. Anything else ends the call: `stack:pop + 10` is normal maths. So whenever more of the line follows a method call, put its inputs in brackets, even empty ones:
 ```tuff
 items = ["eggs"]
 ready = true
@@ -75,7 +77,7 @@ func double(n):
     n * 2                   # a function gives back its last value; 'return' also works
 say double(4)
 ```
-- **Blocks:** blocks are indented 4 spaces after a line ending in `:` (or `then`). A one-line block also works, `if score > 3: say "big"`, but always put a space after the `:`. `if score > 3:say "big"` is read as a method call.
+- **Blocks:** blocks are indented 4 spaces after a line ending in `:` (or `then`). 2 spaces or a tab also work, as long as the lines of a block line up. A one-line block also works, `if score > 3: say "big"`, but always put a space after the `:`. `if score > 3:say "big"` is read as a method call.
 - **Line breaks:** a line can only continue onto the next one inside brackets, like a list written over several lines.
 - **True and false:**
   - `and`, `or` and `not` work as you'd expect.
@@ -83,12 +85,12 @@ say double(4)
   - `and` and `or` give back one of their sides, so `name = typed or "nobody"` gives a default.
 - **Comparing:**
   - Compare with `is`, `is not`, `==`, `!=`, `<`, `>`, `<=` and `>=`.
-  - Different kinds of value are never equal: `"5" is 5` and `true is 1` are both false.
+  - Different kinds of value are never equal: `"5" is 5` and `true is 1` are both false. Comparing text with a number is always a mistake, so `tuff_check` reports it.
   - Comparing text with a number using `<` is an error.
   - Text compares alphabetically, capitals first (`"Banana" < "apple"`), so two typed answers compare as text: `"10" > "9"` is false. Turn them into numbers first.
 
 ### Asking questions
-`input` isn't an ordinary function: everything after it on the line is its question. Give it a line of its own and store the answer: `answer = input "Again? "`, then `while answer is "y":`. The only other safe place is directly inside a call, like `number(input "Age? ")`. `while input "More? " is "y":` asks the question `false`, and `input("x") + "!"` is an error.
+`input` isn't an ordinary function: everything after it on the line is its question. Give it a line of its own and store the answer: `answer = input "Again? "`, then `while answer is "y":`. The only other safe place is directly inside a call, like `number(input "Age? ")`. `while input "More? " is "y":` asks the question `false`, and `input("x") + "!"` is an error. The answer keeps any spaces typed around it, so trim it before comparing: `answer = answer:trim()`.
 
 ## Numbers
 - **Maths:** `+ - * /`, `%` (remainder) and `^` (power, so `2 ^ 10` is 1024). There are no chained comparisons.
@@ -104,7 +106,7 @@ say double(4)
   - It needs whole numbers, and `random()` with no inputs is an error.
   - For a decimal, divide: `random(0, 100) / 100`.
 - **Typed numbers:** `input` always gives text, so `"5" + 1` is `"51"` and `"5" * 2` is `"55"`.
-  - Turn it into a number first: `number("42")` is 42 and `number("4.5")` is 4.5.
+  - Turn it into a number first: `number("42")` is 42 and `number("4.5")` is 4.5. Spaces around the number are ignored: `number(" 5 ")` is 5.
   - But `number("abc")` **stops the program** with an error, so check typed text first (`is_number` in "Patterns").
 
 ## Text
@@ -145,14 +147,17 @@ both = items + ["jam"]      # join two lists (makes a new list)
 - **Joining:** `+` only joins lists when both sides are lists. `items + "jam"` turns the whole list into text, so use `items:add("jam")`.
 - **Sharing:** lists are shared, not copied. After `b = a`, adding to `b` also changes `a`. Make a copy with `b = a + []`; lists inside it are still shared.
 - **What lists hold:** lists can hold anything, including other lists (`grid[0][1] = 9`), and can be written over several lines.
+- **Showing a list:** `say ["a", "b"]` shows `["a", "b"]`, with text items in quotes, and so does a list joined with text. To show the items without quotes, `say` each one in a loop.
 - **Not in Tuff:** there's no sort and there are no dictionaries. Keep two lists side by side instead, like `names` and `scores`.
 
 ## Functions
-- `func name(a, b):` then an indented body. The last line's value is given back automatically. A loop or `say` gives back nothing useful, so end with `return value` when the answer matters.
+- `func name(a, b):` then an indented body. The last line's value is given back automatically. A loop gives back nil, and `say` gives back the line it showed (so a function ending in `say w * h` gives back the text "12", not a number). End with `return value` when the answer matters.
+- A function with no inputs can leave out the brackets when it's made (`func greet:`), but calling it always needs them: `greet()`. `greet` on its own line does nothing.
 - Call a function with exactly as many inputs as it has. There are no default or keyword inputs.
+- `return` only works inside a function.
 - **Make every function at the top level of the file**, not inside another function or inside `if`, `for` or `while`. Top-level functions can be used anywhere, even above where they're written. A function made inside a block or another function only exists there, and only once its line has run.
 - Inputs belong to the function. Any other name follows rule 2.
-- Functions can call themselves, but only about 70 calls deep. Use a loop for anything that could go deeper.
+- Functions can call themselves, but only about 100 calls deep. Use a loop for anything that could go deeper.
 
 ## Live lines and clearing (console programs)
 ```tuff
@@ -164,6 +169,7 @@ say line:text()             # what the line says now
 flush                       # clear the whole screen
 clear(2)                    # remove the last 2 lines; clear(all) is the same as flush
 ```
+`say` and `print(...)` both give back the line they showed, so `say print(1, 2)` shows "1 2" twice.
 
 ## Libraries
 `import x` and `mention x` mean the same thing. Put them at the top. Library functions use a dot and always need brackets, even with no inputs: `anims.loading()`. On its own, `anims.loading` does nothing.
@@ -173,6 +179,31 @@ clear(2)                    # remove the last 2 lines; clear(all) is the same as
   - `anims.type(text, seconds_per_letter)`: the text is required; 0.04 by default, and bigger is slower
   - `anims.countdown(start, then)` (defaults: 3, "Go!"): shows start, start - 1 … 1, one per second, then replaces the line with the text `then`
 - **tgui**: real desktop app windows. **mtgui**: the same widgets with a modern look (gradients, gloss, glow). Use mtgui unless asked otherwise.
+- **tap** gets and sends things on the web (HTTP), like Python's requests. See below.
+
+### tap
+```tuff
+mention tap
+
+res = tap.get("https://api.github.com/users/octocat")
+if res:ok:
+    user = res:json                 # a JSON object comes back as a data object
+    say user:get("name") + " has " + user:get("public_repos") + " public repos"
+else:
+    say "Error " + res:status
+
+note = tap.data()                   # an empty data object, to send
+note:set("title", "Hello")
+note:set("tags", ["a", "b"])
+sent = tap.post("https://httpbin.org/post", note)
+say sent:status
+```
+- **Requests:** `tap.get(url)`, `tap.post(url, body)`, `tap.put(url, body)` and `tap.delete(url)`. Text is sent as plain text, and a data object or a list as JSON. Headers go last, as a data object: `tap.get(url, headers)`.
+- **A response:** `res:status` (like 200 or 404), `res:ok` (true for 200 to 299), `res:text`, `res:json` and `res:header("Content-Type")` (nil if it isn't there).
+- **Errors:** a 404 or 500 doesn't stop the program, so check `res:ok`. No internet, a bad address, no answer within 15 seconds, and `res:json` on something that isn't JSON do stop it with an error.
+- **JSON:** `res:json` gives a data object for `{...}`, a list for `[...]`, or text, a number, true/false or nil.
+- **Data objects:** `user:get("name")` (not `user["name"]`; nil if it's missing), `user:has("name")`, `user:keys()` (a list of the names), `user:size()` and `user:set("name", value)`. Objects inside are data objects too, and `say user` shows it as JSON. Loop over `user:keys()`, not `user`.
+- **Waiting:** each call waits for the answer, and a window freezes while it waits.
 
 ## App windows (tgui / mtgui)
 ```tuff
@@ -224,7 +255,7 @@ func clear_all():
   - Change a button later with `btn:set "New text"`, `btn:style "danger"`, `btn:disable` and `btn:enable`. Only buttons can be disabled.
 - **Every widget** has `:hide`, `:show` and `:remove`. The window, a row, a card, a page or a text box also has `:clear`.
 - **Other methods:**
-  - `box:focus` puts the cursor in a text box.
+  - `box:focus` puts the cursor in a text box, and `box:set "hi"` replaces its text.
   - `clock:style "digital"` and `clock:set(10, 30)`.
   - `dropdown:options(["X", "Y"])`.
   - `spinner:start` and `:stop`.
@@ -309,7 +340,7 @@ func go_home():
 func menu_shown():
     say "Menu opened"
 ```
-- `page:showing` is true while that page is on screen.
+- `page:showing` is true while that page is on screen. `page:show` does the same as `page:open`.
 - Pages go straight on the window, not inside cards or rows, and hold widgets just like a card.
 - The first page's `:opened` doesn't run at the start. Opening the page that's already showing doesn't run it again.
 
@@ -478,7 +509,7 @@ In a window app, check a text box before using it: `if not is_number(bill:value(
 
 ## What Tuff can't do
 Tuff has none of these:
-- files (except pictures for `image` and `icon`) or the internet;
+- files (except pictures for `image` and `icon`), or the internet except through `tap`;
 - dictionaries, classes, sorting, or exceptions (`try`);
 - splitting, replacing or formatting text, or slices;
 - random decimals (divide a whole number instead), or sin, cos, tan, log or exp;
