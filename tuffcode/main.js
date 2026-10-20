@@ -380,11 +380,15 @@ ipcMain.handle('plugins:list', (_e, force) => plugins.list(force));
 ipcMain.handle('plugins:install', (_e, id) => plugins.install(id));
 ipcMain.handle('plugins:uninstall', (_e, id) => plugins.uninstall(id));
 ipcMain.handle('plugins:setEnabled', (_e, id, on) => plugins.setEnabled(id, on));
-// Plugins with the "files" permission save into the open project, and only there.
-ipcMain.handle('plugins:writeFile', async (_e, root, rel, data, encoding = 'utf8') => {
-  const base = path.resolve(String(root || ''));
+// Plugins with the "files" permission save into the open project through here: the folder the IDE
+// is watching, not one the caller names. This keeps their saves in the project. It isn't a sandbox:
+// plugins run in the IDE's own page, so they can reach everything window.tuff has.
+ipcMain.handle('plugins:writeFile', async (_e, rel, data, encoding = 'utf8') => {
+  const base = path.resolve(String(watchedDir || ''));
   const target = path.resolve(base, String(rel || ''));
-  if (!root || !rel || (target !== base && !target.startsWith(base + path.sep))) throw new Error('Plugins can only save inside the open project.');
+  // A drive's root (E:\) already ends in a separator.
+  const inside = base.endsWith(path.sep) ? base : base + path.sep;
+  if (!watchedDir || !rel || !target.startsWith(inside)) throw new Error('Plugins can only save inside the open project.');
   await fsp.mkdir(path.dirname(target), { recursive: true });
   await fsp.writeFile(target, encoding === 'base64' ? Buffer.from(String(data), 'base64') : String(data), encoding === 'base64' ? undefined : 'utf8');
   return target;

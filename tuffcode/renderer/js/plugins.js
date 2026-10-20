@@ -149,7 +149,7 @@
         rel: (path) => ide.rel(path),
         // "files" permission: save text or base64 data (like a PNG or WAV) at a path inside the project.
         write: perms.includes('files') ? async (path, data, { encoding = 'utf8' } = {}) => {
-          const saved = await api.plugins.writeFile(ide.root(), path, data, encoding);
+          const saved = await api.plugins.writeFile(path, data, encoding); // inside the open project
           await ide.reloadChanged();
           return saved;
         } : undefined,
