@@ -85,6 +85,15 @@ def main():
         R.check(c["failed"] == 0, f"--check: {c['passed']} cases right, {c['failed']} wrong", c.get("failures"))
         R.numbers["check_cases"] = c["passed"] + c["failed"]
 
+    if wants("docs"):
+        print("== the editor's tables (docs_test.mjs)", flush=True)
+        try:
+            p = subprocess.run(["node", os.path.join(HERE, "docs_test.mjs")], cwd=REPO, env=ENV, capture_output=True, text=True, encoding="utf-8")
+            m = re.search(r"docs: (\d+) passed, (\d+) failed", p.stdout)
+            R.check(p.returncode == 0 and m, f"tuff-lang.js knows atgui ({m.group(1) if m else 0} checks)", p.stdout[-800:] + p.stderr[-400:])
+        except OSError:
+            print("  skip: node isn't installed", flush=True)
+
     if wants("widgets"):
         print("== programs/widgets.tuf: every widget, through real DOM events", flush=True)
         r = drive("widgets", "tuffcode/test/atgui/programs/widgets.tuf", "tuffcode/test/atgui/programs/widgets.js")

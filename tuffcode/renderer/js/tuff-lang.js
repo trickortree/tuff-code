@@ -143,6 +143,93 @@ window.TUFF_DOCS = {
   append: ['line:append value', 'Adds text to the end of a line you already said.'],
 };
 
+// atgui: its library entry and its methods. TUFF_METHOD_DOCS is one namespace for every library, so a name
+// atgui shares with tgui or tap keeps its doc, with atgui's use added at the end.
+(() => {
+  window.TUFF_LIBS.atgui = {
+    window: ['atgui.window("Title", width, height)', 'Opens a modern app window made of real HTML and CSS: sidebars, lists, chat bubbles, dashboards, menus and pop-ups, all styled from Tuff. Width and height are optional.'],
+  };
+  window.TUFF_DOCS.atgui = ['mention atgui', 'Advanced Tuff GUI: apps that look like the Claude or Codex desktop apps. Sidebars, lists, tables, tabs, markdown, menus, toasts, animations and styling, with no HTML to write.'];
+  const docs = window.TUFF_METHOD_DOCS;
+  const also = {
+    set: 'atgui: also lists (picks an item), tables, markdown, code, charts, badges, icons, avatars, modals and the title bar.',
+    value: 'atgui: a list gives the picked item\'s text (nil if none), a table the picked row as a list, tabs the open tab\'s name.',
+    change: 'atgui: a list\'s :change gets the picked item\'s text, a table\'s the row (a list), tabs\' the tab\'s name.',
+    enter: 'atgui: in a textarea, Enter runs fn and Shift+Enter starts a new line.',
+    focus: 'atgui: box:focus fn runs fn(true) when the cursor goes in and fn(false) when it leaves.',
+    add: 'atgui: list:add("Inbox") adds an item and gives it back; table:add(["Ada", "Admin"]) adds a row; markdown, code and charts add to the end.',
+    remove: 'atgui: list:remove "Inbox" takes an item out of a list or table (with no input, the whole widget goes).',
+    clear: 'atgui: empties a list, table, markdown or code block too.',
+    open: 'atgui: tabs:open "Home", dlg:open shows a modal, menu:open shows a menu under what was just clicked.',
+    opened: 'atgui: also for a tab.',
+    close: 'atgui: dlg:close closes a modal; menu:close closes a menu.',
+    style: 'atgui: w:style(name, value) with friendly names: background, color, radius, padding, margin, border, shadow, size, bold, opacity, glass, blur, gradient, width, height, scale... Start the name with hover, pressed or focus for that moment, like btn:style("hover scale", 1.05). Buttons, badges and spinners also take one style name.',
+    color: 'atgui: also icons.',
+    icon: 'atgui: btn:icon "send" puts a built-in icon on a button (or a list item, badge or menu item); row:icon("search", 20) shows one; app:icon "logo.png" sets the window\'s icon.',
+    image: 'atgui: also .jpg, .webp and .svg, or a web address.',
+    theme: 'atgui: also "system", which follows the computer.',
+    accent: 'atgui: also indigo and gray.',
+    start: 'atgui: timer:start runs a timer from app:every again.',
+    stop: 'atgui: timer:stop pauses a timer from app:every or app:after.',
+    small: 'atgui: item:small "text" gives a list item a second line.',
+    spinner: 'atgui: spinner:style "dots" makes three bouncing dots, like "someone is typing".',
+    every: 'atgui: gives back a timer with :stop and :start.',
+    after: 'atgui: gives back a timer with :stop.',
+    title: 'atgui: also changes the title bar\'s text.',
+    button: 'atgui: also the gradient style, and the function gets the button\'s text (or leave the input out).',
+  };
+  for (const [name, text] of Object.entries(also)) if (docs[name] && text) docs[name] = [docs[name][0], `${docs[name][1]} ${text}`];
+  Object.assign(docs, {
+    textarea: ['app:textarea "Message"', 'atgui: a text box for several lines that grows as you type. With :enter, Enter runs the function and Shift+Enter starts a new line.'],
+    switch: ['app:switch("Dark mode", true)', 'atgui: an on/off switch (tgui calls it toggle). Read it with :value.'],
+    list: ['items = app:list(["Inbox", "Sent"])', 'atgui: a list to pick from. items:add("x") gives back the item (:icon, :small, :badge); items:change fn gets the picked item\'s text.'],
+    table: ['t = app:table(["Name", "Role"])', 'atgui: a table. t:add(["Ada", "Admin"]) adds a row; t:change fn gets the picked row as a list.'],
+    tabs: ['tabs = app:tabs()', 'atgui: tabs. home = tabs:tab "Home" makes one to add widgets to; tabs:open "Home", tabs:value, tabs:change fn.'],
+    tab: ['home = tabs:tab "Home"', 'atgui: a tab of a tabs widget. Add widgets to it like a card.'],
+    column: ['col = row:column', 'atgui: stacks things down, like the window does. Useful inside a row.'],
+    grid: ['g = app:grid(3)', 'atgui: things in equal columns (with no number, as many as fit). card:style("span", 2) makes a card two columns wide.'],
+    scroll: ['msgs = app:scroll()', 'atgui: a part that scrolls on its own and takes the space left, like a chat\'s messages. msgs:to_bottom scrolls to the end.'],
+    split: ['panes = app:split(260)', 'atgui: two panes side by side; the first is 260 wide, with a handle to drag between them.'],
+    sidebar: ['side = app:sidebar(240)', 'atgui: a column down the left side of the window, or app:sidebar(240, "right").'],
+    avatar: ['app:avatar("Ada Lovelace")', 'atgui: a round badge with someone\'s initials, or a picture file. A color is optional: app:avatar("Ada", "pink").'],
+    badge: ['app:badge("New", "success")', 'atgui: a small pill of text. Styles: accent, gray, success, warning, danger, info, outline. item:badge "3" shows a count on a list item.'],
+    markdown: ['app:markdown "**bold**"', 'atgui: formatted text from Markdown: headings, **bold**, *italic*, `code`, lists, links, tables and code blocks. :add adds more at the end, for replies that arrive bit by bit.'],
+    code: ['app:code(text, "tuff")', 'atgui: a code block with colors and a Copy button.'],
+    html: ['app:html("<b>Hi</b>")', 'atgui, for experts: your own HTML.'],
+    chart: ['app:chart([3, 8, 5], "line")', 'atgui: a small line or bar chart. chart:add 9 adds a point; chart:set([...]) replaces them all.'],
+    gap: ['box:gap 12', 'atgui: the space between the things in a row, column, card, grid or the window.'],
+    padding: ['box:padding 20', 'atgui: the space inside the edges of a row, column, card or the window.'],
+    align: ['box:align "center"', 'atgui: lines things up across a row or column: start, center, end or stretch.'],
+    justify: ['row:justify "between"', 'atgui: spreads things along a row or column: start, center, end, between, around or evenly.'],
+    grow: ['w:grow', 'atgui: makes it take the space left over in its row or column.'],
+    fill: ['w:fill', 'atgui: stretches it across its row or column.'],
+    width: ['w:width 200', 'atgui: sets the width (pixels, or text like "50%").'],
+    height: ['w:height 120', 'atgui: sets the height (pixels, or text like "50%").'],
+    drag: ['bar:drag', 'atgui: dragging it moves a window that has no frame.'],
+    tooltip: ['w:tooltip "Hint"', 'atgui: a little label that shows when the mouse rests on it.'],
+    hover: ['w:hover fn', 'atgui: runs fn(true) when the mouse goes over it and fn(false) when it leaves.'],
+    clicked: ['w:clicked fn', 'atgui: runs fn when it\'s clicked. Works on any widget; fn gets its text (or leave the input out).'],
+    animate: ['w:animate "slide-up"', 'atgui: fade-in, fade-out, slide-up, slide-down, slide-left, slide-right, pop, zoom-in, zoom-out, bounce, shake, pulse, spin, wiggle, float, blink. w:animate("pulse", 1, "forever") repeats; "none" stops.'],
+    css: ['w:css("letter-spacing: 2px")', 'atgui, for experts: adds CSS to it. app:css(".at-card { ... }") adds CSS rules to the whole window.'],
+    font: ['app:font "rounded"', 'atgui: the window\'s font: system, rounded, serif, mono, or a font\'s name.'],
+    frameless: ['app:frameless', 'atgui: a window without the system\'s frame or title bar. Use it at the top of the program.'],
+    titlebar: ['bar = app:titlebar("My App")', 'atgui: a frameless window with its own title bar (drag it to move; minimize, maximize and close). Add things to it like a row.'],
+    modal: ['dlg = app:modal("Rename")', 'atgui: a dialog over the window. Add widgets to it, then dlg:open and dlg:close; Escape or a click outside closes it. dlg:closed fn.'],
+    menu: ['m = app:menu()', 'atgui: a pop-up menu: m:item("Copy", copy), m:divider. w:menu m opens it on a right-click; m:open opens it under what was just clicked.'],
+    item: ['m:item("Delete", delete_it, "danger")', 'atgui: adds an item to a menu. Its function gets the text of the list item that was right-clicked (or nil).'],
+    toast: ['app:toast("Saved", "success")', 'atgui: a message that pops up in the corner for a few seconds: info, success, warning or error.'],
+    key: ['app:key("ctrl+s", save)', 'atgui: runs a function when a key is pressed: "ctrl+s", "escape", "f5", "ctrl+shift+n"...'],
+    closed: ['app:closed fn', 'atgui: runs fn when the window closes (or a modal: dlg:closed fn).'],
+    minimize: ['app:minimize', 'atgui: minimizes the window.'],
+    maximize: ['app:maximize', 'atgui: maximizes the window, or puts it back.'],
+    password: ['box:password', 'atgui: hides what\'s typed in a text box, with dots.'],
+    items: ['items:items()', 'atgui: the texts of every item in a list, as a list.'],
+    to_bottom: ['msgs:to_bottom', 'atgui: scrolls a scroll() to the end.'],
+    to_top: ['msgs:to_top', 'atgui: scrolls a scroll() to the start.'],
+    select: ['item:select', 'atgui: picks this list item (or table row), without running :change.'],
+  });
+})();
+
 const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average'];
 
 // A line that opens an indented block: if/elif/else/while/for/func ending in ':' or 'then'.
@@ -290,6 +377,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
         { label: 'import anims', kind: K.Snippet, insertText: 'import anims\n', range, detail: 'Load the animations library' },
         { label: 'tap', kind: K.Snippet, insertText: 'mention tap\n\nres = tap.get("${1:https://api.github.com/users/octocat}")\nif res:ok:\n    info = res:json\n    say info:get("${2:name}")\nelse:\n    say "Error " + res:status\n', insertTextRules: R, range, detail: 'Get JSON from the web' },
         { label: 'tgui app', kind: K.Snippet, insertText: 'import tgui\n\napp = tgui.window("${1:My App}")\napp:heading "${2:Hello!}"\n\nfunc ${3:clicked}():\n    $0\n\napp:button("${4:Click me}", ${3:clicked})\n', insertTextRules: R, range, detail: 'A starter app window' },
+        { label: 'atgui app', kind: K.Snippet, insertText: 'mention atgui\n\napp = atgui.window("${1:My App}", 900, 600)\napp:accent "${2:indigo}"\nside = app:sidebar(220)\nside:heading "${3:My App}"\npages = side:list(["Home", "Settings"])\npages:change opened\ntitle = app:heading "Home"\ncard = app:card\ncard:text "${4:Hello!}"\n\nfunc opened(name):\n    title:set name\n    $0\n', insertTextRules: R, range, detail: 'A modern app with a sidebar' },
       ];
       const kws = window.TUFF_KEYWORDS.map((k) => ({ label: k, kind: K.Keyword, insertText: k, range, documentation: window.TUFF_DOCS[k]?.[1] }));
       const fns = TUFF_BUILTINS.map((b) => ({ label: b, kind: K.Function, insertText: `${b}($0)`, insertTextRules: R, range, detail: window.TUFF_DOCS[b]?.[0], documentation: window.TUFF_DOCS[b]?.[1] }));
@@ -465,7 +553,7 @@ function registerTuffNavigation(monaco) {
         if ((m = text.match(/^\s*func\s+([A-Za-z_]\w*)\s*(\([^)]*\))?/))) {
           const end = blockEnd(model, line);
           symbols.push({ name: m[1], detail: m[2] || '()', kind: K.Function, range: new monaco.Range(line, 1, end, model.getLineMaxColumn(end)), selectionRange: range(line, 1, model.getLineMaxColumn(line)), tags: [] });
-        } else if ((m = text.match(/^([A-Za-z_]\w*)\s*=\s*(m?tgui)\.window/))) {
+        } else if ((m = text.match(/^([A-Za-z_]\w*)\s*=\s*(m?tgui|atgui)\.window/))) {
           symbols.push({ name: m[1], detail: `${m[2]} window`, kind: K.Class, range: range(line, 1, model.getLineMaxColumn(line)), selectionRange: range(line, 1, m[1].length + 1), tags: [] });
           seen.add(m[1]);
         } else if ((m = text.match(/^([A-Za-z_]\w*)\s*=\s*[A-Za-z_]\w*:([a-z]+)/))) {
