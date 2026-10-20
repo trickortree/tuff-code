@@ -38,6 +38,7 @@ const within = (promise, ms) => {
 };
 
 const summary = [];
+const started = Date.now();
 for (const name of wanted.length ? wanted : all) {
   const mod = await import(pathToFileURL(path.join(SUITES, `${name}.mjs`)).href);
   const meta = mod.meta || {};
@@ -47,7 +48,7 @@ for (const name of wanted.length ? wanted : all) {
     continue;
   }
   console.log(`\n=== ${name}: ${meta.title || ''}`);
-  const res = { name, pass: 0, fail: 0, skip: 0 };
+  const res = { name, pass: 0, fail: 0, skip: 0, t0: Date.now() };
   summary.push(res);
   const app = await launch({ name, project: meta.project, app: appBin, env: meta.env, keep });
   current = app;
@@ -77,12 +78,13 @@ for (const name of wanted.length ? wanted : all) {
     await app.stop();
     current = null;
   }
-  console.log(`--- ${name}: ${res.pass} passed, ${res.fail} failed${res.skip ? `, ${res.skip} skipped` : ''}`);
+  res.secs = Math.round((Date.now() - res.t0) / 1000);
+  console.log(`--- ${name}: ${res.pass} passed, ${res.fail} failed${res.skip ? `, ${res.skip} skipped` : ''} (${res.secs} s)`);
 }
 
 const ran = summary.filter((s) => !s.skipped);
 const total = ran.reduce((a, s) => ({ pass: a.pass + s.pass, fail: a.fail + s.fail, skip: a.skip + s.skip }), { pass: 0, fail: 0, skip: 0 });
 console.log('\n=== Summary');
-for (const s of summary) console.log(`${s.skipped ? 'skip' : s.fail ? 'FAIL' : 'ok  '}  ${s.name.padEnd(12)} ${s.skipped ? 'not on this system' : `${s.pass}/${s.pass + s.fail}${s.skip ? ` (${s.skip} skipped)` : ''}`}`);
-console.log(`TOTAL: ${total.pass} passed, ${total.fail} failed${total.skip ? `, ${total.skip} checks skipped` : ''}, in ${ran.length} suites${summary.length > ran.length ? ` (${summary.length - ran.length} not for this system)` : ''}`);
+for (const s of summary) console.log(`${s.skipped ? 'skip' : s.fail ? 'FAIL' : 'ok  '}  ${s.name.padEnd(12)} ${s.skipped ? 'not on this system' : `${s.pass}/${s.pass + s.fail}${s.skip ? ` (${s.skip} skipped)` : ''}  ${s.secs} s`}`);
+console.log(`TOTAL: ${total.pass} passed, ${total.fail} failed${total.skip ? `, ${total.skip} checks skipped` : ''}, in ${ran.length} suites${summary.length > ran.length ? ` (${summary.length - ran.length} not for this system)` : ''}, ${Math.round((Date.now() - started) / 1000)} s`);
 process.exit(total.fail || !ran.length ? 1 : 0);

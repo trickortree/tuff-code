@@ -89,7 +89,15 @@ export async function connect(app, { timeout = 90000 } = {}) {
     async ready(ms = 60000) {
       const end = Date.now() + ms;
       while (Date.now() < end) {
-        try { if ((await t.eval(READY)) === 'ready') return; } catch {}
+        let state = null;
+        try { state = await t.eval(READY); } catch {}
+        if (state === 'ready') {
+          // The suites were written for the default 1400 x 880 window. On a smaller screen (a CI machine's)
+          // Windows shrinks the window, so the page is laid out at that size instead.
+          const [w, h] = await t.eval('[innerWidth, innerHeight]');
+          if (w < 1400 || h < 880) await send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 880, deviceScaleFactor: 0, mobile: false });
+          return;
+        }
         await sleep(300);
       }
       throw new Error(`The IDE didn't finish loading in ${ms / 1000} s`);
@@ -129,8 +137,11 @@ export async function connect(app, { timeout = 90000 } = {}) {
     },
     async move(x, y) { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y }); await sleep(120); },
     // Screenshot into this suite's out folder (a bare name) or anywhere (a full path). clip: { x, y, width, height[, scale] }.
+    // A clip that doesn't fit the window falls back to the whole window: screenshots are for people, not checks.
     async shot(file, clip) {
-      const r = await send('Page.captureScreenshot', { format: 'png', ...(clip ? { clip: { scale: 1, ...clip } } : {}) });
+      let r;
+      try { r = await send('Page.captureScreenshot', { format: 'png', ...(clip ? { clip: { scale: 1, ...clip } } : {}) }); } catch {}
+      if (!r?.data) r = await send('Page.captureScreenshot', { format: 'png' });
       const dest = path.isAbsolute(file) ? file : path.join(app.out, file);
       fs.writeFileSync(dest, Buffer.from(r.data, 'base64'));
       return dest;
