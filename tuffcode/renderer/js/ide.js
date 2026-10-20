@@ -1824,7 +1824,7 @@
   async function playIntro() {
     await saveAll();
     await window.TuffIntro.play({ initial: state.accent, onReveal: enterIDE });
-    await saveSettings({ introSeen: true });
+    await saveSettings({ introSeen: true, introVersion: state.version });
     editor?.focus();
   }
 
@@ -1914,6 +1914,9 @@
     const last = s.lastFolder && (await api.fs.exists(s.lastFolder)) ? s.lastFolder : null;
     const root = last || (await api.project.default());
     const firstRun = !s.introSeen;
+    // After an update the intro plays once more, but nothing else starts over: the folder, tabs,
+    // Learn Tuff progress, settings and plugins all carry on (they live in userData, which updates keep).
+    const updated = !firstRun && s.introVersion !== state.version;
 
     window.TuffStudio.init(window.TuffIDE);
     if (firstRun) {
@@ -1924,11 +1927,16 @@
       await openFile(join(root, 'main.tuf'), { focus: false, quiet: true });
       await introDone;
     } else {
+      const introDone = updated ? playIntro() : null;
       window.TuffLearn.init(window.TuffIDE);
       await openFolder(root, { restore: last ? { tabs: s.openTabs, active: s.activeTab } : null });
       if (!state.tabs.length && !last) await openFile(join(root, 'main.tuf'), { quiet: true });
-      enterIDE();
-      editor?.focus();
+      if (introDone) {
+        await introDone;
+      } else {
+        enterIDE();
+        editor?.focus();
+      }
     }
     window.TuffPluginHost?.init(window.TuffIDE);
   }
