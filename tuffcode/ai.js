@@ -8,6 +8,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const os = require('os');
 const crypto = require('crypto');
+const { pipeline } = require('stream/promises');
 
 // Until Pumice (the trained model) is ready, the preview uses its base model as it is.
 const MODELS = [
@@ -31,7 +32,9 @@ let onProgress = () => {};
 let download = null; // { id, got, total, abort }
 let worker = null; // { proc, model, ready, info }
 let idleTimer = null;
-const runs = new Map(); // runId -> { emit, resolve }
+const runs = new Map(); // runId -> { emit, resolve }: questions the worker is answering
+const active = new Set(); // runIds of questions still going, from the first check to the last event
+const stoppedRuns = new Set(); // the active ones the person stopped
 
 function setup(opts) {
   if (opts.checkSource) checkSource = opts.checkSource;
@@ -58,9 +61,13 @@ async function status() {
     models: MODELS.map((m) => ({ id: m.id, name: m.name, sub: m.sub, size: m.size, downloaded: downloaded(m) })),
     downloading: download ? { id: download.id, got: download.got, total: download.total } : null,
     loaded: worker?.info ? { model: worker.model, ...worker.info } : null,
-    ram: { total: os.totalmem(), free: os.freemem(), need: find().ram },
+    ram: { total: os.totalmem(), free: freeMemory(), need: find().ram },
   };
 }
+
+// Memory the model can have. On a Mac, os.freemem() leaves out the cache macOS gives back when asked,
+// so it's often only a few hundred MB; availableMemory() counts it. On Windows they're the same.
+const freeMemory = () => process.availableMemory?.() ?? os.freemem();
 
 // ---------------------------------------------------------------- the model file
 async function fetchModel(id) {
@@ -76,18 +83,30 @@ async function fetchModel(id) {
   download = { id: m.id, got: have, total: m.size, abort };
   const tell = () => onProgress({ id: m.id, got: download?.got || 0, total: m.size, done: false });
   try {
-    // Carry on from where an interrupted download stopped.
-    const res = await net.fetch(m.url, { headers: have ? { Range: `bytes=${have}-` } : {}, signal: abort.signal });
-    if (!res.ok && res.status !== 206) throw new Error(`The download failed (${res.status}).`);
-    if (have && res.status !== 206) { have = 0; download.got = 0; }
-    const out = fs.createWriteStream(part, { flags: have ? 'a' : 'w' });
-    let last = 0;
-    for await (const chunk of res.body) {
-      if (!out.write(chunk)) await new Promise((r) => out.once('drain', r));
-      download.got += chunk.length;
-      if (Date.now() - last > 250) { last = Date.now(); tell(); }
+    // Carry on from where an interrupted download stopped. A .part that's already whole (TuffCode was
+    // closed while it was being checked, say) only needs the check below: the server refuses to send
+    // anything from past the end.
+    if (have < m.size) {
+      let res = await net.fetch(m.url, { headers: have ? { Range: `bytes=${have}-` } : {}, signal: abort.signal });
+      if (have && res.status === 416) {
+        // The server can't carry on from there, so start again from the beginning.
+        await res.body?.cancel().catch(() => {});
+        have = 0;
+        download.got = 0;
+        res = await net.fetch(m.url, { signal: abort.signal });
+      }
+      if (!res.ok && res.status !== 206) throw new Error(`The download failed (${res.status}).`);
+      if (have && res.status !== 206) { have = 0; download.got = 0; }
+      let last = 0;
+      // pipeline hands a failed write (a full disk, say) and Stop to the catch below, and closes the file.
+      await pipeline(res.body, async function* count(body) {
+        for await (const chunk of body) {
+          download.got += chunk.length;
+          if (Date.now() - last > 250) { last = Date.now(); tell(); }
+          yield chunk;
+        }
+      }, fs.createWriteStream(part, { flags: have ? 'a' : 'w' }), { signal: abort.signal });
     }
-    await new Promise((r, j) => out.end((err) => (err ? j(err) : r())));
     // Check the whole file, including a part downloaded earlier.
     const hash = crypto.createHash('sha256');
     await new Promise((r, j) => fs.createReadStream(part).on('data', (d) => hash.update(d)).on('end', r).on('error', j));
@@ -95,11 +114,18 @@ async function fetchModel(id) {
       await fsp.rm(part, { force: true });
       throw new Error("The downloaded model didn't match what was expected, so it was deleted. Try again.");
     }
-    await fsp.rename(part, modelPath(m));
+    // On Windows, antivirus can hold a brand-new file for a moment, so try the rename a few times.
+    for (let i = 0; ; i++) {
+      try { await fsp.rename(part, modelPath(m)); break; } catch (err) {
+        if (i >= 4 || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
     onProgress({ id: m.id, got: m.size, total: m.size, done: true });
   } catch (err) {
     const stopped = abort.signal.aborted;
-    onProgress({ id: m.id, got: download?.got || 0, total: m.size, done: true, error: stopped ? null : String(err.message || err), stopped });
+    const why = err.code === 'ENOSPC' ? `There isn't enough free disk space. Tuff AI needs ${(m.size / 1e9).toFixed(1)} GB. Free some up, then try again.` : String(err.message || err);
+    onProgress({ id: m.id, got: download?.got || 0, total: m.size, done: true, error: stopped ? null : why, stopped });
     if (!stopped) throw err;
   } finally {
     download = null;
@@ -129,13 +155,15 @@ function unload() {
   const w = worker;
   worker = null;
   try { w.proc.kill(); } catch {}
-  for (const [, r] of runs) r.emit({ kind: 'done', ok: false, error: 'Tuff AI stopped.' });
+  // Each question being answered then finishes with this, and sends its own done.
+  for (const [, r] of runs) r.resolve({ ok: false, error: 'Tuff AI stopped.' });
   runs.clear();
 }
 
+// The model is unloaded after 5 minutes without questions, but never while one is being answered.
 function touch() {
   clearTimeout(idleTimer);
-  idleTimer = setTimeout(unload, IDLE_MS);
+  if (!active.size) idleTimer = setTimeout(unload, IDLE_MS);
 }
 
 function start(m) {
@@ -149,17 +177,25 @@ function start(m) {
   w.ready = new Promise((resolve, reject) => {
     proc.on('message', (msg) => {
       if (msg.type === 'loaded') { w.info = { gpu: msg.gpu, device: msg.device }; resolve(w.info); return; }
-      if (msg.type === 'failed') { reject(new Error(msg.error)); return; }
+      if (msg.type === 'failed') {
+        // The model didn't load. Let this worker go, so the next question starts a fresh one.
+        if (worker === w) worker = null;
+        try { proc.kill(); } catch {}
+        reject(new Error(msg.error));
+        return;
+      }
       const r = runs.get(msg.runId);
       if (!r) return;
       if (msg.type === 'delta') r.emit({ kind: 'delta', text: msg.text });
       else if (msg.type === 'done') { runs.delete(msg.runId); r.resolve(msg); }
     });
     proc.on('exit', (code) => {
-      if (worker === w) worker = null;
+      // A worker that was already let go (unloaded, or failed to load) has no questions left here.
+      const mine = worker === w;
+      if (mine) worker = null;
       const why = w.err.trim().split(/\r?\n/).pop();
       reject(new Error(`Tuff AI's model stopped unexpectedly (code ${code}).${why ? ` ${why}` : ''}`));
-      for (const [id, r] of runs) { runs.delete(id); r.resolve({ ok: false, error: 'Tuff AI stopped unexpectedly. Try again.' }); }
+      if (mine) for (const [id, r] of runs) { runs.delete(id); r.resolve({ ok: false, error: 'Tuff AI stopped unexpectedly. Try again.' }); }
     });
   });
   w.ready.catch(() => {});
@@ -170,6 +206,7 @@ function start(m) {
 }
 
 function ask(runId, type, payload, emit) {
+  if (!worker) return Promise.resolve({ ok: false, error: 'Tuff AI stopped unexpectedly. Try again.' });
   return new Promise((resolve) => {
     runs.set(runId, { emit, resolve });
     worker.proc.postMessage({ type, runId, maxTokens: MAX_TOKENS, ...payload });
@@ -218,19 +255,36 @@ Keep answers short and friendly. When you give a program, give the whole program
 ${guideSections().core.map((s) => s.text).join('\n\n')}`;
 }
 
+// Only a ```tuff block is a program to check. Other blocks are an error message, what a program prints,
+// or another language, and the checker would wrongly say they're broken.
 function codeOf(text) {
-  const m = /```[ \t]*tuff[^\n]*\n([\s\S]*?)```/i.exec(text) || /```[^\n]*\n([\s\S]*?)```/.exec(text);
+  const m = /```[ \t]*tuff[^\n]*\n([\s\S]*?)```/i.exec(text);
   return m ? m[1] : null;
 }
 
 // ---------------------------------------------------------------- runs (same events as the CLI agents)
-async function run({ runId, prompt, model }, emit) {
+async function run(params, emit) {
+  // While a question is going, the idle timer waits.
+  active.add(params.runId);
+  touch();
+  try {
+    await answerRun(params, emit);
+  } finally {
+    active.delete(params.runId);
+    stoppedRuns.delete(params.runId);
+    touch();
+  }
+}
+
+async function answerRun({ runId, prompt, model }, emit) {
   const send = (e) => emit({ runId, ...e });
   const m = find(model);
+  // Stop can come at any point: while the model loads, while the checker runs, or between the two answers.
+  const halted = () => stoppedRuns.has(runId);
   if (!(await runtimeAvailable())) { send({ kind: 'done', ok: false, error: "Tuff AI's engine isn't in this copy of TuffCode." }); return; }
   if (!downloaded(m)) { send({ kind: 'done', ok: false, error: 'Download Tuff AI first (the card at the top).' }); return; }
   if (!worker || worker.model !== m.id) {
-    const free = os.freemem();
+    const free = freeMemory();
     if (free < m.ram) {
       send({ kind: 'done', ok: false, error: `Tuff AI needs about ${(m.ram / 1e9).toFixed(1)} GB of free memory, and ${(free / 1e9).toFixed(1)} GB is free right now. Close some apps or browser tabs, then try again.` });
       return;
@@ -244,22 +298,22 @@ async function run({ runId, prompt, model }, emit) {
     send({ kind: 'done', ok: false, error: String(err.message || err) });
     return;
   }
-  touch();
+  if (halted()) { send({ kind: 'done', ok: true, error: null }); return; }
   const extra = relevant(prompt);
   const message = `${extra.length ? `More of the Tuff guide that may help:\n\n${extra.map((s) => s.text).join('\n\n')}\n\n---\n\n` : ''}${prompt}`;
   let r = await ask(runId, 'chat', { system: systemPrompt(), prompt: message }, send);
-  if (r.ok && !r.stopped) {
+  if (r.ok && !r.stopped && !halted()) {
     const code = codeOf(r.text || '');
     if (code) {
       send({ kind: 'tool', name: 'mcp__tuffcode__tuff_check', input: { code } });
       const c = await checkSource(code);
       send({ kind: 'tool_result', ok: c.ok });
-      if (!c.ok && !c.unknown) {
+      if (!c.ok && !c.unknown && !halted()) {
         send({ kind: 'note', text: "The checker found a mistake, so Tuff AI is fixing it." });
         send({ kind: 'break' });
         r = await ask(runId, 'followup', { prompt: `That program doesn't pass Tuff's checker:\n${c.message}\n\nFix it and give the whole program again.` }, send);
         const again = codeOf(r.text || '');
-        if (r.ok && again) {
+        if (r.ok && again && !halted()) {
           send({ kind: 'tool', name: 'mcp__tuffcode__tuff_check', input: { code: again } });
           const c2 = await checkSource(again);
           send({ kind: 'tool_result', ok: c2.ok });
@@ -268,11 +322,14 @@ async function run({ runId, prompt, model }, emit) {
       }
     }
   }
-  touch();
-  send({ kind: 'done', ok: !!r.ok || !!r.stopped, error: r.ok || r.stopped ? null : r.error });
+  const ok = !!r.ok || !!r.stopped || halted();
+  send({ kind: 'done', ok, error: ok ? null : r.error });
 }
 
 function stop(runId) {
+  if (!active.has(runId)) return;
+  stoppedRuns.add(runId);
+  // The worker stops the answer it's writing, or skips the question when it gets to it.
   if (worker && runs.has(runId)) worker.proc.postMessage({ type: 'stop', runId });
 }
 
