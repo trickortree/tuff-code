@@ -8,6 +8,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const os = require('os');
 const crypto = require('crypto');
+const { pipeline } = require('stream/promises');
 
 // Until Pumice (the trained model) is ready, the preview uses its base model as it is.
 const MODELS = [
@@ -76,18 +77,30 @@ async function fetchModel(id) {
   download = { id: m.id, got: have, total: m.size, abort };
   const tell = () => onProgress({ id: m.id, got: download?.got || 0, total: m.size, done: false });
   try {
-    // Carry on from where an interrupted download stopped.
-    const res = await net.fetch(m.url, { headers: have ? { Range: `bytes=${have}-` } : {}, signal: abort.signal });
-    if (!res.ok && res.status !== 206) throw new Error(`The download failed (${res.status}).`);
-    if (have && res.status !== 206) { have = 0; download.got = 0; }
-    const out = fs.createWriteStream(part, { flags: have ? 'a' : 'w' });
-    let last = 0;
-    for await (const chunk of res.body) {
-      if (!out.write(chunk)) await new Promise((r) => out.once('drain', r));
-      download.got += chunk.length;
-      if (Date.now() - last > 250) { last = Date.now(); tell(); }
+    // Carry on from where an interrupted download stopped. A .part that's already whole (TuffCode was
+    // closed while it was being checked, say) only needs the check below: the server refuses to send
+    // anything from past the end.
+    if (have < m.size) {
+      let res = await net.fetch(m.url, { headers: have ? { Range: `bytes=${have}-` } : {}, signal: abort.signal });
+      if (have && res.status === 416) {
+        // The server can't carry on from there, so start again from the beginning.
+        await res.body?.cancel().catch(() => {});
+        have = 0;
+        download.got = 0;
+        res = await net.fetch(m.url, { signal: abort.signal });
+      }
+      if (!res.ok && res.status !== 206) throw new Error(`The download failed (${res.status}).`);
+      if (have && res.status !== 206) { have = 0; download.got = 0; }
+      let last = 0;
+      // pipeline hands a failed write (a full disk, say) and Stop to the catch below, and closes the file.
+      await pipeline(res.body, async function* count(body) {
+        for await (const chunk of body) {
+          download.got += chunk.length;
+          if (Date.now() - last > 250) { last = Date.now(); tell(); }
+          yield chunk;
+        }
+      }, fs.createWriteStream(part, { flags: have ? 'a' : 'w' }), { signal: abort.signal });
     }
-    await new Promise((r, j) => out.end((err) => (err ? j(err) : r())));
     // Check the whole file, including a part downloaded earlier.
     const hash = crypto.createHash('sha256');
     await new Promise((r, j) => fs.createReadStream(part).on('data', (d) => hash.update(d)).on('end', r).on('error', j));
@@ -95,11 +108,18 @@ async function fetchModel(id) {
       await fsp.rm(part, { force: true });
       throw new Error("The downloaded model didn't match what was expected, so it was deleted. Try again.");
     }
-    await fsp.rename(part, modelPath(m));
+    // On Windows, antivirus can hold a brand-new file for a moment, so try the rename a few times.
+    for (let i = 0; ; i++) {
+      try { await fsp.rename(part, modelPath(m)); break; } catch (err) {
+        if (i >= 4 || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
     onProgress({ id: m.id, got: m.size, total: m.size, done: true });
   } catch (err) {
     const stopped = abort.signal.aborted;
-    onProgress({ id: m.id, got: download?.got || 0, total: m.size, done: true, error: stopped ? null : String(err.message || err), stopped });
+    const why = err.code === 'ENOSPC' ? `There isn't enough free disk space. Tuff AI needs ${(m.size / 1e9).toFixed(1)} GB. Free some up, then try again.` : String(err.message || err);
+    onProgress({ id: m.id, got: download?.got || 0, total: m.size, done: true, error: stopped ? null : why, stopped });
     if (!stopped) throw err;
   } finally {
     download = null;
