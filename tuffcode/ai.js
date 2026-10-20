@@ -59,9 +59,13 @@ async function status() {
     models: MODELS.map((m) => ({ id: m.id, name: m.name, sub: m.sub, size: m.size, downloaded: downloaded(m) })),
     downloading: download ? { id: download.id, got: download.got, total: download.total } : null,
     loaded: worker?.info ? { model: worker.model, ...worker.info } : null,
-    ram: { total: os.totalmem(), free: os.freemem(), need: find().ram },
+    ram: { total: os.totalmem(), free: freeMemory(), need: find().ram },
   };
 }
+
+// Memory the model can have. On a Mac, os.freemem() leaves out the cache macOS gives back when asked,
+// so it's often only a few hundred MB; availableMemory() counts it. On Windows they're the same.
+const freeMemory = () => process.availableMemory?.() ?? os.freemem();
 
 // ---------------------------------------------------------------- the model file
 async function fetchModel(id) {
@@ -250,7 +254,7 @@ async function run({ runId, prompt, model }, emit) {
   if (!(await runtimeAvailable())) { send({ kind: 'done', ok: false, error: "Tuff AI's engine isn't in this copy of TuffCode." }); return; }
   if (!downloaded(m)) { send({ kind: 'done', ok: false, error: 'Download Tuff AI first (the card at the top).' }); return; }
   if (!worker || worker.model !== m.id) {
-    const free = os.freemem();
+    const free = freeMemory();
     if (free < m.ram) {
       send({ kind: 'done', ok: false, error: `Tuff AI needs about ${(m.ram / 1e9).toFixed(1)} GB of free memory, and ${(free / 1e9).toFixed(1)} GB is free right now. Close some apps or browser tabs, then try again.` });
       return;
