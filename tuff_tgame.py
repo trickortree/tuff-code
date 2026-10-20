@@ -732,6 +732,15 @@ class Layer:
         ox, oy = (w - g.W * k) / 2, (h - g.H * k) / 2
         return (x - self.cx) * k + ox, (y - self.cy) * k + oy
 
+    def sprite_at(self, e):
+        """The topmost sprite on this layer that has a :clicked function, under a click (window pixels), or None."""
+        x, y = self.to_layer(e.get("x", 0), e.get("y", 0))
+        for s in sorted((s for s in self.sprites if s.alive and not s.hidden and s.click_fns),
+                        key=lambda s: (s.z, s.order), reverse=True):
+            if s.contains(x, y):
+                return s
+        return None
+
     def make(self, shape, x, y, props, own=True):
         """A sprite on this layer. own=False: one of tgame's own (the pause screen, the crosshair), which
         game:clear leaves alone."""
@@ -862,14 +871,8 @@ class Game2D(Game, Layer):
         if self.is_paused:
             return
         hit = None
-        layers = ([self.hud_layer] if self.hud_layer else []) + [self]
-        for layer in layers:
-            x, y = layer.to_layer(e.get("x", 0), e.get("y", 0))
-            for s in sorted((s for s in layer.sprites if s.alive and not s.hidden and s.click_fns),
-                            key=lambda s: (s.z, s.order), reverse=True):
-                if s.contains(x, y):
-                    hit = s
-                    break
+        for layer in ([self.hud_layer] if self.hud_layer else []) + [self]:
+            hit = layer.sprite_at(e)
             if hit:
                 break
         if hit:
@@ -1684,10 +1687,19 @@ class World3D(Game):
             return
         if self.is_paused:
             return
-        t = self.thing_at(e.get("path") or [])
-        if t is not None and t.click_fns:
-            for fn in list(t.click_fns):
-                self.fire(fn, t.native)
+        # The HUD is on top, so a button on it gets the click instead of the object behind it. Not while the mouse
+        # is locked for looking around: then the pointer is hidden and a click aims with the middle of the view.
+        hit = None
+        if self.hud_layer is not None and not (self.locked or self.fake_lock):
+            hit = self.hud_layer.sprite_at(e)
+        if hit is not None:
+            for fn in list(hit.click_fns):
+                self.fire(fn, hit.native)
+        else:
+            t = self.thing_at(e.get("path") or [])
+            if t is not None and t.click_fns:
+                for fn in list(t.click_fns):
+                    self.fire(fn, t.native)
         if self.click_fns:
             pt = e.get("point")
             args = [tidy(v) for v in pt] if pt else [None, None, None]
