@@ -399,6 +399,9 @@ CSS = """
 .at-titlebar{height:40px;flex-shrink:0;display:flex;align-items:center;gap:10px;padding-left:14px;background:var(--side);border-bottom:1px solid var(--border);user-select:none}
 .at-tb-title{font-size:13px;font-weight:600;color:var(--muted);pointer-events:none;white-space:nowrap}
 .at-tb-slot{flex:1;display:flex;align-items:center;gap:8px;height:100%%;min-width:0;--self:auto}
+.at-tb-slot .at-input{height:28px;max-width:340px;font-size:13px;background:color-mix(in srgb,var(--field) 70%%,transparent)}
+.at-tb-slot .at-btn{height:28px;padding:0 10px;font-size:13px}
+.at-tb-slot .at-btn.at-only-icon{width:28px;padding:0}
 .at-tb-buttons{display:flex;height:100%%;align-self:stretch}
 .at-wb{width:46px;height:100%%;display:grid;place-items:center;background:none;border:0;color:var(--muted);cursor:default;outline:none}
 .at-wb .at-i{width:16px;height:16px;stroke-width:1.4}
