@@ -54,6 +54,8 @@ contextBridge.exposeInMainWorld('tuff', {
     mcpServer: invoke('agents:mcpServer'),
     mcpSetup: invoke('agents:mcpSetup'),
     mcpCheck: invoke('agents:mcpCheck'),
+    signedIn: invoke('agents:signedIn'),
+    signIn: invoke('agents:signIn'),
     run: invoke('agents:run'),
     stop: invoke('agents:stop'),
     onEvent: on('agents:event'),

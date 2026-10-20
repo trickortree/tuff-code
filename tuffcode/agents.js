@@ -36,7 +36,51 @@ function which(bin) {
 async function resolveBin(id) {
   const override = process.env[`TUFFCODE_${id.toUpperCase()}_BIN`];
   if (override) return override;
-  return which(AGENTS[id].bin);
+  const found = await which(AGENTS[id].bin);
+  if (found) return found;
+  if (id === 'claude') return findClaudeElsewhere();
+  if (id === 'codex') return findCodexElsewhere();
+  return null;
+}
+
+// Codex that isn't on PATH: the copy the Codex desktop app keeps for itself
+// (AppData/Local/OpenAI/Codex/bin/<build>/codex.exe). It shares the app's sign-in.
+function findCodexElsewhere() {
+  const exe = process.platform === 'win32' ? 'codex.exe' : 'codex';
+  const root = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'OpenAI', 'Codex', 'bin');
+  let newest = null;
+  let builds = [];
+  try { builds = fs.readdirSync(root); } catch { return null; }
+  for (const b of builds) {
+    const file = path.join(root, b, exe);
+    try {
+      const t = fs.statSync(file).mtimeMs;
+      if (!newest || t > newest.t) newest = { file, t };
+    } catch {}
+  }
+  return newest ? newest.file : null;
+}
+
+// Claude Code that isn't on PATH: the standard installer's folder, or the copy the Claude desktop
+// app keeps for its Code tab (AppData/Roaming/Claude/claude-code/<version>/<build>/claude.exe).
+function findClaudeElsewhere() {
+  const exe = process.platform === 'win32' ? 'claude.exe' : 'claude';
+  const home = path.join(os.homedir(), '.local', 'bin', exe);
+  if (fs.existsSync(home)) return home;
+  const root = path.join(app.getPath('appData'), 'Claude', 'claude-code');
+  let versions = [];
+  try { versions = fs.readdirSync(root).filter((v) => /^\d+\.\d+\.\d+/.test(v)); } catch { return null; }
+  const num = (v) => v.split(/[.-]/).slice(0, 3).map((n) => parseInt(n, 10) || 0);
+  versions.sort((a, b) => { const x = num(a), y = num(b); return (y[0] - x[0]) || (y[1] - x[1]) || (y[2] - x[2]); });
+  for (const v of versions) {
+    let builds = [];
+    try { builds = fs.readdirSync(path.join(root, v)); } catch { continue; }
+    for (const b of builds) {
+      const file = path.join(root, v, b, exe);
+      if (fs.existsSync(file)) return file;
+    }
+  }
+  return null;
 }
 
 // npm installs agents as .cmd shims, which Windows can only start through cmd.exe. Our arguments
@@ -127,6 +171,42 @@ async function connect(id, on = true) {
   const state = await connection(id);
   if (state.connected !== on) throw new Error(r.out || `Couldn't ${on ? 'connect' : 'disconnect'} ${AGENTS[id].name}.`);
   return state;
+}
+
+// How each agent reports and starts its own sign-in. Antigravity can't say without a prompt.
+const SIGN_IN = {
+  claude: {
+    status: ['auth', 'status'],
+    read: (r) => { try { return !!JSON.parse(r.out).loggedIn; } catch { return null; } },
+    login: ['auth', 'login'],
+  },
+  codex: {
+    status: ['login', 'status'],
+    read: (r) => (/not logged in/i.test(r.out) ? false : r.code === 0 && /logged in/i.test(r.out) ? true : null),
+    login: ['login'],
+  },
+};
+
+// Is the agent signed in? null: can't tell.
+async function signedIn(id) {
+  if (!SIGN_IN[id]) return null;
+  const file = await resolveBin(id);
+  if (!file) return null;
+  return SIGN_IN[id].read(await quick(file, SIGN_IN[id].status, 15000));
+}
+
+// Opens a window running the agent's own sign-in, so the person signs in themselves in the browser.
+async function signIn(id) {
+  const file = await resolveBin(id);
+  if (!file) throw new Error(`${AGENTS[id].name} isn't installed.`);
+  if (!SIGN_IN[id]) throw new Error(`Sign in to ${AGENTS[id].name} in a terminal.`);
+  // A new window of its own (detached), so the person can see the sign-in link. npm installs are
+  // .cmd shims, which Windows only starts through the shell.
+  const shim = /\.(cmd|bat)$/i.test(file);
+  const proc = spawn(shim ? `"${file}"` : file, SIGN_IN[id].login, { detached: true, stdio: 'ignore', windowsHide: false, shell: shim });
+  proc.on('error', () => {});
+  proc.unref();
+  return true;
 }
 
 // What to type to set the tools up by hand: the same commands the Connect buttons run, plus the
@@ -260,7 +340,16 @@ function claudeMcpConfigFile() {
   return file;
 }
 
-function argsFor(agent, { mode, session }) {
+// Antigravity takes the prompt as the value of --print, on the command line. Windows allows about
+// 32,000 characters there, so a longer prompt loses the middle (the file) and keeps the request at the end.
+function fitCommandLine(prompt, limit = 30000) {
+  if (prompt.length <= limit) return prompt;
+  const note = '\n\n… (part of this was cut to fit) …\n\n';
+  const head = 6000;
+  return prompt.slice(0, head) + note + prompt.slice(-(limit - head - note.length));
+}
+
+function argsFor(agent, { mode, session, prompt }) {
   const edit = mode === 'edit';
   if (agent === 'claude') {
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
@@ -269,7 +358,7 @@ function argsFor(agent, { mode, session }) {
     return { args, stdin: true };
   }
   if (agent === 'codex') return { args: ['exec', '--json', '--skip-git-repo-check', '--sandbox', edit ? 'workspace-write' : 'read-only', '-'], stdin: true };
-  return { args: ['-p', '--output-format', 'stream-json', '--mode', edit ? 'accept-edits' : 'plan'], stdin: false };
+  return { args: [`--print=${fitCommandLine(prompt)}`, '--output-format', 'stream-json', '--mode', edit ? 'accept-edits' : 'plan'], stdin: false };
 }
 
 // Each parser turns one JSON line from an agent into panel events:
@@ -341,8 +430,7 @@ async function run({ runId, agent, prompt, root, mode, session }, emit) {
   const send = (e) => emit({ runId, ...e });
   const file = await resolveBin(agent);
   if (!file) { send({ kind: 'done', ok: false, error: `${AGENTS[agent].name} isn't installed. ${AGENTS[agent].install}` }); return; }
-  const { args, stdin } = argsFor(agent, { mode, session });
-  if (!stdin) args.push(prompt);
+  const { args, stdin } = argsFor(agent, { mode, session, prompt });
   let proc;
   try {
     proc = startCli(file, args, { cwd: root, env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' }, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -386,4 +474,4 @@ function stop(runId) {
   runs.delete(runId);
 }
 
-module.exports = { AGENTS, setup, detect, run, stop, connection, connect, mcpServer, mcpSetup, mcpCheck };
+module.exports = { AGENTS, setup, detect, run, stop, connection, connect, mcpServer, mcpSetup, mcpCheck, signedIn, signIn };

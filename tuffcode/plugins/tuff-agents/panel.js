@@ -48,6 +48,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     tested: {}, // agent id -> { ok, text } from "Test it"
     openMan: new Set(), // which "by hand" sections are open
     busyAgent: null, // agent being connected or removed
+    auth: {}, // agent id -> signed in? (true / false / null when it can't tell)
   };
   let root = null;
   let ctxTimer = null;
@@ -145,6 +146,31 @@ TuffPlugins.register('tuff-agents', (t) => {
     for (const a of S.agents.filter((x) => x.installed)) {
       t.agents.connection(a.id).then((c) => { S.conn[a.id] = c.connected; renderStatus(); renderSetup(); }).catch(() => {});
     }
+    for (const id of ['claude', 'codex']) {
+      if (!S.agents.find((x) => x.id === id)?.installed) continue;
+      t.agents.signedIn(id).then((v) => { S.auth[id] = v; renderStatus(); renderSetup(); }).catch(() => {});
+    }
+  }
+
+  // Each agent's desktop app keeps its own copy of the agent, which TuffCode finds and uses.
+  const INSTALL_TIP = {
+    claude: ' Have the Claude desktop app? Open its Code tab once (that sets up Claude Code), then click Check again.',
+    codex: ' Have the Codex app? Open it once and sign in, then click Check again.',
+  };
+  function signInText(a) {
+    const p = a.path || '';
+    if (a.id === 'claude') return `TuffCode found Claude Code${/[\\/]Claude[\\/]claude-code[\\/]/.test(p) ? ' from your Claude desktop app' : ''}, but it isn't signed in for use outside that app. Sign in once with your Claude account.`;
+    if (a.id === 'codex') return `TuffCode found Codex${/[\\/]OpenAI[\\/]Codex[\\/]/.test(p) ? ' from your Codex app' : ''}, but it isn't signed in. Sign in once with your ChatGPT account.`;
+    return `${esc(a.name)} isn't signed in.`;
+  }
+
+  async function signInAgent(id) {
+    try {
+      await t.agents.signIn(id);
+      t.toast('A sign-in window opened. Finish in your browser, then click Check again.', 'ok', 8000);
+    } catch (err) {
+      t.toast(cleanErr(err), 'error', 7000);
+    }
   }
 
   function renderAgents() {
@@ -178,9 +204,15 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (!a?.installed) {
       box.innerHTML = `<div class="ta-card">
         <b>${esc(a?.name || S.agent)} isn't installed</b>
-        <p>Install it once, then come back. TuffCode runs it for you right here.</p>
+        <p>Install it once, then come back. TuffCode runs it for you right here.${INSTALL_TIP[S.agent] || ''}</p>
         <div class="ta-cmd"><code>${esc(a?.install || '')}</code><button data-a="copy-install">Copy</button></div>
         <div class="ta-btns"><button class="btn sm" data-a="site">Website</button><button class="btn sm" data-a="recheck">Check again</button></div>
+      </div>`;
+    } else if (S.auth[S.agent] === false) {
+      box.innerHTML = `<div class="ta-card">
+        <b>Sign in to ${esc(a.name)}</b>
+        <p>${signInText(a)} A window opens and your browser does the rest.</p>
+        <div class="ta-btns"><button class="btn sm primary" data-a="signin">Sign in</button><button class="btn sm" data-a="recheck">Check again</button></div>
       </div>`;
     } else if (S.agent !== 'claude' && S.conn[S.agent] === false && !S.dismissed[S.agent]) {
       box.innerHTML = `<div class="ta-card">
@@ -199,6 +231,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       if (act === 'dismiss') { S.dismissed[S.agent] = true; t.storage.set('dismissed', S.dismissed); renderStatus(); }
       if (act === 'connect') connect(true);
       if (act === 'setup') showSetup(true);
+      if (act === 'signin') signInAgent(S.agent);
     };
   }
 
@@ -313,8 +346,12 @@ TuffPlugins.register('tuff-agents', (t) => {
     let btns = [];
     if (S.agents && !a?.installed) {
       state = 'Not installed';
-      body = `<p>Install it once, then come back here.</p><div class="ta-cmd"><code>${esc(a?.install || '')}</code><button data-copy="${esc(a?.install || '')}">Copy</button></div>`;
+      body = `<p>Install it once, then come back here.${INSTALL_TIP[id] || ''}</p><div class="ta-cmd"><code>${esc(a?.install || '')}</code><button data-copy="${esc(a?.install || '')}">Copy</button></div>`;
       btns = [['site', 'Website']];
+    } else if (a?.installed && S.auth[id] === false) {
+      state = 'Not signed in';
+      body = `<p>${signInText(a)}</p>`;
+      btns = [['signin', 'Sign in', 'primary'], ['recheck', 'Check again']];
     } else if (a?.installed && id === 'claude') {
       ok = true;
       state = conn ? 'Ready here and in the terminal' : 'Ready in this panel';
@@ -361,6 +398,8 @@ TuffPlugins.register('tuff-agents', (t) => {
       case 'back': showSetup(false); break;
       case 'check': runCheck(); break;
       case 'test': testAgent(id); break;
+      case 'signin': signInAgent(id); break;
+      case 'recheck': refreshAgents(); break;
       case 'site': t.openExternal(S.agents?.find((x) => x.id === id)?.url); break;
       case 'on':
       case 'off':
@@ -559,6 +598,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     const a = current();
     if (!text || S.run) return;
     if (!a?.installed) { renderStatus(); t.toast(`${a?.name || 'That agent'} isn't installed yet.`, 'error'); return; }
+    if (S.auth[a.id] === false) { showSetup(false); renderStatus(); t.toast(`Sign in to ${a.name} first (the card at the top).`, 'error'); return; }
     const test = !!opts.test;
     const mode = test ? 'ask' : S.mode;
     const file = t.editor.file();
