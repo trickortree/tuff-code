@@ -182,6 +182,7 @@ clear(2)                    # remove the last 2 lines; clear(all) is the same as
   - `anims.countdown(start, then)` (defaults: 3, "Go!"): shows start, start - 1 … 1, one per second, then replaces the line with the text `then`
 - **tgui**: real desktop app windows. **mtgui**: the same widgets with a modern look (gradients, gloss, glow). Use mtgui unless asked otherwise.
 - **tap** gets and sends things on the web (HTTP), like Python's requests. See below.
+- **atgui** ("advanced tgui") makes apps that look like the Claude or Codex desktop apps: sidebars, lists, chat bubbles, dashboards, menus and pop-ups, all styled from Tuff. See below.
 
 ### tap
 ```tuff
@@ -206,6 +207,92 @@ say sent:status
 - **JSON:** `res:json` gives a data object for `{...}`, a list for `[...]`, or text, a number, true/false or nil.
 - **Data objects:** `user:get("name")` (not `user["name"]`; nil if it's missing), `user:has("name")`, `user:keys()` (a list of the names), `user:size()` and `user:set("name", value)`. Objects inside are data objects too, and `say user` shows it as JSON. Loop over `user:keys()`, not `user`.
 - **Waiting:** each call waits for the answer, and a window freezes while it waits.
+
+### atgui
+Modern app windows made of real HTML and CSS, without writing any HTML. Most of mtgui works the same (`heading`, `text`, `button`, `input`, `:set`, `:value`, `:change`, `app:every`, `app:ask`...; see "App windows" below), plus everything here.
+```tuff
+mention atgui
+
+app = atgui.window("Notes", 900, 600)      # title, width, height (all optional)
+app:accent "indigo"
+side = app:sidebar(240)                     # a column down the left side
+side:heading "Notes"
+notes = side:list(["Ideas", "Shopping"])    # click an item to pick it
+notes:change opened
+title = app:heading "Ideas"
+app:textarea "Write something"
+row = app:row
+row:button("Save", save, "primary"):icon "check"
+row:button("Delete", delete_note, "danger")
+app:key("ctrl+s", save)
+
+func opened(name):                          # a list's :change gets the item's text
+    title:set name
+
+func save():
+    app:toast("Saved " + title:value(), "success")
+
+func delete_note():
+    if app:confirm "Delete this note?":
+        notes:remove title:value()
+```
+- **How it runs:** like mtgui, but the window opens once the top-level code has run (or at the first popup), so the first screen shows all at once. A Tuff error in an event function is shown once, with its line, and the app keeps going. One window per program: use `app:tabs()`, pages (`app:page "Home"`, as in mtgui), a sidebar list or `app:modal(...)` for more screens.
+- **Widgets** go on the window, a `row`, `column`, `card`, `grid(3)` (3 columns), `scroll()`, `sidebar`, tab or modal: `heading`, `text`, `small`, `button(text, fn, style)`, `input`, `textarea`, `checkbox`, `switch` (or `toggle`), `slider(low, high, start)`, `dropdown(list, choice)`, `list(items)`, `table(["Name", "Role"])`, `tabs()`, `image(file or web address, width)`, `icon(name, size)`, `avatar("Ada Lovelace")`, `badge(text, style)`, `progress(percent)`, `spinner(label)`, `markdown(text)`, `code(text, language)`, `chart([3, 8, 5], "line")` (or `"bar"`), `divider`, `space 20` and `html(text)`.
+  - Button styles: primary, secondary, outline, ghost, success, danger, gradient. Badge styles: accent, gray, success, warning, danger, info, outline. `spinner:style "dots"` makes a typing indicator.
+  - Icons: home, search, settings, user, users, chat, message, send, plus, minus, x, check, chevron-down (and -up, -left, -right), arrow-up (and -down, -left, -right), menu, more, bell, star, heart, trash, edit, compose, copy, download, upload, folder, file, mail, calendar, clock, lock, sun, moon, info, warning, error, success, help, bolt, sparkle, chart, trend, activity, grid, list, layers, play, pause, stop, refresh, link, image, code, terminal, globe, logout, filter, eye, bookmark, cloud, camera, mic, attach, sidebar, cart, dollar, flag, pin, bot, smile and dot. `btn:icon "send"` puts one on a button (with `""` as the text, only the icon shows).
+- **Layout:** the window, columns, cards and scrolls stack things down; a row puts them side by side.
+  - `box:gap 12`, `box:padding 20`, `box:align "center"` (across: start, center, end, stretch), `box:justify "between"` (along: start, center, end, between, around, evenly).
+  - `w:grow` takes the space left, `w:fill` stretches across, `w:width 200` and `w:height 120` (numbers are pixels; text like `"50%"` works too).
+  - The window scrolls when things don't fit. A `scroll()` scrolls on its own and takes the space left, like a chat's messages: `msgs:to_bottom` scrolls to the end.
+  - `app:sidebar(240)` (or `app:sidebar(240, "right")`) and `app:split(260)` (two panes with a handle to drag).
+- **Changing things:** every widget has `:show`, `:hide` and `:remove`.
+  - A list: `items:add("Inbox")` gives back the item, which takes `:icon`, `:small` (a second line) and `:badge`. Also `items:remove "Inbox"`, `items:set "Inbox"` (picks it), `items:value()`, `items:items()` and `items:clear`. A table: `t:add(["Ada", "Admin"])`.
+  - Markdown, code and charts have `:add` (more at the end), so a reply can arrive bit by bit.
+- **Events:** functions may leave out the input they're given.
+  - `w:clicked fn` works on any widget, and a click's function gets the widget's text, so one function can serve many buttons.
+  - `:change fn`; `box:enter fn` (in a textarea Enter sends and Shift+Enter starts a new line); `w:hover fn` and `box:focus fn` get true or false (`box:focus` on its own puts the cursor there).
+  - `app:key("ctrl+s", fn)` for a key (also "escape", "f5", "ctrl+shift+n"), and `app:closed fn` when the window closes.
+  - `app:every` and `app:after` give back a timer with `:stop` and `:start`.
+- **Pop-ups:** `dlg = app:modal("Rename")`, add widgets to it, then `dlg:open`; Escape or a click outside closes it (`dlg:closed fn`). `m = app:menu()` with `m:item("Delete", fn, "danger")` and `m:divider`: `w:menu m` opens it on a right-click (the item's function gets the right-clicked list item's text), and `m:open` opens it under what was just clicked. `app:toast("Saved", "success")` (info, success, warning, error) and `w:tooltip "Hint"`.
+- **Looks:**
+  - `app:theme "light"` (dark, light or system), `app:accent "teal"` (the mtgui colors, indigo, gray or `"#rrggbb"`) and `app:font "rounded"` (system, rounded, serif, mono or a font's name).
+  - `w:style(name, value)`: background, color, radius, padding, margin, border, shadow (small, medium, large, glow), size, bold, weight, opacity, glass (frosted), blur, gradient (`["#6366f1", "#ec4899"]`), width, height, scale, rotate, span (grid columns). Colors are the accent names, white, black, accent, muted, raised, surface or `"#rrggbb"`. Start the name with hover, pressed or focus: `btn:style("hover scale", 1.05)`.
+  - `w:animate "slide-up"`: fade-in, fade-out, slide-up, slide-down, slide-left, slide-right, pop, zoom-in, zoom-out, bounce, shake, pulse, spin, wiggle, float, blink. `w:animate("pulse", 1, "forever")` repeats; `w:animate "none"` stops. Style changes fade smoothly on their own.
+  - For experts: `w:css("letter-spacing: 2px")`, `app:css(".at-card { border-width: 2px }")` and `app:html("<b>Hi</b>")`.
+- **The window:** `app:titlebar("My App")` (at the top of the program) swaps the system frame for a title bar you can add things to, with minimize, maximize and close. `app:frameless` has no title bar at all. `app:icon "logo.png"` sets the window's icon (a .png or .ico), but `app:icon "search"` shows a built-in icon.
+```tuff
+mention atgui
+
+app = atgui.window("Timer", 420, 340)
+app:theme "light"
+app:accent "pink"
+seconds = 0
+card = app:card
+card:style("radius", 20)
+card:style("hover shadow", "glow")
+shown = card:heading "0"
+shown:style("size", 48)
+row = card:row
+row:button("Start", start, "gradient"):icon "play"
+row:button("Reset", reset, "ghost")
+clock = app:every(1, tick)
+clock:stop
+app:key("space", start)
+
+func start():
+    clock:start
+    shown:animate "pop"
+
+func tick():
+    seconds += 1
+    shown:set text(seconds)
+
+func reset():
+    clock:stop
+    seconds = 0
+    shown:set "0"
+    app:toast("Back to 0", "info")
+```
 
 ## App windows (tgui / mtgui)
 ```tuff
@@ -503,7 +590,7 @@ Tuff has none of these:
 - dictionaries, classes, sorting, or exceptions (`try`);
 - splitting, replacing or formatting text, or slices;
 - random decimals (divide a whole number instead), or sin, cos, tan, log or exp;
-- drawing, sound, or keyboard and mouse events (see "How a window app runs");
+- drawing, sound, or keyboard and mouse events in tgui and mtgui (see "How a window app runs"; atgui has key shortcuts, hover, and clicks on any widget);
 - `exit()`, or Python modules.
 
 There's no date or time function either. A clock widget's `:value` gives the time of day, and `wait(seconds)` pauses a console program.

@@ -512,7 +512,7 @@ class Err:
 
 
 ERR = Err()
-LIBRARIES = ("anims", "tgui", "mtgui", "tap")
+LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui")
 # Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
@@ -844,6 +844,13 @@ class Interpreter:
         except ImportError as exc:
             raise TuffError(f"tap couldn't load ({exc}). Reinstall TuffCode.")
         return tuff_tap.make_library(self.rt)
+
+    def lib_atgui(self):
+        try:
+            import tuff_atgui
+        except ImportError as exc:
+            raise TuffError(f"atgui couldn't load ({exc}). Reinstall TuffCode.")
+        return tuff_atgui.make_library(self.rt)
 
     def lib_anims(self):
         con = self.console
@@ -1398,6 +1405,22 @@ def tap_tables():
     return _TAP or None
 
 
+_ATGUI = None
+
+
+def atgui_tables():
+    """atgui's functions, every kind's methods ("kinds"), what makers make, and the styles, icons, themes and
+    animations it knows, read from the library itself without opening a window. None when it can't be loaded."""
+    global _ATGUI
+    if _ATGUI is None:
+        try:
+            import tuff_atgui
+            _ATGUI = tuff_atgui.tables()
+        except Exception:
+            _ATGUI = {}
+    return _ATGUI or None
+
+
 def nodes(x):
     """Every node inside a node, or inside a list of nodes."""
     if isinstance(x, N):
@@ -1556,7 +1579,7 @@ class Checker:
         self.problems.append((node.line, node.col, msg))
 
     def what(self, kind):
-        return "a function" if kind.startswith("$libfn:") else self.TYPE.get(kind) or a_kind(kind)
+        return "a function" if kind.startswith("$libfn:") else self.TYPE.get(kind) or a_kind(kind.lstrip("@"))
 
     def only_func(self, name):
         """True when name is one top-level function and never anything else."""
@@ -1643,9 +1666,13 @@ class Checker:
                 return "window"
             if lib == "$module:tap":
                 return self.TAP_MAKES.get(e.fn.name)
+            if lib == "$module:atgui":
+                return "@window" if e.fn.name == "window" else None
             return None
         if k == "method":
             obj = self.kind(e.obj, seen)
+            if obj and obj.startswith("@"):
+                return self.atgui_kind(obj[1:], e)
             if obj in self.TAP_GIVES:
                 return self.TAP_GIVES[obj].get(e.name)
             gui = gui_tables()
@@ -1825,6 +1852,9 @@ class Checker:
         if lib == "tap":
             tap = tap_tables()
             return tap["lib"] if tap else None
+        if lib == "atgui":
+            at = atgui_tables()
+            return at["lib"] if at else None
         gui = gui_tables()
         return gui["libs"].get(lib) if gui else None
 
@@ -1935,6 +1965,9 @@ class Checker:
         gui = gui_tables()
         if gui is None:
             return True
+        at = atgui_tables()
+        if at is not None and any(name in m for m in at["kinds"].values()):
+            return True
         tap = tap_tables()
         return name in SIMPLE_METHODS["text"] or name in SIMPLE_METHODS["list"] or name in SIMPLE_METHODS["line"] or \
             any(name in m for m in gui["kinds"].values()) or (tap is None or any(name in m for m in tap["kinds"].values()))
@@ -2041,6 +2074,9 @@ class Checker:
         bare_fix = f"{owner}:{name} doesn't take an input, so what comes after it was read as one. Write {owner}:{name}() instead."
         if obj.startswith("$libfn:"):
             self.problem(e, f"'{owner}' is the function {obj[7:]} itself, not what it makes. Add brackets, like: {owner} = {obj[7:]}(...)")
+            return
+        if obj.startswith("@"):
+            self.check_atgui(e, obj[1:])
             return
         simple = SIMPLE_METHODS.get(obj[1:]) if obj.startswith("$") else None
         if simple:
@@ -2239,6 +2275,189 @@ class Checker:
                 self.problem(s, f"Tuff's range includes both ends, so {s.name} reaches -1, and {lst}[-1] is the last item again. "
                                 f"Stop at 0 instead, like range(len({lst}) - 1, 0, -1).")
                 return
+
+    # ---- atgui (its tables come from tuff_atgui.tables(); its kinds are written "@button", "@window"...)
+    def atgui_kind(self, kind, e):
+        """What an atgui method gives back: another widget, the same one (so calls can be chained), or a value."""
+        at = atgui_tables()
+        if at is None:
+            return None
+        name = e.name
+        made = at["makes_on"].get(kind, {}).get(name)
+        if made:
+            return "@" + made
+        methods = at["kinds"].get(kind, {})
+        if name in at["makes"] and "heading" in methods:
+            if name == "icon" and kind == "window" and self.atgui_file(e.args[0] if e.args else None):
+                return None
+            return "@" + at["makes"][name]
+        if name == "value" and not e.args:
+            return ("$text" if kind in at["text_values"] else "$bool" if kind in at["bool_values"]
+                    else "$number" if kind in at["number_values"] else None)
+        if name in ("confirm", "showing"):
+            return "$bool"
+        if name == "ask":
+            return "$text"
+        if name == "items":
+            return "$list"
+        if name in at["self_methods"] and name in methods:
+            return "@" + kind
+        return None
+
+    def atgui_file(self, arg):
+        """Is this input a picture file's name (rather than a built-in icon's)?"""
+        if arg is None or arg.kind != "const" or not isinstance(arg.value, str):
+            return False
+        text = arg.value.strip().lower()
+        return text.endswith(atgui_tables()["image_exts"]) or "/" in text or "\\" in text
+
+    def check_atgui(self, e, kind):
+        at = atgui_tables()
+        methods = at["kinds"].get(kind) if at else None
+        if methods is None:
+            return
+        name, n = e.name, len(e.args)
+        owner = e.obj.name if e.obj.kind == "var" else "thing"
+        if name not in methods:
+            self.problem(e, method_help(a_kind(kind).capitalize(), name, list(methods)))
+            return
+        if not accepts(methods[name], n):
+            if e.bare and accepts(methods[name], 0):
+                self.problem(e, f"{owner}:{name} doesn't take an input, so what comes after it was read as one. Write {owner}:{name}() instead.")
+            else:
+                self.problem(e, f"{kind}:{name} got the wrong number of inputs ({n}).")
+            return
+        self.atgui_values(e, kind, at)
+        self.atgui_handler(e, at)
+        if kind == "dropdown" and name == "set" and e.obj.kind == "var" and e.args:
+            self.check_dropdown_set(e)
+
+    def atgui_values(self, e, kind, at):
+        """Styles, icons, themes, colors, animations and keys written as text must be ones atgui knows."""
+        name = e.name
+        container = "heading" in at["kinds"].get(kind, {})
+
+        def const(i):
+            a = e.args[i] if len(e.args) > i else None
+            ok = a is not None and a.kind == "const" and isinstance(a.value, str)
+            return a, a.value.strip().lower() if ok else None
+
+        def one_of(i, choices, msg, aliases=()):
+            a, v = const(i)
+            if v is not None and v not in choices and v not in aliases:
+                self.problem(a, msg.replace("{}", v))
+
+        buttons = "'{}' isn't a button style. Use one of: " + ", ".join(at["button_styles"]) + "."
+        badges = "'{}' isn't a badge style. Use one of: " + ", ".join(at["badge_styles"]) + "."
+        if name == "button" and container:
+            one_of(2, at["button_styles"], buttons)
+        elif name == "badge" and container:
+            one_of(1, at["badge_styles"], badges, at["badge_aliases"])
+        elif name == "style" and len(e.args) == 1:
+            if kind == "button":
+                one_of(0, at["button_styles"], buttons)
+            elif kind == "badge":
+                one_of(0, at["badge_styles"], badges, at["badge_aliases"])
+            elif kind == "spinner":
+                one_of(0, at["spinner_styles"], "A spinner's style can be \"ring\" or \"dots\".")
+            else:
+                self.problem(e, f"{kind}:style needs a name and a value, like box:style(\"radius\", 12).")
+        elif name == "style":
+            a, v = const(0)
+            first, _, rest = (v or "").partition(" ")
+            prop = rest.strip() if first in at["states"] and rest else v
+            if v is not None and prop not in at["styles"] and "-" not in prop:
+                hint = difflib.get_close_matches(prop, list(at["styles"]), n=1, cutoff=0.6)
+                self.problem(a, f"'{prop}' isn't a style I know." + (f" Did you mean \"{hint[0]}\"?" if hint else
+                             " Try: background, color, radius, padding, border, shadow, size, bold, opacity, glass, gradient, width or height."))
+        elif name == "theme":
+            one_of(0, at["themes"], "The theme can be \"dark\", \"light\" or \"system\".")
+        elif name == "accent":
+            a, v = const(0)
+            if v is not None and v not in at["accents"] and not re.fullmatch(r"#(?:[0-9a-f]{3}|[0-9a-f]{6})", v):
+                self.problem(a, f"'{v}' isn't an accent color. Try {', '.join(at['accents'])} or a hex code like \"#ff8800\".")
+        elif name == "icon" and kind == "window" and self.atgui_file(e.args[0] if e.args else None):
+            self.atgui_picture(e.args[0], icon=True)
+        elif name == "icon":
+            a, v = const(0)
+            if v is not None and v not in at["icons"]:
+                hint = difflib.get_close_matches(v, list(at["icons"]), n=1, cutoff=0.6)
+                self.problem(a, f"There's no icon called '{v}'." + (f" Did you mean \"{hint[0]}\"?" if hint else
+                             " Try home, search, settings, user, chat, send, plus, check, x, star, heart, trash, edit or bell."))
+        elif (name == "image" and container) or (name == "set" and kind == "image"):
+            self.atgui_picture(e.args[0] if e.args else None)
+        elif name == "animate":
+            one_of(0, at["animations"], "There's no animation called '{}'. Try one of: " + ", ".join(at["animations"]) + ".")
+        elif name == "toast":
+            one_of(1, at["toast_styles"], "A toast's style can be " + ", ".join(at["toast_styles"]) + ".", at["toast_aliases"])
+        elif name == "chart" and container:
+            one_of(1, at["charts"], "A chart can be \"line\" or \"bar\".")
+        elif name == "key" and kind == "window":
+            a, v = const(0)
+            if v is not None and at["key_combo"](v) is None:
+                self.problem(a, f"'{v}' isn't a key I know. Write keys like \"ctrl+s\", \"escape\", \"f5\" or \"ctrl+shift+n\".")
+        elif name == "sidebar":
+            one_of(1, ("left", "right"), "A sidebar goes on the \"left\" or the \"right\".")
+        elif name == "align":
+            one_of(0, at["align"], "align can be start, center, end or stretch.")
+        elif name == "justify":
+            one_of(0, at["justify"], "justify can be start, center, end, between, around or evenly.")
+
+    def atgui_picture(self, arg, icon=False):
+        """A picture named in the program: a kind of file atgui can show, and there (when we know the folder)."""
+        if arg is None or arg.kind != "const" or not isinstance(arg.value, str):
+            return
+        path = arg.value.strip()
+        if not icon and re.match(r"^(https?:|data:)", path, re.I):
+            return
+        if not path.lower().endswith((".png", ".ico") if icon else atgui_tables()["image_exts"]):
+            self.problem(arg, f"Couldn't use '{path}' as the window's icon. Use a .png or .ico file." if icon
+                         else f"'{path}' isn't a picture. Use a .png, .jpg, .gif, .webp or .svg file.")
+            return
+        base = self.base_dir
+        if base and not os.path.isabs(path) and not os.path.abspath(base).lower().startswith(os.path.abspath(tempfile.gettempdir()).lower()):
+            if not os.path.isfile(os.path.join(base, path)):
+                what = "icon" if icon else "image"
+                self.problem(arg, f"Couldn't find the {what} '{path}'. Put the picture in your project folder (next to your .tuf file).")
+
+    def atgui_handler(self, e, at):
+        """Event functions are passed by name, and don't ask for more inputs than their event gives."""
+        name = e.name
+        if name not in at["events"]:
+            return
+        gives, what, pos, given = at["events"][name]
+        fn = e.args[pos] if len(e.args) > pos else None
+        if fn is None:
+            return
+        if fn.kind == "call" and fn.fn.kind == "var" and self.only_func(fn.fn.name) and not self.returns_function(fn.fn.name):
+            f = fn.fn.name
+            self.problem(fn, f"Pass the function's name without brackets: {f}, not {f}(). With brackets it runs once at the start instead of when it should.")
+            return
+        if fn.kind == "method":
+            target = f"{fn.obj.name}:{fn.name}" if fn.obj.kind == "var" else f":{fn.name}"
+            self.problem(fn, f"{target} runs right away here, while this line runs. Make a small function (func do_it(): {target}) and pass its name.")
+            return
+        if fn.kind == "const" and isinstance(fn.value, str):
+            self.problem(fn, f"This needs a function name, not text. Write {fn.value} without the quotes, and make it with func {fn.value}():")
+            return
+        if fn.kind != "var" or not self.only_func(fn.name):
+            return
+        want = len(self.funcs[fn.name])
+        if want > gives:
+            how = "doesn't give it any. Write it as: func " + fn.name + "():" if gives == 0 else f"only gives it 1 ({given})."
+            self.problem(fn, f"{fn.name}() needs {want} input{'s' if want != 1 else ''}, but {what} {how}")
+        node = self.func_nodes.get(fn.name)
+        if node is not None and id(node) not in self.handlers_seen:
+            self.handlers_seen.add(id(node))
+            for x in nodes(node.body):
+                if x.kind == "call" and x.fn.kind == "var" and x.fn.name == "wait" and "wait" not in self.user:
+                    self.problem(x, "wait() freezes the window: nothing redraws or runs until it's over. To do something later, use app:after(seconds, fn).")
+                elif x.kind == "input":
+                    self.problem(x, "input reads from the console and freezes the window while it waits. In a window app, ask with app:ask \"...\" instead.")
+
+
+# atgui's event methods too, so a missing event function gets "Make it with func" (atgui's checks are just above).
+Checker.HANDLER_POS = {**Checker.HANDLER_POS, "clicked": 0, "hover": 0, "focus": 0, "key": 1, "closed": 0, "item": 1}
 
 
 # ---------------------------------------------------------------- entry point

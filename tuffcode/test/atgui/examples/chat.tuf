@@ -1,0 +1,59 @@
+mention atgui
+
+app = atgui.window("Messages", 980, 660)
+app:accent "indigo"
+side = app:sidebar(260)
+top = side:row
+top:heading "Chats"
+top:justify "between"
+top:button("", new_chat, "ghost"):icon "compose"
+chats = side:list()
+for name in ["Design team", "Ada Lovelace", "Weekend plans", "Tuff club"]:
+    chats:add(name):icon "chat"
+chats:change open_chat
+title = app:heading "Design team"
+msgs = app:scroll()
+typing = app:spinner("Ada is typing"):style "dots"
+typing:hide
+bar = app:row
+box = bar:textarea "Write a message"
+box:enter send
+bar:button("", send, "primary"):icon "send"
+chats:set "Design team"
+bubble("Morning! The new screens are in the drive.", false)
+
+func bubble(words, mine):
+    line = msgs:row
+    msg = line:text words
+    msg:style("padding", [9, 14])
+    msg:style("radius", 18)
+    msg:style("max width", "68%")
+    msg:style("background", "raised")
+    if mine:
+        line:justify "end"
+        msg:style("background", "accent")
+        msg:style("color", "white")
+    msg:animate "slide-up"
+    msgs:to_bottom
+
+func send():
+    words = box:value():trim()
+    if words is not "":
+        bubble(words, true)
+        box:clear
+        typing:show
+        app:after(1.2, reply)
+
+func reply():
+    typing:hide
+    bubble(["Sounds good!", "Love it. Ship it.", "On my way"][random(0, 2)], false)
+
+func open_chat(name):
+    title:set name
+    msgs:clear
+    bubble("This is the start of " + name + ".", false)
+
+func new_chat():
+    name = app:ask "Name the new chat"
+    if name:
+        chats:add(name):icon "chat"

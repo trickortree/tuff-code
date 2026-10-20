@@ -1,0 +1,14 @@
+mention atgui
+
+# Closed by the system (run_all.py sends WM_CLOSE, what the window's X button sends), with a timer running.
+app = atgui.window("atgui close test", 420, 300)
+ticks = 0
+app:heading "Close me"
+app:every(0.05, tick)
+app:closed bye
+
+func tick():
+    ticks += 1
+
+func bye():
+    say "closed by the system"

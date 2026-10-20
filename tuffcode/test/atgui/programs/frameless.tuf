@@ -1,0 +1,13 @@
+mention atgui
+
+# A window without a frame, with atgui's title bar: frameless.js maximizes and restores it with the
+# title bar's button and a double-click, resizes it, and closes it with the title bar's close button.
+app = atgui.window("Frameless test", 640, 420)
+bar = app:titlebar("My frameless app")
+bar:input "Search"
+app:heading "No frame"
+app:text "Drag the title bar to move the window."
+app:closed bye
+
+func bye():
+    say "closed"

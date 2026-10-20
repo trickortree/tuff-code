@@ -1,0 +1,18 @@
+mention atgui
+
+# How fast the app answers: latency.js clicks the button and types, and times each round trip
+# (page event -> the Tuff function -> its change seen in the page).
+app = atgui.window("atgui latency", 520, 360)
+n = 0
+count = app:heading "0"
+app:button("Click", clicked, "primary")
+mirror = app:text ""
+box = app:input "Type"
+box:change typed
+
+func clicked():
+    n += 1
+    count:set text(n)
+
+func typed(words):
+    mirror:set words

@@ -1,0 +1,22 @@
+mention atgui
+
+# Event functions with mistakes. Each mistake must be reported once, with its line, however often it
+# happens, and the app must keep working: "still working" is said after every click on the good button.
+app = atgui.window("atgui errors test", 520, 400)
+app:button("Broken", broken, "danger")
+app:button("Good", good, "primary")
+box = app:input "Type"
+box:change bad_change
+app:every(0.05, bad_tick)
+
+func broken():
+    say 10 / 0
+
+func good():
+    say "still working"
+
+func bad_change(words):
+    say words - 1
+
+func bad_tick():
+    say no_such_name
