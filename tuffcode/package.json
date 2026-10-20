@@ -8,6 +8,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test:e2e": "node test/e2e/run.mjs",
     "build:runtime": "py -3 -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py",
     "dist": "npm run build:runtime && electron-builder --win nsis --x64 --publish never",
     "build:runtime:mac": "python3 -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py",
