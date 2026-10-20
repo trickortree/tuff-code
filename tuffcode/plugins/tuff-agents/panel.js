@@ -49,6 +49,8 @@ TuffPlugins.register('tuff-agents', (t) => {
     openMan: new Set(), // which "by hand" sections are open
     busyAgent: null, // agent being connected or removed
     auth: {}, // agent id -> signed in? (true / false / null when it can't tell)
+    pick: t.storage.get('pick', {}), // agent id -> { model, effort } chosen for it ('' = the agent's default)
+    models: {}, // agent id -> what it offers, as it reports it: { models, efforts }, { loading } or { error }
   };
   let root = null;
   let ctxTimer = null;
@@ -93,6 +95,10 @@ TuffPlugins.register('tuff-agents', (t) => {
         <div class="ta-compose">
           <div class="ta-ctx"></div>
           <textarea rows="3" spellcheck="true" placeholder="Ask about your code…"></textarea>
+          <div class="ta-opts">
+            <label class="ta-sel" title="Which model the agent uses"><span>Model</span><select data-o="model"></select></label>
+            <label class="ta-sel" title="How long the model thinks before it answers. Higher is slower but more careful."><span>Thinking</span><select data-o="effort"></select></label>
+          </div>
           <div class="ta-row">
             <div class="ta-mode" role="radiogroup" aria-label="What the agent may do">
               <button data-m="ask" title="Explains and suggests. Won't change your files.">Ask</button>
@@ -112,6 +118,14 @@ TuffPlugins.register('tuff-agents', (t) => {
     ta.addEventListener('focus', updateCtx);
     $('.ta-send', root).onclick = () => (S.run ? stop() : send(ta.value));
     $$('.ta-mode button', root).forEach((b) => (b.onclick = () => { S.mode = b.dataset.m; t.storage.set('mode', S.mode); renderMode(); }));
+    $$('.ta-opts select', root).forEach((sel) => (sel.onchange = () => {
+      if (S.run) { renderPick(); return; }
+      const p = { ...(S.pick[S.agent] || {}) };
+      p[sel.dataset.o] = sel.value;
+      S.pick = { ...S.pick, [S.agent]: p };
+      t.storage.set('pick', S.pick);
+      renderPick();
+    }));
     $('[data-a="menu"]', root).onclick = (e) => { e.stopPropagation(); toggleMenu(); };
     $('[data-a="setup"]', root).onclick = () => showSetup(S.view !== 'setup');
     const setupBox = $('.ta-setup', root);
@@ -150,6 +164,67 @@ TuffPlugins.register('tuff-agents', (t) => {
       if (!S.agents.find((x) => x.id === id)?.installed) continue;
       t.agents.signedIn(id).then((v) => { S.auth[id] = v; renderStatus(); renderSetup(); }).catch(() => {});
     }
+    for (const a of S.agents.filter((x) => x.installed)) loadModels(a.id, true);
+    renderPick();
+  }
+
+  // Asks the agent which models and thinking levels it offers.
+  function loadModels(id, fresh = false) {
+    if (!t.agents.models) return;
+    S.models[id] = { loading: true };
+    if (id === S.agent) renderPick();
+    t.agents.models(id, fresh)
+      .then((r) => { S.models[id] = r; })
+      .catch((err) => { S.models[id] = { error: cleanErr(err) }; })
+      .finally(() => { if (id === S.agent) renderPick(); });
+  }
+
+  // The model the agent will use (null = its default) and the thinking levels on offer for it.
+  function picked(id = S.agent) {
+    const list = S.models[id] || {};
+    const p = S.pick[id] || {};
+    const model = (list.models || []).find((m) => m.id === p.model) || null;
+    let efforts = model ? model.efforts : list.efforts || [];
+    if (!model && !efforts.length) { // default model: offer every level the agent knows
+      const seen = new Map();
+      for (const m of list.models || []) for (const e of m.efforts) seen.set(e.id, e);
+      efforts = [...seen.values()];
+    }
+    const effort = efforts.find((e) => e.id === p.effort) || null;
+    return { list, model, efforts, effort };
+  }
+
+  function renderPick() {
+    const box = $('.ta-opts', root);
+    if (!box) return;
+    const a = current();
+    const { list, model, efforts, effort } = picked();
+    const opt = (v, label, on) => `<option value="${esc(v)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
+    const mSel = $('select[data-o="model"]', box);
+    const eSel = $('select[data-o="effort"]', box);
+    box.classList.toggle('hidden', !a?.installed);
+    if (list.loading) {
+      mSel.innerHTML = opt('', 'Loading…', true);
+      eSel.innerHTML = opt('', 'Loading…', true);
+    } else {
+      mSel.innerHTML = opt('', 'Default', !model) + (list.models || []).map((m) => opt(m.id, m.name, model?.id === m.id)).join('');
+      const def = model?.defaultEffort ? `Default (${efforts.find((e) => e.id === model.defaultEffort)?.name || model.defaultEffort})` : 'Default';
+      eSel.innerHTML = opt('', def, !effort) + efforts.map((e) => opt(e.id, e.name, effort?.id === e.id)).join('');
+    }
+    mSel.title = list.error ? `Couldn't get the model list: ${list.error}` : '';
+    const lock = !!S.run || !!list.loading;
+    mSel.disabled = lock || !!list.error;
+    eSel.disabled = lock || !efforts.length;
+    box.title = S.run ? 'Wait for the reply to finish (or press Stop) to change these.' : '';
+  }
+
+  // While an agent is answering, its tab, model and thinking level stay as they are.
+  function renderLock() {
+    $$('.ta-agents button', root).forEach((b) => {
+      b.disabled = !!S.run && b.dataset.id !== S.agent;
+      b.title = b.disabled ? 'Wait for the reply to finish, or press Stop' : b.dataset.title || b.title;
+    });
+    renderPick();
   }
 
   // Each agent's desktop app keeps its own copy of the agent, which TuffCode finds and uses.
@@ -179,15 +254,18 @@ TuffPlugins.register('tuff-agents', (t) => {
       const a = S.agents?.find((x) => x.id === id);
       const state = !S.agents ? 'checking' : a?.installed ? 'ready' : 'missing';
       const title = !S.agents ? 'Checking…' : a?.installed ? `${a.name}${a.version ? ` ${a.version}` : ''}` : `${a?.name || id} isn't installed`;
-      return `<button role="tab" data-id="${id}" class="${id === S.agent ? 'on' : ''}" title="${esc(title)}" aria-selected="${id === S.agent}"><i class="dot ${state}"></i>${SHORT[id]}</button>`;
+      const locked = !!S.run && id !== S.agent;
+      return `<button role="tab" data-id="${id}" class="${id === S.agent ? 'on' : ''}" data-title="${esc(title)}" title="${esc(locked ? 'Wait for the reply to finish, or press Stop' : title)}" aria-selected="${id === S.agent}"${locked ? ' disabled' : ''}><i class="dot ${state}"></i>${SHORT[id]}</button>`;
     }).join('');
     $$('button', box).forEach((b) => (b.onclick = () => {
+      if (S.run && b.dataset.id !== S.agent) return;
       S.agent = b.dataset.id;
       t.storage.set('agent', S.agent);
       if (S.view === 'setup') showSetup(false);
       renderAgents();
       renderStatus();
       renderMsgs();
+      renderPick();
     }));
   }
 
@@ -217,7 +295,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     } else if (S.agent !== 'claude' && S.conn[S.agent] === false && !S.dismissed[S.agent]) {
       box.innerHTML = `<div class="ta-card">
         <b>Teach ${esc(a.name)} about Tuff</b>
-        <p>Connect TuffCode's tools so ${esc(a.name)} can read the Tuff guide and check and run your programs. This adds a "tuffcode" tool server to its settings. You can remove it any time from the ⋯ menu.</p>
+        <p>Connect TuffCode's tools so ${esc(a.name)} can read the Tuff guide and check and run your programs. This adds a "tuffcode" tool server to its settings${S.agent === 'antigravity' ? ' and lets it use those tools without asking' : ''}. You can remove it any time from the ⋯ menu.</p>
         <div class="ta-btns"><button class="btn sm primary" data-a="connect">Connect</button><button class="btn sm" data-a="setup">How it works</button><button class="btn sm" data-a="dismiss">Not now</button></div>
       </div>`;
     } else {
@@ -354,14 +432,15 @@ TuffPlugins.register('tuff-agents', (t) => {
       btns = [['signin', 'Sign in', 'primary'], ['recheck', 'Check again']];
     } else if (a?.installed && id === 'claude') {
       ok = true;
-      state = conn ? 'Ready here and in the terminal' : 'Ready in this panel';
-      body = `<p>Claude gets the tools automatically in this panel. ${conn ? 'They’re also added for <code>claude</code> in your terminal.' : 'Add them to your terminal too if you use <code>claude</code> there.'}</p>`;
-      btns = [['test', 'Test it', 'primary'], conn ? ['off', 'Remove from terminal'] : ['on', 'Add to terminal']];
+      state = conn ? 'Ready here, in the Claude app and the terminal' : 'Ready in this panel';
+      body = `<p>Claude gets the tools automatically in this panel. ${conn ? 'They’re also added to the Claude app (chat and Code tab) and <code>claude</code> in your terminal. Restart the Claude app if it doesn’t show “tuffcode” yet.' : 'Add them to the Claude app (chat and Code tab) and <code>claude</code> in your terminal too. Restart the Claude app afterwards.'}</p>`;
+      btns = [['test', 'Test it', 'primary'], conn ? ['off', 'Remove from the Claude app'] : ['on', 'Add to the Claude app']];
     } else if (a?.installed) {
       ok = !!conn;
       state = conn === undefined ? 'Checking…' : conn ? 'Connected' : 'Not connected';
-      body = conn ? `<p>${esc(name)} can use the Tuff tools, here and in your terminal.</p>`
-        : `<p>Connect once so ${esc(name)} can read the Tuff guide and check and run your programs. This adds a "tuffcode" tool server to its settings.</p>`;
+      const where = id === 'codex' ? 'here, in the Codex app and in your terminal. Restart the Codex app if it doesn’t show “tuffcode” yet' : 'here and in your terminal';
+      body = conn ? `<p>${esc(name)} can use the Tuff tools ${where}.</p>`
+        : `<p>Connect once so ${esc(name)} can read the Tuff guide and check and run your programs${id === 'codex' ? ', here and in the Codex app' : ''}. This adds a "tuffcode" tool server to its settings${id === 'antigravity' ? ' and lets it use those tools without asking' : ''}.</p>`;
       btns = conn ? [['test', 'Test it', 'primary'], ['off', 'Remove']] : conn === false ? [['on', 'Connect', 'primary']] : [];
     }
     const test = S.tested[id];
@@ -463,7 +542,7 @@ TuffPlugins.register('tuff-agents', (t) => {
         : m.status === 'error' ? `<div class="ta-err">${esc(m.error)}</div>` : '';
     const notes = (m.notes || []).map((n) => `<div class="ta-small">${esc(n)}</div>`).join('');
     return `<div class="ta-msg agent" data-i="${i}">
-      <div class="ta-who">${esc(SHORT[m.agent])}${m.mode === 'edit' ? ' · Edit' : ''}</div>
+      <div class="ta-who">${esc(SHORT[m.agent])}${m.model ? ` · ${esc(m.model)}` : ''}${m.mode === 'edit' ? ' · Edit' : ''}</div>
       ${tools ? `<div class="ta-tools">${tools}</div>` : ''}
       <div class="ta-md">${md(m.text)}</div>${notes}${status}</div>`;
   }
@@ -606,7 +685,8 @@ TuffPlugins.register('tuff-agents', (t) => {
     const ctx = test ? '' : [file && S.useFile ? short(file) : '', lines && S.useSel ? `lines ${lines[0]}–${lines[1]}` : ''].filter(Boolean).join(', ');
     S.msgs.push({ role: 'user', text: test ? `Test ${a.name}'s TuffCode tools` : text, ctx: ctx ? `with ${ctx}` : '' });
     const prompt = buildPrompt(text, { mode, bare: test });
-    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running' };
+    const { model, effort } = picked();
+    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running', model: [model?.name, effort?.name].filter(Boolean).join(' · ') };
     S.msgs.push(msg);
     const runId = `run-${Date.now()}`;
     S.run = { id: runId, msg, changed: false, test, mcp: new Set() };
@@ -618,7 +698,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     renderMsgs();
     updateSend();
     try {
-      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode, session: S.agent === 'claude' ? S.sessions.claude : null });
+      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode, session: ['claude', 'antigravity'].includes(S.agent) ? S.sessions[S.agent] : null, model: model?.id || '', effort: effort?.id || '' });
     } catch (err) {
       onEvent({ runId, kind: 'done', ok: false, error: err.message });
     }
@@ -691,6 +771,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     b.textContent = S.run ? 'Stop' : 'Send';
     b.classList.toggle('stop', !!S.run);
     b.title = S.run ? 'Stop the agent' : 'Send (Enter)';
+    renderLock();
   }
 
   return () => {

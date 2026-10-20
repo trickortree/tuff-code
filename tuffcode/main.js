@@ -303,6 +303,7 @@ ipcMain.handle('agents:mcpSetup', () => agents.mcpSetup());
 ipcMain.handle('agents:mcpCheck', () => agents.mcpCheck());
 ipcMain.handle('agents:signedIn', (_e, id) => agents.signedIn(id));
 ipcMain.handle('agents:signIn', (_e, id) => agents.signIn(id));
+ipcMain.handle('agents:models', (_e, id, fresh) => agents.models(id, fresh));
 ipcMain.handle('agents:run', (_e, params) => { agents.run(params, (ev) => send('agents:event', ev)); return true; });
 ipcMain.handle('agents:stop', (_e, runId) => agents.stop(runId));
 

@@ -14,15 +14,17 @@ AI coding agents like Claude Code, Codex and Antigravity don't know Tuff. TuffCo
 2. Click the **plug button** at the top of the panel. That opens **Agent tools**.
 3. **Check the tools work** runs by itself. It starts the tools exactly the way your agents do and tries every one, with a ✓ or ✗ for each step.
 4. Under **Connect your agents**:
-   - For Codex or Antigravity, click **Connect**.
-   - Claude Code gets the tools automatically in the panel. **Add to terminal** also gives them to `claude` when you run it in a terminal.
+   - For Codex or Antigravity, click **Connect**. Codex's tools also show up in the **Codex app**, which shares its settings (restart the app to see "tuffcode").
+   - Claude Code gets the tools automatically in the panel. **Add to the Claude app** also gives them to the Claude desktop app (its chat and its Code tab) and to `claude` in a terminal. Restart the Claude app to see "tuffcode".
 5. Click **Test it**. The agent is asked to use the tools, and the panel shows which ones it really used.
+
+The agents also work when they only came with their desktop app: TuffCode finds the copy of Claude Code inside the Claude app and the copy of Codex inside the Codex app. If one isn't signed in, the panel shows a **Sign in** button that opens its sign-in window.
 
 ## By hand
 **Agent tools** shows these commands with the exact paths for your computer, plus Copy buttons, so that's the easiest place to get them. For an installed copy of TuffCode they usually look like this:
 
 ```bash
-claude mcp add --scope user -e ELECTRON_RUN_AS_NODE=1 tuffcode -- "C:\Users\YOU\AppData\Local\Programs\TuffCode\TuffCode.exe" "C:\Users\YOU\AppData\Local\Programs\TuffCode\resources\app.asar.unpacked\mcp\tuff-mcp.js"
+claude mcp add --scope user tuffcode -e ELECTRON_RUN_AS_NODE=1 -- "C:\Users\YOU\AppData\Local\Programs\TuffCode\TuffCode.exe" "C:\Users\YOU\AppData\Local\Programs\TuffCode\resources\app.asar.unpacked\mcp\tuff-mcp.js"
 ```
 ```bash
 codex mcp add tuffcode --env ELECTRON_RUN_AS_NODE=1 -- "C:\Users\YOU\AppData\Local\Programs\TuffCode\TuffCode.exe" "C:\Users\YOU\AppData\Local\Programs\TuffCode\resources\app.asar.unpacked\mcp\tuff-mcp.js"
@@ -31,7 +33,13 @@ codex mcp add tuffcode --env ELECTRON_RUN_AS_NODE=1 -- "C:\Users\YOU\AppData\Loc
 agy mcp add --env ELECTRON_RUN_AS_NODE=1 tuffcode "C:\Users\YOU\AppData\Local\Programs\TuffCode\TuffCode.exe" "C:\Users\YOU\AppData\Local\Programs\TuffCode\resources\app.asar.unpacked\mcp\tuff-mcp.js"
 ```
 
-**Other apps** (Claude Desktop, Cursor, Windsurf and others): add this to the app's MCP settings file, then restart the app. Examples of that file are `claude_desktop_config.json` and `.cursor/mcp.json`. In VS Code's `mcp.json`, write `"servers"` instead of `"mcpServers"`.
+Antigravity also has to be allowed to use the tools, because it can't ask for permission when TuffCode runs it. **Connect** does this for you. By hand, add these rules to `%USERPROFILE%\.gemini\antigravity-cli\settings.json`:
+
+```json
+{ "permissions": { "allow": ["mcp(tuffcode/tuff_reference)", "mcp(tuffcode/tuff_examples)", "mcp(tuffcode/tuff_check)", "mcp(tuffcode/tuff_run)"] } }
+```
+
+**Other apps** (the Claude desktop app, Cursor, Windsurf and others): add this to the app's MCP settings file, then restart the app. Examples of that file are `%APPDATA%\Claude\claude_desktop_config.json` and `.cursor/mcp.json`. In VS Code's `mcp.json`, write `"servers"` instead of `"mcpServers"`.
 
 ```json
 {

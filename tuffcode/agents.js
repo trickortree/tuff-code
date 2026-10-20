@@ -1,7 +1,7 @@
 // Tuff Agents backend: finds the AI coding agents installed on this PC (Claude Code, Codex,
 // Antigravity), runs them on the user's project, streams what they do back to the panel, and
 // connects them to the TuffCode MCP server (mcp/tuff-mcp.js) so they know the Tuff language.
-const { app } = require('electron');
+const { app, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -142,7 +142,8 @@ function mcpServer() {
 
 const CONNECT = {
   claude: {
-    add: () => ['mcp', 'add', '--scope', 'user', '-e', 'ELECTRON_RUN_AS_NODE=1', MCP_NAME, '--', mcpServer().command, mcpServer().args[0]],
+    // The name goes before -e: -e takes several values and would swallow it.
+    add: () => ['mcp', 'add', '--scope', 'user', MCP_NAME, '-e', 'ELECTRON_RUN_AS_NODE=1', '--', mcpServer().command, mcpServer().args[0]],
     remove: () => ['mcp', 'remove', '--scope', 'user', MCP_NAME],
     check: async (file) => (await quick(file, ['mcp', 'get', MCP_NAME])).code === 0,
   },
@@ -158,19 +159,155 @@ const CONNECT = {
   },
 };
 
+// The Claude desktop app's chat reads its tool servers from claude_desktop_config.json (Claude Code
+// and the app's Code tab use ~/.claude.json, which `claude mcp add --scope user` writes).
+function claudeAppConfig() {
+  if (process.env.TUFFCODE_CLAUDE_APP_CONFIG) return process.env.TUFFCODE_CLAUDE_APP_CONFIG;
+  const dirs = [path.join(app.getPath('appData'), 'Claude')];
+  const pkgs = path.join(process.env.LOCALAPPDATA || '', 'Packages');
+  try { for (const p of fs.readdirSync(pkgs)) if (/claude/i.test(p)) dirs.push(path.join(pkgs, p, 'LocalCache', 'Roaming', 'Claude')); } catch {}
+  const dir = dirs.find((d) => fs.existsSync(d));
+  return dir ? path.join(dir, 'claude_desktop_config.json') : null;
+}
+function readClaudeApp(file) {
+  if (!fs.existsSync(file)) return {};
+  try { return JSON.parse(fs.readFileSync(file, 'utf8') || '{}'); } catch { return null; }
+}
+function claudeAppHas() {
+  const file = claudeAppConfig();
+  if (!file) return null; // no Claude app on this PC
+  return !!readClaudeApp(file)?.mcpServers?.[MCP_NAME];
+}
+function setClaudeApp(on) {
+  const file = claudeAppConfig();
+  if (!file) return;
+  const cfg = readClaudeApp(file);
+  if (!cfg) throw new Error("Couldn't read the Claude app's settings file, so TuffCode left it alone.");
+  if (fs.existsSync(file) && !fs.existsSync(`${file}.before-tuffcode`)) fs.copyFileSync(file, `${file}.before-tuffcode`);
+  cfg.mcpServers = cfg.mcpServers || {};
+  const s = mcpServer();
+  if (on) cfg.mcpServers[MCP_NAME] = { command: s.command, args: s.args, env: { ELECTRON_RUN_AS_NODE: '1' } };
+  else delete cfg.mcpServers[MCP_NAME];
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(cfg, null, 2));
+  fs.renameSync(`${file}.tmp`, file);
+}
+
+// Antigravity runs headless in the panel, where it can't ask before using a tool, so it turns
+// down every tool that needs permission, TuffCode's included. Connecting it also allows TuffCode's
+// own four tools in its settings (and nothing else); removing takes those rules out again.
+const AGY_DIR = path.join(os.homedir(), '.gemini', 'antigravity-cli');
+const AGY_ALLOW = ['tuff_reference', 'tuff_examples', 'tuff_check', 'tuff_run'].map((n) => `mcp(${MCP_NAME}/${n})`);
+function setAgyAllow(on) {
+  const file = path.join(AGY_DIR, 'settings.json');
+  if (!fs.existsSync(AGY_DIR)) return;
+  let cfg = {};
+  if (fs.existsSync(file)) { try { cfg = JSON.parse(fs.readFileSync(file, 'utf8') || '{}'); } catch { return; } }
+  const had = cfg.permissions?.allow || [];
+  const allow = on ? [...new Set([...had, ...AGY_ALLOW])] : had.filter((r) => !AGY_ALLOW.includes(r));
+  if (allow.length === had.length && allow.every((r, i) => r === had[i])) return;
+  cfg.permissions = { ...(cfg.permissions || {}), allow };
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(cfg, null, 2));
+  fs.renameSync(`${file}.tmp`, file);
+}
+// Antigravity keeps a folder per connected tool server, so this needs no slow `agy mcp list`.
+const agyHasTuffTools = () => fs.existsSync(path.join(AGY_DIR, 'mcp', MCP_NAME));
+
 async function connection(id) {
   const file = await resolveBin(id);
   if (!file) return { id, installed: false, connected: false };
-  return { id, installed: true, connected: await CONNECT[id].check(file) };
+  let connected = await CONNECT[id].check(file);
+  if (id === 'claude' && claudeAppHas() === false) connected = false;
+  return { id, installed: true, connected };
 }
 
 async function connect(id, on = true) {
   const file = await resolveBin(id);
   if (!file) throw new Error(`${AGENTS[id].name} isn't installed.`);
   const r = await quick(file, on ? CONNECT[id].add() : CONNECT[id].remove(), 30000);
+  if (id === 'claude') setClaudeApp(on);
+  if (id === 'antigravity') { try { setAgyAllow(on); } catch {} }
   const state = await connection(id);
   if (state.connected !== on) throw new Error(r.out || `Couldn't ${on ? 'connect' : 'disconnect'} ${AGENTS[id].name}.`);
   return state;
+}
+
+// ---------------------------------------------------------------- models and thinking levels
+// Each agent is asked which models it offers and how hard each can think. The list is the
+// agent's own (for this account and version), so nothing here goes out of date. id '' = the
+// agent's own default.
+const LEVEL_NAMES = { minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultra: 'Ultra' };
+const levels = (list) => list.map((id) => ({ id, name: LEVEL_NAMES[id] || id[0].toUpperCase() + id.slice(1) }));
+const safeArg = (s) => typeof s === 'string' && /^[\w.\-:/]{1,80}$/.test(s);
+const modelCache = {};
+
+const MODELS = {
+  // Claude Code has no list command; its help names the model aliases and effort levels.
+  claude: async (file) => {
+    const help = (await quick(file, ['--help'], 15000)).out.replace(/\s+/g, ' ');
+    const aliases = [...((/--model <model>.*?\(e\.g\.([^)]*)\)/.exec(help) || [])[1] || '').matchAll(/'([\w.-]+)'/g)].map((m) => m[1]);
+    const efforts = (((/--effort <level>[^(]*\(([^)]*)\)/.exec(help) || [])[1] || '').match(/[a-z]+/g)) || [];
+    if (!aliases.length) throw new Error("Claude Code didn't list its models.");
+    return { models: aliases.map((id) => ({ id, name: id[0].toUpperCase() + id.slice(1), efforts: levels(efforts) })), efforts: levels(efforts) };
+  },
+  // Codex prints its model catalog; "list" models are the ones its own picker shows.
+  codex: async (file) => {
+    const r = await quick(file, ['debug', 'models'], 30000);
+    const json = JSON.parse(r.out.slice(r.out.indexOf('{')));
+    const models = (json.models || []).filter((m) => m.slug && m.visibility !== 'hide').map((m) => ({
+      id: m.slug,
+      name: m.display_name || m.slug,
+      efforts: levels((m.supported_reasoning_levels || []).map((l) => l.effort || l).filter((e) => typeof e === 'string')),
+      defaultEffort: m.default_reasoning_level || null,
+    }));
+    if (!models.length) throw new Error("Codex didn't list any models.");
+    return { models, efforts: [] };
+  },
+  // Antigravity lists one entry per model and thinking level ("gemini-4-argon-high  Gemini 4 Argon (High)").
+  antigravity: async (file) => {
+    const out = (await quick(file, ['models'], 45000)).out;
+    const byBase = new Map();
+    for (const line of out.split(/\r?\n/)) {
+      const m = /^(\S+)\s+(.+)$/.exec(line.trim());
+      if (!m || /^fetching/i.test(line)) continue;
+      const [, id, label] = m;
+      const lv = /-(minimal|low|medium|high|xhigh|max)$/.exec(id);
+      const base = lv ? id.slice(0, -lv[0].length) : id;
+      const name = label.replace(/\s*\((minimal|low|medium|high|extra high|xhigh|max)\)\s*$/i, '').trim();
+      if (!byBase.has(base)) byBase.set(base, { id: base, name, efforts: [], ids: {} });
+      const e = byBase.get(base);
+      if (lv) { e.efforts.push(...levels([lv[1]])); e.ids[lv[1]] = id; } else e.ids[''] = id;
+    }
+    const order = Object.keys(LEVEL_NAMES);
+    const models = [...byBase.values()];
+    for (const m of models) m.efforts.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+    if (!models.length) throw new Error("Antigravity didn't list any models. Is it signed in?");
+    return { models, efforts: [] };
+  },
+};
+
+async function models(id, fresh = false) {
+  if (!MODELS[id]) return { models: [], efforts: [] };
+  if (modelCache[id] && !fresh) return modelCache[id];
+  const file = await resolveBin(id);
+  if (!file) return { models: [], efforts: [] };
+  const list = await MODELS[id](file);
+  modelCache[id] = list;
+  return list;
+}
+
+// The flags that pick the model and thinking level for one run. Unknown values are dropped.
+function modelArgs(agent, model, effort) {
+  const m = safeArg(model) ? model : '';
+  const e = safeArg(effort) ? effort : '';
+  if (agent === 'claude') return [...(m ? ['--model', m] : []), ...(e ? ['--effort', e] : [])];
+  if (agent === 'codex') return [...(m ? ['-m', m] : []), ...(e ? ['-c', `model_reasoning_effort=${e}`] : [])];
+  if (agent === 'antigravity') {
+    const entry = modelCache.antigravity?.models.find((x) => x.id === m);
+    const full = entry ? entry.ids[e] || entry.ids[''] || Object.values(entry.ids)[0] : m;
+    if (full) return ['--model', full];
+    return e ? ['--effort', e] : [];
+  }
+  return [];
 }
 
 // How each agent reports and starts its own sign-in. Antigravity can't say without a prompt.
@@ -200,10 +337,28 @@ async function signIn(id) {
   const file = await resolveBin(id);
   if (!file) throw new Error(`${AGENTS[id].name} isn't installed.`);
   if (!SIGN_IN[id]) throw new Error(`Sign in to ${AGENTS[id].name} in a terminal.`);
-  // A new window of its own (detached), so the person can see the sign-in link. npm installs are
-  // .cmd shims, which Windows only starts through the shell.
-  const shim = /\.(cmd|bat)$/i.test(file);
-  const proc = spawn(shim ? `"${file}"` : file, SIGN_IN[id].login, { detached: true, stdio: 'ignore', windowsHide: false, shell: shim });
+  const name = AGENTS[id].name;
+  if (process.platform === 'win32') {
+    // The sign-in needs a real console window: it opens the browser from there and shows the link
+    // if that fails. A small script opened like a double-click gets one (a hidden child doesn't).
+    const script = path.join(os.tmpdir(), `tuffcode-signin-${id}.cmd`);
+    fs.writeFileSync(script, [
+      '@echo off',
+      `title Sign in to ${name}`,
+      `echo Signing in to ${name}. Your browser should open; finish signing in there.`,
+      'echo If it doesn\'t open, copy the link below into your browser.',
+      'echo.',
+      `call "${file}" ${SIGN_IN[id].login.join(' ')}`,
+      'echo.',
+      'echo When it says you\'re signed in, close this window and click Check again in TuffCode.',
+      'pause',
+      '',
+    ].join('\r\n'));
+    const err = await shell.openPath(script);
+    if (err) throw new Error(`Couldn't open the sign-in window: ${err}`);
+    return true;
+  }
+  const proc = spawn(file, SIGN_IN[id].login, { detached: true, stdio: 'ignore' });
   proc.on('error', () => {});
   proc.unref();
   return true;
@@ -349,16 +504,19 @@ function fitCommandLine(prompt, limit = 30000) {
   return prompt.slice(0, head) + note + prompt.slice(-(limit - head - note.length));
 }
 
-function argsFor(agent, { mode, session, prompt }) {
+function argsFor(agent, { mode, session, prompt, model, effort }) {
   const edit = mode === 'edit';
+  const pick = modelArgs(agent, model, effort);
   if (agent === 'claude') {
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-      '--mcp-config', claudeMcpConfigFile(), '--allowedTools', `mcp__${MCP_NAME}`, '--permission-mode', edit ? 'acceptEdits' : 'default'];
+      '--mcp-config', claudeMcpConfigFile(), '--allowedTools', `mcp__${MCP_NAME}`, '--permission-mode', edit ? 'acceptEdits' : 'default', ...pick];
     if (session) args.push('--resume', session);
     return { args, stdin: true };
   }
-  if (agent === 'codex') return { args: ['exec', '--json', '--skip-git-repo-check', '--sandbox', edit ? 'workspace-write' : 'read-only', '-'], stdin: true };
-  return { args: [`--print=${fitCommandLine(prompt)}`, '--output-format', 'stream-json', '--mode', edit ? 'accept-edits' : 'plan'], stdin: false };
+  if (agent === 'codex') return { args: ['exec', '--json', '--skip-git-repo-check', '--sandbox', edit ? 'workspace-write' : 'read-only', ...pick, '-'], stdin: true };
+  const args = [`--print=${fitCommandLine(prompt)}`, '--output-format', 'stream-json', '--mode', edit ? 'accept-edits' : 'plan', ...pick];
+  if (session) args.push('--conversation', session);
+  return { args, stdin: false };
 }
 
 // Each parser turns one JSON line from an agent into panel events:
@@ -408,11 +566,57 @@ function codexParser() {
   };
 }
 
-// Antigravity's stream mirrors Claude Code's; anything else with text in it is shown as text.
+// Antigravity (agy --output-format stream-json) sends {event: 'init' | 'step_update' | 'result'}.
+// Each step is the agent talking (text_delta pieces) or one tool call (ACTIVE, then DONE).
+const AGY_TOOLS = {
+  write_file: 'Write', write_to_file: 'Write',
+  replace_file_content: 'Edit', multi_replace_file_content: 'Edit', sed_file: 'Edit', notebook_edit: 'Edit',
+  read_file: 'Read', view_file: 'Read',
+  run_command: 'Bash',
+  list_dir: 'Glob', find_by_name: 'Glob', grep_search: 'Grep',
+  search_web: 'WebSearch', read_url_content: 'WebFetch',
+};
+function agyTool(name, p = {}) {
+  const file = p.Path || p.AbsolutePath || p.TargetFile || p.FilePath || p.path || p.file_path;
+  const tuff = /tuff_(reference|examples|check|run)/.exec(`${name} ${p.ToolName || p.tool_name || p.tool || ''}`);
+  if (tuff) return { name: `mcp__${MCP_NAME}__${tuff[0]}`, input: p.Arguments || p.arguments || {} };
+  if (AGY_TOOLS[name]) return { name: AGY_TOOLS[name], input: { file_path: file, command: p.CommandLine || p.Command || p.command } };
+  return { name, input: { file_path: file } };
+}
 function antigravityParser() {
   const claude = claudeParser();
   let shown = false;
+  let talking = false;
+  const started = new Set();
+  const hidden = new Set(); // agy reading its own description of a tool before calling it
   return (o, emit) => {
+    if (o.event === 'init') { if (o.conversation_id) emit({ kind: 'session', id: o.conversation_id }); return; }
+    if (o.event === 'step_update') {
+      const s = o.step_update || {};
+      if (s.step_type === 'agent_response' && typeof s.text_delta === 'string' && s.text_delta) {
+        shown = talking = true;
+        emit({ kind: 'delta', text: s.text_delta });
+      } else if (s.step_type === 'tool') {
+        if (talking) { talking = false; emit({ kind: 'break' }); }
+        const key = s.step_index;
+        const p = s.tool_info?.parameters || {};
+        if (hidden.has(key) || /[\\/]antigravity-cli[\\/]mcp[\\/][^\\/]+[\\/][^\\/]+\.json$/i.test(p.Path || p.AbsolutePath || '')) { hidden.add(key); return; }
+        if (!started.has(key)) { started.add(key); const t = agyTool(s.tool_name || s.tool_info?.name, s.tool_info?.parameters); emit({ kind: 'tool', name: t.name, input: t.input }); }
+        if (/^(DONE|ERROR|FAILED|CANCELED|CANCELLED)$/i.test(s.state || '')) emit({ kind: 'tool_result', ok: /^DONE$/i.test(s.state) && !s.tool_info?.error });
+      }
+      return;
+    }
+    if (o.event === 'result') {
+      const r = o.result || {};
+      const ok = /^success$/i.test(r.status || '');
+      if (!shown && r.response) emit({ kind: 'text', text: r.response });
+      const denied = [...new Set((r.denied_actions || []).map((d) => (d.action === 'command' ? 'run a command' : `use ${d.display_name || d.action}`)))];
+      if (denied.length) emit({ kind: 'note', text: `Antigravity wanted to ${denied.join(' and ')}, but it can't ask for permission from this panel, so that was skipped.` });
+      emit({ kind: 'done', ok, error: ok ? null : (r.error?.message || r.error || r.message || `Antigravity stopped (${r.status || 'no result'}).`), session: r.conversation_id });
+      return;
+    }
+    if (o.event === 'error') { emit({ kind: 'error', text: o.error?.message || o.error || o.message || 'Antigravity reported an error.' }); return; }
+    // Older builds mirrored Claude Code's stream; anything else with text in it is shown as text.
     const known = ['system', 'stream_event', 'assistant', 'user', 'result'].includes(o.type);
     if (known) {
       claude(o, (e) => { if (['delta', 'text'].includes(e.kind)) shown = true; emit(e); });
@@ -426,11 +630,15 @@ function antigravityParser() {
 
 const PARSERS = { claude: claudeParser, codex: codexParser, antigravity: antigravityParser };
 
-async function run({ runId, agent, prompt, root, mode, session }, emit) {
+async function run({ runId, agent, prompt, root, mode, session, model, effort }, emit) {
   const send = (e) => emit({ runId, ...e });
   const file = await resolveBin(agent);
   if (!file) { send({ kind: 'done', ok: false, error: `${AGENTS[agent].name} isn't installed. ${AGENTS[agent].install}` }); return; }
-  const { args, stdin } = argsFor(agent, { mode, session, prompt });
+  if (agent === 'antigravity') {
+    if (model && !modelCache.antigravity) await models('antigravity').catch(() => {});
+    if (agyHasTuffTools()) { try { setAgyAllow(true); } catch {} }
+  }
+  const { args, stdin } = argsFor(agent, { mode, session, prompt, model, effort });
   let proc;
   try {
     proc = startCli(file, args, { cwd: root, env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' }, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -474,4 +682,4 @@ function stop(runId) {
   runs.delete(runId);
 }
 
-module.exports = { AGENTS, setup, detect, run, stop, connection, connect, mcpServer, mcpSetup, mcpCheck, signedIn, signIn };
+module.exports = { AGENTS, setup, detect, run, stop, connection, connect, mcpServer, mcpSetup, mcpCheck, signedIn, signIn, models };
