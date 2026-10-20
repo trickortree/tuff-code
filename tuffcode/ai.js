@@ -34,6 +34,7 @@ let worker = null; // { proc, model, ready, info }
 let idleTimer = null;
 const runs = new Map(); // runId -> { emit, resolve }: questions the worker is answering
 const active = new Set(); // runIds of questions still going, from the first check to the last event
+const stopped = new Set(); // the active ones the person stopped
 
 function setup(opts) {
   if (opts.checkSource) checkSource = opts.checkSource;
@@ -270,6 +271,7 @@ async function run(params, emit) {
     await answerRun(params, emit);
   } finally {
     active.delete(params.runId);
+    stopped.delete(params.runId);
     touch();
   }
 }
@@ -277,6 +279,8 @@ async function run(params, emit) {
 async function answerRun({ runId, prompt, model }, emit) {
   const send = (e) => emit({ runId, ...e });
   const m = find(model);
+  // Stop can come at any point: while the model loads, while the checker runs, or between the two answers.
+  const halted = () => stopped.has(runId);
   if (!(await runtimeAvailable())) { send({ kind: 'done', ok: false, error: "Tuff AI's engine isn't in this copy of TuffCode." }); return; }
   if (!downloaded(m)) { send({ kind: 'done', ok: false, error: 'Download Tuff AI first (the card at the top).' }); return; }
   if (!worker || worker.model !== m.id) {
@@ -294,21 +298,22 @@ async function answerRun({ runId, prompt, model }, emit) {
     send({ kind: 'done', ok: false, error: String(err.message || err) });
     return;
   }
+  if (halted()) { send({ kind: 'done', ok: true, error: null }); return; }
   const extra = relevant(prompt);
   const message = `${extra.length ? `More of the Tuff guide that may help:\n\n${extra.map((s) => s.text).join('\n\n')}\n\n---\n\n` : ''}${prompt}`;
   let r = await ask(runId, 'chat', { system: systemPrompt(), prompt: message }, send);
-  if (r.ok && !r.stopped) {
+  if (r.ok && !r.stopped && !halted()) {
     const code = codeOf(r.text || '');
     if (code) {
       send({ kind: 'tool', name: 'mcp__tuffcode__tuff_check', input: { code } });
       const c = await checkSource(code);
       send({ kind: 'tool_result', ok: c.ok });
-      if (!c.ok && !c.unknown) {
+      if (!c.ok && !c.unknown && !halted()) {
         send({ kind: 'note', text: "The checker found a mistake, so Tuff AI is fixing it." });
         send({ kind: 'break' });
         r = await ask(runId, 'followup', { prompt: `That program doesn't pass Tuff's checker:\n${c.message}\n\nFix it and give the whole program again.` }, send);
         const again = codeOf(r.text || '');
-        if (r.ok && again) {
+        if (r.ok && again && !halted()) {
           send({ kind: 'tool', name: 'mcp__tuffcode__tuff_check', input: { code: again } });
           const c2 = await checkSource(again);
           send({ kind: 'tool_result', ok: c2.ok });
@@ -317,10 +322,14 @@ async function answerRun({ runId, prompt, model }, emit) {
       }
     }
   }
-  send({ kind: 'done', ok: !!r.ok || !!r.stopped, error: r.ok || r.stopped ? null : r.error });
+  const ok = !!r.ok || !!r.stopped || halted();
+  send({ kind: 'done', ok, error: ok ? null : r.error });
 }
 
 function stop(runId) {
+  if (!active.has(runId)) return;
+  stopped.add(runId);
+  // The worker stops the answer it's writing, or skips the question when it gets to it.
   if (worker && runs.has(runId)) worker.proc.postMessage({ type: 'stop', runId });
 }
 

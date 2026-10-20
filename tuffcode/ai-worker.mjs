@@ -82,6 +82,7 @@ async function newChat(system) {
 }
 
 async function answer(runId, prompt, maxTokens) {
+  if (stopped.delete(runId)) { post({ type: 'done', runId, ok: false, text: '', stopped: true }); return; }
   const abort = new AbortController();
   current = { runId, abort };
   try {
@@ -102,15 +103,25 @@ async function answer(runId, prompt, maxTokens) {
   }
 }
 
+// A stop for a question that's still waiting its turn (or whose chat is still being set up) is kept,
+// and the question is skipped when its turn comes.
+const stopped = new Set();
 let queue = Promise.resolve();
 port.on('message', (e) => {
   const msg = e.data;
-  if (msg.type === 'stop') { if (current?.runId === msg.runId) current.abort.abort(); return; }
+  if (msg.type === 'stop') {
+    if (current?.runId === msg.runId) current.abort.abort();
+    else {
+      stopped.add(msg.runId);
+      if (stopped.size > 50) stopped.delete(stopped.values().next().value);
+    }
+    return;
+  }
   // Everything else runs one at a time, in order.
   queue = queue.then(async () => {
     try {
       if (msg.type === 'load') await load(msg);
-      else if (msg.type === 'chat') { await newChat(msg.system); await answer(msg.runId, msg.prompt, msg.maxTokens || 700); }
+      else if (msg.type === 'chat') { if (!stopped.has(msg.runId)) await newChat(msg.system); await answer(msg.runId, msg.prompt, msg.maxTokens || 700); }
       else if (msg.type === 'followup') await answer(msg.runId, msg.prompt, msg.maxTokens || 700);
     } catch (err) {
       if (msg.runId) post({ type: 'done', runId: msg.runId, ok: false, error: String(err?.message || err) });
