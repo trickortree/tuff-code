@@ -499,7 +499,7 @@ LIBRARIES = ("anims", "tgui", "mtgui", "tap")
 # Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
-VIEW_IMPORT = re.compile(r"^[ 	]*(?:import|mention)[ 	]+(?:" + "|".join(VIEW_LIBRARIES) + r")", re.M)
+VIEW_IMPORT = re.compile(r"^[ 	]*(?:import|mention)[ 	]+(?:" + "|".join(VIEW_LIBRARIES) + r")\b", re.M)
 BUILTIN_NAMES = {"print", "number", "text", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
                  "floor", "ceil", "min", "max", "sum", "average"}
 
