@@ -19,7 +19,6 @@ import sys
 import threading
 import time
 import urllib.parse
-import webbrowser
 
 # ---------------------------------------------------------------- looks
 
@@ -2706,8 +2705,7 @@ class Spinner(Widget):
 
 def badge_style(lib, style):
     s = lib.text(style).strip().lower()
-    s = {"primary": "accent", "error": "danger", "red": "danger", "green": "success", "yellow": "warning",
-         "blue": "info", "grey": "gray", "neutral": "gray"}.get(s, s)
+    s = BADGE_ALIASES.get(s, s)
     if s not in BADGE_STYLES:
         raise lib.rt.error(f"'{s}' isn't a badge style. Use one of: {', '.join(BADGE_STYLES)}.")
     return s
@@ -3046,6 +3044,7 @@ class App(Container):
     def link(self, e):
         href = str(e.get("href") or "")
         if re.match(r"^(https?:|mailto:)", href, re.I):
+            import webbrowser
             threading.Thread(target=webbrowser.open, args=(href,), daemon=True).start()
 
     def context(self, e):
@@ -3179,7 +3178,7 @@ class App(Container):
 
     def toast(self, text, style="info"):
         style = self.lib.text(style).strip().lower()
-        style = {"danger": "error", "ok": "success", "warn": "warning"}.get(style, style)
+        style = TOAST_ALIASES.get(style, style)
         if style not in TOAST_STYLES:
             raise self.rt.error(f"A toast's style can be {', '.join(TOAST_STYLES)}.")
         Toast(self, self.lib.text(text), style, 3.6)
@@ -3340,8 +3339,17 @@ TEXT_VALUES = {"heading", "text", "small", "button", "input", "textarea", "dropd
 BOOL_VALUES = {"checkbox", "switch"}
 NUMBER_VALUES = {"slider", "progress"}
 # What each event function is given (how many inputs, and how to describe it), and which input is the function.
-EVENTS = {"clicked": (0, "a click", 0), "hover": (1, ":hover", 0), "focus": (1, ":focus", 0), "key": (0, ":key", 1),
-          "closed": (0, ":closed", 0), "item": (1, "a menu item", 1)}
+# Functions may take fewer inputs than they're given (a click's text can be left out), not more.
+EVENTS = {"button": (1, "a button click", 1, "the button's text"), "clicked": (1, "a click", 0, "what was clicked"),
+          "click": (1, "a click", 0, "what was clicked"), "change": (1, ":change", 0, "the new value"),
+          "enter": (1, ":enter", 0, "the text"), "hover": (1, ":hover", 0, "true or false"),
+          "focus": (1, ":focus", 0, "true or false"), "every": (0, ":every", 1, ""), "after": (0, ":after", 1, ""),
+          "key": (0, ":key", 1, ""), "closed": (0, ":closed", 0, ""), "opened": (0, ":opened", 0, ""),
+          "item": (1, "a menu item", 1, "the text of what was right-clicked")}
+BADGE_ALIASES = {"primary": "accent", "error": "danger", "red": "danger", "green": "success", "yellow": "warning",
+                 "blue": "info", "grey": "gray", "neutral": "gray"}
+TOAST_ALIASES = {"danger": "error", "ok": "success", "warn": "warning"}
+SPINNER_STYLES = ("ring", "dots")
 
 
 def tables():
@@ -3374,4 +3382,6 @@ def tables():
             "number_values": NUMBER_VALUES, "events": EVENTS, "button_styles": BUTTON_STYLES,
             "badge_styles": BADGE_STYLES, "toast_styles": TOAST_STYLES, "themes": THEMES, "accents": tuple(ACCENTS),
             "icons": ICON_NAMES, "animations": ANIMATIONS, "styles": tuple(STYLES), "states": STATES,
-            "charts": CHART_KINDS}
+            "charts": CHART_KINDS, "badge_aliases": BADGE_ALIASES, "toast_aliases": TOAST_ALIASES,
+            "spinner_styles": SPINNER_STYLES, "align": tuple(ALIGN), "justify": tuple(JUSTIFY), "key_combo": key_combo,
+            "image_exts": IMAGE_EXTS}
