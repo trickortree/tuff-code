@@ -77,6 +77,12 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tb-icon .fl { font-size: 15px; }
 .tb-icon:hover { background: rgba(255,255,255,.07); color: var(--text); }
 .win-controls { display: flex; height: 100%; margin-left: 8px; }
+/* Mac: the system traffic lights sit at the left of the title bar, so make room and hide ours. */
+.mac #titlebar { padding-left: 84px; }
+.mac .win-controls { display: none; }
+.mac .tb-right { padding-right: 8px; }
+/* Drawn icons that stand in for Segoe Fluent Icons off Windows (see ide.js). */
+.fl-svg { width: 1em; height: 1em; display: block; }
 .win-controls button { width: 46px; height: 100%; display: grid; place-items: center; color: var(--text); transition: background .1s; }
 .win-controls .fl { font-size: 10px; }
 .win-controls button:hover { background: rgba(255,255,255,.06); }

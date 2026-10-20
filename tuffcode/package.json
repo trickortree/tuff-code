@@ -1,7 +1,7 @@
 {
   "name": "tuffcode",
   "productName": "TuffCode",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "TuffCode - the IDE for the Tuff language",
   "author": "trickortree",
   "repository": "github:trickortree/tuff-code",
@@ -9,7 +9,9 @@
   "scripts": {
     "start": "electron .",
     "build:runtime": "py -3 -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py",
-    "dist": "npm run build:runtime && electron-builder --win nsis --x64 --publish never"
+    "dist": "npm run build:runtime && electron-builder --win nsis --x64 --publish never",
+    "build:runtime:mac": "python3 -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py",
+    "dist:mac": "npm run build:runtime:mac && electron-builder --mac dmg zip --publish never"
   },
   "build": {
     "appId": "com.trickortree.tuffcode",
@@ -47,6 +49,21 @@
     "win": {
       "target": "nsis",
       "icon": "renderer/assets/icon.png"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "build-res/icon.png",
+      "category": "public.app-category.developer-tools",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "artifactName": "TuffCode-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "TuffCode ${version}"
     },
     "nsis": {
       "oneClick": false,

@@ -46,6 +46,11 @@ async function resolveBin(id) {
 // Codex that isn't on PATH: the copy the Codex desktop app keeps for itself
 // (AppData/Local/OpenAI/Codex/bin/<build>/codex.exe). It shares the app's sign-in.
 function findCodexElsewhere() {
+  if (process.platform === 'darwin') {
+    // The Mac Codex app keeps its CLI inside the app bundle.
+    const apps = ['/Applications', path.join(os.homedir(), 'Applications')];
+    return apps.map((d) => path.join(d, 'Codex.app', 'Contents', 'Resources', 'codex')).find((f) => fs.existsSync(f)) || null;
+  }
   const exe = process.platform === 'win32' ? 'codex.exe' : 'codex';
   const root = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'OpenAI', 'Codex', 'bin');
   let newest = null;
@@ -67,17 +72,25 @@ function findClaudeElsewhere() {
   const exe = process.platform === 'win32' ? 'claude.exe' : 'claude';
   const home = path.join(os.homedir(), '.local', 'bin', exe);
   if (fs.existsSync(home)) return home;
-  const root = path.join(app.getPath('appData'), 'Claude', 'claude-code');
-  let versions = [];
-  try { versions = fs.readdirSync(root).filter((v) => /^\d+\.\d+\.\d+/.test(v)); } catch { return null; }
+  // appData is AppData/Roaming on Windows and ~/Library/Application Support on a Mac. The Microsoft
+  // Store version of the Claude app keeps its files in its package folder instead.
+  const roots = [path.join(app.getPath('appData'), 'Claude', 'claude-code')];
+  const pkgs = path.join(process.env.LOCALAPPDATA || '', 'Packages');
+  if (process.platform === 'win32') {
+    try { for (const p of fs.readdirSync(pkgs)) if (/claude/i.test(p)) roots.push(path.join(pkgs, p, 'LocalCache', 'Roaming', 'Claude', 'claude-code')); } catch {}
+  }
   const num = (v) => v.split(/[.-]/).slice(0, 3).map((n) => parseInt(n, 10) || 0);
-  versions.sort((a, b) => { const x = num(a), y = num(b); return (y[0] - x[0]) || (y[1] - x[1]) || (y[2] - x[2]); });
-  for (const v of versions) {
-    let builds = [];
-    try { builds = fs.readdirSync(path.join(root, v)); } catch { continue; }
-    for (const b of builds) {
-      const file = path.join(root, v, b, exe);
-      if (fs.existsSync(file)) return file;
+  for (const root of roots) {
+    let versions = [];
+    try { versions = fs.readdirSync(root).filter((v) => /^\d+\.\d+\.\d+/.test(v)); } catch { continue; }
+    versions.sort((a, b) => { const x = num(a), y = num(b); return (y[0] - x[0]) || (y[1] - x[1]) || (y[2] - x[2]); });
+    for (const v of versions) {
+      let builds = [];
+      try { builds = fs.readdirSync(path.join(root, v)); } catch { continue; }
+      for (const b of builds) {
+        const file = path.join(root, v, b, exe);
+        if (fs.existsSync(file)) return file;
+      }
     }
   }
   return null;
@@ -91,7 +104,8 @@ function startCli(file, args, opts) {
     if (args.some((a) => /[\r\n%!^]/.test(a))) throw new Error('Unsafe argument for a .cmd agent');
     return spawn(`"${file}"`, args.map(cmdQuote), { ...opts, shell: true, windowsHide: true });
   }
-  return spawn(file, args, { ...opts, windowsHide: true });
+  // On a Mac or Linux the agent gets its own process group, so Stop can end everything it started.
+  return spawn(file, args, { ...opts, windowsHide: true, detached: process.platform !== 'win32' });
 }
 
 function quick(file, args, timeout = 15000) {
@@ -110,7 +124,7 @@ function quick(file, args, timeout = 15000) {
 function killTree(proc) {
   if (!proc || proc.exitCode !== null) return;
   if (process.platform === 'win32') execFile('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { windowsHide: true }, () => {});
-  else proc.kill('SIGTERM');
+  else { try { process.kill(-proc.pid, 'SIGTERM'); } catch { proc.kill('SIGTERM'); } }
 }
 
 async function detect() {
@@ -358,9 +372,22 @@ async function signIn(id) {
     if (err) throw new Error(`Couldn't open the sign-in window: ${err}`);
     return true;
   }
-  const proc = spawn(file, SIGN_IN[id].login, { detached: true, stdio: 'ignore' });
-  proc.on('error', () => {});
-  proc.unref();
+  // Mac: a .command file opens in Terminal, which gives the sign-in a real window too.
+  const script = path.join(os.tmpdir(), `tuffcode-signin-${id}.command`);
+  const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+  fs.writeFileSync(script, [
+    '#!/bin/bash',
+    `echo ${q(`Signing in to ${name}. Your browser should open; finish signing in there.`)}`,
+    `echo ${q("If it doesn't open, copy the link below into your browser.")}`,
+    'echo',
+    `${q(file)} ${SIGN_IN[id].login.join(' ')}`,
+    'echo',
+    `echo ${q("When it says you're signed in, close this window and click Check again in TuffCode.")}`,
+    '',
+  ].join('\n'), { mode: 0o755 });
+  fs.chmodSync(script, 0o755);
+  const err = await shell.openPath(script);
+  if (err) throw new Error(`Couldn't open the sign-in window: ${err}`);
   return true;
 }
 

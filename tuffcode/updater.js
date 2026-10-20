@@ -1,10 +1,13 @@
-const { app, net } = require('electron');
+const { app, net, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
 const { spawn } = require('child_process');
 
 const REPO = 'trickortree/tuff-code';
+// The Mac app isn't signed with an Apple Developer ID, and macOS only lets signed apps replace
+// themselves. So on a Mac, updates are found as usual but downloaded from the release page.
+const MANUAL = process.platform === 'darwin';
 const ROOT = path.join(__dirname, '..');
 const SKIP = new Set(['.git', 'node_modules', 'dist', '__pycache__', '.idea']);
 const HOUR = 60 * 60 * 1000;
@@ -157,7 +160,7 @@ function installer() {
   au.autoInstallOnAppQuit = true;
   au.on('update-available', (info) => {
     set({ status: 'available', latest: { version: info.version, url: `https://github.com/${REPO}/releases/tag/v${info.version}` } });
-    if (auAutoInstall) install();
+    if (auAutoInstall && !MANUAL) install();
   });
   au.on('update-not-available', () => set({ status: state.ready ? 'ready' : 'up-to-date' }));
   au.on('download-progress', (p) => set({ status: 'downloading', detail: `${Math.round(p.percent)}%` }));
@@ -199,6 +202,11 @@ async function check({ silent = false, autoInstall = false } = {}) {
 
 async function install() {
   if (!state.latest || !newer(state.latest.version, version())) return state;
+  if (app.isPackaged && MANUAL) {
+    shell.openExternal(state.latest.url);
+    set({ status: 'available', detail: 'Download the new version from the page that just opened, then drag it into Applications.' });
+    return state;
+  }
   if (app.isPackaged) {
     set({ status: 'downloading', detail: '0%' });
     try {
