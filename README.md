@@ -84,6 +84,8 @@ npm start
 
 `npm start` downloads Electron the first time (`npm install` doesn't, since Electron 42). On Windows you can also just double-click `tuffcode/TuffCode.cmd`: it runs `npm install` and gets Electron by itself when they're needed.
 
+**Updating a copy like this from 1.0.3 to 1.0.4:** 1.0.4 runs on a newer Electron, which 1.0.3's updater can't install by itself. On Windows, if the update says npm couldn't install the new parts, close TuffCode and double-click `tuffcode/TuffCode.cmd`. On a Mac, if TuffCode doesn't open again after the update, run `npm start` in `tuffcode/`: it downloads the new Electron.
+
 You can also run a Tuff program without the IDE:
 
 ```bash
