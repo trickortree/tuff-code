@@ -34,7 +34,7 @@ let worker = null; // { proc, model, ready, info }
 let idleTimer = null;
 const runs = new Map(); // runId -> { emit, resolve }: questions the worker is answering
 const active = new Set(); // runIds of questions still going, from the first check to the last event
-const stopped = new Set(); // the active ones the person stopped
+const stoppedRuns = new Set(); // the active ones the person stopped
 
 function setup(opts) {
   if (opts.checkSource) checkSource = opts.checkSource;
@@ -271,7 +271,7 @@ async function run(params, emit) {
     await answerRun(params, emit);
   } finally {
     active.delete(params.runId);
-    stopped.delete(params.runId);
+    stoppedRuns.delete(params.runId);
     touch();
   }
 }
@@ -280,7 +280,7 @@ async function answerRun({ runId, prompt, model }, emit) {
   const send = (e) => emit({ runId, ...e });
   const m = find(model);
   // Stop can come at any point: while the model loads, while the checker runs, or between the two answers.
-  const halted = () => stopped.has(runId);
+  const halted = () => stoppedRuns.has(runId);
   if (!(await runtimeAvailable())) { send({ kind: 'done', ok: false, error: "Tuff AI's engine isn't in this copy of TuffCode." }); return; }
   if (!downloaded(m)) { send({ kind: 'done', ok: false, error: 'Download Tuff AI first (the card at the top).' }); return; }
   if (!worker || worker.model !== m.id) {
@@ -328,7 +328,7 @@ async function answerRun({ runId, prompt, model }, emit) {
 
 function stop(runId) {
   if (!active.has(runId)) return;
-  stopped.add(runId);
+  stoppedRuns.add(runId);
   // The worker stops the answer it's writing, or skips the question when it gets to it.
   if (worker && runs.has(runId)) worker.proc.postMessage({ type: 'stop', runId });
 }
