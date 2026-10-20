@@ -1368,6 +1368,23 @@ def tap_tables():
     return _TAP or None
 
 
+_TGAME = None
+
+
+def tgame_tables():
+    """tgame's functions ("lib"), the methods of everything it makes ("kinds"), what they give back, its events,
+    hints for guessed names and a check for text inputs, read from the library without opening a window.
+    None when it can't be loaded."""
+    global _TGAME
+    if _TGAME is None:
+        try:
+            import tuff_tgame
+            _TGAME = tuff_tgame.tables()
+        except Exception:
+            _TGAME = {}
+    return _TGAME or None
+
+
 def nodes(x):
     """Every node inside a node, or inside a list of nodes."""
     if isinstance(x, N):
@@ -1440,7 +1457,9 @@ class Checker:
     # take fewer inputs than it's given (extras are dropped), not more.
     EVENT_GIVES = {"click": (0, "a button click"), "button": (0, "a button click"), "opened": (0, ":opened"),
                    "every": (0, ":every"), "after": (0, ":after"), "change": (1, ":change"), "enter": (1, ":enter")}
-    HANDLER_POS = {"click": 0, "opened": 0, "change": 0, "enter": 0, "button": 1, "every": 1, "after": 1}
+    HANDLER_POS = {"click": 0, "opened": 0, "change": 0, "enter": 0, "button": 1, "every": 1, "after": 1,
+                   "every_frame": 0, "on_key": 1, "clicked": 0, "game_over": 1}
+    TGAME_KINDS = ("game", "world", "sprite", "object", "player", "hud", "group")  # what tgame makes
     # What tap's functions make, and what the methods of those give back (left out: it depends, like :json).
     TAP_MAKES = {"get": "response", "post": "response", "put": "response", "delete": "response", "data": "data object"}
     TAP_GIVES = {"response": {"status": "$number", "ok": "$bool", "text": "$text"},
@@ -1613,11 +1632,16 @@ class Checker:
                 return "window"
             if lib == "$module:tap":
                 return self.TAP_MAKES.get(e.fn.name)
+            if lib == "$module:tgame":
+                return {"window": "game", "world": "world"}.get(e.fn.name)
             return None
         if k == "method":
             obj = self.kind(e.obj, seen)
             if obj in self.TAP_GIVES:
                 return self.TAP_GIVES[obj].get(e.name)
+            if obj in self.TGAME_KINDS:
+                tg = tgame_tables()
+                return tg["gives"].get(obj, {}).get(e.name) if tg else None
             gui = gui_tables()
             if obj in self.CONTAINERS and gui and e.name in gui["kinds"] and e.name != "window" and (e.name != "page" or obj == "window"):
                 return e.name
@@ -1795,6 +1819,9 @@ class Checker:
         if lib == "tap":
             tap = tap_tables()
             return tap["lib"] if tap else None
+        if lib == "tgame":
+            tg = tgame_tables()
+            return tg["lib"] if tg else None
         gui = gui_tables()
         return gui["libs"].get(lib) if gui else None
 
@@ -1906,8 +1933,10 @@ class Checker:
         if gui is None:
             return True
         tap = tap_tables()
+        tg = tgame_tables()
         return name in SIMPLE_METHODS["text"] or name in SIMPLE_METHODS["list"] or name in SIMPLE_METHODS["line"] or \
-            any(name in m for m in gui["kinds"].values()) or (tap is None or any(name in m for m in tap["kinds"].values()))
+            any(name in m for m in gui["kinds"].values()) or (tap is None or any(name in m for m in tap["kinds"].values())) or \
+            (tg is None or any(name in m for m in tg["kinds"].values()))
 
     def check_call(self, e, scope):
         fn, n = e.fn, len(e.args)
@@ -1995,7 +2024,8 @@ class Checker:
             return
         # Unknown value: only a library can use '.', and libraries only have these.
         gui = gui_tables()
-        members = {"window"} | set(self.lib_members("anims") or {}) | set(self.lib_members("tap") or {})
+        members = {"window"} | set(self.lib_members("anims") or {}) | set(self.lib_members("tap") or {}) | \
+            set(self.lib_members("tgame") or {})
         if gui is not None and e.name not in members and e.obj.kind == "var" and e.obj.name not in self.imports:
             self.problem(e, dot_help("not a library", e.obj, e.name))
 
@@ -2038,6 +2068,9 @@ class Checker:
         if obj in self.TYPE:
             self.problem(e, f"{self.TYPE[obj].capitalize()} doesn't have any :methods.")
             return
+        if obj in self.TGAME_KINDS:
+            self.check_tgame(e, obj, bare_fix)
+            return
         gui = gui_tables()
         tap = tap_tables() if obj in self.TAP_GIVES else None
         methods = tap["kinds"].get(obj) if tap else gui["kinds"].get(obj) if gui else None
@@ -2077,6 +2110,55 @@ class Checker:
         choices = [to_text(x.value) for x in made.args[0].items]
         if to_text(arg.value) not in choices:
             self.problem(arg, f"'{to_text(arg.value)}' isn't one of this dropdown's choices: {', '.join(choices)}.")
+
+    def check_tgame(self, e, obj, bare_fix):
+        """A method of something tgame made: its name, its input count, the function an event runs, and inputs
+        written as text that have to be a color, a sky, a key, a sound or a file tgame knows."""
+        tg = tgame_tables()
+        methods = tg["kinds"].get(obj) if tg else None
+        if methods is None:
+            return
+        name, n = e.name, len(e.args)
+        what = a_kind(obj).capitalize()
+        if name not in methods:
+            alt = tg["hints"].get(obj, {}).get(name.lower())
+            self.problem(e, f"{what} doesn't have :{name}. Use :{alt} instead." if alt in methods else method_help(what, name, list(methods)))
+            return
+        if not accepts(methods[name], n):
+            self.problem(e, bare_fix if e.bare and accepts(methods[name], 0) else f"{obj}:{name} got the wrong number of inputs ({n}).")
+            return
+        event = tg["handlers"].get(obj, {}).get(name)
+        fn = e.args[event[0]] if event and len(e.args) > event[0] else None
+        if fn is not None:
+            owner = e.obj.name if e.obj.kind == "var" else obj
+            if fn.kind == "call" and fn.fn.kind == "var" and self.only_func(fn.fn.name) and not self.returns_function(fn.fn.name):
+                self.problem(fn, f"Pass the function's name without brackets: {fn.fn.name}, not {fn.fn.name}(). With brackets it runs once at the start instead of when it should.")
+            elif fn.kind == "method":
+                target = f"{fn.obj.name}:{fn.name}" if fn.obj.kind == "var" else f":{fn.name}"
+                self.problem(fn, f"{target} runs right away here, while this line runs. Make a small function (func do_it(): {target}) and pass its name.")
+            elif fn.kind == "const" and isinstance(fn.value, str):
+                self.problem(fn, f"This needs a function name, not text. Write {fn.value} without the quotes, and make it with func {fn.value}():")
+            elif fn.kind == "var" and self.only_func(fn.name):
+                want, gives, given = len(self.funcs[fn.name]), event[1], event[2]
+                if want > gives:
+                    fix = f" Write it as: func {fn.name}():" if gives == 0 else f" Write it as: func {fn.name}({', '.join(self.funcs[fn.name][:gives])}):"
+                    self.problem(fn, f"{fn.name}() needs {want} input{'s' if want != 1 else ''}, but {owner}:{name} gives it {given}.{fix}")
+                node = self.func_nodes.get(fn.name)
+                if node is not None and id(node) not in self.handlers_seen:
+                    self.handlers_seen.add(id(node))
+                    for x in nodes(node.body):
+                        if x.kind == "call" and x.fn.kind == "var" and x.fn.name == "wait" and "wait" not in self.user:
+                            self.problem(x, f"wait() freezes the game: nothing moves or redraws until it's over. To do something later, use {owner}:after(seconds, fn).")
+                        elif x.kind == "input":
+                            self.problem(x, "input reads from the console and freezes the game while it waits.")
+        base = self.base_dir
+        if base and os.path.abspath(base).lower().startswith(os.path.abspath(tempfile.gettempdir()).lower()):
+            base = None  # a snippet in a temporary folder: its files aren't next to it
+        for i, a in enumerate(e.args):
+            if a.kind == "const" and isinstance(a.value, str):
+                msg = tg["check"](obj, name, i, a.value, base)
+                if msg:
+                    self.problem(a, msg)
 
     def check_values(self, e, obj):
         """Styles, colors and themes written as text must be ones the library knows."""
