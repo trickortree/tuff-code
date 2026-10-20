@@ -530,6 +530,7 @@
     $('#studio').classList.remove('hidden');
     $('#monaco').classList.add('hidden');
     $('#breadcrumbs').classList.add('hidden');
+    if (!state.running) showBottom(false);
     window.TuffStudio?.closeCustomizer();
     renderTabs();
     updateChrome();
@@ -1495,6 +1496,11 @@
     shiftClean = false;
     if (e.key === 'Escape') hideMenus();
     if (overlayOpen()) return;
+    if (studio.visible && window.TuffStudio?.onKey(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
     const combo = [(e.ctrlKey || e.metaKey) && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', key].filter(Boolean).join('+');
     const id = keymap[combo];
@@ -1600,6 +1606,7 @@
     rel,
     basename,
     goToLine,
+    ask,
     openStudio,
     studioVisible: () => studio.visible,
     activeFile: () => activeTab()?.path || null,
