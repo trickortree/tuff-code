@@ -65,10 +65,12 @@ export default async (t, ctx) => {
 
   // ---------------------------------------------------------------- running Tuff
   const py = python();
-  const runtime = path.join(path.dirname(ctx.exe), 'resources', 'runtime', ctx.win ? 'tuff-runtime.exe' : 'tuff-runtime');
-  const tuffCmd = ctx.packaged && fs.existsSync(runtime) ? [runtime] : py ? [...py, path.join(REPO, 'tuff.py')] : null;
+  // A packaged app's own runtime (on a Mac it's in TuffCode.app/Contents/Resources), never Python instead.
+  const resources = process.platform === 'darwin' ? path.join(path.dirname(ctx.exe), '..', 'Resources') : path.join(path.dirname(ctx.exe), 'resources');
+  const runtime = path.join(resources, 'runtime', ctx.win ? 'tuff-runtime.exe' : 'tuff-runtime');
+  const tuffCmd = ctx.packaged ? (fs.existsSync(runtime) ? [runtime] : null) : py ? [...py, path.join(REPO, 'tuff.py')] : null;
   const runTuff = (file) => new Promise((resolve) => {
-    if (!tuffCmd) { resolve({ code: -1, out: 'No Python found to run tuff.py' }); return; }
+    if (!tuffCmd) { resolve({ code: -1, out: ctx.packaged ? `The packaged app has no Tuff runtime at ${runtime}` : 'No Python found to run tuff.py' }); return; }
     const proc = spawn(tuffCmd[0], [...tuffCmd.slice(1), file], { env: { ...process.env, PYTHONIOENCODING: 'utf-8', NO_PROXY: '127.0.0.1,localhost' }, windowsHide: true });
     let out = '';
     proc.stdout.on('data', (d) => { out += d; });
