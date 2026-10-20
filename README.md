@@ -26,6 +26,8 @@ Get the newest version from the [Releases page](https://github.com/trickortree/t
 | **Mac with Apple Silicon** (M1 and newer) | `TuffCode-<version>-mac-arm64.dmg` |
 | **Mac with an Intel chip** | `TuffCode-<version>-mac-x64.dmg` |
 
+The Mac files are built on GitHub's Macs and added to a release after the Windows installer. If a release doesn't list them yet, check back later.
+
 To find which Mac you have, open the Apple menu and choose **About This Mac**. The **Chip** line says Apple (M1, M2…) or Intel.
 
 **Installing on a Mac:** open the `.dmg` and drag TuffCode into Applications. TuffCode isn't signed with a paid Apple developer ID yet, so the first time you open it, macOS refuses. To let it open:
