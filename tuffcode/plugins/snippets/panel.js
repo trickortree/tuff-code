@@ -8,7 +8,7 @@ TuffPlugins.register('snippets', (t) => {
     ['Basics', [
       ['Say hello', 'say "Hello, ${1:world}!"'],
       ['Ask a question', '${1:name} = input "${2:What is your name?} "\nsay "Nice to meet you, " + ${1:name} + "!"'],
-      ['If / else', 'if ${1:score} > ${2:10}:\n    say "${3:Big!}"\nelse:\n    say "${4:Small}"'],
+      ['If / else', '${1:score} = ${2:12}\nif ${1:score} > ${3:10}:\n    say "${4:Big!}"\nelse:\n    say "${5:Small}"'],
       ['Count with for', 'for ${1:i} in range(1, ${2:10}):\n    say ${1:i}'],
       ['Repeat with while', '${1:n} = ${2:3}\nwhile ${1:n} > 0:\n    say ${1:n}\n    ${1:n} -= 1'],
       ['Function', 'func ${1:double}(${2:n}):\n    ${3:n * 2}'],
@@ -30,8 +30,9 @@ TuffPlugins.register('snippets', (t) => {
       ['Text box + Enter', '${1:name} = app:input "${2:Type your name}"\n${3:greeting} = app:text ""\n${1:name}:enter ${4:greet}\n\nfunc ${4:greet}():\n    ${3:greeting}:set "Hi " + ${1:name}:value + "!"'],
       ['Switch that does something', '${1:dark} = app:toggle("${2:Dark mode}", true)\n${1:dark}:change ${3:switched}\n\nfunc ${3:switched}():\n    if ${1:dark}:value:\n        app:theme "dark"\n    else:\n        app:theme "light"'],
       ['Slider moves a bar', '${1:volume} = app:slider(0, 100, 50)\n${2:bar} = app:progress(50)\n${1:volume}:change ${3:moved}\n\nfunc ${3:moved}():\n    ${2:bar}:set ${1:volume}:value'],
-      ['Row of buttons', '${1:row} = app:row\n${1:row}:button("${2:Yes}", ${3:yes}, "primary")\n${1:row}:button("${4:No}", ${5:no}, "ghost")'],
+      ['Row of buttons', '${1:row} = app:row\n${1:row}:button("${2:Yes}", ${3:yes}, "primary")\n${1:row}:button("${4:No}", ${5:no}, "ghost")\n\nfunc ${3:yes}():\n    app:alert "You picked ${2:Yes}"\n\nfunc ${5:no}():\n    app:alert "You picked ${4:No}"'],
       ['Timer that ticks', '${1:ticks} = 0\n${2:label} = app:text "0"\napp:every(${3:1}, ${4:tick})\n\nfunc ${4:tick}():\n    ${1:ticks} += 1\n    ${2:label}:set text(${1:ticks})'],
+      ['Pages and a button to switch', '${1:home} = app:page "${2:Home}"\n${1:home}:heading "${3:Welcome}"\n${4:about} = app:page "${5:About}"\n${4:about}:text "${6:Made with Tuff}"\n${1:home}:button("${7:About}", go_${4:about}, "primary")\n${4:about}:button("Back", go_${1:home}, "ghost")\n\nfunc go_${4:about}():\n    ${4:about}:open\n\nfunc go_${1:home}():\n    ${1:home}:open'],
       ['Card with a list', '${1:card} = app:card\n${1:card}:heading "${2:Today}"\n${1:card}:checkbox("${3:Homework}", false)\n${1:card}:checkbox("${4:Walk the dog}", false)'],
     ]],
   ];

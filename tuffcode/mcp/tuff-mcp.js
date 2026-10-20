@@ -10,7 +10,7 @@ const vm = require('vm');
 const { spawn } = require('child_process');
 const os = require('os');
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const RENDERER_JS = path.join(__dirname, '..', 'renderer', 'js');
 
@@ -36,90 +36,12 @@ function loadTables() {
   return window;
 }
 
-const GUIDE = `# Tuff language guide
-
-Tuff is a small, beginner-friendly language. Files end in \`.tuf\`. Blocks are indented (4 spaces), like Python.
-
-## Basics
-\`\`\`tuff
-# comments start with #
-say "Hello"                 # show a line
-name = input "Your name? "  # ask a question (gives back text)
-score = 10
-score += 5                  # also -= *= /=
-if score is 15:             # 'is' means equals, 'is not' means not equal; 'then' works instead of ':'
-    say "fifteen"
-elif score > 20:
-    say "big"
-else:
-    say "small"
-for i in range(1, 3):       # 1, 2, 3 - the END IS INCLUDED (unlike Python)
-    say i
-while score > 0:
-    score -= 1
-func double(n):
-    n * 2                   # a function gives back its last value; 'return' also works
-say double(4)
-\`\`\`
-
-- Text joins with +: \`"Hi " + name\`. Turn numbers into text with \`text(n)\` and text into numbers with \`number(t)\`.
-- Lists: \`[1, 2, 3]\`, \`items[0]\`, \`len(items)\`.
-- \`and\`, \`or\`, \`not\`, \`true\`, \`false\`, \`nil\`.
-- Functions can change variables made outside them (\`n += 1\` inside a func updates the outer n).
-
-## Live lines and clearing
-\`\`\`tuff
-line = say "Loading"
-wait(1)
-line:rewrite "Done!"
-flush        # clear the screen
-clear(2)     # remove the last 2 lines
-\`\`\`
-
-## Methods use a colon
-\`thing:method args\`. Brackets are optional for one argument: \`app:heading "Hi"\`, \`name:value\`, \`status:set "Done"\`.
-A method with no inputs is called just by naming it: \`task:clear\`, \`clock:pause\`.
-
-## Libraries
-\`import x\` and \`mention x\` mean the same thing. Put them at the top.
-- **anims**: console animations (\`anims.loading\`, \`anims.bar\`, \`anims.type\`, \`anims.countdown\`).
-- **tgui**: real desktop app windows. **mtgui**: the same widgets with a modern look (gradients, gloss, glow).
-
-## Making an app window (tgui / mtgui)
-\`\`\`tuff
-mention mtgui
-
-app = mtgui.window("Greeter", 380, 420)   # title, width, height
-app:accent "purple"                        # blue purple pink red orange yellow green teal or "#hex"
-app:heading "Hello!"
-name = app:input "Your name"
-hello = app:text ""
-row = app:row                              # side by side
-row:button("Say hi", greet, "primary")     # text, function to run, style
-row:button("Clear", clear, "ghost")
-name:enter greet                           # run greet when Enter is pressed in the box
-
-func greet():
-    hello:set "Hey " + name:value + "!"
-
-func clear():
-    name:clear
-    hello:set ""
-\`\`\`
-
-Widgets: heading, text, small, button, input, toggle, checkbox, dropdown, slider, progress, spinner, clock, image, divider, space, row, card.
-Containers: \`row = app:row\` (side by side) and \`card = app:card\` (a rounded panel). Add to them with \`row:button(...)\`, \`card:text "..."\`.
-Button styles: primary, secondary, outline, ghost, success, danger.
-Events: \`button:click fn\`, \`box:change fn\`, \`box:enter fn\`, \`switch:change fn\`, \`dropdown:change fn\`, \`slider:change fn\`.
-Timers: \`app:every(seconds, fn)\`, \`app:after(seconds, fn)\`. Popups: \`app:alert "Hi"\`, \`app:confirm "Sure?"\`, \`app:ask "Name?"\`.
-Every widget has \`:hide\`, \`:show\`, \`:remove\`; buttons have \`:disable\`/\`:enable\`; anything animated has \`:speed n\`.
-Functions used by buttons and events must be defined with \`func\` (they can be lower in the file than the button).
-
-## Tips for writing Tuff for beginners
-- Keep programs short and readable, with clear names.
-- Use mtgui for apps unless asked otherwise.
-- Check your code with the tuff_check tool before giving it to the user.
-`;
+// The Tuff guide agents read first (tuff_reference). It lives next to this file so it is easy to edit.
+const GUIDE = (() => {
+  try { return fs.readFileSync(path.join(__dirname, 'tuff-guide.md'), 'utf8'); } catch {
+    return '# Tuff language guide\n\nThe guide file (tuff-guide.md) is missing. Reinstall TuffCode.\n';
+  }
+})();
 
 function reference(topic) {
   const t = loadTables();
@@ -129,7 +51,7 @@ function reference(topic) {
     keywords: `## Keywords\n${(t.TUFF_KEYWORDS || []).join(', ')}`,
     builtins: `## Built-in functions and keywords\n${fmt(t.TUFF_DOCS)}`,
     libraries: `## Libraries\n${Object.entries(t.TUFF_LIBS || {}).map(([lib, fns]) => `### ${lib}\n${fmt(fns)}`).join('\n\n')}`,
-    widgets: `## tgui / mtgui methods\n${fmt(t.TUFF_METHOD_DOCS)}`,
+    widgets: `## Methods (windows, widgets, lists, text and lines)\n${fmt(t.TUFF_METHOD_DOCS)}`,
   };
   if (topic && parts[topic]) return parts[topic];
   return Object.values(parts).join('\n\n');
@@ -140,25 +62,35 @@ function examples() {
   return (t.TUFF_TEMPLATES || []).map((x) => `## ${x.name} (${x.id}.tuf)\n${x.desc}\n\n\`\`\`tuff\n${x.code}\`\`\``).join('\n\n') || 'No examples found.';
 }
 
-// Run the interpreter. Returns { code, out, timedOut }.
-function runTuff(args, { input = '', timeout = 10, cwd } = {}) {
+// Run the interpreter. Returns { code, out, stdout, stderr, timedOut }.
+// echo: typed answers show up in the output. ide: the console speaks TuffCode's line protocol
+// (say / rewrite / clear), so screen() can rebuild what the Run window would show.
+function runTuff(args, { input = '', timeout = 10, cwd, echo = false, ide = false } = {}) {
   return new Promise((resolve) => {
     const [cmd, ...base] = tuffCommand();
     let out = '';
+    let stdout = '';
+    let stderr = '';
     let timedOut = false;
     let proc;
     try {
-      proc = spawn(cmd, [...base, ...args], { cwd, windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8', TUFF_IDE: '' } });
+      const env = { ...process.env, PYTHONIOENCODING: 'utf-8', TUFF_IDE: ide ? '1' : '', TUFF_ECHO_INPUT: echo ? '1' : '' };
+      proc = spawn(cmd, [...base, ...args], { cwd, windowsHide: true, env });
     } catch (err) {
-      resolve({ code: -1, out: `Could not start Tuff: ${err.message}`, timedOut });
+      resolve({ code: -1, out: `Could not start Tuff: ${err.message}`, stdout, stderr: '', timedOut });
       return;
     }
-    const add = (d) => { if (out.length < 60000) out += d.toString(); };
-    proc.stdout.on('data', add);
-    proc.stderr.on('data', add);
-    proc.on('error', (err) => resolve({ code: -1, out: `Could not start Tuff (${cmd}): ${err.message}`, timedOut }));
+    const add = (which) => (d) => {
+      if (out.length >= 60000) return;
+      const s = d.toString();
+      out += s;
+      if (which === 'out') stdout += s; else stderr += s;
+    };
+    proc.stdout.on('data', add('out'));
+    proc.stderr.on('data', add('err'));
+    proc.on('error', (err) => resolve({ code: -1, out: `Could not start Tuff (${cmd}): ${err.message}`, stdout, stderr, timedOut }));
     const timer = setTimeout(() => { timedOut = true; proc.kill(); }, Math.max(1, Math.min(60, timeout)) * 1000);
-    proc.on('close', (code) => { clearTimeout(timer); resolve({ code, out, timedOut }); });
+    proc.on('close', (code) => { clearTimeout(timer); resolve({ code, out, stdout, stderr, timedOut }); });
     if (input) proc.stdin.write(input.endsWith('\n') ? input : input + '\n');
     proc.stdin.end();
   });
@@ -180,6 +112,41 @@ function sourceFile(a) {
 
 const clean = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').replace(/\r/g, '');
 
+// What the Run window would show at the end: replays say / rewrite / clear from the line protocol,
+// with plain text (questions and typed answers) in between.
+function screen(raw) {
+  const lines = [];
+  let partial = '';
+  const plain = (text) => {
+    const parts = (partial + clean(text)).split('\n');
+    partial = parts.pop();
+    for (const p of parts) lines.push({ text: p });
+  };
+  const re = /\x1b\]tuff;([^\x07]*)\x07/g;
+  let last = 0;
+  let m;
+  while ((m = re.exec(raw))) {
+    plain(raw.slice(last, m.index));
+    last = re.lastIndex;
+    const [kind, a, b] = m[1].split(';');
+    const text = (s) => Buffer.from(s || '', 'base64').toString('utf8');
+    if (kind === 'say') {
+      if (partial) { lines.push({ text: partial }); partial = ''; }
+      lines.push({ id: a, text: text(b) });
+      if (raw[last] === '\n') last += 1; // the protocol's own line end
+    } else if (kind === 'rewrite') {
+      const line = lines.find((l) => l.id === a);
+      if (line) line.text = text(b);
+    } else if (kind === 'clear') {
+      if (a === 'all') { lines.length = 0; partial = ''; } else lines.splice(Math.max(0, lines.length - Number(a)));
+    }
+  }
+  plain(raw.slice(last));
+  if (partial) lines.push({ text: partial });
+  return lines.map((l) => l.text).join('\n');
+}
+const EXAMPLE_NAMES = (loadTables().TUFF_TEMPLATES || []).map((x) => x.name.replace(/^(\w)/, (c) => c.toLowerCase()));
+
 const TOOLS = [
   {
     name: 'tuff_reference',
@@ -190,14 +157,14 @@ const TOOLS = [
   },
   {
     name: 'tuff_examples',
-    description: 'Complete, working Tuff app examples (counter, sign-in form, to-do list, order form, clock, settings page, quiz). Good patterns for tgui/mtgui windows, events and functions.',
+    description: `Complete, working Tuff apps (${EXAMPLE_NAMES.join(', ')}). Good patterns for tgui/mtgui windows, pages, events and functions.`,
     inputSchema: { type: 'object', properties: {} },
     annotations: { readOnlyHint: true },
     async run() { return examples(); },
   },
   {
     name: 'tuff_check',
-    description: 'Check Tuff code for mistakes without running it. Pass "file" (path to a .tuf file) or "code". Returns OK or the error with its line number, in plain English.',
+    description: 'Check Tuff code for mistakes without running it: syntax, names that are never set or only exist inside another function (with "did you mean"), wrong input counts, event functions that would crash or are passed with brackets, methods a list, text, window or widget doesn\'t have, unknown styles and colors, and Python habits that break in Tuff (range(len(...)), typed text used as a number, "Total: " + a + b, :pop(0), random()). Pass "file" (path to a .tuf file) or "code". Returns OK, or every problem with its line number, in plain English. Use it on every Tuff file you write or change, especially window (tgui/mtgui) apps, which tuff_run can only test with a self-test (see the guide).',
     inputSchema: { type: 'object', properties: { file: { type: 'string', description: 'Path to a .tuf file (relative to the project or absolute).' }, code: { type: 'string', description: 'Tuff source code to check.' } } },
     annotations: { readOnlyHint: true },
     async run(a) {
@@ -212,13 +179,13 @@ const TOOLS = [
   },
   {
     name: 'tuff_run',
-    description: 'Run a Tuff program and return what it printed. Pass "file" or "code", plus optional "input" (text typed in, one answer per line) and "timeout_seconds" (default 10, max 60). Programs that open app windows (tgui/mtgui) show a real window on the user\'s screen until the timeout, so prefer tuff_check for those.',
+    description: 'Run a Tuff program and return what its Run window shows at the end (lines changed with :rewrite or removed with clear show their final state), with each typed answer shown after its question. Pass "file" or "code", plus optional "input" (the answers to type, one per line) and "timeout_seconds" (default 10, max 60). If the program asks more questions than there are answers, it stops with an error saying so. Programs that open app windows (tgui/mtgui) show a real window on the user\'s screen until the timeout, so use tuff_check for those.',
     inputSchema: { type: 'object', properties: { file: { type: 'string' }, code: { type: 'string' }, input: { type: 'string' }, timeout_seconds: { type: 'number' } } },
     async run(a) {
       const src = sourceFile(a);
       try {
-        const r = await runTuff([src.file], { input: a.input || '', timeout: a.timeout_seconds || 10, cwd: a.file ? path.dirname(src.file) : process.cwd() });
-        const text = clean(r.out).trim();
+        const r = await runTuff([src.file], { input: a.input || '', timeout: a.timeout_seconds || 10, cwd: a.file ? path.dirname(src.file) : process.cwd(), echo: true, ide: true });
+        const text = [screen(r.stdout).trim(), clean(r.stderr).trim()].filter(Boolean).join('\n');
         const status = r.timedOut ? `Stopped after ${a.timeout_seconds || 10} seconds (still running).` : `Exit code ${r.code}.`;
         return `${text || '(no output)'}\n\n${status}`;
       } finally { src.cleanup(); }

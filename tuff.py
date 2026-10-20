@@ -6,9 +6,12 @@ import math
 import os
 import random
 import sys
+import tempfile
 import time
 
 IDE = os.environ.get("TUFF_IDE") == "1"
+# Echo typed answers back, so a run fed from a file reads like a real session (the MCP tuff_run tool).
+ECHO_INPUT = os.environ.get("TUFF_ECHO_INPUT") == "1"
 
 KEYWORDS = {
     "func", "return", "if", "elif", "else", "then", "while", "for", "in", "break", "continue",
@@ -98,7 +101,7 @@ def tokenize(src):
                 out = []
                 while j < n and raw[j] != c:
                     if raw[j] == "\\" and j + 1 < n:
-                        out.append(ESCAPES.get(raw[j + 1], raw[j + 1]))
+                        out.append(ESCAPES.get(raw[j + 1], "\\" + raw[j + 1]))  # unknown escapes stay as written, like C:\Users
                         j += 2
                     else:
                         out.append(raw[j])
@@ -422,15 +425,20 @@ class Parser:
                 node = N("attr", tok, obj=node, name=name)
             elif self.at("METHOD"):
                 self.next()
+                name_tok = self.peek()
                 name = self.member_name("Expected a method name after ':'.")
+                bare = spaced = False  # bare: an input without brackets takes the rest of the expression
                 if self.at("OP", "("):
+                    nxt = self.peek()
+                    spaced = nxt.line == name_tok.line and nxt.col > name_tok.col + len(name)  # name (x): a space before the bracket
                     self.next()
                     args = self.call_args(")")
                 elif self.starts_expr():
                     args = [self.expr()]
+                    bare = True
                 else:
                     args = []
-                node = N("method", tok, obj=node, name=name, args=args)
+                node = N("method", tok, obj=node, name=name, args=args, bare=bare, spaced=spaced)
             else:
                 return node
 
@@ -454,8 +462,8 @@ class Parser:
 # ---------------------------------------------------------------- runtime
 
 class Func:
-    def __init__(self, name, params, body, env):
-        self.name, self.params, self.body, self.env = name, params, body, env
+    def __init__(self, name, params, body, env, line=None):
+        self.name, self.params, self.body, self.env, self.line = name, params, body, env, line
 
 
 class Builtin:
@@ -486,6 +494,8 @@ class AllLines:
 
 ALL = AllLines()
 LIBRARIES = ("anims", "tgui", "mtgui")
+BUILTIN_NAMES = {"print", "number", "text", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
+                 "floor", "ceil", "min", "max", "sum", "average"}
 
 
 class ReturnSignal(Exception):
@@ -619,8 +629,13 @@ class Console:
     def input(self, prompt):
         self.write(prompt)
         data = sys.stdin.readline()
+        if data == "":
+            raise TuffError("The program asked for an answer, but there was no more input to read.")
         self.rows += 1
-        return data.lstrip("﻿").rstrip("\r\n")
+        answer = data.lstrip("﻿").rstrip("\r\n")
+        if ECHO_INPUT:
+            self.write(answer + "\n")
+        return answer
 
 
 class Env:
@@ -699,6 +714,8 @@ class Runtime:
         try:
             return True, self.interp.invoke(fn, list(args), loose=True)
         except TuffError as err:
+            if err.line is None and getattr(fn, "line", None):  # e.g. a click function asking for inputs
+                err.line = fn.line
             report(err, self.interp.src)
         except RecursionError:
             report(TuffError(f"{getattr(fn, 'name', 'This function')}() called itself too many times."), self.interp.src)
@@ -719,7 +736,7 @@ class Interpreter:
             "number": self.b_number,
             "text": lambda v: to_text(plain(v)),
             "len": self.b_len,
-            "round": lambda v, digits=0: round(v, int(digits)) if digits else round(v),
+            "round": lambda v, digits=0: round(self.num_arg("round", v), int(digits)) if digits else round(self.num_arg("round", v)),
             "random": self.b_random,
             "wait": self.b_wait,
             "range": self.b_range,
@@ -852,9 +869,15 @@ class Interpreter:
             raise TuffError(f"len() needs text or a list, not {type_name(v)}.")
         return len(v)
 
-    def b_random(self, low=1, high=None):
-        if high is None:
-            low, high = 1, low
+    def b_random(self, *ends):
+        if not 1 <= len(ends) <= 2:
+            raise TuffError("random() needs a range, like random(1, 6), or just the top, like random(6).")
+        nums = [self.num_arg("random", v) for v in ends]
+        if any(isinstance(v, float) and not v.is_integer() for v in nums):
+            raise TuffError("random() needs whole numbers, like random(1, 6). For a decimal, divide: random(0, 100) / 100.")
+        low, high = (1, nums[0]) if len(nums) == 1 else nums
+        if low > high:
+            raise TuffError(f"random({to_text(low)}, {to_text(high)}): the first number must be the smaller one.")
         return random.randint(int(low), int(high))
 
     def b_wait(self, seconds):
@@ -935,7 +958,7 @@ class Interpreter:
         return None
 
     def s_func(self, s, env):
-        env.vars[s.name] = Func(s.name, s.params, s.body, env)
+        env.vars[s.name] = Func(s.name, s.params, s.body, env, s.line)
         return None
 
     def s_import(self, s, env):
@@ -1008,7 +1031,8 @@ class Interpreter:
         if k == "attr":
             obj = self.eval(e.obj, env)
             if not isinstance(obj, Module):
-                raise TuffError(f"Only libraries use '.', and this is {type_name(obj)}. For methods use ':', like line:rewrite")
+                kind = "list" if isinstance(obj, list) else "text" if isinstance(obj, str) else None
+                raise TuffError(dot_help(type_name(obj), e.obj, e.name, kind))
             if e.name not in obj.members:
                 raise TuffError(f"{obj.name} doesn't have '{e.name}'. It has: {', '.join(obj.members)}.")
             return obj.members[e.name]
@@ -1069,6 +1093,8 @@ class Interpreter:
 
     def call(self, e, env):
         fn = self.eval(e.fn, env)
+        if e.fn.kind == "var" and e.fn.name in BUILTIN_NAMES and not isinstance(fn, (Builtin, Func)):
+            raise TuffError(f"'{e.fn.name}' was given a value ({to_text(fn, True)}), so it isn't the built-in {e.fn.name}() any more. Use another name for your variable.")
         args = [self.eval(a, env) for a in e.args]
         return self.invoke(fn, args)
 
@@ -1100,12 +1126,15 @@ class Interpreter:
             if len(args) != count:
                 raise TuffError(f":{name} needs {count} input{'s' if count != 1 else ''}.")
 
+        def no_inputs():
+            if args:
+                raise TuffError(f":{name} doesn't take an input. Write :{name}() or just :{name}.")
+
         if isinstance(obj, Native):
             fn = obj.methods.get(name)
             if fn is None:
-                hint = difflib.get_close_matches(name, list(obj.methods), n=1, cutoff=0.6)
-                extra = f" Did you mean :{hint[0]}?" if hint else f" Try one of: {', '.join(obj.methods)}."
-                raise TuffError(f"A {obj.kind} doesn't have :{name}.{extra}")
+                options = [m for m in obj.methods if m != "page" or obj.kind == "window"]
+                raise TuffError(method_help(a_kind(obj.kind).capitalize(), name, options))
             return call_python(f"{obj.kind}:{name}", fn, args)
 
         if isinstance(obj, Line):
@@ -1118,41 +1147,994 @@ class Interpreter:
                 self.console.rewrite(obj, obj.text + to_text(args[0]))
                 return obj
             if name == "clear":
+                no_inputs()
                 self.console.rewrite(obj, "")
                 return obj
             if name == "text":
+                no_inputs()
                 return obj.text
-            obj_kind, options = "line", "rewrite, append, clear, text"
+            what, kind = "A line", "line"
         elif isinstance(obj, str):
             simple = {"upper": str.upper, "lower": str.lower, "trim": str.strip}
             if name in simple:
+                no_inputs()
                 return simple[name](obj)
             if name == "has":
                 need(1)
                 return to_text(args[0]) in obj
-            obj_kind, options = "text", "upper, lower, trim, has"
+            what, kind = "Text", "text"
         elif isinstance(obj, list):
             if name == "add":
                 need(1)
                 obj.append(args[0])
                 return obj
+            # Same matching as 'is': true and 1 are different things.
+            spot = lambda: next((i for i, x in enumerate(obj) if self.binop("==", x, args[0])), None)
             if name == "remove":
                 need(1)
-                if args[0] not in obj:
+                i = spot()
+                if i is None:
                     raise TuffError(f"{to_text(args[0], True)} isn't in this list.")
-                obj.remove(args[0])
+                del obj[i]
                 return obj
             if name == "pop":
+                if args:
+                    raise TuffError(":pop doesn't take a position: it always takes the last item. Read another item with items[...] and take it out with :remove.")
                 if not obj:
                     raise TuffError("Can't pop from an empty list.")
                 return obj.pop()
             if name == "has":
                 need(1)
-                return args[0] in obj
-            obj_kind, options = "list", "add, remove, pop, has"
+                return spot() is not None
+            what, kind = "A list", "list"
         else:
             raise TuffError(f"{type_name(obj).capitalize()} doesn't have any :methods.")
-        raise TuffError(f"A {obj_kind} doesn't have :{name}. Try one of: {options}.")
+        raise TuffError(method_help(what, name, SIMPLE_METHODS[kind], kind))
+
+
+# ---------------------------------------------------------------- checking without running
+
+# Python habits that are plain names in Tuff, and what to write instead.
+PY_NAMES = {
+    "True": "Tuff writes true in lowercase.",
+    "False": "Tuff writes false in lowercase.",
+    "None": "Tuff writes nil for 'nothing'.",
+    "str": "To turn a value into text, use text(value).",
+    "int": "To turn text into a number, use number(text).",
+    "float": "To turn text into a number, use number(text).",
+    "math": "sqrt, floor, ceil, abs, round and pi are built in, so there's nothing to import.",
+    "time": "Use wait(seconds) to pause. In an app, app:every(seconds, fn) runs something again and again.",
+    "length": "Use len(value) for how long some text or a list is.",
+    "self": "Tuff has no classes. Keep things in variables and functions.",
+}
+# Methods from other languages, and the Tuff method that does the same job.
+PY_METHODS = {
+    "list": {"append": "add", "push": "add", "insert": "add", "contains": "has", "includes": "has", "delete": "remove", "discard": "remove"},
+    "text": {"strip": "trim", "contains": "has", "includes": "has", "upper_case": "upper", "lower_case": "lower",
+             "uppercase": "upper", "lowercase": "lower", "toupper": "upper", "tolower": "lower"},
+}
+SIMPLE_METHODS = {"text": ("upper", "lower", "trim", "has"), "list": ("add", "remove", "pop", "has"), "line": ("rewrite", "append", "clear", "text")}
+ONE_INPUT = {"has", "add", "remove", "rewrite", "append"}
+
+
+def a_kind(kind):
+    return f"{'an' if kind[:1] in 'aeiou' else 'a'} {kind}"
+
+
+def method_help(what, name, options, kind=None):
+    """'A list doesn't have :append. Use :add instead.' (or a close match, or every option)."""
+    alt = PY_METHODS.get(kind, {}).get(name.lower())
+    if alt in options:
+        return f"{what} doesn't have :{name}. Use :{alt} instead."
+    hint = difflib.get_close_matches(name, list(options), n=1, cutoff=0.6)
+    if hint:
+        return f"{what} doesn't have :{name}. Did you mean :{hint[0]}?"
+    return f"{what} doesn't have :{name}. Try one of: {', '.join(options)}."
+
+
+def dot_help(what, obj_node, name, kind=None):
+    """For thing.name when thing isn't a library: methods use ':'."""
+    alt = PY_METHODS.get(kind, {}).get(name.lower(), name)
+    owner = obj_node.name if getattr(obj_node, "kind", None) == "var" else "thing"
+    return f"Only libraries use '.', and this is {what}. For methods use ':', like {owner}:{alt}"
+
+
+def accepts(fn, count):
+    """Can fn be called with this many inputs? (True when we can't tell.)"""
+    try:
+        inspect.signature(fn).bind(*([None] * count))
+        return True
+    except TypeError:
+        return False
+    except ValueError:
+        return True
+
+
+_GUI = None
+
+
+class Anything:
+    """Stands in for whatever a widget touches while it lists its methods, so no window is made."""
+
+    def __getattr__(self, name):
+        if name.startswith("__"):  # let Python's own lookups (like __signature__) fail normally
+            raise AttributeError(name)
+        return Anything()
+
+    def __call__(self, *args, **kwargs):
+        return Anything()
+
+
+def gui_tables():
+    """The methods of every tgui/mtgui window and widget (name -> the function behind it), read from
+    the library itself without opening a window, plus the styles and colors it accepts.
+    None when tkinter isn't available."""
+    global _GUI
+    if _GUI is None:
+        _GUI = {}
+        try:
+            import tuff_tgui as tg
+
+            class FakeRt(Anything):
+                def native(self, kind, methods):
+                    return methods
+
+                def builtin(self, name, fn):
+                    return fn
+
+            lib = Anything()
+            lib.rt = FakeRt()
+
+            def probe_attr(self, name):
+                if name.startswith("__"):
+                    raise AttributeError(name)
+                return Anything()
+
+            def probe(cls, **fields):
+                obj = object.__new__(type("Probe", (cls,), {"__getattr__": probe_attr}))
+                obj.__dict__.update(lib=lib, app=obj, children=[], hidden=False, **fields)
+                return obj
+
+            kinds = {"window": tg.App.native(probe(tg.App))}
+            for style in ("heading", "text", "small"):
+                kinds[style] = probe(tg.Label, kind=style, style=style).methods()
+            for cls in (tg.Button, tg.Input, tg.Dropdown, tg.Toggle, tg.Checkbox, tg.Slider, tg.Progress, tg.Spinner,
+                        tg.Clock, tg.Image, tg.Divider, tg.Space, tg.Row, tg.Card, tg.Page):
+                kinds[cls.kind] = probe(cls).methods()
+            libs = {name: tg.make_library(FakeRt(), modern=name == "mtgui") for name in ("tgui", "mtgui")}
+            _GUI = {"kinds": kinds, "libs": libs, "styles": tuple(tg.BUTTON_STYLES), "clocks": tuple(tg.CLOCK_STYLES),
+                    "colors": set(tg.NAMED_COLORS) | set(tg.GRADIENTS) | {"accent", "text", "muted"},
+                    "accents": list(tg.ACCENTS), "themes": set(tg.THEMES)}
+        except Exception:
+            _GUI = {}
+    return _GUI or None
+
+
+def nodes(x):
+    """Every node inside a node, or inside a list of nodes."""
+    if isinstance(x, N):
+        yield x
+        for v in x.__dict__.values():
+            yield from nodes(v)
+    elif isinstance(x, (list, tuple)):
+        for v in x:
+            yield from nodes(v)
+
+
+def is_hex_color(text):
+    return len(text) == 7 and text[0] == "#" and all(c in "0123456789abcdef" for c in text[1:])
+
+
+class Scope:
+    """The names a function (or the top of the program) makes for itself."""
+
+    def __init__(self, parent=None, name=None):
+        self.parent, self.name = parent, name
+        self.names = set()
+        self.funcs = {}
+
+    def chain(self):
+        s = self
+        while s is not None:
+            yield s
+            s = s.parent
+
+
+# Methods that other languages have, with the Tuff way to do it, for "nothing in Tuff has :x".
+PY_ONLY = {
+    "split": "Tuff can't split text. Go through it letter by letter with a for loop.",
+    "join": "Join text with +.",
+    "replace": "Tuff can't replace inside text. Build new text with + in a loop.",
+    "format": "Join text with +, like \"Hi \" + name.",
+    "startswith": "Compare the first letter: t[0] is \"a\".",
+    "endswith": "Compare the last letter: t[-1] is \"a\".",
+    "find": "Use :has to check, like t:has(\"a\").",
+    "index": "Loop with a counter to find a position.",
+    "count": "Loop and count with a variable.",
+    "sort": "Tuff has no sort. Sort with a loop, or keep the list in order as you add.",
+    "reverse": "Build a reversed list with a loop.",
+    "keys": "Tuff has no dictionaries. Keep two lists side by side.",
+    "items": "Tuff has no dictionaries. Keep two lists side by side.",
+    "values": "Tuff has no dictionaries. Keep two lists side by side.",
+    "get": "Tuff has no dictionaries. Keep two lists side by side.",
+    "extend": "Join lists with +, like items = items + more.",
+    "isdigit": "Use the is_number pattern from the guide.",
+    "capitalize": "Use t[0]:upper() + the rest built with a loop.",
+}
+
+
+class Checker:
+    """Finds mistakes without running the program. It only reports what is certain to go wrong
+    when that line runs, so correct code is never flagged. It knows which names each function
+    makes for itself, what kind of value most names hold, and every window and widget method."""
+
+    CONTAINERS = ("window", "row", "card", "page")
+    TYPE = {"$text": "text", "$list": "a list", "$line": "a line", "$number": "a number", "$bool": "true/false",
+            "$nil": "nil", "$func": "a function", "$builtin": "a function"}
+    NUMBER_FNS = {"number", "len", "random", "round", "sqrt", "abs", "floor", "ceil", "min", "max", "sum", "average"}
+    NUMBER_INPUT_FNS = {"round", "floor", "ceil", "abs", "sqrt", "min", "max", "sum", "average"}  # these fail on text
+    MATHS = ("+", "-", "*", "/", "%", "^")
+    COMPARE = ("==", "!=", "<", ">", "<=", ">=")
+    ORDER = ("<", ">", "<=", ">=")
+    ZERO_INPUT = {"upper", "lower", "trim", "pop", "clear", "text"}  # list/text/line methods without inputs
+    TEXT_VALUE = {"input", "heading", "text", "small", "button", "dropdown", "clock"}  # :value() gives text
+    # What each event hands its function, and where the function goes in the call. A function may
+    # take fewer inputs than it's given (extras are dropped), not more.
+    EVENT_GIVES = {"click": (0, "a button click"), "button": (0, "a button click"), "opened": (0, ":opened"),
+                   "every": (0, ":every"), "after": (0, ":after"), "change": (1, ":change"), "enter": (1, ":enter")}
+    HANDLER_POS = {"click": 0, "opened": 0, "change": 0, "enter": 0, "button": 1, "every": 1, "after": 1}
+
+    def __init__(self, program, base_dir=None):
+        self.program = program
+        self.problems = []
+        self.funcs = {}  # top-level functions: name -> params (made at the top, or in a top-level block)
+        self.func_nodes = {}
+        self.func_count = {}
+        self.assigned = {}
+        self.params = set()
+        self.loop_vars = set()
+        self.imports = set()
+        self.interp = Interpreter()
+        self.builtins = dict(self.interp.globals.vars)
+        self.memo = {}
+        self.anims = None
+        self.calls = {}  # name -> every line it's called on, like name(...)
+        self.top = Scope()
+        self.scope_of = {}  # id(func node) -> its Scope
+        self.everywhere = set()  # every name made anywhere
+        self.makes_window = False
+        self.handlers_seen = set()
+        self.statement_call = None  # a call on a line of its own: its answer isn't used
+        self.base_dir = base_dir
+
+    # ---- what the program makes, and where
+    def collect(self, body, scope, top_level=True):
+        for s in body:
+            k = s.kind
+            if k == "func":
+                scope.names.add(s.name)
+                inner = Scope(scope, s.name)
+                inner.names.update(s.params)
+                self.scope_of[id(s)] = inner
+                self.everywhere.add(s.name)
+                self.everywhere.update(s.params)
+                self.params.update(s.params)
+                if scope is self.top:
+                    self.funcs[s.name] = s.params
+                    self.func_nodes[s.name] = s
+                    self.func_count[s.name] = self.func_count.get(s.name, 0) + 1
+                self.collect(s.body, inner, False)
+            elif k == "assign" and s.target.kind == "var":
+                self.assigned.setdefault(s.target.name, []).append(s)
+                if s.op == "=":
+                    scope.names.add(s.target.name)
+                    self.everywhere.add(s.target.name)
+            elif k == "for":
+                self.loop_vars.add(s.name)
+                scope.names.add(s.name)
+                self.everywhere.add(s.name)
+                self.collect(s.body, scope, False)
+            elif k == "while":
+                self.collect(s.body, scope, False)
+            elif k == "if":
+                for _, b in s.branches:
+                    self.collect(b, scope, False)
+                if s.else_body:
+                    self.collect(s.else_body, scope, False)
+            elif k == "import":
+                scope.names.add(s.name)
+                self.everywhere.add(s.name)
+                self.imports.add(s.name)
+
+    def run(self):
+        self.collect(self.program, self.top)
+        self.user = self.everywhere | set(self.func_count)
+        kinds = [self.kind(n) for n in nodes(self.program) if n.kind == "call" and n.fn.kind == "attr"]
+        self.makes_window = "window" in kinds
+        self.body(self.program, self.top, in_loop=False)
+        self.check_top_level()
+        seen, out = set(), []
+        for p in sorted(self.problems):
+            if p not in seen:
+                seen.add(p)
+                out.append(p)
+        return out
+
+    def problem(self, node, msg):
+        self.problems.append((node.line, node.col, msg))
+
+    def what(self, kind):
+        return "a function" if kind.startswith("$libfn:") else self.TYPE.get(kind) or a_kind(kind)
+
+    def only_func(self, name):
+        """True when name is one top-level function and never anything else."""
+        return self.func_count.get(name) == 1 and name not in self.assigned and name not in self.params and name not in self.loop_vars
+
+    def returns_function(self, name):
+        """Does this function give back another function? (Then calling it in a handler spot is fine.)"""
+        node = self.func_nodes.get(name)
+        if node is None:
+            return True
+        for x in nodes(node.body):
+            if x.kind == "func":
+                return True
+            if x.kind == "return" and x.value is not None and x.value.kind == "var" and (x.value.name in self.func_count or x.value.name in self.builtins):
+                return True
+        last = node.body[-1] if node.body else None
+        return bool(last is not None and last.kind == "expr" and last.expr.kind == "var" and last.expr.name in self.func_count)
+
+    # ---- what kind of value something is ("$text", "$list", "button", "window", "$module:anims"...), or None
+    def var_kind(self, name, seen):
+        if name in self.memo:
+            return self.memo[name]
+        if name in seen:
+            return None
+        kinds = set()
+        if name in self.imports:
+            kinds.add("$module:" + name)
+        if name in self.func_count:
+            kinds.add("$func")
+        if name in self.params or name in self.loop_vars:
+            kinds.add(None)
+        for s in self.assigned.get(name, []):
+            vk = self.kind(s.value, seen | {name})
+            if s.op == "=":
+                kinds.add(vk)
+            elif vk is None:
+                kinds.add(None)  # x += something unknown: x could become anything
+            elif vk == "$text" and s.op in ("+=", "*="):
+                kinds.add("$text")
+            elif vk == "$list" and s.op == "+=":
+                kinds.add("$list")
+        if not kinds and name in self.builtins:
+            kinds.add("$builtin" if isinstance(self.builtins[name], Builtin) else "$number" if name == "pi" else None)
+        result = kinds.pop() if len(kinds) == 1 else None
+        if not seen:
+            self.memo[name] = result
+        return result
+
+    def kind(self, e, seen=frozenset()):
+        k = e.kind
+        if k == "const":
+            v = e.value
+            return "$text" if isinstance(v, str) else "$bool" if isinstance(v, bool) else "$nil" if v is None else "$number"
+        if k == "list":
+            return "$list"
+        if k == "say":
+            return "$line"
+        if k == "input":
+            return "$text"
+        if k == "var":
+            return self.var_kind(e.name, seen)
+        if k == "not" or (k == "binop" and e.op in self.COMPARE):
+            return "$bool"
+        if k == "neg":
+            return "$number" if self.kind(e.value, seen) == "$number" else None
+        if k == "binop" and e.op in ("+", "*"):
+            a, b = self.kind(e.left, seen), self.kind(e.right, seen)
+            if "$text" in (a, b):
+                return "$text"
+            if a == b and a in ("$number", "$list") and (e.op == "+" or a == "$number"):
+                return a
+            return None
+        if k == "binop" and e.op in ("-", "/", "%", "^"):
+            return "$number" if self.kind(e.left, seen) == self.kind(e.right, seen) == "$number" else None
+        if k == "attr":
+            lib = self.kind(e.obj, seen)
+            return f"$libfn:{lib[8:]}.{e.name}" if lib and lib.startswith("$module:") else None
+        if k == "call" and e.fn.kind == "var" and e.fn.name not in self.user:
+            name = e.fn.name
+            return "$text" if name == "text" else "$list" if name == "range" else "$number" if name in self.NUMBER_FNS else None
+        if k == "call" and e.fn.kind == "attr":
+            lib = self.kind(e.fn.obj, seen)
+            if lib in ("$module:tgui", "$module:mtgui") and e.fn.name == "window":
+                return "window"
+            return None
+        if k == "method":
+            obj = self.kind(e.obj, seen)
+            gui = gui_tables()
+            if obj in self.CONTAINERS and gui and e.name in gui["kinds"] and e.name != "window" and (e.name != "page" or obj == "window"):
+                return e.name
+            if obj == "$text":
+                return "$bool" if e.name == "has" else "$text" if e.name in ("upper", "lower", "trim") else None
+            if obj == "$list":
+                return "$list" if e.name in ("add", "remove") else "$bool" if e.name == "has" else None
+            if obj == "$line" and e.name == "text":
+                return "$text"
+            if e.name == "value" and not e.args and obj:
+                return "$text" if obj in self.TEXT_VALUE else "$bool" if obj in ("toggle", "checkbox") else "$number" if obj in ("slider", "progress") else None
+        return None
+
+    def typed(self, e):
+        """Text that came from someone typing (input, or a widget's :value), even through a variable."""
+        if e.kind == "input" or (e.kind == "method" and e.name == "value" and self.kind(e) == "$text"):
+            return True
+        if e.kind == "var" and self.var_kind(e.name, frozenset()) == "$text":
+            sets = [s for s in self.assigned.get(e.name, []) if s.op == "="]
+            return bool(sets) and all(self.typed(s.value) for s in sets)
+        return False
+
+    def describe(self, e):
+        return e.name if e.kind == "var" else f"{e.obj.name}:{e.name}()" if e.kind == "method" and e.obj.kind == "var" else None
+
+    # ---- walking the program
+    def body(self, body, scope, in_loop, in_func=False):
+        for i, s in enumerate(body):
+            last_of_func = in_func and i == len(body) - 1
+            self.stmt(s, scope, in_loop, in_func, last_of_func)
+
+    def stmt(self, s, scope, in_loop, in_func, last_of_func):
+        k = s.kind
+        if k == "func":
+            self.body(s.body, self.scope_of[id(s)], False, True)
+        elif k == "import":
+            if s.name not in LIBRARIES:
+                hint = difflib.get_close_matches(s.name, LIBRARIES, n=1, cutoff=0.5)
+                extra = f" Did you mean '{hint[0]}'?" if hint else f" Available libraries: {', '.join(LIBRARIES)}."
+                self.problem(s, f"There's no library called '{s.name}'.{extra}")
+        elif k == "assign":
+            target = s.target.name if s.target.kind == "var" else None
+            if s.op != "=" and target:
+                self.expr(s.target, scope)
+                if s.op == "+=" and self.kind(s.target) == "$list" and self.kind(s.value) == "$text":
+                    self.problem(s, f"This turns the list {target} into text. To add one item, use {target}:add(...).")
+                if s.op == "+=" and s.value.kind == "input" and any(t.op == "=" and self.kind(t.value) == "$number" for t in self.assigned.get(target, [])):
+                    self.problem(s, f"input gives text, so += sticks it onto {target} as text (0, then \"05\", then \"0510\"). Use {target} += number(input \"...\").")
+            elif s.target.kind == "index":
+                self.expr(s.target.obj, scope)
+                self.expr(s.target.index, scope)
+                if self.kind(s.target.obj) == "$text":
+                    self.problem(s, "You can only set items in a list, not in text. Build new text with + instead.")
+            if s.op == "=" and target in self.func_count and target not in self.params and target not in self.loop_vars \
+                    and self.kind(s.value) not in ("$func", "$builtin"):
+                self.problem(s, f"{target} is a function, and giving it a value replaces it, so {target}() won't work afterwards. Use another name for the value.")
+            self.expr(s.value, scope)
+        elif k == "expr":
+            self.statement_call = s.expr
+            self.expr(s.expr, scope)
+            if not last_of_func:
+                self.check_useless(s.expr)
+        elif k == "if":
+            for cond, b in s.branches:
+                self.expr(cond, scope)
+                self.check_condition(cond)
+                self.body(b, scope, in_loop, in_func)
+            if s.else_body:
+                self.body(s.else_body, scope, in_loop, in_func)
+        elif k == "while":
+            self.expr(s.cond, scope)
+            self.check_condition(s.cond)
+            self.body(s.body, scope, True, in_func)
+        elif k == "for":
+            self.expr(s.items, scope)
+            if self.kind(s.items) == "$number":
+                self.problem(s, f"Can't loop over a number. Try: for {s.name} in range(...):")
+            self.check_range_len(s)
+            self.body(s.body, scope, True, in_func)
+        elif k == "return":
+            if not in_func:
+                self.problem(s, "'return' can only be used inside a function.")
+            if s.value is not None:
+                self.expr(s.value, scope)
+        elif k in ("break", "continue") and not in_func and not in_loop:
+            self.problem(s, f"'{k}' can only be used inside a loop.")
+
+    def expr(self, e, scope):
+        if e is None:
+            return
+        k = e.kind
+        if k == "var":
+            self.use(e, scope)
+        elif k == "say":
+            self.expr(e.value, scope)
+        elif k == "input":
+            self.expr(e.prompt, scope)
+            if e.prompt is not None and (e.prompt.kind in ("and", "or") or (e.prompt.kind == "binop" and e.prompt.op in self.COMPARE)):
+                self.problem(e, "input took everything after it as its question, so it asks the wrong thing. Store the answer first: answer = input \"...\", then compare answer.")
+        elif k in ("binop", "and", "or"):
+            self.expr(e.left, scope)
+            self.expr(e.right, scope)
+            if k == "binop":
+                self.check_binop(e)
+            if k == "binop" and e.op in self.MATHS and e.left.kind == "method" and getattr(e.left, "spaced", False):
+                m = e.left
+                owner = m.obj.name if m.obj.kind == "var" else "thing"
+                self.problem(m, f"With a space before the bracket, {owner}:{m.name} still takes only what's inside the brackets as its input, and the rest is worked out afterwards. Put the whole input in brackets: {owner}:{m.name}(... + ...)")
+        elif k in ("not", "neg"):
+            self.expr(e.value, scope)
+        elif k == "list":
+            for x in e.items:
+                self.expr(x, scope)
+        elif k == "index":
+            self.expr(e.obj, scope)
+            self.expr(e.index, scope)
+            self.check_index(e)
+        elif k == "call":
+            if e.fn.kind == "var":
+                self.use(e.fn, scope, func=True)
+                self.calls.setdefault(e.fn.name, []).append(e.line)
+            else:
+                self.expr(e.fn, scope)
+            for a in e.args:
+                self.expr(a, scope)
+            self.check_call(e, scope)
+        elif k == "attr":
+            self.expr(e.obj, scope)
+            self.check_attr(e)
+        elif k == "method":
+            self.expr(e.obj, scope)
+            pos = self.HANDLER_POS.get(e.name)
+            for i, a in enumerate(e.args):
+                if i == pos and a.kind == "var":
+                    self.use(a, scope, func=True)
+                else:
+                    self.expr(a, scope)
+            self.check_method(e)
+
+    def use(self, e, scope, func=False):
+        name = e.name
+        if name in self.builtins or any(name in s.names for s in scope.chain()):
+            return
+        if name in self.everywhere:
+            owners = sorted({f"{n}()" for n, sc in self.scope_names() if name in sc})
+            where = owners[0] if len(owners) == 1 else "other functions"
+            self.problem(e, f"'{name}' is only set inside {where}, so it only exists there. Give it a value at the top of the program (like {name} = 0) so this line can use it.")
+            return
+        if name in LIBRARIES:
+            msg = f"'{name}' is a library. Add  import {name}  at the top of your file to use it."
+        elif name in PY_NAMES:
+            msg = f"I don't know what '{name}' is. {PY_NAMES[name]}"
+        else:
+            visible = set(self.builtins) | set().union(*(s.names for s in scope.chain()))
+            hint = difflib.get_close_matches(name, sorted(visible), n=1, cutoff=0.6)
+            fix = f" Make it with func, like: func {name}():" if func else f" Give it a value first, like: {name} = 5"
+            msg = f"I don't know what '{name}' is." + (f" Did you mean '{hint[0]}'?" if hint else fix)
+        self.problem(e, msg)
+
+    def scope_names(self):
+        seen = set()
+        for sc in self.scope_of.values():
+            if id(sc) not in seen:
+                seen.add(id(sc))
+                yield sc.name, sc.names
+
+    def lib_members(self, lib):
+        if lib == "anims":
+            if self.anims is None:
+                self.anims = {n: b.fn for n, b in self.interp.lib_anims().items()}
+            return self.anims
+        gui = gui_tables()
+        return gui["libs"].get(lib) if gui else None
+
+    # ---- checks
+    def check_top_level(self):
+        """A built-in's name given a value at the top replaces it, so later calls of it fail. And a
+        function made twice at the top: the second replaces the first."""
+        made = {}
+
+        def replaces(s, name, after):
+            """s sets the built-in called name; any call of it after line `after` breaks."""
+            if self.kind(s.value) in ("$func", "$builtin") or (self.kind(s.value) or "").startswith("$libfn:"):
+                return
+            later = [line for line in self.calls.get(name, []) if line > after]
+            if later:
+                self.problem(s, f"'{name}' is a built-in function, and giving it a value replaces it everywhere, so {name}() on line {later[0]} won't work. Use another name, like my_{name}.")
+
+        for s in self.program:
+            if s.kind == "assign" and s.op == "=" and s.target.kind == "var" and isinstance(self.builtins.get(s.target.name), Builtin):
+                replaces(s, s.target.name, s.line)
+            # f() at the top runs f, and f setting a built-in's name (not one of its inputs) replaces it for everyone
+            if s.kind == "expr" and s.expr.kind == "call" and s.expr.fn.kind == "var" and self.only_func(s.expr.fn.name):
+                f = self.func_nodes[s.expr.fn.name]
+                for t in f.body:
+                    if t.kind == "assign" and t.op == "=" and t.target.kind == "var" and t.target.name not in f.params \
+                            and isinstance(self.builtins.get(t.target.name), Builtin):
+                        replaces(t, t.target.name, s.line)
+            if s.kind == "func":
+                if s.name in made:
+                    self.problem(s, f"There are two functions called {s.name}. This one replaces the one on line {made[s.name]}. Give them different names.")
+                made[s.name] = s.line
+
+    def check_useless(self, e):
+        """A line that works something out but throws the answer away."""
+        if e.kind == "var" and e.name in self.func_count:
+            self.problem(e, f"{e.name} on its own does nothing. Call it with brackets: {e.name}()")
+        elif e.kind == "attr" and (self.kind(e) or "").startswith("$libfn:"):
+            self.problem(e, f"{self.kind(e)[7:]} on its own does nothing. Call it with brackets: {self.kind(e)[7:]}(...)")
+        elif e.kind == "method" and e.name in ("upper", "lower", "trim") and self.kind(e.obj) == "$text" and e.obj.kind == "var":
+            v = e.obj.name
+            self.problem(e, f"{v}:{e.name}() gives back new text but doesn't change {v}. Write {v} = {v}:{e.name}()")
+
+    def check_condition(self, cond):
+        """if answer is "yes" or "y": the "y" part is always true on its own."""
+        if cond.kind == "or":
+            for side in (cond.left, cond.right):
+                if side.kind == "const" and isinstance(side.value, str) and side.value:
+                    other = cond.left if side is cond.right else cond.right
+                    subject = other.left.name if other.kind == "binop" and other.left.kind == "var" else "answer"
+                    self.problem(side, f"or \"{side.value}\" on its own is always true. Compare again: {subject} is \"{side.value}\"")
+        if cond.kind == "method" and cond.name == "has" and getattr(cond, "bare", False) and cond.args and (
+                cond.args[0].kind in ("and", "or") or (cond.args[0].kind == "binop" and cond.args[0].op in self.COMPARE)):
+            owner = cond.obj.name if cond.obj.kind == "var" else "thing"
+            self.problem(cond, f"Everything after {owner}:has was read as the thing to look for. Put brackets around its input, like: {owner}:has(x) and ...")
+
+    def check_binop(self, e):
+        op, a, b = e.op, self.kind(e.left), self.kind(e.right)
+        typed = next((x for x in (e.left, e.right) if self.typed(x)), None)
+        tip = f" {self.describe(typed)} is typed text, so turn it into a number first: number({self.describe(typed)})." if typed is not None and self.describe(typed) else ""
+        if op in self.ORDER and e.left.kind == "binop" and e.left.op in self.COMPARE:
+            self.problem(e, "Tuff can't chain comparisons like 1 < x < 9: the first part gives true or false. Write x > 1 and x < 9.")
+        elif op in self.ORDER and {a, b} == {"$text", "$number"}:
+            self.problem(e, f"Can't compare text with a number using {op}.{tip}")
+        elif op in ("==", "!=") and {a, b} == {"$text", "$number"}:
+            word = "never" if op == "==" else "always"
+            self.problem(e, f"Text is never equal to a number, so this is {word} true.{tip or ' Turn the text into a number with number(...) first.'}")
+        elif op in ("-", "/", "%", "^") and "$text" in (a, b) and None not in (a, b):
+            verb = {"-": "subtract", "/": "divide", "%": "use %", "^": "use ^ on"}[op]
+            first, second = self.TYPE[a], self.TYPE.get(b, self.what(b))
+            hint = tip
+            if e.left.kind == "binop" and e.left.op == "+" and a == "$text":
+                hint = " The + before it already joined the text, so put the maths in brackets, like \"Lives: \" + (lives - 1)."
+            self.problem(e, f"Can't {verb} {first} and {second}.{hint}")
+        elif op == "*" and "$list" in (a, b) and None not in (a, b):
+            self.problem(e, "Can't multiply a list. Write the items out, like [0, 0, 0], or add them with :add in a loop.")
+        elif op == "*" and a == b == "$text":
+            self.problem(e, f"Can't multiply text and text.{tip}")
+        elif op == "+" and a == "$list" and b == "$text":
+            self.problem(e, "This turns the list into text. To add one item, use :add, or join two lists: items + [\"jam\"].")
+        elif op == "+" and b == "$number" and e.left.kind == "binop" and e.left.op == "+" and self.kind(e.left) == "$text" \
+                and self.kind(e.left.right) == "$number" and not (e.left.right.kind == "const" and e.right.kind == "const"):
+            self.problem(e, "+ works left to right, and the text before has already turned the numbers into text, so they're stuck together (\"Total: \" + 10 + 2 gives \"Total: 102\"). Put the sum in brackets: \"Total: \" + (a + b)")
+        elif op == "+" and {a, b} == {"$text", "$number"} and typed is not None and self.describe(typed):
+            self.problem(e, f"{self.describe(typed)} is typed text, so + sticks them together (\"5\" + 1 gives \"51\"). Use number({self.describe(typed)}) to add.")
+        if op == "*" and "$text" in (a, b):
+            n = e.right if a == "$text" else e.left
+            if self.is_decimal(n):
+                self.problem(n, "This is a decimal (it comes from /), even if it looks whole, so it can't repeat text. Use floor(...) around the division.")
+
+    def check_index(self, e):
+        idx = self.kind(e.index)
+        if idx == "$text":
+            who = self.describe(e.index)
+            self.problem(e, "List positions must be whole numbers, not text." + (f" Use number({who})." if who and self.typed(e.index) else ""))
+        elif self.is_decimal(e.index):
+            self.problem(e.index, "This is a decimal (it comes from /), even if it looks whole, so it can't be a position. Use floor(...) around the division.")
+        elif e.index.kind == "method" and not e.index.args and not self.method_exists(e.index.name):
+            self.problem(e, "Tuff has no slices like word[a:b]. Build the part you need with a loop.")
+        elif e.index.kind == "call" and e.index.fn.kind == "var" and e.index.fn.name == "random" and "random" not in self.user and e.obj.kind == "var":
+            args = e.index.args
+            ends_at_len = args and args[-1].kind == "call" and args[-1].fn.kind == "var" and args[-1].fn.name == "len" and len(args[-1].args) == 1 and \
+                args[-1].args[0].kind == "var" and args[-1].args[0].name == e.obj.name
+            if ends_at_len:
+                lst = e.obj.name
+                self.problem(e.index, f"random(...len({lst})) can give len({lst}), which is past the last position (positions go from 0 to len({lst}) - 1). Use {lst}[random(0, len({lst}) - 1)].")
+
+    def method_exists(self, name):
+        gui = gui_tables()
+        if gui is None:
+            return True
+        return name in SIMPLE_METHODS["text"] or name in SIMPLE_METHODS["list"] or name in SIMPLE_METHODS["line"] or \
+            any(name in m for m in gui["kinds"].values())
+
+    def check_call(self, e, scope):
+        fn, n = e.fn, len(e.args)
+        if fn.kind == "var":
+            name = fn.name
+            local = any(name in s.names for s in scope.chain() if s is not self.top)
+            if self.only_func(name) and not local:
+                want = len(self.funcs[name])
+                if n != want:
+                    self.problem(e, f"{name}() needs {want} input{'s' if want != 1 else ''}, but got {n}.")
+                elif e is not self.statement_call:
+                    self.check_gives_back(e, name)
+            elif name not in self.user and isinstance(self.builtins.get(name), Builtin):
+                if not accepts(self.builtins[name].fn, n):
+                    self.problem(e, f"{name}() got the wrong number of inputs ({n}).")
+                elif name == "random" and not 1 <= n <= 2:
+                    self.problem(e, "random() needs a range, like random(1, 6), or just the top, like random(6). For a decimal, use random(0, 100) / 100.")
+                elif name == "random" and any(a.kind == "const" and isinstance(a.value, float) and not a.value.is_integer() for a in e.args):
+                    self.problem(e, "random() needs whole numbers, like random(1, 6). For a decimal, divide: random(0, 100) / 100.")
+                elif name in self.NUMBER_INPUT_FNS:
+                    for a in e.args:
+                        if self.kind(a) == "$text":
+                            who = self.describe(a)
+                            tip = f" Use number({who})." if who and self.typed(a) else ""
+                            self.problem(a, f"{name}() needs a number, not text.{tip}")
+                            break
+            elif name not in self.builtins and not local:
+                kind = self.var_kind(name, frozenset())
+                if kind and not kind.startswith(("$module:", "$libfn:")) and kind not in ("$func", "$builtin"):
+                    self.problem(e, f"'{name}' is {self.what(kind)}, not a function, so it can't be called with ( ).")
+        elif fn.kind == "attr":
+            lib = self.kind(fn.obj)
+            if lib and lib.startswith("$module:"):
+                members = self.lib_members(lib[8:]) or {}
+                if fn.name in members and not accepts(members[fn.name], n):
+                    self.problem(e, f"{lib[8:]}.{fn.name}() got the wrong number of inputs ({n}).")
+
+    def check_gives_back(self, e, name):
+        """The answer of name() is used, but name() can't give one back."""
+        f = self.func_nodes[name]
+        if not f.body or any(x.kind == "return" for x in nodes(f.body)):
+            return
+        last = f.body[-1]
+        if last.kind in ("for", "while"):
+            self.problem(e, f"{name}() ends with a loop, so it gives back nil here. Add a return line at its end, like return total.")
+        elif last.kind == "expr" and last.expr.kind == "say":
+            self.problem(e, f"{name}() ends with say, so it gives back the shown line, not a value. Use return instead of say for the answer.")
+
+    def is_decimal(self, x):
+        """A / always gives a decimal, even when it looks whole (10 / 5 is 2.0)."""
+        if x.kind == "binop" and x.op == "/":
+            return True
+        if x.kind == "var" and x.name not in self.params and x.name not in self.loop_vars:
+            sets = self.assigned.get(x.name, [])
+            return len(sets) == 1 and sets[0].op == "=" and sets[0].value.kind == "binop" and sets[0].value.op == "/"
+        return False
+
+    def check_file_input(self, arg, what):
+        """A picture file named in the program: right kind of file, and there (when we know the folder)."""
+        if arg is None or arg.kind != "const" or not isinstance(arg.value, str):
+            return
+        path = arg.value
+        ok = (".png", ".gif") if what == "image" else (".png", ".gif", ".ico")
+        if not path.lower().endswith(ok):
+            msg = f"Couldn't open the image '{path}'. Put a .png or .gif file in your project folder." if what == "image" \
+                else f"Couldn't use '{path}' as an icon. Use a .png, .gif or .ico file."
+            self.problem(arg, msg)
+            return
+        base = self.base_dir
+        if base and not os.path.isabs(path) and not os.path.abspath(base).lower().startswith(os.path.abspath(tempfile.gettempdir()).lower()):
+            if not os.path.isfile(os.path.join(base, path)):
+                msg = f"Couldn't open the image '{path}'. Put a .png or .gif file in your project folder." if what == "image" \
+                    else f"Couldn't find the icon '{path}'. Put the image in your project folder."
+                self.problem(arg, msg)
+
+    def check_attr(self, e):
+        obj = self.kind(e.obj)
+        if obj is not None and obj.startswith("$module:"):
+            members = self.lib_members(obj[8:])
+            if members is not None and e.name not in members:
+                self.problem(e, f"{obj[8:]} doesn't have '{e.name}'. It has: {', '.join(members)}.")
+            return
+        if obj is not None:
+            self.problem(e, dot_help(self.what(obj), e.obj, e.name, obj.lstrip("$")))
+            return
+        # Unknown value: only a library can use '.', and libraries only have these.
+        gui = gui_tables()
+        members = {"window"} | set(self.lib_members("anims") or {})
+        if gui is not None and e.name not in members and e.obj.kind == "var" and e.obj.name not in self.imports:
+            self.problem(e, dot_help("not a library", e.obj, e.name))
+
+    def check_method(self, e):
+        obj = self.kind(e.obj)
+        name, n = e.name, len(e.args)
+        owner = e.obj.name if e.obj.kind == "var" else "thing"
+        if obj is None:
+            if not self.method_exists(name):
+                tip = PY_ONLY.get(name.lower())
+                self.problem(e, f"Nothing in Tuff has :{name}." + (f" {tip}" if tip else ""))
+            return
+        bare_fix = f"{owner}:{name} doesn't take an input, so what comes after it was read as one. Write {owner}:{name}() instead."
+        if obj.startswith("$libfn:"):
+            self.problem(e, f"'{owner}' is the function {obj[7:]} itself, not what it makes. Add brackets, like: {owner} = {obj[7:]}(...)")
+            return
+        simple = SIMPLE_METHODS.get(obj[1:]) if obj.startswith("$") else None
+        if simple:
+            kind = obj[1:]
+            if name not in simple:
+                what = "Text" if kind == "text" else a_kind(kind).capitalize()
+                tip = PY_ONLY.get(name.lower())
+                msg = method_help(what, name, simple, kind)
+                self.problem(e, msg + (f" {tip}" if tip and "instead" not in msg else ""))
+            elif name in ONE_INPUT and n != 1:
+                self.problem(e, f":{name} needs 1 input.")
+            elif name in self.ZERO_INPUT and e.bare:
+                self.problem(e, bare_fix)
+            elif name in self.ZERO_INPUT and n:
+                if name == "pop":
+                    self.problem(e, f"{owner}:pop doesn't take a position: it always takes the last item. To take another item, read it with {owner}[...] and then :remove it.")
+                else:
+                    self.problem(e, f"{owner}:{name} doesn't take an input. Write {owner}:{name}()")
+            return
+        if obj.startswith("$module:"):
+            lib = obj[8:]
+            first = next(iter(self.lib_members(lib) or {"window": None}))
+            self.problem(e, f"A library doesn't have any :methods. Library functions use a dot, like: {lib}.{first}(...)")
+            return
+        if obj in self.TYPE:
+            self.problem(e, f"{self.TYPE[obj].capitalize()} doesn't have any :methods.")
+            return
+        gui = gui_tables()
+        methods = gui["kinds"].get(obj) if gui else None
+        if methods is None:
+            return
+        if name == "page" and obj in ("row", "card", "page"):
+            self.problem(e, f"A {obj} doesn't have :page. Pages go straight on the window, like: home = app:page \"Home\"")
+        elif name not in methods:
+            options = [m for m in methods if m != "page" or obj == "window"]
+            self.problem(e, method_help(a_kind(obj).capitalize(), name, options))
+        elif not accepts(methods[name], n):
+            self.problem(e, bare_fix if e.bare and accepts(methods[name], 0) else f"{obj}:{name} got the wrong number of inputs ({n}).")
+        else:
+            self.check_values(e, obj)
+            self.check_handler(e)
+            self.check_maker_inputs(e, obj)
+            if name == "image" and obj in self.CONTAINERS or name == "set" and obj == "image":
+                self.check_file_input(e.args[0] if e.args else None, "image")
+            elif name == "icon" and obj == "window":
+                self.check_file_input(e.args[0] if e.args else None, "icon")
+            elif name == "set" and obj == "dropdown" and e.obj.kind == "var" and e.args:
+                self.check_dropdown_set(e)
+
+    def check_dropdown_set(self, e):
+        """box:set "Large" on a dropdown whose choices are written out and never changed."""
+        v = e.obj.name
+        sets = self.assigned.get(v, [])
+        arg = e.args[0]
+        if len(sets) != 1 or sets[0].op != "=" or v in self.params or v in self.loop_vars or arg.kind != "const":
+            return
+        made = sets[0].value
+        if not (made.kind == "method" and made.name == "dropdown" and made.args and made.args[0].kind == "list"
+                and all(x.kind == "const" for x in made.args[0].items)):
+            return
+        if any(x.kind == "method" and x.name == "options" and x.obj.kind == "var" and x.obj.name == v for x in nodes(self.program)):
+            return
+        choices = [to_text(x.value) for x in made.args[0].items]
+        if to_text(arg.value) not in choices:
+            self.problem(arg, f"'{to_text(arg.value)}' isn't one of this dropdown's choices: {', '.join(choices)}.")
+
+    def check_values(self, e, obj):
+        """Styles, colors and themes written as text must be ones the library knows."""
+        gui = gui_tables()
+        name = e.name
+        checks = []
+        if name == "button" and obj in self.CONTAINERS:
+            checks.append((2, "style"))
+        elif name == "style" and obj in ("button", "clock"):
+            checks.append((0, "style" if obj == "button" else "clock"))
+        elif name == "clock" and obj in self.CONTAINERS:
+            checks.append((0, "clock"))
+        elif name in ("accent", "color", "gradient"):
+            checks.append((0, "color"))  # tgui ignores a gradient's second color, so only the first is certain
+        elif name == "theme":
+            checks.append((0, "theme"))
+        for i, what in checks:
+            arg = e.args[i] if len(e.args) > i else None
+            if arg is None or arg.kind != "const" or not isinstance(arg.value, str):
+                continue
+            low = arg.value.lower()
+            if what == "style" and low not in gui["styles"]:
+                self.problem(arg, f"'{low}' isn't a button style. Use one of: {', '.join(gui['styles'])}.")
+            elif what == "clock" and low not in gui["clocks"]:
+                self.problem(arg, "A clock can be \"analog\" or \"digital\".")
+            elif what == "theme" and low not in gui["themes"]:
+                self.problem(arg, "The theme can be \"dark\" or \"light\".")
+            elif what == "color" and low.strip() not in gui["colors"] and not is_hex_color(low.strip()):
+                self.problem(arg, f"'{low.strip()}' isn't a color I know. Try {', '.join(gui['accents'])} or a hex code like \"#ff8800\".")
+
+    def check_maker_inputs(self, e, obj):
+        """Inputs to widget makers that can't be right: a function where a value goes, text where a list goes."""
+        if obj not in self.CONTAINERS:
+            return
+        kinds = [self.kind(a) for a in e.args]
+        name = e.name
+        if name in ("toggle", "checkbox") and len(kinds) > 1 and kinds[1] in ("$func", "$builtin"):
+            self.problem(e.args[1], f"The second input is whether it starts on (true or false). To run a function when it's switched, use the widget's :change, like: box = app:{name}(\"...\") then box:change fn")
+        elif name == "slider" and any(k in ("$func", "$builtin", "$text", "$list") for k in kinds):
+            bad = next(k for k in kinds if k in ("$func", "$builtin", "$text", "$list"))
+            self.problem(e, f"A slider needs a number, not {self.what(bad)}. To run a function when it moves, use its :change.")
+        elif name == "dropdown" and kinds and kinds[0] not in (None, "$list"):
+            self.problem(e.args[0], "A dropdown needs a list, like [\"One\", \"Two\"].")
+
+    def check_handler(self, e):
+        name = e.name
+        if name not in self.EVENT_GIVES:
+            return
+        pos = self.HANDLER_POS[name]
+        fn = e.args[pos] if len(e.args) > pos else None
+        if fn is None:
+            return
+        if fn.kind == "call" and fn.fn.kind == "var" and self.only_func(fn.fn.name) and not self.returns_function(fn.fn.name):
+            f = fn.fn.name
+            self.problem(fn, f"Pass the function's name without brackets: {f}, not {f}(). With brackets it runs once at the start instead of when it should.")
+            return
+        if fn.kind == "method":
+            target = f"{fn.obj.name}:{fn.name}" if fn.obj.kind == "var" else f":{fn.name}"
+            self.problem(fn, f"{target} runs right away here, while this line runs. Make a small function (func do_it(): {target}) and pass its name.")
+            return
+        if fn.kind == "const" and isinstance(fn.value, str):
+            self.problem(fn, f"This needs a function name, not text. Write {fn.value} without the quotes, and make it with func {fn.value}():")
+            return
+        if fn.kind != "var" or not self.only_func(fn.name):
+            return
+        gives, what = self.EVENT_GIVES[name]
+        want = len(self.funcs[fn.name])
+        if want > gives:
+            given = "doesn't give it any" if gives == 0 else "only gives it 1 (the new value)"
+            fix = f" Write it as: func {fn.name}():" if gives == 0 else ""
+            self.problem(fn, f"{fn.name}() needs {want} input{'s' if want != 1 else ''}, but {what} {given}.{fix}")
+        node = self.func_nodes.get(fn.name)
+        if node is not None and id(node) not in self.handlers_seen:
+            self.handlers_seen.add(id(node))
+            for x in nodes(node.body):
+                if x.kind == "call" and x.fn.kind == "var" and x.fn.name == "wait" and "wait" not in self.user:
+                    self.problem(x, "wait() freezes the window: nothing redraws or runs until it's over. To do something later, use app:after(seconds, fn).")
+                elif x.kind == "input":
+                    self.problem(x, "input reads from the console and freezes the window while it waits. In a window app, ask with app:ask \"...\" instead.")
+
+    def check_range_len(self, s):
+        """for i in range(len(items)) with items[i] inside: Tuff's range includes both ends, so i reaches len(items)."""
+        it = s.items
+        if not (it.kind == "call" and it.fn.kind == "var" and it.fn.name == "range" and "range" not in self.user and 1 <= len(it.args) <= 3):
+            return
+        ends = [it.args[0]] if len(it.args) == 1 else [it.args[0], it.args[1]]
+
+        def len_of(x):
+            if x.kind == "call" and x.fn.kind == "var" and x.fn.name == "len" and "len" not in self.user and len(x.args) == 1 and x.args[0].kind == "var":
+                return x.args[0].name
+            if x.kind == "var":
+                sets = self.assigned.get(x.name, [])
+                if len(sets) == 1 and sets[0].op == "=" and x.name not in self.params and x.name not in self.loop_vars:
+                    return len_of(sets[0].value)
+            return None
+
+        body = list(nodes(s.body))
+        indexed = {x.obj.name for x in body if x.kind == "index" and x.obj.kind == "var" and x.index.kind == "var" and x.index.name == s.name}
+        if not indexed:
+            return
+        compared = any(x.kind == "binop" and x.op in self.COMPARE and any(y.kind == "var" and y.name == s.name for y in (x.left, x.right)) for x in body)
+
+        def changed(lst, where):
+            return any(x.kind == "assign" and x.target.kind == "var" and x.target.name in (s.name, lst) for x in body) or \
+                any(x.kind == "method" and x.obj.kind == "var" and x.obj.name == lst and x.name in ("add", "remove", "pop") for x in where)
+
+        if compared:
+            return
+
+        def fixed_literal(lst):
+            """How long lst is, if it's a list written out once and never grown or shrunk."""
+            sets = self.assigned.get(lst, [])
+            if len(sets) == 1 and sets[0].op == "=" and sets[0].value.kind == "list" and lst not in self.params and lst not in self.loop_vars:
+                return len(sets[0].value.items)
+            return None
+
+        everything = list(nodes(self.program))
+        for lst in sorted(indexed):
+            if changed(lst, body):
+                continue
+            by_len = lst in [len_of(x) for x in ends]
+            size = None if changed(lst, everything) else fixed_literal(lst)
+            by_size = size is not None and any(x.kind == "const" and x.value == size for x in ends)
+            if by_len or by_size:
+                top = f"len({lst})" if by_len else str(size)
+                self.problem(s, f"Tuff's range includes both ends, so {s.name} reaches {top}, and {lst}[{s.name}] goes past the last item "
+                                f"(positions go from 0 to len({lst}) - 1). Use  for item in {lst}:  or  range(0, len({lst}) - 1).")
+                return
+            if any(x.kind == "neg" and x.value.kind == "const" and x.value.value == 1 for x in ends):
+                self.problem(s, f"Tuff's range includes both ends, so {s.name} reaches -1, and {lst}[-1] is the last item again. "
+                                f"Stop at 0 instead, like range(len({lst}) - 1, 0, -1).")
+                return
 
 
 # ---------------------------------------------------------------- entry point
@@ -1227,9 +2209,22 @@ def check_file(path):
     with open(path, encoding="utf-8-sig") as f:
         src = f.read()
     try:
-        Parser(tokenize(src)).program()
+        program = Parser(tokenize(src)).program()
     except TuffError as err:
         report(err, src)
+        return 1
+    try:
+        problems = Checker(program, os.path.dirname(os.path.abspath(path))).run()
+    except Exception:  # a bug in the checker must never block a correct program
+        problems = []
+    if problems:
+        line, col, msg = problems[0]
+        report(TuffError(msg, line, col), src)
+        for line, col, msg in problems[1:10]:
+            sys.stderr.write(f"Also on line {line}: {msg}\n")
+        if len(problems) > 10:
+            sys.stderr.write(f"...and {len(problems) - 10} more.\n")
+        sys.stderr.flush()
         return 1
     print("OK")
     return 0
