@@ -242,8 +242,10 @@ Keep answers short and friendly. When you give a program, give the whole program
 ${guideSections().core.map((s) => s.text).join('\n\n')}`;
 }
 
+// Only a ```tuff block is a program to check. Other blocks are an error message, what a program prints,
+// or another language, and the checker would wrongly say they're broken.
 function codeOf(text) {
-  const m = /```[ \t]*tuff[^\n]*\n([\s\S]*?)```/i.exec(text) || /```[^\n]*\n([\s\S]*?)```/.exec(text);
+  const m = /```[ \t]*tuff[^\n]*\n([\s\S]*?)```/i.exec(text);
   return m ? m[1] : null;
 }
 
