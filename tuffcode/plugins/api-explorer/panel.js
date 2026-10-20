@@ -13,11 +13,19 @@
     const OWN = ['res', 'data', 'headers', 'body', 'answer'];
     const TAKEN = new Set([...KEYWORDS, ...BUILTINS, ...LIBS, ...OWN]);
 
-    // A Tuff text literal. Tuff knows \n, \t, \" and \\; a line can't hold a real line break.
-    const str = (s) => '"' + String(s)
-      .replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-      .replace(/\r\n?/g, '\n').replace(/\n/g, '\\n').replace(/\t/g, '\\t')
-      .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '') + '"';
+    // A Tuff text literal. Tuff knows \n, \t, \" and \\; a line can't hold a real line break. Tuff also ends a
+    // line at U+0085, U+2028 and U+2029, so they're written as \n too. Other control characters have no way
+    // to be written, so they're left out. Either way the text changes: `changed` notes it, for exact().
+    const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f\u0085\u2028\u2029]/;
+    let changed = false;
+    const str = (s) => {
+      const raw = String(s);
+      if (HIDDEN.test(raw)) changed = true;
+      return '"' + raw
+        .replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+        .replace(/\r\n?|[\u0085\u2028\u2029]/g, '\n').replace(/\n/g, '\\n').replace(/\t/g, '\\t')
+        .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '') + '"';
+    };
 
     const clean = (raw) => String(raw).toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 28).replace(/_$/, '');
 
@@ -151,6 +159,14 @@
       return [...head, 'if res:ok:', ...body.map((l) => '    ' + l), 'else:', '    say "Something went wrong. The server answered " + res:status'].join('\n') + '\n';
     }
 
+    // False when the code for these options had to change a text (a name, the address, a header or the
+    // body) because it has a hidden character Tuff can't write. Then the code may not reach the same value.
+    function exact(opts) {
+      changed = false;
+      code(opts);
+      return !changed;
+    }
+
     // A name for a saved program: the value's name, or the website's.
     function fileBase({ req, path = [] }) {
       if (path.length) return valueName(path, new Set());
@@ -159,7 +175,7 @@
       return ident(host || 'answer', new Set());
     }
 
-    return { str, ident, reach, code, crumbs, fileBase, TAKEN };
+    return { str, ident, reach, code, exact, crumbs, fileBase, TAKEN };
   })();
 
   // ---------------------------------------------------------------- errors and answers, in plain words
@@ -232,6 +248,8 @@
         else if (/^[^\s/?#:@]+\.[a-z]{2,}(:\d+)?([/?#]|$)/i.test(u)) u = `https://${u}`;
       }
       if (/\s/.test(u)) return { error: { kind: 'address', title: "That isn't a web address", text: "A web address can't have spaces in it. Write a space as %20." } };
+      // Pasted text can bring a control character along, which can't be seen and which Tuff can't write.
+      if (/[\u0000-\u001f\u007f\u0085]/.test(u)) return { error: { kind: 'address', title: "That isn't a web address", text: 'This address has a hidden character in it. Type it again by hand.' } };
       let parsed = null;
       try { parsed = new URL(u); } catch { /* below */ }
       if (!parsed || !/^https?:$/.test(parsed.protocol) || !parsed.hostname) {
@@ -343,7 +361,18 @@
     t.command('open', 'API Explorer: Open', () => panel.toggle());
 
     // ---------------------------------------------------------------- events
+    // The IDE catches shortcut keys on the document before they reach this panel, even while you type in
+    // one of its boxes: Ctrl+Y would delete a line of the open code file, Ctrl+D copy one, Ctrl+Shift+Z redo
+    // there. So while a box here has focus, those keys stay with the box. This listens on the window, which
+    // hears keys before the document does.
+    function keepKeys(e) {
+      const el = e.target;
+      if (!root?.contains(el) || !el.matches?.('input, textarea')) return;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[zydr]$/i.test(e.key)) e.stopPropagation();
+    }
+
     function wire() {
+      window.addEventListener('keydown', keepKeys, true);
       $('.ax-bar').addEventListener('submit', (e) => { e.preventDefault(); send(); });
       $('.ax-method').addEventListener('change', (e) => setMethod(e.target.value));
       $('.ax-url').addEventListener('input', (e) => { S.url = e.target.value; });
@@ -559,10 +588,14 @@
       renderDrawer();
     }
 
-    function currentCode() {
+    function codeOpts() {
       const a = S.answer;
-      if (!a || !S.sel) return '';
-      return Tuff.code({ req: a.req, kind: a.isJson ? 'json' : 'text', path: S.sel.path, value: S.sel.value, whole: S.whole });
+      return a && S.sel ? { req: a.req, kind: a.isJson ? 'json' : 'text', path: S.sel.path, value: S.sel.value, whole: S.whole } : null;
+    }
+
+    function currentCode() {
+      const o = codeOpts();
+      return o ? Tuff.code(o) : '';
     }
 
     async function saveProgram(code) {
@@ -857,6 +890,7 @@
         <div class="ax-seg ax-mode"><button type="button" data-m="short" class="${S.whole ? '' : 'on'}">Short</button><button type="button" data-m="whole" class="${S.whole ? 'on' : ''}">Whole program</button></div>
         <pre class="ax-pre"><code>${codeLines(code)}</code></pre>
         ${listed ? '<div class="ax-note ax-tip">Tuff lists start at 0, so [0] is the first item and [1] the second.</div>' : ''}
+        ${Tuff.exact(codeOpts()) ? '' : '<div class="ax-note ax-tip ax-inexact">Some text here has a hidden character that Tuff can\'t write, so the code changes it. It might not work quite the same.</div>'}
         <div class="ax-dbtns">
           <button type="button" class="btn sm" data-a="copy">Copy</button>
           <button type="button" class="btn sm primary" data-a="insert">Insert</button>
@@ -864,6 +898,9 @@
         </div>`;
     }
 
-    return () => clearInterval(ticker);
+    return () => {
+      clearInterval(ticker);
+      window.removeEventListener('keydown', keepKeys, true);
+    };
   });
 })();
