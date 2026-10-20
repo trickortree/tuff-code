@@ -2706,6 +2706,15 @@ def setup_streams():
         sys.stderr.reconfigure(encoding="utf-8", newline="\n")
         sys.stdin.reconfigure(encoding="utf-8")
     else:
+        # Piped (an agent's tuff_run, a test, `> out.txt`): UTF-8 both ways, as in the IDE. The built runtime
+        # ignores PYTHONIOENCODING, so on Windows a pipe would otherwise get the old code page and "°" or "…"
+        # would come out as "�". A real terminal keeps its own encoding.
+        for stream in (sys.stdout, sys.stderr, sys.stdin):
+            try:
+                if stream is not None and not stream.isatty():
+                    stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, OSError, ValueError):  # a closed or unusual stream: leave it as it is
+                pass
         sys.stdout.reconfigure(errors="replace")
         if os.name == "nt":
             os.system("")

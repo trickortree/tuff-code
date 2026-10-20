@@ -18,6 +18,8 @@ const KEYS = {
   End: { key: 'End', code: 'End', keyCode: 35 },
   Home: { key: 'Home', code: 'Home', keyCode: 36 },
 };
+// The editing command each key does in a Mac text box (see key() below).
+const MAC_EDITING = { Backspace: ['deleteBackward'], Delete: ['deleteForward'] };
 
 // The IDE has loaded: folder open, editor and plugins ready, intro and boot fade done. Clicks through
 // the intro if it plays (it does once per version, and the scratch settings don't say which one was seen).
@@ -117,7 +119,12 @@ export async function connect(app, { timeout = 90000 } = {}) {
     },
     async key(name, mods = 0) {
       const k = KEYS[name] || { key: name, code: 'Key' + name.toUpperCase(), keyCode: name.toUpperCase().charCodeAt(0) };
-      await send('Input.dispatchKeyEvent', { type: k.text ? 'keyDown' : 'rawKeyDown', modifiers: mods, windowsVirtualKeyCode: k.keyCode, key: k.key, code: k.code, text: mods ? undefined : k.text });
+      // On a Mac, Chromium leaves editing in text boxes (select all, Backspace, Delete) to macOS, which never sees
+      // these made-up key presses. Naming the editing command makes them work there as they do on Windows.
+      // (Modifiers: 2 is Ctrl, 4 is Cmd.)
+      const commands = process.platform !== 'darwin' ? undefined
+        : name.toLowerCase() === 'a' && mods & 6 ? ['selectAll'] : !mods ? MAC_EDITING[name] : undefined;
+      await send('Input.dispatchKeyEvent', { type: k.text ? 'keyDown' : 'rawKeyDown', modifiers: mods, windowsVirtualKeyCode: k.keyCode, key: k.key, code: k.code, text: mods ? undefined : k.text, commands });
       await send('Input.dispatchKeyEvent', { type: 'keyUp', modifiers: mods, windowsVirtualKeyCode: k.keyCode, key: k.key, code: k.code });
       await sleep(60);
     },

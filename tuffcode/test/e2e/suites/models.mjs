@@ -15,6 +15,7 @@ export default async (t, ctx) => {
   };
   const choose = async (o, v) => {
     await ev(`${dd(o)}.querySelector('.ta-dd-btn').click()`);
+    await waitFor(`!!${dd(o)}.querySelector('.ta-dd-opt[data-v="${v}"]')`, 10000); // a slow machine fills the list later
     await ev(`${dd(o)}.querySelector('.ta-dd-opt[data-v="${v}"]').click()`);
   };
   const shown = (o) => ev(`${dd(o)}.querySelector('.ta-dd-v').textContent`);

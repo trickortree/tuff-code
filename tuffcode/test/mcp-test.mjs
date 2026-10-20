@@ -43,6 +43,9 @@ const bad = await tool('tuff_check', { code: 'if x is 1\n    say 1\n' });
 check('tuff_check explains a mistake with its line', bad.isError && /line 1/i.test(bad.content[0].text) && /':' or 'then'/.test(bad.content[0].text), bad);
 const run = await tool('tuff_run', { code: 'name = input "Name? "\nsay "Hi " + name\nfor i in range(1, 3):\n    say i\n', input: 'Sam' });
 check('tuff_run runs with input and returns output', /Hi Sam/.test(run.content[0].text) && /1\n2\n3/.test(run.content[0].text) && /Exit code 0/.test(run.content[0].text), run);
+// The built runtime ignores PYTHONIOENCODING, so this fails there if Tuff leaves a pipe on Windows' old code page.
+const uni = (await tool('tuff_run', { code: 'say "21.5 °C … \u{1F600}"\nname = input "Name? "\nsay "Hi " + name\n', input: 'Zoë' })).content[0].text;
+check('tuff_run keeps text like °, …, emoji and a typed Zoë', uni.includes('21.5 °C … \u{1F600}') && uni.includes('Hi Zoë') && !uni.includes('�'), uni);
 const scr = (await tool('tuff_run', { code: 'line = say "Loading"\nline:rewrite("Done!")\nsay "next"\nsay "gone"\nclear(1)\nname = input "Name? "\nsay "Hi " + name\n', input: 'Sam' })).content[0].text;
 check('tuff_run shows the final screen: rewritten and cleared lines, answers after questions', scr.startsWith('Done!\nnext\nName? Sam\nHi Sam\n'), scr);
 const short = (await tool('tuff_run', { code: 'a = input "A? "\nb = input "B? "\n', input: 'x' })).content[0].text;

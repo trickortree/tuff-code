@@ -282,7 +282,8 @@ export default async (t, ctx) => {
   // ---------------------------------------------------------------- 5. the list of saved sounds
   fs.writeFileSync(path.join(sounds, 'plain_beep.wav'), plainWav());
   await click(inPanel('[data-a="refresh"]'));
-  await waitFor(`!!${P}.querySelector('.sl-item[data-rel="sounds/plain_beep.wav"]') && !!${P}.querySelector('.sl-item[data-rel="sounds/e2e_coin.wav"] [data-a="edit"]')`, 8000);
+  // Wait until every Sound Lab sound has its Edit button: on a slow machine the last ones show up later.
+  await waitFor(`!!${P}.querySelector('.sl-item[data-rel="sounds/plain_beep.wav"]') && [...${P}.querySelectorAll('.sl-item')].filter((x) => x.dataset.rel.startsWith('sounds/e2e_')).every((x) => !!x.querySelector('[data-a="edit"]'))`, 15000);
   const listed = await ev(`[...${P}.querySelectorAll('.sl-item')].map(x => ({ rel: x.dataset.rel, edit: !!x.querySelector('[data-a="edit"]'), play: !!x.querySelector('[data-a="playfile"]'), use: !!x.querySelector('[data-a="use"]') }))`);
   const wanted = [...PRESETS.map((k) => `sounds/e2e_${k}.wav`), 'sounds/e2e_base.wav', 'sounds/e2e_pitch.wav', 'sounds/plain_beep.wav'];
   check('"Sounds in this project" lists every saved sound with Play and Use buttons', wanted.every((r) => listed.some((x) => x.rel === r && x.play && x.use)), listed);
