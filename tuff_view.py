@@ -135,6 +135,12 @@ def _stuck_threads(timeout):
     return pywebview_threads()
 
 
+def _no_pywebview():
+    """What to do when pywebview isn't installed, with the command for this computer (a Mac has python3, not py)."""
+    python = "py" if sys.platform == "win32" else "python3"
+    return f"App and game windows need pywebview. Install it with:  {python} -m pip install pywebview"
+
+
 def _prepare_process(title):
     if sys.platform != "win32":
         return
@@ -432,7 +438,7 @@ class View:
         try:
             import webview
         except ImportError:
-            self._fail(ViewError("Windows need pywebview. Install it with:  py -m pip install pywebview"))
+            self._fail(ViewError(_no_pywebview()))
             return
         if sys.platform == "win32" and not webview.settings.get("WEBVIEW2_RUNTIME_PATH"):
             self.info["webview2"] = _webview2_version()

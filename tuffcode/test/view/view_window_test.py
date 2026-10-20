@@ -5,6 +5,7 @@ Runs itself as a child process once per case and looks at the real window with W
   - ico:      a .ico icon                             -> the icon is ours;
   - built:    TUFF_APP_ICON (what a built app sets)   -> its windows use that icon by default;
   - missing:  as if WebView2 weren't installed        -> a clear error, no window, exit 1;
+  - nopywebview: as if pywebview weren't installed    -> the install command for this computer, no window, exit 1;
   - outside:  View() without run()                    -> a clear error.
 
     py -3 tuffcode/test/view/view_window_test.py [--out result.json]
@@ -108,6 +109,8 @@ def child(case, icon_path):
     def main():
         if case == "missing":
             tuff_view._webview2_version = lambda: None
+        if case == "nopywebview":
+            sys.modules["webview"] = None  # `import webview` fails, as in a Python without pywebview
         kw = {}
         if case == "options":
             kw = {"frameless": True, "resizable": False, "icon": icon_path}
@@ -149,7 +152,7 @@ def parent():
         f.write(ico(48, COLORS["ico"]))
     with open(icons["built"], "wb") as f:
         f.write(png(128, COLORS["built"]))
-    for case in ("options", "ico", "built", "missing"):
+    for case in ("options", "ico", "built", "missing", "nopywebview"):
         env = dict(os.environ)
         if case == "built":
             env["TUFF_APP_ICON"] = icons["built"]
@@ -163,6 +166,11 @@ def parent():
         if case == "missing":
             checks.check(p.returncode == 1 and "WebView2" in r.get("error", "") and not r.get("windows_left"),
                          f"missing: no WebView2 gives a clear error and no window ({r.get('error', '')[:70]}...)")
+            continue
+        if case == "nopywebview":
+            checks.check(p.returncode == 1 and r.get("error", "").startswith("App and game windows need pywebview")
+                         and "py -m pip install pywebview" in r.get("error", "") and not r.get("windows_left"),
+                         f"no pywebview: the error says how to install it here, and no window ({r.get('error')})")
             continue
         before, after = r.get("before") or {}, r.get("after") or {}
         icon = before.get("icon")
@@ -185,6 +193,14 @@ def parent():
     except tuff_view.ViewError as err:
         outside = str(err)
     checks.check(outside and "run(" in outside, f"outside: View() without run() explains itself ({outside})")
+    real = sys.platform
+    try:
+        sys.platform = "darwin"
+        mac = tuff_view._no_pywebview()
+    finally:
+        sys.platform = real
+    checks.check("python3 -m pip install pywebview" in mac and " py -m" not in mac,
+                 f"no pywebview on a Mac: the command is python3, which a Mac has ({mac})")
     shutil.rmtree(folder, ignore_errors=True)
     return finish(checks, numbers)
 
