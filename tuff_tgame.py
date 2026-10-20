@@ -1502,7 +1502,8 @@ class World3D(Game):
                 return nums
             if not three and len(nums) == 2:
                 return nums
-            raise self.rt.error(f":{what}'s size is one number, or {'[width, height, depth]' if three else '[width, height]'}.")
+            shape = "[width, height, depth]" if three else "[width, depth]" if what == "plane" else "[width, height]"
+            raise self.rt.error(f":{what}'s size is one number, or {shape}.")
         n = self.num(v, f":{what}")
         return [n, n, n] if three else [n, n]
 
