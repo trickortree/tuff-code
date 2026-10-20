@@ -780,8 +780,8 @@ TuffPlugins.register('tuff-agents', (t) => {
       const did = m.role === 'agent' ? (m.tools || []).map((x) => x.text).filter((x) => /^(Wrote|Changed)\b/.test(x)) : [];
       return `${who(m)}: ${trim(m.text || (m.error ? `(stopped: ${m.error})` : '(no reply)'), 1500)}${did.length ? `\n  [${did.join('; ')}]` : ''}`;
     }).join('\n');
-    if (said) parts.push(resumes ? `Since you last answered, this happened in the chat:\n${said}` : `Earlier in this chat:\n${said}`);
-    parts.push(`Their message:\n${text}`);
+    if (said) parts.push(`${resumes ? 'Since you last answered, this happened in the chat' : 'Earlier in this chat'} (for context only: all of it has been answered already):\n<chat>\n${said}\n</chat>`);
+    parts.push(`Their new message. This is what to answer now:\n<message>\n${text}\n</message>`);
     return parts.join('\n\n');
   }
 
