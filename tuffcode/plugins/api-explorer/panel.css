@@ -149,6 +149,7 @@
 .ax-pre .n { color: var(--yellow); }
 .ax-pre .f, .ax-pre .l { color: var(--text-dim); }
 .ax-tip { margin: -2px 2px 0; }
+.ax-inexact { color: var(--yellow); }
 .ax-dbtns { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* a narrow sidebar */

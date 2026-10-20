@@ -22,6 +22,9 @@ const ODD = {
   big: Array.from({ length: 250 }, (_, i) => i * 2),
 };
 const TEXT = 'hello from the test server\nsecond line';
+// A name with a line separator in it (U+2028): Tuff ends a line there, and has no way to write one.
+const LS = String.fromCharCode(0x2028);
+const HIDDEN = { [`a${LS}b`]: 1, plain: 2 };
 
 export default async (t, ctx) => {
   const check = t.check;
@@ -44,6 +47,7 @@ export default async (t, ctx) => {
       if (u === '/facts') return json(FACTS);
       if (u === '/people') return json(PEOPLE);
       if (u === '/odd') return json(ODD);
+      if (u === '/hidden') return json(HIDDEN);
       if (u === '/text') return send(200, 'text/plain; charset=utf-8', TEXT);
       if (u === '/echo') {
         let parsed = body;
@@ -300,6 +304,16 @@ export default async (t, ctx) => {
     await t.key('Enter');
     check('Arrow keys move through the tree and Enter picks a row', (await ev(`document.querySelector('.ax-path').textContent`)) === 'post code', await ev(`document.querySelector('.ax-path').textContent`));
 
+    // A name with a hidden line separator: Tuff can't write it, so the code changes it (and still passes
+    // --check), and the drawer says so. A plain name next to it gets no such note.
+    await sendTo(`${BASE}/hidden`);
+    await pick([`a${LS}b`]);
+    const hid = { code: await shownCode(), note: await ev(`document.querySelector('.ax-inexact')?.textContent || ''`) };
+    const gh = await saveAndRun(hid.code);
+    await pick(['plain']);
+    const plainNote = await ev(`!!document.querySelector('.ax-inexact')`);
+    check('A name with a hidden character: the code passes --check and the drawer says Tuff had to change it', gh.check === 'OK' && !hid.code.includes(LS) && /hidden character/.test(hid.note) && !plainNote, { hid, check: gh.check, plainNote });
+
     // ---------------------------------------------------------------- 6. a text answer; Raw and Headers
     await sendTo(`${BASE}/text`);
     const txt = await ev(`({ subs: [...document.querySelectorAll('.ax-sub button')].map((b) => b.textContent.trim()), pre: document.querySelector('.ax-raw')?.textContent })`);
@@ -539,6 +553,28 @@ export default async (t, ctx) => {
     for (let i = 0; i < jobs.length; i += 6) await Promise.all(jobs.slice(i, i + 6).map((j, k) => one(j, i + k)));
     const sweepBad = sweep.filter((s) => !s.ok);
     check(`Whole programs for all ${sweep.length} values in four answers pass --check and say the right value`, sweep.length > 30 && sweepBad.length === 0, sweepBad.slice(0, 2));
+
+    // Characters Tuff can't write, in a name, a JSON body, a text body or a header: every program still
+    // passes --check (Tuff ends a line at U+0085, U+2028 and U+2029), and exact() says the code had to change them.
+    const ch = (n) => String.fromCharCode(n);
+    const get = { method: 'GET', url: `${BASE}/odd`, headers: [] };
+    const odd2 = [
+      { req: get, path: [{ k: `a${ch(0x2028)}b` }] },
+      { req: get, path: [{ k: `a${ch(0x2029)}b` }] },
+      { req: get, path: [{ k: `a${ch(0x85)}b` }] },
+      { req: get, path: [{ k: `a${ch(1)}b` }] },
+      { req: { method: 'POST', url: `${BASE}/echo`, headers: [], body: '{"v": "a\\u2028b"}', bodyType: 'json' }, path: [{ k: 'v' }] },
+      { req: { method: 'POST', url: `${BASE}/echo`, headers: [['X-Test', `h${ch(0x2028)}v`]], body: `a${ch(0x85)}b`, bodyType: 'text' }, path: [{ k: 'body' }] },
+    ].map((o, i) => {
+      const opts = { ...o, kind: 'json', value: 1, whole: true };
+      const file = proj(`hidden_${i}.tuf`);
+      fs.writeFileSync(file, G.code(opts));
+      return { i, check: checkOk(file), exact: G.exact(opts) };
+    });
+    const plainExact = G.exact({ req: get, kind: 'json', path: [{ k: 'post code' }], value: 1, whole: true });
+    check('Hidden characters Tuff can\'t write: the code still passes --check, and exact() says it was changed', odd2.every((r) => r.check === 'OK' && !r.exact) && plainExact, { odd2, plainExact });
+    const hiddenUrls = [ch(0x85), ch(1)].map((c) => G.fixUrl(`${BASE}/a${c}b`).error?.text || 'sent');
+    check('An address with a hidden character in it isn\'t sent, and says why', hiddenUrls.every((x) => /hidden character/.test(x)) && G.fixUrl(`${BASE}/ab`).url === `${BASE}/ab`, hiddenUrls);
   } finally {
     t.info(`screenshots: ${shots.join(', ')}`);
     server.closeAllConnections?.();
