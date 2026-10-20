@@ -352,6 +352,7 @@ class Game:
         self.wheel = 0.0
         self.locked = False
         self.fake_lock = False
+        self.blurs = 0
         self.sound_count = 0
         self.base = getattr(getattr(self.rt, "interp", None), "base_dir", None) or os.getcwd()
         self.autopilot = Autopilot.load(self)
@@ -531,8 +532,9 @@ class Game:
                 self.just.add(name)
             elif t == "mouseup":
                 self.down.discard(MOUSE_BUTTONS.get(e.get("button", 0), "mouse"))
-            elif t == "blur":
+            elif t == "blur":  # the window lost focus: keys held now come up without telling us
                 self.down.clear()
+                self.blurs += 1
             elif t == "click":
                 self.clicked_at(e)
             elif t == "wheel":
@@ -2680,6 +2682,7 @@ class Autopilot:
         except Exception:
             pass
         out["time"] = g.time()
+        out["blurs"] = g.blurs  # times the window lost focus (that lets go of held keys)
         out["paused"] = g.is_paused
         out["locked"] = g.locked
         out["things"] = len([t for t in g.things if t.alive])
