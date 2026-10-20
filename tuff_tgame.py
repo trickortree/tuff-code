@@ -768,7 +768,7 @@ class Layer:
     def circle(self, x=MISSING, y=MISSING, radius=MISSING, color=MISSING):
         g = self.game
         x, y, (radius, color) = self.place([x, y, radius, color], (20, "white"), "circle")
-        return self.make("circle", x, y, {"r": g.num(radius, ":circle"), "color": g.color(color)}).native
+        return self.make("circle", x, y, {"r": max(0, g.num(radius, ":circle")), "color": g.color(color)}).native
 
     def line(self, x1=0, y1=0, x2=100, y2=100, color="white"):
         g = self.game
@@ -1159,8 +1159,8 @@ class Sprite:
             self.w, self.h = a, (self.num(b, ":size") if b is not MISSING else a)
             self.send(w=self.w, h=self.h)
         elif self.shape == "circle":
-            self.r = a
-            self.send(r=a)
+            self.r = max(0, a)  # shrunk below 0 it's gone: nothing to see, click or touch
+            self.send(r=self.r)
         elif self.shape == "text":
             self.size_ = a
             self.send(size=a)

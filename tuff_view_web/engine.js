@@ -351,7 +351,7 @@ function textSize(ctx, s) {
 function shapeSize(ctx, s) {
   const p = s.p;
   switch (s.type) {
-    case 'circle': return [p.r * 2, p.r * 2];
+    case 'circle': return [Math.max(0, p.r) * 2, Math.max(0, p.r) * 2];
     case 'text': return [textSize(ctx, s), p.size];
     case 'image': {
       const img = images.get(p.src);
@@ -396,7 +396,15 @@ function draw2d(n) {
   if (n.bg) { ctx.fillStyle = n.bg; ctx.fillRect(0, 0, el.width, el.height); } else ctx.clearRect(0, 0, el.width, el.height);
   ctx.imageSmoothingEnabled = n.smooth;
   const [k, ox, oy] = view2d(n);
-  for (const s of n.shapes) if (s.p.visible && !s.dead) drawShape(ctx, s, k, ox, oy);
+  for (const s of n.shapes) {
+    if (!s.p.visible || s.dead) continue;
+    // One shape that can't be drawn mustn't hide the ones after it. Its error is reported once, not every frame.
+    try {
+      drawShape(ctx, s, k, ox, oy);
+    } catch (err) {
+      if (!s.failed) { s.failed = true; report(err, `drawing object ${s.id}`); }
+    }
+  }
 }
 
 function drawShape(ctx, s, k, ox, oy) {
@@ -414,7 +422,7 @@ function drawShape(ctx, s, k, ox, oy) {
       const y = -p.ay * p.h;
       if (p.radius) {
         ctx.beginPath();
-        ctx.roundRect(x, y, p.w, p.h, p.radius);
+        ctx.roundRect(x, y, p.w, p.h, Math.max(0, p.radius));
         fillStroke(ctx, p);
       } else {
         if (p.color) { ctx.fillStyle = p.color; ctx.fillRect(x, y, p.w, p.h); }
@@ -422,14 +430,16 @@ function drawShape(ctx, s, k, ox, oy) {
       }
       break;
     }
-    case 'circle':
+    case 'circle': {
+      const r = Math.max(0, p.r);  // a circle shrunk below 0 draws nothing (the canvas throws on a negative radius)
       ctx.beginPath();
-      ctx.arc((0.5 - p.ax) * 2 * p.r, (0.5 - p.ay) * 2 * p.r, p.r, 0, TAU);
+      ctx.arc((0.5 - p.ax) * 2 * r, (0.5 - p.ay) * 2 * r, r, 0, TAU);
       fillStroke(ctx, p);
       break;
+    }
     case 'ellipse':
       ctx.beginPath();
-      ctx.ellipse((0.5 - p.ax) * p.w, (0.5 - p.ay) * p.h, p.w / 2, p.h / 2, 0, 0, TAU);
+      ctx.ellipse((0.5 - p.ax) * p.w, (0.5 - p.ay) * p.h, Math.max(0, p.w / 2), Math.max(0, p.h / 2), 0, 0, TAU);
       fillStroke(ctx, p);
       break;
     case 'line':

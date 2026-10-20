@@ -100,6 +100,44 @@ def run_phase(view, sprites, seconds, fps):
     }
 
 
+PIXEL_JS = """requestAnimationFrame(() => requestAnimationFrame(() => {
+  const c = tv.node(%d).el, f = Math.min(c.width / 200, c.height / 100);
+  const x = Math.round((c.width - 200 * f) / 2 + 150 * f), y = Math.round((c.height - 100 * f) / 2 + 50 * f);
+  tv.emit('pixel', { rgb: [...c.getContext('2d').getImageData(x, y, 1, 1).data].slice(0, 3) });
+}));"""
+
+
+def edge_cases(view, checks):
+    """A circle with a negative radius mustn't stop the shapes after it from drawing, and shapes made and
+    removed all the time mustn't pile up in the engine's bookkeeping."""
+    errors = []
+    view.on("error", lambda e: errors.append(e.get("message")))
+    top = view.canvas(bg="#000000", fit=[200, 100])
+    view.shape(top, "circle", x=50, y=50, r=-5, color="#ff0000")  # a ball that shrank below 0
+    view.shape(top, "rect", x=150, y=50, w=40, h=40, color="#00ff00")  # drawn after it
+    probe = {}
+    view.on("pixel", lambda e: probe.update(e))
+    for _ in range(5):
+        view.frame()
+    view.js(PIXEL_JS % int(top))
+    deadline = time.perf_counter() + 3
+    while "rgb" not in probe and time.perf_counter() < deadline:
+        view.frame()
+    checks.check(probe.get("rgb") == [0, 255, 0] and not errors,
+                 f"a circle with a negative radius draws nothing, and the box after it is still drawn ({probe.get('rgb')}, errors {errors})")
+    kids = lambda: sum(len(k) for k in view._kids.values())  # noqa: E731
+    before = (kids(), len(view._parents))
+    for _ in range(20):
+        made = [view.shape(top, "rect", x=10, y=10, w=2, h=2) for _ in range(50)]
+        view.frame()
+        for n in made:
+            n.remove()
+    view.frame()
+    after = (kids(), len(view._parents))
+    checks.check(after == before, f"1,000 shapes made and removed leave nothing behind in Python (ids kept: {before} -> {after})")
+    top.remove()
+
+
 def main():
     checks = Checks("2d")
     seconds = float(arg("--seconds", 10))
@@ -127,6 +165,7 @@ def main():
             sweep.append(res)
             for s in more:
                 s[0].remove()
+    edge_cases(view, checks)
     view.close()
 
     checks.check(idle is not None and display_fps > 50, f"the page draws at the display's rate ({display_fps:.0f} fps)")
