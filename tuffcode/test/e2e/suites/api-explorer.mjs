@@ -387,6 +387,13 @@ export default async (t, ctx) => {
     await sendTo('ftp://example.com/file');
     const e3 = await errorShown();
     check('Not a web address: says what one looks like, and sends nothing', e3 && e3.title === "That isn't a web address" && /https:\/\//.test(e3.text) && !e3.retry && seen.length === nFtp, e3);
+    await sendTo(`${BASE}/two words`);
+    const e5 = await errorShown();
+    await fill(q('.ax-url'), ' ');
+    await click(q('.ax-send'), 'Send');
+    await sleep(200);
+    const e6 = await errorShown();
+    check('A space in the address, or no address at all, is explained and nothing is sent', e5?.text === "A web address can't have spaces in it. Write a space as %20." && e6?.title === 'Type a web address first' && seen.length === nFtp, { e5, e6 });
     await sendTo(`${BASE.replace('http://', '')}/text`);
     check('An address without http:// gets it added, and works', (await ev(`document.querySelector('.ax-url').value`)) === `${BASE}/text` && (await status())?.text === '200 OK', await ev(`document.querySelector('.ax-url').value`));
     await fill(q('.ax-url'), `${BASE}/slow`);

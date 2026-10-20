@@ -231,9 +231,10 @@
         if (/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?([/?#]|$)/i.test(u)) u = `http://${u}`;
         else if (/^[^\s/?#:@]+\.[a-z]{2,}(:\d+)?([/?#]|$)/i.test(u)) u = `https://${u}`;
       }
+      if (/\s/.test(u)) return { error: { kind: 'address', title: "That isn't a web address", text: "A web address can't have spaces in it. Write a space as %20." } };
       let parsed = null;
       try { parsed = new URL(u); } catch { /* below */ }
-      if (!parsed || !/^https?:$/.test(parsed.protocol) || !parsed.hostname || /\s/.test(u)) {
+      if (!parsed || !/^https?:$/.test(parsed.protocol) || !parsed.hostname) {
         return { error: { kind: 'address', title: "That isn't a web address", text: 'A web address starts with http:// or https://, like https://catfact.ninja/fact.' } };
       }
       return { url: u };
@@ -365,10 +366,7 @@
       $('.ax-hdrs').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
       $('.ax-btype').addEventListener('click', (e) => { const bt = e.target.closest('button')?.dataset.bt; if (bt) { S.bodyType = bt; renderEditors(); } });
       $('.ax-body').addEventListener('input', (e) => { S.body = e.target.value; $('.ax-bodyerr').classList.add('hidden'); });
-      $('.ax-body').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
-        if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); document.execCommand('insertText', false, '  '); }
-      });
+      $('.ax-body').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } });
       $('.ax-tabs').addEventListener('click', (e) => { const v = e.target.closest('button')?.dataset.v; if (v) { S.view = v; renderTabs(); renderMain(); } });
       $('.ax-main').addEventListener('click', onMainClick);
       $('.ax-main').addEventListener('keydown', onTreeKey);
