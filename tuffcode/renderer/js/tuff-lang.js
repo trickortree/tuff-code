@@ -267,7 +267,7 @@ window.TUFF_DOCS = {
     gradient: 'atgui: the accent and its partner color (gradient buttons, progress bars).',
   };
   for (const [name, text] of Object.entries(also)) if (docs[name] && text) docs[name] = [docs[name][0], `${docs[name][1]} ${text}`];
-  Object.assign(docs, {
+  const own = {
     textarea: ['app:textarea "Message"', 'atgui: a text box for several lines that grows as you type. With :enter, Enter runs the function and Shift+Enter starts a new line.'],
     switch: ['app:switch("Dark mode", true)', 'atgui: an on/off switch (tgui calls it toggle). Read it with :value.'],
     list: ['items = app:list(["Inbox", "Sent"])', 'atgui: a list to pick from. items:add("x") gives back the item (:icon, :small, :badge); items:change fn gets the picked item\'s text.'],
@@ -315,7 +315,14 @@ window.TUFF_DOCS = {
     to_bottom: ['msgs:to_bottom', 'atgui: scrolls a scroll() to the end.'],
     to_top: ['msgs:to_top', 'atgui: scrolls a scroll() to the start.'],
     select: ['item:select', 'atgui: picks this list item (or table row), without running :change.'],
-  });
+  };
+  // A name tgame has too (align, clicked, grow, width...) keeps both meanings. Its doc then starts with
+  // neither library's name, so completions offer it in atgui and tgame files alike.
+  for (const [name, [sig, text]] of Object.entries(own)) {
+    docs[name] = docs[name] && /^tgame\b/.test(docs[name][1])
+      ? [docs[name][0], `In tgame: ${docs[name][1].replace(/^tgame( \([^)]*\))?:\s*/, '')} In atgui: ${text.replace(/^atgui:\s*/, '')}`]
+      : [sig, text];
+  }
 })();
 
 const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average'];
