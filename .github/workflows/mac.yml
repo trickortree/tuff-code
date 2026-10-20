@@ -1,6 +1,6 @@
 # Builds TuffCode for Mac (Apple Silicon and Intel) on GitHub's Mac machines, tests the built app,
 # and adds the Mac downloads to a release: when one is published, or when it's run by hand with a
-# release tag (Actions → Mac build → Run workflow, or: gh workflow run mac.yml -f tag=v1.0.2).
+# release tag (Actions → Mac build → Run workflow, or: gh workflow run mac.yml -f tag=v1.0.4).
 name: Mac build
 
 on:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release to build and add the Mac files to, like v1.0.2. Leave empty to only build and test.'
+        description: 'Release to build and add the Mac files to, like v1.0.4. Leave empty to only build and test.'
         required: false
         default: ''
   release:
