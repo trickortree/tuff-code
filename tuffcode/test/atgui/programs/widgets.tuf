@@ -56,6 +56,34 @@ dlg:text "Inside"
 dlg:closed modal_closed
 badge = app:badge("Beta", "info")
 pg = app:progress(10)
+app:icon "icon.png"
+app:font "serif"
+app:css ".probe-rule { letter-spacing: 3px }"
+pic = app:image("icon.png", 48)
+panes = app:split(180)
+left = panes:column
+left:text "Left pane"
+right = panes:column
+right:text "Right pane"
+spaced = app:row
+spaced:gap 20
+spaced:align "start"
+spaced:icon("star", 24)
+spaced:avatar("Ada Lovelace", "pink")
+grow_me = spaced:text "Grows"
+grow_me:grow
+fancy = app:card
+fancy:style("glass", true)
+fancy:style("gradient", ["#6366f1", "#ec4899"])
+fancy:style("shadow", "glow")
+fancy:style("pressed scale", 0.95)
+fancy:animate("pulse", 1, "forever")
+fancy:text "Fancy"
+app:html("<span class=\"probe-rule\">Raw HTML</span>")
+app:chart([3, 8, 5, 12], "bar")
+later = app:small "Shown later"
+later:hide
+later:show
 
 func add_one():
     count += 1
