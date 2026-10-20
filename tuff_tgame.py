@@ -415,6 +415,8 @@ class Game:
 
     # ---- the loop
     def is_open(self):
+        if not self.view.is_open:  # closed with its X, even in a loop that never calls game:frame()
+            self.closed = True
         return not self.closed
 
     def frame(self):
