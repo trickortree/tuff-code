@@ -30,7 +30,9 @@ export default async (t, ctx) => {
 
   // 1. marketplace
   await ev(`document.querySelector('.ts-btn[data-tool="plugins"]').click()`);
-  await t.sleep(600);
+  // The list waits for the online copy on GitHub (6 s at most), which can be slow on a CI machine.
+  await waitFor(`!!document.querySelector('.pl-card[data-id="snippets"]')`, 10000);
+  await t.sleep(200);
   const ids = await ev(`[...document.querySelectorAll('.pl-card')].map(c => c.dataset.id)`);
   check('Plugins view shows the marketplace with Tuff Agents and Snippets', ids.includes('tuff-agents') && ids.includes('snippets') && (await ev(`!document.querySelector('#view-plugins').classList.contains('hidden')`)), ids);
   await t.shot('p_market.png');
