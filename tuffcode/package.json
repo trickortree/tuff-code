@@ -58,6 +58,7 @@
       ],
       "icon": "build-res/icon.png",
       "category": "public.app-category.developer-tools",
+      "minimumSystemVersion": "13.0",
       "identity": "-",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
