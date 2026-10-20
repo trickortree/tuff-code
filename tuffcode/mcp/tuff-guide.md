@@ -30,6 +30,7 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | default or keyword inputs, `global` | plain inputs only; `global` isn't needed (see rule 2) |
 | `print(x, end="")` | an error: build the whole line with `+` first, or add to a shown line with `line:append(...)` |
 | `import random`, `import math` | nothing to import. Built in: `random(a, b)`, `sqrt`, `floor`, `ceil`, `round`, `abs`, `min`, `max`, `sum`, `average`, `pi`. There's no sin, cos, tan, log or exp, no `random.choice` (use `items[random(0, len(items) - 1)]`) and no shuffle |
+| `requests.get(url)`, `json.loads(...)` | `mention tap`, then `res = tap.get(url)` and `res:json` (see "tap") |
 | dictionaries, classes, `try`/`except`, `lambda`, slices like `s[1:3]`, `sort()`, `split()`, `exit()` | not in Tuff (see "What Tuff can't do") |
 
 These words are keywords and can't be names: `func return if elif else then while for in break continue and or not is true false nil say input flush import mention`.
@@ -178,6 +179,31 @@ clear(2)                    # remove the last 2 lines; clear(all) is the same as
   - `anims.type(text, seconds_per_letter)`: the text is required; 0.04 by default, and bigger is slower
   - `anims.countdown(start, then)` (defaults: 3, "Go!"): shows start, start - 1 … 1, one per second, then replaces the line with the text `then`
 - **tgui**: real desktop app windows. **mtgui**: the same widgets with a modern look (gradients, gloss, glow). Use mtgui unless asked otherwise.
+- **tap** gets and sends things on the web (HTTP), like Python's requests. See below.
+
+### tap
+```tuff
+mention tap
+
+res = tap.get("https://api.github.com/users/octocat")
+if res:ok:
+    user = res:json                 # a JSON object comes back as a data object
+    say user:get("name") + " has " + user:get("public_repos") + " public repos"
+else:
+    say "Error " + res:status
+
+note = tap.data()                   # an empty data object, to send
+note:set("title", "Hello")
+note:set("tags", ["a", "b"])
+sent = tap.post("https://httpbin.org/post", note)
+say sent:status
+```
+- **Requests:** `tap.get(url)`, `tap.post(url, body)`, `tap.put(url, body)` and `tap.delete(url)`. Text is sent as plain text, and a data object or a list as JSON. Headers go last, as a data object: `tap.get(url, headers)`.
+- **A response:** `res:status` (like 200 or 404), `res:ok` (true for 200 to 299), `res:text`, `res:json` and `res:header("Content-Type")` (nil if it isn't there).
+- **Errors:** a 404 or 500 doesn't stop the program, so check `res:ok`. No internet, a bad address, no answer within 15 seconds, and `res:json` on something that isn't JSON do stop it with an error.
+- **JSON:** `res:json` gives a data object for `{...}`, a list for `[...]`, or text, a number, true/false or nil.
+- **Data objects:** `user:get("name")` (not `user["name"]`; nil if it's missing), `user:has("name")`, `user:keys()` (a list of the names), `user:size()` and `user:set("name", value)`. Objects inside are data objects too, and `say user` shows it as JSON. Loop over `user:keys()`, not `user`.
+- **Waiting:** each call waits for the answer, and a window freezes while it waits.
 
 ## App windows (tgui / mtgui)
 ```tuff
@@ -483,7 +509,7 @@ In a window app, check a text box before using it: `if not is_number(bill:value(
 
 ## What Tuff can't do
 Tuff has none of these:
-- files (except pictures for `image` and `icon`) or the internet;
+- files (except pictures for `image` and `icon`), or the internet except through `tap`;
 - dictionaries, classes, sorting, or exceptions (`try`);
 - splitting, replacing or formatting text, or slices;
 - random decimals (divide a whole number instead), or sin, cos, tan, log or exp;
