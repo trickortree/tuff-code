@@ -51,8 +51,10 @@ TuffPlugins.register('tuff-agents', (t) => {
     auth: {}, // agent id -> signed in? (true / false / null when it can't tell)
     pick: t.storage.get('pick', {}), // agent id -> { model, effort } chosen for it ('' = the agent's default)
     models: {}, // agent id -> what it offers, as it reports it: { models, efforts }, { loading } or { error }
+    used: {}, // agent id -> what its Default model turned out to be (from the agent itself), e.g. 'Opus 5.5'
   };
   let root = null;
+  let dd = null; // the Model and Thinking dropdowns
   let ctxTimer = null;
   let raf = 0;
 
@@ -96,8 +98,8 @@ TuffPlugins.register('tuff-agents', (t) => {
           <div class="ta-ctx"></div>
           <textarea rows="3" spellcheck="true" placeholder="Ask about your code…"></textarea>
           <div class="ta-opts">
-            <label class="ta-sel" title="Which model the agent uses"><span>Model</span><select data-o="model"></select></label>
-            <label class="ta-sel" title="How long the model thinks before it answers. Higher is slower but more careful."><span>Thinking</span><select data-o="effort"></select></label>
+            <div class="ta-dd" data-o="model"></div>
+            <div class="ta-dd" data-o="effort"></div>
           </div>
           <div class="ta-row">
             <div class="ta-mode" role="radiogroup" aria-label="What the agent may do">
@@ -118,14 +120,16 @@ TuffPlugins.register('tuff-agents', (t) => {
     ta.addEventListener('focus', updateCtx);
     $('.ta-send', root).onclick = () => (S.run ? stop() : send(ta.value));
     $$('.ta-mode button', root).forEach((b) => (b.onclick = () => { S.mode = b.dataset.m; t.storage.set('mode', S.mode); renderMode(); }));
-    $$('.ta-opts select', root).forEach((sel) => (sel.onchange = () => {
-      if (S.run) { renderPick(); return; }
-      const p = { ...(S.pick[S.agent] || {}) };
-      p[sel.dataset.o] = sel.value;
-      S.pick = { ...S.pick, [S.agent]: p };
+    const choose = (key) => (v) => {
+      if (S.run) return;
+      S.pick = { ...S.pick, [S.agent]: { ...(S.pick[S.agent] || {}), [key]: v } };
       t.storage.set('pick', S.pick);
       renderPick();
-    }));
+    };
+    dd = {
+      model: dropdown($('.ta-dd[data-o="model"]', root), { label: 'Model', title: 'Which model the agent uses', onPick: choose('model') }),
+      effort: dropdown($('.ta-dd[data-o="effort"]', root), { label: 'Thinking', title: 'How long the model thinks before it answers. Higher is slower but more careful.', onPick: choose('effort') }),
+    };
     $('[data-a="menu"]', root).onclick = (e) => { e.stopPropagation(); toggleMenu(); };
     $('[data-a="setup"]', root).onclick = () => showSetup(S.view !== 'setup');
     const setupBox = $('.ta-setup', root);
@@ -194,28 +198,119 @@ TuffPlugins.register('tuff-agents', (t) => {
     return { list, model, efforts, effort };
   }
 
+  // ---------------------------------------------------------------- dropdowns
+  // TuffCode's own dropdown (a system <select> can't be styled). It opens upwards from the message
+  // box and works from the keyboard: arrows, Home/End, Enter or Space to pick, Esc to close.
+  function dropdown(box, { label, title, onPick }) {
+    box.innerHTML = `<button type="button" class="ta-dd-btn" aria-haspopup="listbox" aria-expanded="false" title="${esc(title)}"><span class="ta-dd-k">${esc(label)}</span><span class="ta-dd-v"></span><svg class="ta-dd-chev" viewBox="0 0 16 16"><path d="M4.5 9.5L8 6l3.5 3.5"/></svg></button><div class="ta-dd-menu hidden" role="listbox" aria-label="${esc(label)}"></div>`;
+    const btn = $('.ta-dd-btn', box);
+    const menu = $('.ta-dd-menu', box);
+    let items = [];
+    let value = '';
+    let hot = -1;
+    const isOpen = () => !menu.classList.contains('hidden');
+    const draw = () => {
+      menu.innerHTML = items.map((it, i) => `<div role="option" class="ta-dd-opt${it.id === value ? ' on' : ''}${i === hot ? ' hot' : ''}" data-i="${i}" data-v="${esc(it.id)}" aria-selected="${it.id === value}">${it.icon || ''}<span class="ta-dd-txt"><b>${esc(it.name)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</span><svg class="ta-dd-tick" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></div>`).join('');
+      menu.querySelector('.hot')?.scrollIntoView({ block: 'nearest' });
+    };
+    const outside = (e) => { if (!box.contains(e.target)) close(); };
+    function close() {
+      if (!isOpen()) return;
+      menu.classList.add('hidden');
+      btn.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('mousedown', outside, true);
+    }
+    function open() {
+      if (btn.disabled || !items.length) return;
+      for (const other of Object.values(dd || {})) if (other.box !== box) other.close();
+      hot = Math.max(0, items.findIndex((it) => it.id === value));
+      menu.classList.remove('hidden', 'flip');
+      btn.setAttribute('aria-expanded', 'true');
+      draw();
+      // Keep the menu inside the panel: open it leftwards if it would run off the right edge.
+      if (menu.getBoundingClientRect().right > root.getBoundingClientRect().right - 6) menu.classList.add('flip');
+      document.addEventListener('mousedown', outside, true);
+    }
+    const pick = (i) => { const it = items[i]; close(); btn.focus(); if (it && it.id !== value) onPick(it.id); };
+    btn.onclick = () => (isOpen() ? close() : open());
+    btn.onkeydown = (e) => {
+      if (!isOpen()) {
+        if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(e.key)) { e.preventDefault(); e.stopPropagation(); open(); }
+        return;
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') hot = (hot + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      else if (e.key === 'Home') hot = 0;
+      else if (e.key === 'End') hot = items.length - 1;
+      else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); pick(hot); return; }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+      else if (e.key === 'Tab') { close(); return; }
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+      draw();
+    };
+    menu.onmousedown = (e) => e.preventDefault();
+    menu.onclick = (e) => { const o = e.target.closest('.ta-dd-opt'); if (o) pick(+o.dataset.i); };
+    menu.onmousemove = (e) => {
+      const o = e.target.closest('.ta-dd-opt');
+      if (!o || +o.dataset.i === hot) return;
+      hot = +o.dataset.i;
+      menu.querySelectorAll('.ta-dd-opt').forEach((x) => x.classList.toggle('hot', +x.dataset.i === hot));
+    };
+    return {
+      box,
+      close,
+      set({ list, val, text, disabled, tip }) {
+        items = list;
+        value = val;
+        $('.ta-dd-v', box).textContent = text;
+        btn.disabled = !!disabled;
+        btn.title = tip || title;
+        if (disabled) close();
+        else if (isOpen()) draw();
+      },
+    };
+  }
+
+  const MODEL_ICON = '<svg class="ta-dd-ic" viewBox="0 0 16 16"><path d="M8 1.5l1.7 4.8L14.5 8l-4.8 1.7L8 14.5l-1.7-4.8L1.5 8l4.8-1.7z"/></svg>';
+  const LEVEL_BARS = { minimal: 1, low: 1, medium: 2, high: 3, xhigh: 4, max: 5, ultra: 5 };
+  const LEVEL_SUB = { minimal: 'Fastest', low: 'Quick answers', medium: 'Balanced', high: 'Thinks it through', xhigh: 'Thinks longer', max: 'Most thorough', ultra: 'Deepest and slowest' };
+  const levelIcon = (id) => `<span class="ta-dd-lv" aria-hidden="true">${[1, 2, 3, 4, 5].map((n) => `<i class="${n <= (LEVEL_BARS[id] || 0) ? 'on' : ''}" style="height:${4 + n * 2}px"></i>`).join('')}</span>`;
+
   function renderPick() {
     const box = $('.ta-opts', root);
-    if (!box) return;
+    if (!box || !dd) return;
     const a = current();
     const { list, model, efforts, effort } = picked();
-    const opt = (v, label, on) => `<option value="${esc(v)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
-    const mSel = $('select[data-o="model"]', box);
-    const eSel = $('select[data-o="effort"]', box);
     box.classList.toggle('hidden', !a?.installed);
     if (list.loading) {
-      mSel.innerHTML = opt('', 'Loading…', true);
-      eSel.innerHTML = opt('', 'Loading…', true);
-    } else {
-      mSel.innerHTML = opt('', 'Default', !model) + (list.models || []).map((m) => opt(m.id, m.name, model?.id === m.id)).join('');
-      const def = model?.defaultEffort ? `Default (${efforts.find((e) => e.id === model.defaultEffort)?.name || model.defaultEffort})` : 'Default';
-      eSel.innerHTML = opt('', def, !effort) + efforts.map((e) => opt(e.id, e.name, effort?.id === e.id)).join('');
+      dd.model.set({ list: [], val: '', text: 'Loading…', disabled: true });
+      dd.effort.set({ list: [], val: '', text: 'Loading…', disabled: true });
+      return;
     }
-    mSel.title = list.error ? `Couldn't get the model list: ${list.error}` : '';
-    const lock = !!S.run || !!list.loading;
-    mSel.disabled = lock || !!list.error;
-    eSel.disabled = lock || !efforts.length;
-    box.title = S.run ? 'Wait for the reply to finish (or press Stop) to change these.' : '';
+    const wait = S.run ? 'Wait for the reply to finish (or press Stop) to change this.' : '';
+    const used = S.used[S.agent];
+    dd.model.set({
+      list: [
+        { id: '', name: 'Default', sub: `${NAME[S.agent]} picks${used ? ` (last time: ${used})` : ''}`, icon: MODEL_ICON },
+        ...(list.models || []).map((m) => ({ id: m.id, name: m.name, sub: m.sub || '', icon: MODEL_ICON })),
+      ],
+      val: model?.id || '',
+      text: model?.name || (used ? `Default · ${used}` : 'Default'),
+      disabled: !!S.run || !!list.error,
+      tip: list.error ? `Couldn't get the model list: ${list.error}` : wait,
+    });
+    const def = model?.defaultEffort ? (efforts.find((e) => e.id === model.defaultEffort)?.name || model.defaultEffort) : '';
+    dd.effort.set({
+      list: [
+        { id: '', name: def ? `Default (${def})` : 'Default', sub: def ? `${model.name}'s usual level` : 'The model decides', icon: levelIcon(def ? model.defaultEffort : '') },
+        ...efforts.map((e) => ({ id: e.id, name: e.name, sub: LEVEL_SUB[e.id] || '', icon: levelIcon(e.id) })),
+      ],
+      val: effort?.id || '',
+      text: effort?.name || (def ? `Default (${def})` : 'Default'),
+      disabled: !!S.run || !efforts.length,
+      tip: !efforts.length ? "This model doesn't have thinking levels." : wait,
+    });
   }
 
   // While an agent is answering, its tab, model and thinking level stay as they are.
@@ -278,7 +373,7 @@ TuffPlugins.register('tuff-agents', (t) => {
   function renderStatus() {
     const box = $('.ta-status', root);
     const a = current();
-    if (!S.agents) { box.innerHTML = '<div class="ta-note">Looking for AI agents on this PC…</div>'; return; }
+    if (!S.agents) { box.innerHTML = `<div class="ta-note">Looking for AI agents on this ${document.documentElement.classList.contains('mac') ? 'Mac' : 'PC'}…</div>`; return; }
     if (!a?.installed) {
       box.innerHTML = `<div class="ta-card">
         <b>${esc(a?.name || S.agent)} isn't installed</b>
@@ -337,7 +432,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     m.onclick = (e) => {
       const id = e.target.closest('button')?.dataset.m;
       m.classList.add('hidden');
-      if (id === 'new') { if (S.run) stop(); S.msgs = []; S.sessions = {}; renderMsgs(); }
+      if (id === 'new') { if (S.run) stop(); S.msgs = []; S.sessions = {}; S.used = {}; renderMsgs(); renderPick(); }
       if (id === 'setup') showSetup(true);
       if (id === 'connect') connect(true);
       if (id === 'disconnect') connect(false);
@@ -408,7 +503,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       </section>
       <section>
         <h4><span>3</span>Or set it up by hand</h4>
-        <p>For an agent you use in a terminal, or another app. Paste a command into Command Prompt or PowerShell.</p>
+        <p>For an agent you use in a terminal, or another app. Paste a command into ${document.documentElement.classList.contains('mac') ? 'Terminal' : 'Command Prompt or PowerShell'}.</p>
         ${manualHtml()}
       </section>`;
     box.scrollTop = scroll;
@@ -662,11 +757,46 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (file && S.useFile) parts.push(`Open file: ${t.project.rel(file)}\n\`\`\`${/\.tuf$/i.test(file) ? 'tuff' : ''}\n${trim(t.editor.code(), 24000)}\n\`\`\``);
     const lines = t.editor.selectionLines();
     if (S.useSel && lines) parts.push(`They selected lines ${lines[0]} to ${lines[1]}:\n\`\`\`\n${trim(t.editor.selection(), 8000)}\n\`\`\``);
-    if (!(S.agent === 'claude' && S.sessions.claude)) {
-      const history = S.msgs.slice(-9, -1).map((m) => `${m.role === 'user' ? 'Them' : 'You'}: ${trim(m.text, 1500)}`).join('\n');
-      if (history) parts.push(`Earlier in this chat:\n${history}`);
+    // One chat, several agents: whoever answers needs to know who said what, and what happened
+    // while another agent had the floor.
+    const me = S.agent;
+    // "Test it" runs are diagnostics, not part of the conversation.
+    const earlier = S.msgs.slice(0, -1).filter((m) => !m.test && (m.role === 'user' || m.status !== 'running'));
+    const others = earlier.some((m) => m.role === 'agent' && m.agent !== me);
+    const running = picked(me).model?.name || S.used[me];
+    parts.push(`You are ${NAME[me]}${running ? `, running as ${running}` : ''}. ${others
+      ? 'This chat is shared: the person can switch between AI agents (Claude Code, Codex and Antigravity) at any time, and you all work on the same project. Replies marked with another agent\'s name were written by that agent, not by you. Treat them as a teammate\'s work: build on it, and don\'t take credit for it or "correct" who wrote it.'
+      : 'The person can also switch to other AI agents (Claude Code, Codex, Antigravity) in this chat.'}`);
+    // Agents that keep their own session (Claude Code, Antigravity) already remember their turns,
+    // so they get what happened since they last answered. Only turns that really reached their
+    // session count (a run stopped or failed before it started doesn't). Others get the recent chat.
+    const mine = earlier.map((m) => m.role === 'agent' && m.agent === me && m.inSession).lastIndexOf(true);
+    const resumes = ['claude', 'antigravity'].includes(me) && S.sessions[me] && mine >= 0;
+    const who = (m) => {
+      if (m.role === 'user') return 'Them';
+      const name = `${NAME[m.agent]}${m.name ? ` (${m.name})` : ''}`;
+      return m.agent === me ? `You (${name})` : name;
+    };
+    const line = (m) => {
+      const did = m.role === 'agent' ? [...new Set((m.tools || []).filter((x) => x.ok !== false && /^(Wrote|Changed)\b/.test(x.text)).map((x) => x.text))] : [];
+      return `${who(m)}: ${trim(m.text || (m.error ? `(stopped: ${m.error})` : '(no reply)'), 1500)}${did.length ? `\n  [${did.join('; ')}]` : ''}`;
+    };
+    // Newest first until the budget is used up, so a long stretch with another agent can't make the
+    // prompt huge. Antigravity gets less: its prompt goes on the command line.
+    const pool = resumes ? earlier.slice(mine + 1) : earlier.slice(-10);
+    const budget = me === 'antigravity' ? 12000 : 30000;
+    const kept = [];
+    let used = 0;
+    for (let i = pool.length - 1; i >= 0; i--) {
+      const l = line(pool[i]);
+      if (used + l.length > budget && kept.length) break;
+      kept.unshift(l);
+      used += l.length;
     }
-    parts.push(`Their message:\n${text}`);
+    const dropped = pool.length - kept.length;
+    const said = (dropped ? `(${dropped} earlier message${dropped > 1 ? 's' : ''} left out)\n` : '') + kept.join('\n');
+    if (kept.length) parts.push(`${resumes ? 'Since you last answered, this happened in the chat' : 'Earlier in this chat'} (for context only: all of it has been answered already):\n<chat>\n${said}\n</chat>`);
+    parts.push(`Their new message. This is what to answer now:\n<message>\n${text}\n</message>`);
     return parts.join('\n\n');
   }
 
@@ -683,10 +813,11 @@ TuffPlugins.register('tuff-agents', (t) => {
     const file = t.editor.file();
     const lines = t.editor.selectionLines();
     const ctx = test ? '' : [file && S.useFile ? short(file) : '', lines && S.useSel ? `lines ${lines[0]}–${lines[1]}` : ''].filter(Boolean).join(', ');
-    S.msgs.push({ role: 'user', text: test ? `Test ${a.name}'s TuffCode tools` : text, ctx: ctx ? `with ${ctx}` : '' });
+    S.msgs.push({ role: 'user', text: test ? `Test ${a.name}'s TuffCode tools` : text, ctx: ctx ? `with ${ctx}` : '', test });
     const prompt = buildPrompt(text, { mode, bare: test });
     const { model, effort } = picked();
-    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running', model: [model?.name, effort?.name].filter(Boolean).join(' · ') };
+    // model: what the reply header shows ('Opus 5.5 · High'); name: just the model, for other agents.
+    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running', model: [model?.name, effort?.name].filter(Boolean).join(' · '), name: model?.name || '', picked: !!model, effort: effort?.name || '', test };
     S.msgs.push(msg);
     const runId = `run-${Date.now()}`;
     S.run = { id: runId, msg, changed: false, test, mcp: new Set() };
@@ -698,7 +829,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     renderMsgs();
     updateSend();
     try {
-      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode, session: ['claude', 'antigravity'].includes(S.agent) ? S.sessions[S.agent] : null, model: model?.id || '', effort: effort?.id || '' });
+      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode, session: !test && ['claude', 'antigravity'].includes(S.agent) ? S.sessions[S.agent] : null, model: model?.id || '', effort: effort?.id || '' });
     } catch (err) {
       onEvent({ runId, kind: 'done', ok: false, error: err.message });
     }
@@ -708,7 +839,14 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (!S.run || ev.runId !== S.run.id) return;
     const m = S.run.msg;
     switch (ev.kind) {
-      case 'session': S.sessions[m.agent] = ev.id; break;
+      case 'session': // the run reached the agent's session; a test run never becomes the chat's session
+        if (!S.run.test) { S.sessions[m.agent] = ev.id; m.inSession = true; }
+        break;
+      case 'model': // the model that really answered (Claude Code says so when it starts)
+        // S.used is what Default turned out to be, so only a Default run updates it.
+        if (!m.picked) { S.used[m.agent] = ev.name; m.name = ev.name; m.model = [ev.name, m.effort].filter(Boolean).join(' · '); }
+        renderPick();
+        break;
       case 'delta': m.text += ev.text; break;
       case 'break': if (m.text && !/\n\n$/.test(m.text)) m.text += '\n\n'; break;
       case 'text': m.text += (m.text && !/\n\n$/.test(m.text) ? '\n\n' : '') + ev.text; break;
@@ -729,7 +867,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       case 'done':
         m.status = ev.ok ? 'done' : 'error';
         if (!ev.ok) m.error = m.error || ev.error || 'Something went wrong.';
-        if (ev.session) S.sessions[m.agent] = ev.session;
+        if (ev.session && !S.run.test) { S.sessions[m.agent] = ev.session; m.inSession = true; }
         for (const x of m.tools) if (x.ok === null) x.ok = ev.ok;
         finish();
         break;

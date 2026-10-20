@@ -1,22 +1,12 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
 const fsp = fs.promises;
-const { spawn, execFileSync } = require('child_process');
+const { spawn } = require('child_process');
+const shellPath = require('./shellpath');
 
-// Apps opened from the Mac Dock or Finder get a bare PATH (/usr/bin:/bin:...), so Python, Homebrew
-// and the AI agents (claude, codex, agy) wouldn't be found. Use the login shell's PATH instead.
-if (process.platform !== 'win32') {
-  try {
-    const out = execFileSync(process.env.SHELL || '/bin/zsh', ['-ilc', 'printf "@@%s@@" "$PATH"'], { encoding: 'utf8', timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] });
-    const m = /@@(.*)@@/.exec(out);
-    if (m && m[1]) process.env.PATH = m[1];
-  } catch {}
-  const have = (process.env.PATH || '').split(':');
-  for (const d of ['/opt/homebrew/bin', '/usr/local/bin', path.join(os.homedir(), '.local', 'bin')]) if (!have.includes(d)) have.push(d);
-  process.env.PATH = have.filter(Boolean).join(':');
-}
+// On a Mac, read the login shell's PATH in the background (see shellpath.js).
+shellPath.start();
 const builder = require('./build');
 const updater = require('./updater');
 const plugins = require('./plugins');
@@ -169,7 +159,17 @@ function createWindow() {
   win.once('ready-to-show', () => win.show());
   win.on('maximize', () => send('window:maximized', true));
   win.on('unmaximize', () => send('window:maximized', false));
-  win.on('blur', () => send('window:blur'));
+  win.on('blur', () => {
+    send('window:blur');
+    if (process.platform === 'win32') stopWatching();
+  });
+  win.on('focus', () => {
+    if (process.platform !== 'win32' || !watchedDir) return;
+    startWatching();
+    send('fs:changed', { root: watchedDir, paths: [], overflow: true }); // catch up on what changed meanwhile
+  });
+  win.on('enter-full-screen', () => send('window:fullscreen', true));
+  win.on('leave-full-screen', () => send('window:fullscreen', false));
 }
 
 ipcMain.handle('settings:get', () => loadSettings());
@@ -181,6 +181,69 @@ ipcMain.handle('fs:listAll', (_e, root) => listAllFiles(root));
 ipcMain.handle('fs:readFile', (_e, p) => fsp.readFile(p, 'utf8'));
 ipcMain.handle('fs:writeFile', (_e, p, content) => fsp.writeFile(p, content, 'utf8'));
 ipcMain.handle('fs:exists', (_e, p) => fs.existsSync(p));
+// Last-moment save while the window closes (Cmd+Q, the Mac's red button, logging out): it has to be
+// synchronous, because the page is gone right after.
+ipcMain.on('fs:writeFilesSync', (e, files) => {
+  for (const f of files || []) { try { fs.writeFileSync(f.path, f.content, 'utf8'); } catch {} }
+  e.returnValue = true;
+});
+
+// Watches the open folder, so files made, changed or deleted outside the editor (by an AI agent,
+// Explorer/Finder, a build) show up in the project tree right away. Changes go out in batches at
+// most 150 ms apart. On Windows a recursive watch keeps the folder's parents from being renamed or
+// moved, so it only runs while TuffCode has focus and catches up when you come back.
+let watcher = null;
+let watchedDir = null;
+let watchTimer = null;
+let watchOverflow = false;
+const watchChanged = new Set();
+const WATCH_SKIP = /(^|[\/])(\.git|node_modules|__pycache__|\.DS_Store)([\/]|$)/;
+function stopWatching() {
+  try { watcher?.close(); } catch {}
+  watcher = null;
+  clearTimeout(watchTimer);
+  watchTimer = null;
+  watchChanged.clear();
+  watchOverflow = false;
+}
+function flushWatch() {
+  watchTimer = null;
+  const paths = [...watchChanged];
+  const overflow = watchOverflow;
+  watchChanged.clear();
+  watchOverflow = false;
+  send('fs:changed', { root: watchedDir, paths, overflow });
+}
+function startWatching() {
+  stopWatching();
+  const dir = watchedDir;
+  if (!dir || !fs.existsSync(dir)) return false;
+  if (process.platform === 'win32' && win && !win.isDestroyed() && !win.isFocused()) return true;
+  try {
+    watcher = fs.watch(dir, { recursive: true }, (_type, name) => {
+      const n = name == null ? '' : String(name);
+      // The folder itself was deleted or moved: stop instead of erroring on every event.
+      if ((n && path.isAbsolute(n)) || !fs.existsSync(dir)) {
+        stopWatching();
+        send('fs:changed', { root: dir, paths: [dir], gone: true });
+        return;
+      }
+      if (n && WATCH_SKIP.test(n)) return;
+      if (n) watchChanged.add(path.join(dir, n));
+      else watchOverflow = true; // too many changes at once: the OS didn't say which
+      if (!watchTimer) watchTimer = setTimeout(flushWatch, 150);
+    });
+    watcher.on('error', () => stopWatching());
+    return true;
+  } catch {
+    return false;
+  }
+}
+function watchFolder(dir) {
+  watchedDir = dir || null;
+  return startWatching();
+}
+ipcMain.handle('fs:watch', (_e, dir) => watchFolder(dir));
 ipcMain.handle('fs:createFile', async (_e, p) => {
   if (fs.existsSync(p)) throw new Error(`${path.basename(p)} already exists`);
   await fsp.writeFile(p, '', 'utf8');
@@ -328,13 +391,14 @@ ipcMain.handle('window:close', () => win.close());
 ipcMain.handle('window:isMaximized', () => win.isMaximized());
 ipcMain.handle('app:devtools', () => win.webContents.toggleDevTools());
 
-// The Mac menu bar. Cut/Copy/Paste/Select All have to be menu items there or Cmd+C/V do nothing.
-// Undo, Close and Reload are left out so Cmd+Z, Cmd+W and Cmd+R reach the editor's own shortcuts.
+// The Mac menu bar. On a Mac, text fields only get Cmd+Z/C/V/X/A from Edit menu items. The editor
+// and TuffCode's own shortcuts still handle their keys first. Close and Reload are left out so
+// Cmd+W and Cmd+R reach the editor's own shortcuts.
 function macMenu() {
   if (process.platform !== 'darwin') return;
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { role: 'appMenu', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
-    { label: 'Edit', submenu: [{ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
+    { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
     { role: 'windowMenu', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { type: 'separator' }, { role: 'front' }] },
   ]));
 }

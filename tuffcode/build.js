@@ -9,6 +9,9 @@ const RUNTIME_FILES = ['tuff.py', 'tuff_tgui.py'];
 const DEFAULT_ICON = path.join(__dirname, 'renderer', 'assets', 'icon.png');
 const ASSET_EXTS = new Set(['.png', '.gif', '.ico', '.jpg', '.jpeg', '.txt', '.json', '.csv', '.wav']);
 const PY = process.platform === 'win32' ? { cmd: 'py', args: ['-3'] } : { cmd: 'python3', args: [] };
+// What the build makes: an .exe on Windows, an app elsewhere.
+const WIN = process.platform === 'win32';
+const BUILDING = WIN ? 'Building your .exe' : 'Building your app';
 
 let current = null;
 
@@ -74,7 +77,9 @@ function run(cmd, args, { cwd, onLine } = {}) {
 
 function friendlyError(out) {
   if (/PermissionError|Access is denied|being used by another process/i.test(out)) {
-    return 'Windows wouldn\'t let TuffCode replace the old .exe. If your app is still open, close it and build again.';
+    return WIN
+      ? 'Windows wouldn\'t let TuffCode replace the old .exe. If your app is still open, close it and build again.'
+      : 'TuffCode couldn\'t replace the old app. If it\'s still open, quit it and build again.';
   }
   if (/No space left on device/i.test(out)) return 'Your disk is full. Free up some space and try again.';
   if (/icon/i.test(out) && /(error|failed|invalid)/i.test(out)) {
@@ -88,7 +93,7 @@ const MILESTONES = [
   [/Looking for dynamic libraries|Processing (standard )?module hook/i, 'Collecting Python pieces…'],
   [/Building PYZ/i, 'Bundling Python…'],
   [/Building PKG/i, 'Packing everything together…'],
-  [/Building EXE/i, 'Writing the .exe…'],
+  [/Building EXE/i, WIN ? 'Writing the .exe…' : 'Writing the app…'],
   [/Copying icon|Copying \d+ resources/i, 'Adding your icon…'],
 ];
 
@@ -106,9 +111,12 @@ async function build(opts, emit) {
   const distDir = path.join(projectDir, 'dist');
 
   step('python', 'running', 'Finding Python');
+  await require('./shellpath').ready(); // on a Mac, wait for the login shell's PATH
   let r = await run(PY.cmd, [...PY.args, '--version'], { onLine: log });
   if (r.code !== 0) {
-    return fail('python', 'Finding Python', 'Python isn\'t installed (or Windows can\'t find it). Install it from python.org, tick "Add python.exe to PATH", then build again.');
+    return fail('python', 'Finding Python', WIN
+      ? 'Python isn\'t installed (or Windows can\'t find it). Install it from python.org, tick "Add python.exe to PATH", then build again.'
+      : 'Python 3 isn\'t installed. Install it from python.org (or with Homebrew: brew install python), then build again.');
   }
   step('python', 'done', `Found ${r.out.trim()}`);
 
@@ -122,10 +130,32 @@ async function build(opts, emit) {
   step('check', 'done', 'Your code looks good');
 
   step('tools', 'running', 'Getting the build tools ready');
-  r = await run(PY.cmd, [...PY.args, '-m', 'PyInstaller', '--version'], { onLine: log });
+  // Mac and Linux: Homebrew's Python (and many Linux ones) refuse `pip install --user`, so the build
+  // tools go in TuffCode's own Python environment. If Python was upgraded and it broke, it's remade.
+  let py = PY;
+  if (process.platform !== 'win32') {
+    const venv = path.join(app.getPath('userData'), 'build-python');
+    const vpy = path.join(venv, 'bin', 'python3');
+    // It's made in a temporary folder and only moved into place once complete, so a cancelled or
+    // failed setup can't leave a half-made one behind.
+    if ((await run(vpy, ['-m', 'pip', '--version'])).code !== 0) {
+      step('tools', 'running', 'Getting the build tools ready', 'Setting up a Python just for building (first time only)');
+      const tmp = `${venv}.tmp`;
+      await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
+      r = await run(PY.cmd, [...PY.args, '-m', 'venv', tmp], { onLine: log });
+      if (r.code !== 0) {
+        await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
+        return fail('tools', 'Getting the build tools ready', "Python couldn't set up a place for the build tools. Reinstall Python 3 (from python.org, or with Homebrew: brew install python), then build again.");
+      }
+      await fsp.rm(venv, { recursive: true, force: true }).catch(() => {});
+      await fsp.rename(tmp, venv);
+    }
+    py = { cmd: vpy, args: [] };
+  }
+  r = await run(py.cmd, [...py.args, '-m', 'PyInstaller', '--version'], { onLine: log });
   if (r.code !== 0) {
     step('tools', 'running', 'Installing the build tools', 'First time only. This needs the internet and takes about a minute.');
-    r = await run(PY.cmd, [...PY.args, '-m', 'pip', 'install', '--user', '--disable-pip-version-check', 'pyinstaller'], {
+    r = await run(py.cmd, [...py.args, '-m', 'pip', 'install', ...(py === PY ? ['--user'] : []), '--disable-pip-version-check', 'pyinstaller'], {
       onLine: (line) => {
         log(line);
         const m = line.match(/^(Collecting|Downloading|Installing collected packages)\s*:?\s*(\S+)?/);
@@ -135,12 +165,22 @@ async function build(opts, emit) {
     if (r.code !== 0) {
       return fail('tools', 'Installing the build tools', 'TuffCode couldn\'t download its build tools (PyInstaller). Check your internet connection and try again.');
     }
-    r = await run(PY.cmd, [...PY.args, '-m', 'PyInstaller', '--version'], { onLine: log });
+    r = await run(py.cmd, [...py.args, '-m', 'PyInstaller', '--version'], { onLine: log });
     if (r.code !== 0) {
       return fail('tools', 'Installing the build tools', 'The build tools installed, but Python can\'t start them. Try restarting TuffCode and building again.');
     }
   }
   step('tools', 'done', `Build tools ready (PyInstaller ${r.out.trim().split(/\s+/).pop()})`);
+
+  // A window app needs tkinter in the Python that builds it. Without it the app would build fine
+  // and then close straight away when opened, so check first.
+  const usesGuiEarly = /^\s*(import|mention)\s+m?tgui\b/m.test(await fsp.readFile(program, 'utf8'));
+  if (usesGuiEarly && (await run(py.cmd, [...py.args, '-c', 'import tkinter, _tkinter; tkinter.Tcl()'], { onLine: log })).code !== 0) {
+    const ver = (await run(PY.cmd, [...PY.args, '-c', 'import sys; print("%d.%d" % sys.version_info[:2])'])).out.trim().split(/\s+/).pop() || '3';
+    return fail('tools', 'Getting the build tools ready', WIN
+      ? 'Your Python doesn\'t include tkinter, which window apps need. Reinstall Python from python.org with "tcl/tk and IDLE" ticked, then build again.'
+      : `Your Python (${ver}) doesn't include tkinter, which window apps need. With Homebrew run: brew install python-tk@${ver} (or install Python from python.org), then build again.`);
+  }
 
   step('pack', 'running', 'Packing your program');
   const work = path.join(app.getPath('temp'), 'tuffcode-build', `${name.replace(/\s/g, '_')}-${Date.now()}`);
@@ -149,30 +189,40 @@ async function build(opts, emit) {
   const programCopy = path.join(work, 'program.tuf');
   await fsp.copyFile(program, programCopy);
   const launcher = path.join(work, 'tuff_app.py');
+  // The app's windows use the same icon as the app file: the launcher tells the window library
+  // where the packed PNG copy is (Tk shows PNGs; its .ico reader can't read modern .ico files).
   await fsp.writeFile(launcher, [
     'import os, sys',
-    'import tuff',
     'base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))',
+    'icon = os.path.join(base, "_tuffcode", "app_icon.png")',
+    'if os.path.isfile(icon):',
+    '    os.environ["TUFF_APP_ICON"] = icon',
+    'import tuff',
     'sys.argv = [sys.argv[0], os.path.join(base, "program.tuf")]',
     'sys.exit(tuff.main())',
     '',
   ].join('\n'));
 
-  let iconFile = path.join(work, 'icon.ico');
+  let iconFile = path.join(work, 'app_icon.ico');
+  const iconPng = path.join(work, 'app_icon.png');
   try {
+    const img = nativeImage.createFromPath(opts.icon || DEFAULT_ICON);
     if (opts.icon && opts.icon.toLowerCase().endsWith('.ico')) {
       await fsp.copyFile(opts.icon, iconFile);
     } else {
-      const img = nativeImage.createFromPath(opts.icon || DEFAULT_ICON);
       if (img.isEmpty()) throw new Error('empty image');
       await fsp.writeFile(iconFile, pngToIco(img.resize({ width: 256, height: 256, quality: 'best' }).toPNG()));
     }
+    // Tk shows PNGs; an .ico can only be turned into one where Electron reads .ico (Windows).
+    if (!img.isEmpty()) await fsp.writeFile(iconPng, img.resize({ width: 128, height: 128, quality: 'best' }).toPNG());
   } catch {
     return fail('pack', 'Packing your program', 'The icon image couldn\'t be read. Pick a .png, .jpg or .ico file, or use the default icon.');
   }
 
   const sep = process.platform === 'win32' ? ';' : ':';
+  // The icon goes in a folder of its own inside the app, so no project file can clash with it.
   const addData = [`${programCopy}${sep}.`];
+  if (fs.existsSync(iconPng)) addData.push(`${iconPng}${sep}_tuffcode`);
   const assets = [];
   for (const entry of await fsp.readdir(path.dirname(program), { withFileTypes: true })) {
     if (entry.isFile() && ASSET_EXTS.has(path.extname(entry.name).toLowerCase())) {
@@ -180,31 +230,42 @@ async function build(opts, emit) {
       addData.push(`${path.join(path.dirname(program), entry.name)}${sep}.`);
     }
   }
+  // On a Mac the app's icon has to be .icns; macOS's own sips tool makes one from the PNG.
+  let macIcon = null;
+  if (process.platform === 'darwin') {
+    const img = nativeImage.createFromPath(opts.icon || DEFAULT_ICON);
+    const big = path.join(work, 'app_icon_512.png');
+    const icns = path.join(work, 'app_icon.icns');
+    if (!img.isEmpty()) {
+      await fsp.writeFile(big, img.resize({ width: 512, height: 512, quality: 'best' }).toPNG());
+      if ((await run('sips', ['-s', 'format', 'icns', big, '--out', icns])).code === 0 && fs.existsSync(icns)) macIcon = icns;
+    }
+  }
   const src = await fsp.readFile(program, 'utf8');
   const usesGui = /^\s*(import|mention)\s+m?tgui\b/m.test(src);
   const windowed = opts.windowed ?? usesGui;
   step('pack', 'done', `Packed your program${assets.length ? ` and ${assets.length} file${assets.length > 1 ? 's' : ''} (${assets.slice(0, 3).join(', ')}${assets.length > 3 ? '…' : ''})` : ''}`);
 
-  step('build', 'running', 'Building your .exe', 'This usually takes 20–60 seconds.');
+  step('build', 'running', BUILDING, 'This usually takes 20–60 seconds.');
   await fsp.mkdir(distDir, { recursive: true });
   const args = [
-    ...PY.args, '-m', 'PyInstaller', '--onefile', '--noconfirm', '--clean', '--log-level', 'INFO',
+    ...py.args, '-m', 'PyInstaller', '--onefile', '--noconfirm', '--clean', '--log-level', 'INFO',
     '--name', name, '--distpath', distDir, '--workpath', path.join(work, 'work'), '--specpath', work,
     // A Mac app's icon has to be .icns; PyInstaller would need extra tools to convert ours.
-    ...(process.platform === 'win32' ? ['--icon', iconFile] : []), windowed ? '--windowed' : '--console',
+    ...(WIN ? ['--icon', iconFile] : macIcon ? ['--icon', macIcon] : []), windowed ? '--windowed' : '--console',
     ...addData.flatMap((d) => ['--add-data', d]),
     ...(usesGui ? ['--hidden-import', 'tuff_tgui'] : ['--exclude-module', 'tkinter', '--exclude-module', 'tuff_tgui']),
     launcher,
   ];
   let lastDetail = '';
-  r = await run(PY.cmd, args, {
+  r = await run(py.cmd, args, {
     cwd: work,
     onLine: (line) => {
       log(line);
       for (const [re, detail] of MILESTONES) {
         if (re.test(line) && detail !== lastDetail) {
           lastDetail = detail;
-          step('build', 'running', 'Building your .exe', detail);
+          step('build', 'running', BUILDING, detail);
         }
       }
     },
@@ -214,9 +275,17 @@ async function build(opts, emit) {
     ? path.join(distDir, `${name}.app`)
     : path.join(distDir, `${name}${process.platform === 'win32' ? '.exe' : ''}`);
   if (r.code !== 0 || !fs.existsSync(exe)) {
-    return fail('build', 'Building your .exe', friendlyError(r.out));
+    return fail('build', BUILDING, friendlyError(r.out));
   }
-  const size = (await fsp.stat(exe)).size;
+  // A Mac .app is a folder: add up what's inside it.
+  const du = async (p) => {
+    const st = await fsp.lstat(p);
+    if (!st.isDirectory()) return st.size;
+    let total = 0;
+    for (const e of await fsp.readdir(p)) total += await du(path.join(p, e));
+    return total;
+  };
+  const size = await du(exe);
   step('build', 'done', `Built ${path.basename(exe)}`);
   fsp.rm(work, { recursive: true, force: true }).catch(() => {});
   emit({ type: 'done', ok: true, exe, size, windowed, seconds: Math.round((Date.now() - started) / 1000) });

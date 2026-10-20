@@ -8,6 +8,16 @@ const REPO = 'trickortree/tuff-code';
 // The Mac app isn't signed with an Apple Developer ID, and macOS only lets signed apps replace
 // themselves. So on a Mac, updates are found as usual but downloaded from the release page.
 const MANUAL = process.platform === 'darwin';
+// The Mac files go up on a release a little after the Windows installer, so for a while a Mac finds
+// a new release without its latest-mac.yml. That isn't an error to show.
+const MAC_NOT_READY = "A new version is on its way. Its Mac download isn't ready yet, so check again in a little while.";
+function errorState(err, silent) {
+  if (silent) return { status: state.ready ? 'ready' : 'idle' };
+  if (MANUAL && (err?.code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND' || /latest-mac\.yml/.test(String(err?.message || err)))) {
+    return { status: state.ready ? 'ready' : 'up-to-date', error: null, detail: MAC_NOT_READY };
+  }
+  return { status: 'error', error: String(err?.message || err).split('\n')[0] };
+}
 const ROOT = path.join(__dirname, '..');
 const SKIP = new Set(['.git', 'node_modules', 'dist', '__pycache__', '.idea']);
 const HOUR = 60 * 60 * 1000;
@@ -165,10 +175,7 @@ function installer() {
   au.on('update-not-available', () => set({ status: state.ready ? 'ready' : 'up-to-date' }));
   au.on('download-progress', (p) => set({ status: 'downloading', detail: `${Math.round(p.percent)}%` }));
   au.on('update-downloaded', (info) => set({ status: 'ready', ready: info.version, detail: null }));
-  au.on('error', (err) => {
-    const msg = String(err?.message || err).split('\n')[0];
-    set(auSilent && state.status === 'checking' ? { status: state.ready ? 'ready' : 'idle' } : { status: 'error', error: msg });
-  });
+  au.on('error', (err) => set(errorState(err, auSilent && state.status === 'checking')));
   return au;
 }
 
@@ -181,7 +188,7 @@ async function check({ silent = false, autoInstall = false } = {}) {
     try {
       await installer().checkForUpdates();
     } catch (err) {
-      set({ status: silent ? 'idle' : 'error', error: String(err?.message || err).split('\n')[0] });
+      set(errorState(err, silent));
     }
     return state;
   }

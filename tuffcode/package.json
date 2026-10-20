@@ -1,7 +1,7 @@
 {
   "name": "tuffcode",
   "productName": "TuffCode",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "TuffCode - the IDE for the Tuff language",
   "author": "trickortree",
   "repository": "github:trickortree/tuff-code",
@@ -26,6 +26,7 @@
       "build.js",
       "updater.js",
       "agents.js",
+      "shellpath.js",
       "plugins.js",
       "plugins/**/*",
       "mcp/**/*",

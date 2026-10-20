@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn, execFile } = require('child_process');
+const shellPath = require('./shellpath');
 
 const MCP_NAME = 'tuffcode';
 const AGENTS = {
@@ -36,6 +37,7 @@ function which(bin) {
 async function resolveBin(id) {
   const override = process.env[`TUFFCODE_${id.toUpperCase()}_BIN`];
   if (override) return override;
+  await shellPath.ready(); // on a Mac, wait for the login shell's PATH
   const found = await which(AGENTS[id].bin);
   if (found) return found;
   if (id === 'claude') return findClaudeElsewhere();
@@ -80,6 +82,9 @@ function findClaudeElsewhere() {
     try { for (const p of fs.readdirSync(pkgs)) if (/claude/i.test(p)) roots.push(path.join(pkgs, p, 'LocalCache', 'Roaming', 'Claude', 'claude-code')); } catch {}
   }
   const num = (v) => v.split(/[.-]/).slice(0, 3).map((n) => parseInt(n, 10) || 0);
+  // On a Mac the binary sits inside an app bundle (…/<build>/claude.app/Contents/MacOS/claude).
+  const inner = process.platform === 'darwin' ? [path.join('claude.app', 'Contents', 'MacOS', 'claude'), exe] : [exe];
+  const isFile = (f) => { try { return fs.statSync(f).isFile(); } catch { return false; } };
   for (const root of roots) {
     let versions = [];
     try { versions = fs.readdirSync(root).filter((v) => /^\d+\.\d+\.\d+/.test(v)); } catch { continue; }
@@ -87,9 +92,9 @@ function findClaudeElsewhere() {
     for (const v of versions) {
       let builds = [];
       try { builds = fs.readdirSync(path.join(root, v)); } catch { continue; }
-      for (const b of builds) {
-        const file = path.join(root, v, b, exe);
-        if (fs.existsSync(file)) return file;
+      // Each build folder, then the version folder itself (older installs).
+      for (const dir of [...builds.map((b) => path.join(root, v, b)), path.join(root, v)]) {
+        for (const rel of inner) if (isFile(path.join(dir, rel))) return path.join(dir, rel);
       }
     }
   }
@@ -254,14 +259,80 @@ const levels = (list) => list.map((id) => ({ id, name: LEVEL_NAMES[id] || id[0].
 const safeArg = (s) => typeof s === 'string' && /^[\w.\-:/]{1,80}$/.test(s);
 const modelCache = {};
 
+// "claude-opus-5-5" -> "Opus 5.5"
+// Also reads IDs with a context tag ("claude-opus-5-5[1m]") or a cloud prefix/suffix
+// ("us.anthropic.claude-opus-5-5-v1:0"); the tag is left out so a model has one name.
+function claudeModelName(id) {
+  const m = /claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?!\d)/.exec(String(id || '').replace(/(\[[^\]]*\])+$/, ''));
+  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ''}` : null;
+}
+
+// The newest model ID Claude Code knows for each family (opus -> claude-opus-5-5), read from Claude
+// Code itself. Its aliases always point at the newest of their family, so this names what "opus"
+// really is. npm installs are a .cmd/shell shim, so the script it starts is read instead.
+const claudeIdCache = new Map();
+async function claudeModelIds(file) {
+  let target = file;
+  try {
+    if (/\.(cmd|bat)$/i.test(file) || fs.statSync(file).size < 4096) {
+      const shim = fs.readFileSync(file, 'utf8').replace(/%~?dp0%?\\?/gi, `${path.dirname(file)}${path.sep}`).replace(/\$basedir\//g, `${path.dirname(file)}/`);
+      const js = /"?([^"\r\n]+?\.(?:js|cjs|mjs|exe))"?(?:\s|$)/i.exec(shim);
+      if (js && fs.existsSync(path.resolve(path.dirname(file), js[1]))) target = path.resolve(path.dirname(file), js[1]);
+    }
+  } catch {}
+  let stat;
+  try { stat = fs.statSync(target); } catch { return {}; }
+  const key = `${target}|${stat.size}|${stat.mtimeMs}`;
+  if (claudeIdCache.has(key)) return claudeIdCache.get(key);
+  const best = {};
+  const rank = (m) => Number(m[2]) * 100 + Number(m[3] || 0);
+  await new Promise((resolve) => {
+    let tail = '';
+    const re = /claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?!\d)/g;
+    fs.createReadStream(target, { encoding: 'latin1', highWaterMark: 4 << 20 })
+      .on('data', (chunk) => {
+        const text = tail + chunk;
+        let m;
+        while ((m = re.exec(text))) if (!best[m[1]] || rank(m) > best[m[1]].rank) best[m[1]] = { id: m[0], rank: rank(m) };
+        tail = text.slice(-40);
+      })
+      .on('error', resolve)
+      .on('close', resolve);
+  });
+  const ids = Object.fromEntries(Object.entries(best).map(([family, v]) => [family, v.id]));
+  claudeIdCache.set(key, ids);
+  return ids;
+}
+
+const CLAUDE_FAMILIES = {
+  fable: "Anthropic's most capable, for the hardest work",
+  opus: 'Great for complex coding',
+  sonnet: 'Fast and smart',
+  haiku: 'Quickest, for small jobs',
+};
+
 const MODELS = {
-  // Claude Code has no list command; its help names the model aliases and effort levels.
+  // Claude Code has no list command; its help names the model aliases and effort levels, and the
+  // model IDs inside Claude Code give each alias its real name.
   claude: async (file) => {
     const help = (await quick(file, ['--help'], 15000)).out.replace(/\s+/g, ' ');
     const aliases = [...((/--model <model>.*?\(e\.g\.([^)]*)\)/.exec(help) || [])[1] || '').matchAll(/'([\w.-]+)'/g)].map((m) => m[1]);
     const efforts = (((/--effort <level>[^(]*\(([^)]*)\)/.exec(help) || [])[1] || '').match(/[a-z]+/g)) || [];
     if (!aliases.length) throw new Error("Claude Code didn't list its models.");
-    return { models: aliases.map((id) => ({ id, name: id[0].toUpperCase() + id.slice(1), efforts: levels(efforts) })), efforts: levels(efforts) };
+    const ids = await claudeModelIds(file).catch(() => ({}));
+    // Haiku isn't in the help's examples, but Claude Code takes it when it knows a current Haiku.
+    if (ids.haiku && !aliases.includes('haiku') && ids.opus && ids.haiku.split('-')[2] === ids.opus.split('-')[2]) aliases.push('haiku');
+    const order = Object.keys(CLAUDE_FAMILIES);
+    aliases.sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
+    return {
+      models: aliases.map((id) => ({
+        id,
+        name: claudeModelName(ids[id]) || id[0].toUpperCase() + id.slice(1),
+        sub: CLAUDE_FAMILIES[id] || '',
+        efforts: levels(efforts),
+      })),
+      efforts: levels(efforts),
+    };
   },
   // Codex prints its model catalog; "list" models are the ones its own picker shows.
   codex: async (file) => {
@@ -270,6 +341,7 @@ const MODELS = {
     const models = (json.models || []).filter((m) => m.slug && m.visibility !== 'hide').map((m) => ({
       id: m.slug,
       name: m.display_name || m.slug,
+      sub: String(m.description || '').split(/(?<=\.)\s/)[0].slice(0, 80),
       efforts: levels((m.supported_reasoning_levels || []).map((l) => l.effort || l).filter((e) => typeof e === 'string')),
       defaultEffort: m.default_reasoning_level || null,
     }));
@@ -287,7 +359,8 @@ const MODELS = {
       const lv = /-(minimal|low|medium|high|xhigh|max)$/.exec(id);
       const base = lv ? id.slice(0, -lv[0].length) : id;
       const name = label.replace(/\s*\((minimal|low|medium|high|extra high|xhigh|max)\)\s*$/i, '').trim();
-      if (!byBase.has(base)) byBase.set(base, { id: base, name, efforts: [], ids: {} });
+      const maker = /^gemini/i.test(name) ? 'Google' : /^claude/i.test(name) ? 'Anthropic' : /^gpt/i.test(name) ? 'OpenAI' : '';
+      if (!byBase.has(base)) byBase.set(base, { id: base, name, sub: maker, efforts: [], ids: {} });
       const e = byBase.get(base);
       if (lv) { e.efforts.push(...levels([lv[1]])); e.ids[lv[1]] = id; } else e.ids[''] = id;
     }
@@ -554,6 +627,7 @@ function claudeParser() {
   return (o, emit) => {
     if (o.type === 'system' && o.subtype === 'init') {
       emit({ kind: 'session', id: o.session_id });
+      if (o.model) emit({ kind: 'model', id: o.model, name: claudeModelName(o.model) || o.model });
       const mcp = (o.mcp_servers || []).find((s) => s.name === MCP_NAME);
       if (mcp && mcp.status !== 'connected') emit({ kind: 'note', text: `TuffCode tools didn't start (${mcp.status}).` });
     } else if (o.type === 'stream_event' && o.event?.type === 'content_block_delta' && o.event.delta?.type === 'text_delta') {
@@ -583,7 +657,13 @@ function codexParser() {
     else if (o.type === 'item.started' && it.type === 'mcp_tool_call') emit({ kind: 'tool', name: `mcp__${it.server}__${it.tool}`, input: it.arguments || {} });
     else if (o.type === 'item.completed') {
       if (it.type === 'agent_message' && it.text) emit({ kind: 'text', text: it.text });
-      else if (it.type === 'file_change') emit({ kind: 'tool', name: 'Edit', input: { file_path: (it.changes || []).map((c) => c.path).join(', ') } });
+      else if (it.type === 'file_change') {
+        // One step per file, each with its own result, so every changed file is named.
+        for (const c of it.changes || []) {
+          emit({ kind: 'tool', name: 'Edit', input: { file_path: c.path } });
+          emit({ kind: 'tool_result', ok: it.status !== 'failed' });
+        }
+      }
       else if (it.type === 'command_execution') emit({ kind: 'tool_result', ok: it.exit_code === 0 || it.status === 'completed' });
       else if (it.type === 'mcp_tool_call') emit({ kind: 'tool_result', ok: it.status !== 'failed' });
       else if (it.type === 'error') emit({ kind: 'error', text: it.message });

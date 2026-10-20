@@ -80,6 +80,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Mac: the system traffic lights sit at the left of the title bar, so make room and hide ours. */
 .mac #titlebar { padding-left: 84px; }
 .mac .win-controls { display: none; }
+/* In full screen the traffic lights are hidden, so the title bar doesn't need the room. */
+.mac.fullscreen #titlebar { padding-left: 8px; }
 .mac .tb-right { padding-right: 8px; }
 /* Drawn icons that stand in for Segoe Fluent Icons off Windows (see ide.js). */
 .fl-svg { width: 1em; height: 1em; display: block; }
@@ -112,6 +114,9 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tree-row { display: flex; align-items: center; gap: 5px; height: 24px; padding-right: 8px; white-space: nowrap; cursor: default; border-radius: 4px; margin: 0 4px; }
 .tree-row:hover { background: rgba(255,255,255,.04); }
 .tree-row.selected { background: var(--bg-active); }
+/* A file that just appeared (made by an agent or outside TuffCode) glows for a moment. */
+.tree-row.fresh { animation: tree-fresh 1.6s ease-out; }
+@keyframes tree-fresh { 0%, 35% { background: color-mix(in srgb, var(--accent) 28%, transparent); } 100% { background: transparent; } }
 #tree:focus .tree-row.selected { background: color-mix(in srgb, var(--accent) 45%, #2b2d30); }
 .tree-row .tw { width: 14px; height: 14px; flex: none; color: var(--text-muted); transition: transform .12s; }
 .tree-row .tw.open { transform: rotate(90deg); }

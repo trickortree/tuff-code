@@ -134,6 +134,14 @@ def smooth_circle(master, d, color, bg, ring=None, ring_w=0):
 # ---------------------------------------------------------------- default icon
 
 def default_icon(master):
+    # A program built into an app by TuffCode carries the icon picked for it (TUFF_APP_ICON, set by
+    # the app's launcher), so its windows show that icon instead of the Tuff placeholder below.
+    custom = os.environ.get("TUFF_APP_ICON")
+    if custom and os.path.isfile(custom):
+        try:
+            return tk.PhotoImage(master=master, file=custom)
+        except tk.TclError:
+            pass
     size, bg = 32, "#0b1226"
     top, bottom = rgb("#3574f0"), rgb("#22d3ee")
     dots = [(x, y) for y in (7, 12) for x in (6, 11, 16, 21, 26)] + [(16, y) for y in (17, 22, 27)]

@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('tuff', {
     reveal: invoke('shell:reveal'),
     search: invoke('fs:search'),
     replaceInFile: invoke('fs:replaceInFile'),
+    watch: invoke('fs:watch'),
+    writeFilesSync: (files) => ipcRenderer.sendSync('fs:writeFilesSync', files),
+    onChanged: on('fs:changed'),
   },
   run: { start: invoke('run:start'), stop: invoke('run:stop'), input: invoke('run:input'), onData: on('run:data'), onExit: on('run:exit') },
   build: {
@@ -71,6 +74,7 @@ contextBridge.exposeInMainWorld('tuff', {
     isMaximized: invoke('window:isMaximized'),
     onMaximized: on('window:maximized'),
     onBlur: on('window:blur'),
+    onFullScreen: on('window:fullscreen'),
     devtools: invoke('app:devtools'),
   },
   platform: process.platform,

@@ -21,6 +21,9 @@
   // ---------- Mac and Linux ----------
   // A Mac keeps its own traffic-light buttons in the title bar (see main.js).
   if (api.platform === 'darwin') document.documentElement.classList.add('mac');
+  // Words that differ by system.
+  const BUILD_WORD = api.platform === 'win32' ? '.exe' : 'app';
+  const REVEAL = api.platform === 'darwin' ? 'Reveal in Finder' : api.platform === 'win32' ? 'Reveal in File Explorer' : 'Open Containing Folder';
   // "Build .exe" is Windows talk; elsewhere the same feature builds an app.
   if (api.platform !== 'win32') {
     const words = () => {
@@ -317,7 +320,7 @@
 
   function treeRow(e, depth, isRoot) {
     const r = document.createElement('div');
-    r.className = 'tree-row' + (isRoot ? ' root' : '') + (tree.selected === e.path ? ' selected' : '');
+    r.className = 'tree-row' + (isRoot ? ' root' : '') + (tree.selected === e.path ? ' selected' : '') + (tree.fresh?.has(e.path) ? ' fresh' : '');
     r.style.paddingLeft = 6 + depth * 16 + 'px';
     r.dataset.path = e.path;
     if (e.isDir) r.dataset.dir = '1';
@@ -364,10 +367,53 @@
   }
 
   async function refreshTree() {
+    const known = new Set([...tree.children.values()].flat().map((e) => e.path));
     for (const dir of [...tree.expanded]) await loadChildren(dir);
     filesCache = null;
+    // Files that just appeared get a short highlight so you can see where they went.
+    tree.fresh = new Set([...tree.children.values()].flat().map((e) => e.path).filter((p) => known.size && !known.has(p)));
     renderTree();
+    tree.fresh = null;
   }
+
+  // ---------- files changed outside TuffCode ----------
+  // main.js watches the open folder, so files an agent (or Explorer/Finder, or anything else) makes,
+  // changes or deletes show up straight away, and open tabs follow along unless you've edited them.
+  const norm = (s) => s.replace(/\r\n/g, '\n');
+  async function reloadFromDisk(tabs) {
+    for (const t of [...tabs]) { // a copy: closing a tab meanwhile changes state.tabs
+      if (t.model.isDisposed() || isDirty(t)) continue;
+      const disk = await api.fs.readFile(t.path).catch(() => null);
+      // Check again: the tab may have been closed or typed in while the file was being read.
+      if (!state.tabs.includes(t) || t.model.isDisposed() || isDirty(t)) continue;
+      if (disk === null || norm(disk) === norm(t.model.getValue())) continue;
+      t.model.pushStackElement(); // the reload is its own undo step
+      t.model.pushEditOperations([], [{ range: t.model.getFullModelRange(), text: disk }], () => null);
+      t.model.pushStackElement();
+      t.saved = t.model.getAlternativeVersionId();
+    }
+    state.tabs.forEach(syncDirty);
+  }
+  let diskTimer = null;
+  let diskAll = false;
+  const diskChanged = new Set();
+  api.fs.onChanged?.(({ root, paths, overflow, gone }) => {
+    if (root !== state.root) return;
+    if (gone) toast(`The folder ${basename(root)} was moved or deleted. Open it again from File > Open Folder.`, 'error', 10000);
+    for (const p of paths) diskChanged.add(p.toLowerCase());
+    if (overflow) diskAll = true;
+    clearTimeout(diskTimer);
+    diskTimer = setTimeout(async () => {
+      const changed = [...diskChanged];
+      const all = diskAll;
+      diskChanged.clear();
+      diskAll = false;
+      await refreshTree();
+      // A changed folder counts for the files inside it (some systems only report the folder).
+      const hit = (p) => changed.some((c) => p === c || p.startsWith(c + SEP));
+      await reloadFromDisk(all ? state.tabs : state.tabs.filter((t) => hit(t.path.toLowerCase())));
+    }, 120);
+  });
 
   function selectInTree(p) {
     tree.selected = p;
@@ -401,7 +447,7 @@
       items.push('sep');
     }
     items.push({ label: 'Copy Path', run: () => navigator.clipboard.writeText(p) });
-    items.push({ label: 'Reveal in Explorer', run: () => api.fs.reveal(p) });
+    items.push({ label: REVEAL, run: () => api.fs.reveal(p) });
     if (!isRoot) {
       items.push('sep', { label: 'Rename…', sc: 'Shift+F6', run: () => renameEntry(p) });
       items.push({ label: 'Delete', sc: 'Delete', danger: true, run: () => trashEntry(p) });
@@ -526,6 +572,7 @@
     filesCache = null;
     await loadChildren(dir);
     renderTree();
+    api.fs.watch?.(dir);
     const name = basename(dir);
     $('#project-name').textContent = name;
     const initials = name.replace(/[^A-Za-z0-9 _-]/g, '').split(/[\s_-]+|(?=[A-Z])/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
@@ -663,6 +710,13 @@
     persistSession();
   }
 
+  // Cmd+Q, the Mac's red button or logging out close the window without going through Exit, so
+  // whatever the autosave hasn't written yet is written synchronously as the page goes away.
+  window.addEventListener('beforeunload', () => {
+    const dirty = state.tabs.filter(isDirty);
+    if (dirty.length) api.fs.writeFilesSync?.(dirty.map((t) => ({ path: t.path, content: t.model.getValue() })));
+  });
+
   async function saveTab(t) {
     const version = t.model.getAlternativeVersionId();
     t.model.pushStackElement(); // the next edit starts a new undo step, so Ctrl+Z lands on exactly what was saved
@@ -722,7 +776,7 @@
           { label: 'Close All Tabs', run: () => [...state.tabs].forEach((x) => closeTab(x)) },
           'sep',
           { label: 'Copy Path', run: () => navigator.clipboard.writeText(t.path) },
-          { label: 'Reveal in Explorer', run: () => api.fs.reveal(t.path) },
+          { label: REVEAL, run: () => api.fs.reveal(t.path) },
         ]);
       };
       el.appendChild(tab);
@@ -1203,7 +1257,8 @@
 
   function updateBuildDialog() {
     document.querySelectorAll('.bd-type').forEach((b) => b.classList.toggle('sel', (b.dataset.windowed === '1') === bd.windowed));
-    $('#bd-dest').textContent = join(join(state.root, 'dist'), `${exeName($('#bd-name').value)}${api.platform === 'win32' ? '.exe' : ''}`);
+    const suffix = api.platform === 'win32' ? '.exe' : (api.platform === 'darwin' && bd.windowed ? '.app' : '');
+    $('#bd-dest').textContent = join(join(state.root, 'dist'), `${exeName($('#bd-name').value)}${suffix}`);
   }
 
   async function openBuildDialog(file) {
@@ -1435,7 +1490,7 @@
     run: { label: 'Run Current File', sc: 'Shift+F10', run: runCurrent },
     rerun: { label: 'Rerun', sc: 'Ctrl+F5', run: rerun },
     stop: { label: 'Stop', sc: 'Ctrl+F2', run: () => api.run.stop() },
-    build: { label: 'Build .exe…', sc: 'Ctrl+F9', run: () => openBuildDialog() },
+    build: { label: `Build ${BUILD_WORD}…`, sc: 'Ctrl+F9', run: () => openBuildDialog() },
     replayIntro: { label: 'Replay Intro', run: playIntro },
     about: { label: 'About TuffCode', run: () => toast(`TuffCode ${state.version} — the IDE for the Tuff language. github.com/trickortree/tuff-code`, 'info', 6000) },
     checkUpdates: { label: 'Check for Updates…', run: () => { openSettings(); showSettingsPage('updates'); api.update.check(); } },
@@ -1563,7 +1618,7 @@
     switch (s.status) {
       case 'checking': return 'Checking for updates…';
       case 'up-to-date': return 'You have the latest version.';
-      case 'available': return `Version ${s.latest.version} is available.`;
+      case 'available': return `Version ${s.latest.version} is available.${s.detail ? ` ${s.detail}` : ''}`;
       case 'downloading': return `Downloading version ${s.latest?.version}…${s.detail ? ` ${s.detail}` : ''}`;
       case 'installing': return s.detail || 'Installing the update…';
       case 'ready': return `Version ${s.ready} is installed. Restart TuffCode to use it.`;
@@ -1590,12 +1645,14 @@
     const busy = ['checking', 'downloading', 'installing'].includes(s.status);
     const btn = $('#up-check');
     btn.disabled = busy;
-    btn.textContent = s.status === 'ready' ? 'Restart now' : s.status === 'available' ? 'Install update' : 'Check for updates';
+    const mac = api.platform === 'darwin'; // a Mac downloads updates from the release page
+    btn.textContent = s.status === 'ready' ? 'Restart now' : s.status === 'available' ? (mac ? 'Download update' : 'Install update') : 'Check for updates';
+    if (s.status === 'up-to-date' && s.detail) $('#up-status').textContent = s.detail;
     const sb = $('#sb-update');
     const show = ['available', 'downloading', 'installing', 'ready'].includes(s.status);
     sb.classList.toggle('hidden', !show);
     sb.classList.toggle('busy', busy);
-    sb.textContent = s.status === 'ready' ? '↑ Restart to update' : s.status === 'available' ? `↑ Update to ${s.latest.version}` : 'Updating…';
+    sb.textContent = s.status === 'ready' ? '↑ Restart to update' : s.status === 'available' ? `↑ ${mac ? 'Download' : 'Update to'} ${s.latest.version}` : 'Updating…';
     sb.title = updateText(s);
     if (s.status === 'ready' && !upd.toldReady) {
       upd.toldReady = true;
@@ -1603,7 +1660,11 @@
     }
     if (s.status === 'available' && !upd.toldAvailable) {
       upd.toldAvailable = true;
-      toast(`TuffCode ${s.latest.version} is available.`, 'info', 10000, { label: 'Update', run: updateAction });
+      toast(`TuffCode ${s.latest.version} is available.`, 'info', 10000, { label: mac ? 'Download' : 'Update', run: updateAction });
+    }
+    if (mac && s.status === 'available' && s.detail && s.detail !== upd.toldDetail) {
+      upd.toldDetail = s.detail;
+      toast(s.detail, 'info', 10000);
     }
   }
 
@@ -1766,7 +1827,11 @@
       e.stopPropagation();
       return;
     }
-    const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+    // On a Mac, Option turns keys into characters (Option+S is ß, Option+3 is # on a UK keyboard).
+    // With Cmd or Ctrl held nothing gets typed, so there the physical key names the shortcut; a bare
+    // Option+key is left alone so people can type those characters.
+    const phys = /^Key([A-Z])$/.exec(e.code)?.[1] ?? /^Digit(\d)$/.exec(e.code)?.[1];
+    const key = (api.platform === 'darwin' && e.altKey && (e.metaKey || e.ctrlKey) && phys) || (e.key.length === 1 ? e.key.toUpperCase() : e.key);
     const combo = [(e.ctrlKey || e.metaKey) && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', key].filter(Boolean).join('+');
     const id = keymap[combo];
     if (id) {
@@ -1794,6 +1859,7 @@
     $('#win-max').title = max ? 'Restore Down' : 'Maximize';
   };
   api.win.onMaximized(setMaxIcon);
+  api.win.onFullScreen?.((on) => document.documentElement.classList.toggle('fullscreen', !!on));
   api.win.onBlur(() => saveAll());
 
   $('#btn-run').onclick = () => (state.running ? api.run.stop() : runCurrent());
@@ -1847,7 +1913,7 @@
         : { label: cur ? `Run '${basename(cur)}'` : 'Run Current File', sc: 'Shift+F10', run: runCurrent },
       { label: 'Rerun', sc: 'Ctrl+F5', run: rerun },
       'sep',
-      { label: 'Build .exe…', sc: 'Ctrl+F9', run: () => openBuildDialog() },
+      { label: `Build ${BUILD_WORD}…`, sc: 'Ctrl+F9', run: () => openBuildDialog() },
       'sep',
       { label: 'Show Run Window', sc: 'Alt+4', run: () => showBottom(true) },
     ]);
@@ -1913,16 +1979,7 @@
     },
     // Reload open files that changed on disk (an agent edited them) unless they have unsaved changes.
     reloadChanged: async () => {
-      for (const t of state.tabs) {
-        if (isDirty(t)) continue;
-        const disk = await api.fs.readFile(t.path).catch(() => null);
-        const norm = (s) => s.replace(/\r\n/g, '\n');
-        if (disk === null || norm(disk) === norm(t.model.getValue())) continue;
-        t.model.pushEditOperations([], [{ range: t.model.getFullModelRange(), text: disk }], () => null);
-        t.saved = t.model.getAlternativeVersionId();
-      }
-      state.tabs.forEach(syncDirty);
-      filesCache = null;
+      await reloadFromDisk(state.tabs);
       await refreshTree();
     },
     addCommand: (id, def) => { commands[id] = def; if (def.sc) keymap[def.sc] = id; },
