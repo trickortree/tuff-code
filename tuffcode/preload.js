@@ -49,6 +49,8 @@ contextBridge.exposeInMainWorld('tuff', {
     install: invoke('plugins:install'),
     uninstall: invoke('plugins:uninstall'),
     setEnabled: invoke('plugins:setEnabled'),
+    writeFile: invoke('plugins:writeFile'),
+    request: invoke('plugins:request'),
   },
   agents: {
     detect: invoke('agents:detect'),

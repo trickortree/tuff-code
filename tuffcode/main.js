@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -380,6 +380,31 @@ ipcMain.handle('plugins:list', (_e, force) => plugins.list(force));
 ipcMain.handle('plugins:install', (_e, id) => plugins.install(id));
 ipcMain.handle('plugins:uninstall', (_e, id) => plugins.uninstall(id));
 ipcMain.handle('plugins:setEnabled', (_e, id, on) => plugins.setEnabled(id, on));
+// Plugins with the "files" permission save into the open project, and only there.
+ipcMain.handle('plugins:writeFile', async (_e, root, rel, data, encoding = 'utf8') => {
+  const base = path.resolve(String(root || ''));
+  const target = path.resolve(base, String(rel || ''));
+  if (!root || !rel || (target !== base && !target.startsWith(base + path.sep))) throw new Error('Plugins can only save inside the open project.');
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await fsp.writeFile(target, encoding === 'base64' ? Buffer.from(String(data), 'base64') : String(data), encoding === 'base64' ? undefined : 'utf8');
+  return target;
+});
+// Plugins with the "net" permission make web requests through here (http and https only, 15 s at most).
+ipcMain.handle('plugins:request', async (_e, { url, method = 'GET', headers = {}, body } = {}) => {
+  if (!/^https?:\/\//i.test(String(url || ''))) throw new Error('Only http:// and https:// addresses work.');
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 15000);
+  const started = Date.now();
+  try {
+    const res = await net.fetch(url, { method, headers, body: body == null || /^(GET|HEAD)$/i.test(method) ? undefined : String(body), signal: ctl.signal });
+    const text = await res.text();
+    return { ok: res.ok, status: res.status, statusText: res.statusText, headers: Object.fromEntries(res.headers.entries()), text: text.slice(0, 2_000_000), cut: text.length > 2_000_000, ms: Date.now() - started };
+  } catch (err) {
+    throw new Error(ctl.signal.aborted ? 'No answer within 15 seconds.' : String(err.message || err));
+  } finally {
+    clearTimeout(timer);
+  }
+});
 ipcMain.handle('agents:detect', () => agents.detect());
 ipcMain.handle('agents:connection', (_e, id) => agents.connection(id));
 ipcMain.handle('agents:connect', (_e, id, on) => agents.connect(id, on));

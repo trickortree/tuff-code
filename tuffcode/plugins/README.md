@@ -55,12 +55,13 @@ TuffPlugins.register('my-plugin', (t) => {
 | `t.panel(id, { title, icon, mount })` | A panel in the right sidebar. `mount(el)` runs the first time it opens. Returns `{ open, close, toggle, isOpen, element }`. |
 | `t.command(id, label, run, shortcut)` | A command for Search Everywhere (type `/`) with an optional shortcut. |
 | `t.editor` | `code()`, `selection()`, `selectionLines()`, `file()`, `insert(text)`, `insertSnippet(text)` (supports `${1:placeholder}`). |
-| `t.project` | `root()`, `files()`, `read(path)`, `rel(path)`. |
+| `t.project` | `root()`, `files()`, `read(path)`, `rel(path)`. With `"permissions": ["files"]`, also `write(path, data, { encoding })`: saves text, or base64 data such as a PNG or WAV (`encoding: "base64"`), at a path inside the open project, and refreshes the project tree. |
 | `t.openFile(path)`, `t.run(path)` | Open a file in a tab, or run a Tuff file. |
 | `t.toast(message, kind)`, `t.ask({ title, value, confirm })` | Little messages and questions. |
 | `t.reloadChanged()` | Reload open files that changed on disk. |
 | `t.storage.get(key, fallback)`, `t.storage.set(key, value)` | Remember things between sessions. |
 | `t.tuff` | The language tables: `keywords`, `docs`, `methods`, `libs`, `templates`. |
+| `t.net` | Only for plugins with `"permissions": ["net"]`: `request({ url, method, headers, body })` gives back `{ ok, status, statusText, headers, text, ms }`. Only http and https, and 15 seconds at most. |
 | `t.agents` | Only for plugins with `"permissions": ["agents"]`: run Claude Code, Codex or Antigravity (see `tuff-agents`). |
 
 ## Getting it into the marketplace
