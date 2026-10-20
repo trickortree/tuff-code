@@ -67,17 +67,35 @@ jobs:
       - run: npm ci
 
       - name: Build TuffCode.app, the .dmg and the .zip
+        # Sign (ad-hoc) on pull requests too, so a PR tests exactly what a release ships.
+        env:
+          CSC_FOR_PULL_REQUEST: 'true'
         run: npx electron-builder --mac dmg zip --${{ matrix.arch }} --publish never
 
-      - name: Test the Tuff tools inside the built app (MCP server, checker, runtime)
+      # Test the app the way people get it: copied out of the .dmg.
+      - name: Take TuffCode.app out of the .dmg
         run: |
-          APP="$(ls -d ../build/installer/mac*/TuffCode.app | head -1)"
-          node test/mcp-test.mjs "$APP/Contents/MacOS/TuffCode" "$APP/Contents/Resources/app.asar.unpacked/mcp/tuff-mcp.js"
+          DMG="$(ls ../build/installer/*.dmg | head -1)"
+          MNT="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG"
+          ditto "$MNT/TuffCode.app" "$RUNNER_TEMP/TuffCode.app"
+          hdiutil detach "$MNT"
+          echo "APP=$RUNNER_TEMP/TuffCode.app" >> "$GITHUB_ENV"
 
-      - name: Open the built app and check the IDE
+      # A broken signature makes macOS call a downloaded app "damaged" with no way to open it.
+      # A valid ad-hoc one gets "Open Anyway" in Privacy & Security instead.
+      - name: Check the app's signature
         run: |
-          APP="$(ls -d ../build/installer/mac*/TuffCode.app | head -1)"
-          node test/app-smoke.mjs "$APP/Contents/MacOS/TuffCode" "../build/installer/screenshot-${{ matrix.arch }}.png"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv "$APP" 2>&1 | grep -E "Identifier|Signature|Format"
+          codesign --verify --strict --verbose=2 "$APP/Contents/Resources/runtime/tuff-runtime/tuff-runtime"
+          spctl --assess --type execute -vv "$APP" || echo "Gatekeeper: not notarized (expected without an Apple Developer ID)"
+
+      - name: Test the Tuff tools inside the app (MCP server, checker, runtime)
+        run: node test/mcp-test.mjs "$APP/Contents/MacOS/TuffCode" "$APP/Contents/Resources/app.asar.unpacked/mcp/tuff-mcp.js"
+
+      - name: Open the app and check the IDE
+        run: node test/app-smoke.mjs "$APP/Contents/MacOS/TuffCode" "../build/installer/screenshot-${{ matrix.arch }}.png"
 
       - uses: actions/upload-artifact@v4
         if: always()
