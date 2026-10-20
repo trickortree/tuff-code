@@ -1921,21 +1921,64 @@ class Checker:
 
     # ---- checks
     def check_top_level(self):
-        """A built-in's name given a value at the top replaces it, so later calls of it fail. And a
-        function made twice at the top: the second replaces the first."""
+        """A built-in's name given a value at the top replaces it, so later uses of it fail: calls of a built-in
+        function, and "is err" checks of what number() gave. And a function made twice at the top: the second
+        replaces the first."""
         made = {}
+        owner = {}  # id(node) -> the top-level function it's written in (nodes at the top aren't in here)
+        for f in nodes(self.program):
+            if f.kind == "func" and id(f) not in owner:
+                for x in nodes(f.body):
+                    owner[id(x)] = f.name
+        calls, uses = {}, {}  # name -> its calls; function name -> (call or event input, given to an event?)
+        for x in nodes(self.program):
+            if x.kind == "call" and x.fn.kind == "var":
+                calls.setdefault(x.fn.name, []).append(x)
+                uses.setdefault(x.fn.name, []).append((x, False))
+            elif x.kind == "method":
+                for a in x.args:
+                    if a.kind == "var":
+                        uses.setdefault(a.name, []).append((a, True))
+
+        def runs_after(fname, after, seen):
+            """Can the function fname run after line `after`? Yes when it's called on a later line, given to an
+            event at the top (events happen after the top of the program has run), or used in a function that can."""
+            for x, event in uses.get(fname, []):
+                where = owner.get(id(x))
+                if where is None:
+                    if x.line > after or event:
+                        return True
+                elif where not in seen and runs_after(where, after, seen | {where}):
+                    return True
+            return False
+
+        def later(found, after):
+            """The first line of these that can run after line `after`, or None."""
+            lines = [x.line for x in found if (x.line > after if owner.get(id(x)) is None else runs_after(owner[id(x)], after, {owner[id(x)]}))]
+            return min(lines) if lines else None
 
         def replaces(s, name, after):
-            """s sets the built-in called name; any call of it after line `after` breaks."""
+            """s sets the built-in called name; any call of it that runs after line `after` breaks."""
             if self.kind(s.value) in ("$func", "$builtin") or (self.kind(s.value) or "").startswith("$libfn:"):
                 return
-            later = [line for line in self.calls.get(name, []) if line > after]
-            if later:
-                self.problem(s, f"'{name}' is a built-in function, and giving it a value replaces it everywhere, so {name}() on line {later[0]} won't work. Use another name, like my_{name}.")
+            line = later(calls.get(name, []), after)
+            if line:
+                self.problem(s, f"'{name}' is a built-in function, and giving it a value replaces it everywhere, so {name}() on line {line} won't work. Use another name, like my_{name}.")
+
+        def replaces_err(s):
+            """s gives err a value, so a later "is err" check of what number() gave never finds one."""
+            if self.gives_err(s.value) or (s.value.kind == "var" and s.value.name == "err"):
+                return
+            checks = [x for x in nodes(self.program) if x.kind == "binop" and x.op in ("==", "!=") and self.err_check(x)]
+            line = later(checks, s.line)
+            if line:
+                self.problem(s, f"'err' is built in (number() and num() give it for text that isn't a number), and giving it a value replaces it everywhere, so the is err check on line {line} won't work. Use another name, like my_err.")
 
         for s in self.program:
             if s.kind == "assign" and s.op == "=" and s.target.kind == "var" and isinstance(self.builtins.get(s.target.name), Builtin):
                 replaces(s, s.target.name, s.line)
+            elif s.kind == "assign" and s.op == "=" and s.target.kind == "var" and s.target.name == "err":
+                replaces_err(s)
             # f() at the top runs f, and f setting a built-in's name (not one of its inputs) replaces it for everyone
             # (except the OWN_NAME_BUILTINS: there it's f's own variable)
             if s.kind == "expr" and s.expr.kind == "call" and s.expr.fn.kind == "var" and self.only_func(s.expr.fn.name):
@@ -1972,14 +2015,35 @@ class Checker:
             owner = cond.obj.name if cond.obj.kind == "var" else "thing"
             self.problem(cond, f"Everything after {owner}:has was read as the thing to look for. Put brackets around its input, like: {owner}:has(x) and ...")
 
+    def gives_err(self, x, seen=frozenset()):
+        """Could x be the err that number(), num() or int() give for text that isn't a number?"""
+        if x.kind == "call" and x.fn.kind == "var":
+            return x.fn.name in ("number", "num", "int") and x.fn.name not in self.func_count
+        if x.kind == "var" and x.name not in seen:
+            return any(self.gives_err(t.value, seen | {x.name}) for t in self.assigned.get(x.name, []) if t.op == "=")
+        return False
+
+    def err_check(self, e):
+        """e compares err with something that could really be err, like: if num(t) is err"""
+        sides = (e.left, e.right)
+        return any(x.kind == "var" and x.name == "err" for x in sides) and any(self.gives_err(x) for x in sides)
+
     def check_binop(self, e):
         op, a, b = e.op, self.kind(e.left), self.kind(e.right)
         typed = next((x for x in (e.left, e.right) if self.typed(x)), None)
         tip = f" {self.describe(typed)} is typed text, so turn it into a number first: number({self.describe(typed)})." if typed is not None and self.describe(typed) else ""
+        other = e.right if e.left.kind == "var" and e.left.name == "err" else e.left if e.right.kind == "var" and e.right.name == "err" else None
         if op in self.ORDER and e.left.kind == "binop" and e.left.op in self.COMPARE:
             self.problem(e, "Tuff can't chain comparisons like 1 < x < 9: the first part gives true or false. Write x > 1 and x < 9.")
         elif op in self.ORDER and {a, b} == {"$text", "$number"}:
             self.problem(e, f"Can't compare text with a number using {op}.{tip}")
+        elif op in ("==", "!=") and other is not None and "err" not in self.everywhere and self.kind(other) == "$text":
+            # answer is err: only number(), num() and int() give err, so typed text never is
+            who, word, check = self.describe(other), "never" if op == "==" else "always", "is" if op == "==" else "is not"
+            self.problem(e, f"{who} is text, so it's never err and this is {word} true. Use num({who}) {check} err to check whether it's a number." if who
+                         else f"Text is never err, so this is {word} true. Use num(...) {check} err to check whether it's a number.")
+        elif op in ("==", "!=") and other is not None and self.err_check(e):
+            pass  # num(t) is err: if err was given a value, check_top_level says so
         elif op in ("==", "!=") and {a, b} == {"$text", "$number"}:
             word = "never" if op == "==" else "always"
             self.problem(e, f"Text is never equal to a number, so this is {word} true.{tip or ' Turn the text into a number with number(...) first.'}")
