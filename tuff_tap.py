@@ -23,6 +23,31 @@ AGENT = "TuffCode-tap/1.0"
 DATA = "data object"
 URL_SAFE = "!#$%&'()*+,/:;=?@[]~"  # left alone when spaces and other letters in a web address are %-escaped
 MAC_CERTS = "/etc/ssl/cert.pem"  # macOS's own list of certificates, used when certifi isn't there
+KEPT_ON_REDIRECT = {"user-agent", "accept", "accept-language"}  # headers that still go along to another site
+
+
+def same_site(old, new):
+    """Do these two web addresses go to the same site (scheme, host and port)? http:// to https:// on the usual
+    ports counts as the same site, like Python's requests."""
+    try:
+        a, b = urllib.parse.urlsplit(old), urllib.parse.urlsplit(new)
+        ends = [(p.scheme.lower(), p.port or {"http": 80, "https": 443}.get(p.scheme.lower())) for p in (a, b)]
+    except ValueError:
+        return False
+    return a.hostname == b.hostname and (ends[0] == ends[1] or ends == [("http", 80), ("https", 443)])
+
+
+class SafeRedirect(urllib.request.HTTPRedirectHandler):
+    """Follows redirects like urllib does, but when one goes to another site, the headers you set don't go with it
+    (Authorization, X-Api-Key and the like often hold a key or a password), except harmless ones like Accept."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and not same_site(req.full_url, new.full_url):
+            for name in list(new.headers):
+                if name.lower() not in KEPT_ON_REDIRECT:
+                    del new.headers[name]
+        return new
 
 
 def data_of(v):
@@ -234,9 +259,10 @@ class Lib:
         host = urllib.parse.urlsplit(url).hostname
         # Made for http:// too when it can be, in case the server sends tap on to an https:// address.
         context = self.ssl_context() if ssl is not None or url.lower().startswith("https:") else None
+        handlers = [SafeRedirect] + ([urllib.request.HTTPSHandler(context=context)] if context is not None else [])
         try:
             try:
-                with urllib.request.urlopen(req, timeout=TIMEOUT, context=context) as resp:
+                with urllib.request.build_opener(*handlers).open(req, timeout=TIMEOUT) as resp:
                     return self.response(resp.status, resp.headers, resp.read())
             except urllib.error.HTTPError as err:  # 404, 500...: still an answer
                 return self.response(err.code, err.headers, err.read() if err.fp is not None else b"")
