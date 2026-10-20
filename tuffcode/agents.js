@@ -107,7 +107,10 @@ const cmdQuote = (a) => (/^[\w\-.:=/\\@]+$/.test(a) ? a : `"${String(a).replace(
 function startCli(file, args, opts) {
   if (/\.(cmd|bat)$/i.test(file)) {
     if (args.some((a) => /[\r\n%!^]/.test(a))) throw new Error('Unsafe argument for a .cmd agent');
-    return spawn(`"${file}"`, args.map(cmdQuote), { ...opts, shell: true, windowsHide: true });
+    // The command line Node's shell: true would build (cmd.exe /d /s /c ""file" args"), written out
+    // because shell: true with an args list is deprecated (DEP0190). cmd.exe gets it exactly as is.
+    const line = [`"${file}"`, ...args.map(cmdQuote)].join(' ');
+    return spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${line}"`], { ...opts, windowsHide: true, windowsVerbatimArguments: true });
   }
   // On a Mac or Linux the agent gets its own process group, so Stop can end everything it started.
   return spawn(file, args, { ...opts, windowsHide: true, detached: process.platform !== 'win32' });
