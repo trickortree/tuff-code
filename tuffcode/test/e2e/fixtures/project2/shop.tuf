@@ -1,0 +1,22 @@
+mention mtgui
+
+app = mtgui.window("Shop", 400, 520)
+home = app:page "Home"
+home:heading "My Shop"
+home:small "Fresh pizza, every day."
+name = home:input "Your name"
+home:button("Order", go_page_2)
+status = home:text
+page_2 = app:page "Page 2"
+page_2:opened page_2_opened
+page_3 = app:page "Page 3"
+label1 = page_3:text "Some text"
+
+func order():
+    status:set "Thanks " + name:value
+
+func go_page_2():
+    page_2:open
+
+func page_2_opened():
+    say "Page 2 opened"

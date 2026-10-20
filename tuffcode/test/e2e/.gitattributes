@@ -1,0 +1,4 @@
+# Fixtures, stand-in agents and suites keep LF everywhere: the shell shims must, or /bin/sh fails on a Mac.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.png binary
