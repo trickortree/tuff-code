@@ -27,6 +27,20 @@
         "code",
         "beginner"
       ]
+    },
+    {
+      "id": "api-explorer",
+      "name": "API Explorer",
+      "version": "1.0.0",
+      "author": "trickortree",
+      "description": "Try a web API and see what comes back. Click any value in the answer to get the Tuff code that reaches it with tap, or a whole program that runs. Comes with examples to try, and keeps your last 20 requests.",
+      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 3.5c-1.7 0-2.5.8-2.5 2.5v3c0 1.4-.8 2.3-2 3 1.2.7 2 1.6 2 3v3c0 1.7.8 2.5 2.5 2.5M16 3.5c1.7 0 2.5.8 2.5 2.5v3c0 1.4.8 2.3 2 3-1.2.7-2 1.6-2 3v3c0 1.7-.8 2.5-2.5 2.5M9.5 12h5M12.5 10l2 2-2 2\"/></svg>",
+      "builtin": true,
+      "tags": [
+        "web",
+        "tap",
+        "beginner"
+      ]
     }
   ]
 }
