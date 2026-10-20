@@ -3,7 +3,8 @@
 Callback style (what atgui will use): handlers registered with on(), then loop(). A script in the page
 clicks, types into and ticks every widget; each Python handler changes the page, and the page times
 each round trip, from its click to seeing Python's change in the DOM. Also checks bubbling to a parent's
-handler, held keys, input values, and that a failing handler or every-frame function is reported once.
+handler, held keys, input values, mouse movement and the wheel, and that a failing handler or
+every-frame function is reported once.
 
     py -3 tuffcode/test/view/view_ui_test.py [--out result.json]
 """
@@ -60,6 +61,12 @@ async function go() {
   tv.emit('held', {});
   await wait(50);
   dispatchEvent(new KeyboardEvent('keyup', { key: 'k', code: 'KeyK', bubbles: true }));
+  await wait(50);
+  dispatchEvent(new PointerEvent('pointermove', { clientX: 300, clientY: 200, movementX: 5, movementY: -3 }));
+  dispatchEvent(new PointerEvent('pointermove', { clientX: 310, clientY: 210, movementX: 10, movementY: 10 }));
+  tv.node(W.status).el.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true }));
+  await wait(100);
+  tv.emit('moved', {});
   await wait(50);
   for (let i = 0; i < 3; i++) { tv.node(W.broken).el.click(); await wait(20); }
   await wait(100);
@@ -121,6 +128,9 @@ def main():
     held = {}
     view.on("keydown", lambda e: (keys_seen.append(e["key"]), status.set(text=f"Key down: {e['key']}")))
     view.on("held", lambda e: held.setdefault("during", view.key_down("k")))
+    moved = {}
+    view.on("moved", lambda e: moved.update(mouse=view.mouse, delta=view.mouse_delta()))
+    view.on("wheel", lambda e: moved.update(wheel=e["dy"], wheel_path=e["path"][:1]))
     result = {}
 
     def driver_done(e):
@@ -146,6 +156,9 @@ def main():
     checks.check(all(view.values.get(int(c)) is True for c in checks_), "view.values has every checkbox ticked")
     checks.check(keys_seen == ["k"], f"one keydown reached Python ({keys_seen})")
     checks.check(held.get("during") is True and held.get("after") is False, f"key_down('k') while held, not after keyup ({held})")
+    checks.check(moved.get("mouse") == (310, 210) and moved.get("delta") == (15, 7),
+                 f"mouse moves arrive merged, with position and summed movement ({moved.get('mouse')}, {moved.get('delta')})")
+    checks.check(moved.get("wheel") == 120 and moved.get("wheel_path") == [int(status)], f"the wheel arrives with what it was over ({moved.get('wheel')})")
     broken_reports = [w for w, m in errors if "click handler" in w]
     tick_reports = [w for w, m in errors if "every-frame" in w]
     checks.check(len(broken_reports) == 1, f"a handler failing 3 times is reported once ({len(broken_reports)})")
