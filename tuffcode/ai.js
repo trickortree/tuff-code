@@ -173,17 +173,25 @@ function start(m) {
   w.ready = new Promise((resolve, reject) => {
     proc.on('message', (msg) => {
       if (msg.type === 'loaded') { w.info = { gpu: msg.gpu, device: msg.device }; resolve(w.info); return; }
-      if (msg.type === 'failed') { reject(new Error(msg.error)); return; }
+      if (msg.type === 'failed') {
+        // The model didn't load. Let this worker go, so the next question starts a fresh one.
+        if (worker === w) worker = null;
+        try { proc.kill(); } catch {}
+        reject(new Error(msg.error));
+        return;
+      }
       const r = runs.get(msg.runId);
       if (!r) return;
       if (msg.type === 'delta') r.emit({ kind: 'delta', text: msg.text });
       else if (msg.type === 'done') { runs.delete(msg.runId); r.resolve(msg); }
     });
     proc.on('exit', (code) => {
-      if (worker === w) worker = null;
+      // A worker that was already let go (unloaded, or failed to load) has no questions left here.
+      const mine = worker === w;
+      if (mine) worker = null;
       const why = w.err.trim().split(/\r?\n/).pop();
       reject(new Error(`Tuff AI's model stopped unexpectedly (code ${code}).${why ? ` ${why}` : ''}`));
-      for (const [id, r] of runs) { runs.delete(id); r.resolve({ ok: false, error: 'Tuff AI stopped unexpectedly. Try again.' }); }
+      if (mine) for (const [id, r] of runs) { runs.delete(id); r.resolve({ ok: false, error: 'Tuff AI stopped unexpectedly. Try again.' }); }
     });
   });
   w.ready.catch(() => {});
