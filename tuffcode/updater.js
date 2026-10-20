@@ -270,9 +270,26 @@ function reschedule() {
   timer = setInterval(background, hours() * HOUR);
 }
 
+// The Electron package-lock.json asks for, when this copy runs on a different one. That happens after
+// TuffCode 1.0.3 updated a Windows copy: it copied the new files, but npm couldn't replace the Electron
+// that was running, and the restart started the old one again.
+function staleElectron() {
+  try {
+    const want = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8')).packages['node_modules/electron'].version;
+    return want && want !== process.versions.electron ? want : null;
+  } catch {
+    return null;
+  }
+}
+
 function start(sendEvent, getSettings) {
   emit = sendEvent;
   readSettings = getSettings;
+  if (process.platform === 'win32' && !app.isPackaged && !isGitCheckout() && staleElectron()) {
+    // Restarting through TuffCode.cmd installs the right Electron (see restart()).
+    installOnRestart = true;
+    set({ status: 'ready', ready: version(), detail: null });
+  }
   setTimeout(background, 15000);
   reschedule();
 }
@@ -284,8 +301,10 @@ function restart() {
   }
   if (installOnRestart) {
     // TuffCode.cmd installs the new Electron and starts TuffCode on it, once this one has closed.
+    // `start` gives it a window of its own, so if that fails its message shows and waits there
+    // (this detached cmd has no console). cmd /c closes that window once TuffCode.cmd is done.
     const cmd = path.join(__dirname, 'TuffCode.cmd');
-    spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"ping -n 4 127.0.0.1 >nul & "${cmd}""`], { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
+    spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"ping -n 4 127.0.0.1 >nul & start "TuffCode" cmd /d /s /c ""${cmd}"""`], { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
     app.exit(0);
     return;
   }
