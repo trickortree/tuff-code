@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('tuff', {
     rename: invoke('fs:rename'),
     trash: invoke('fs:trash'),
     reveal: invoke('shell:reveal'),
+    search: invoke('fs:search'),
+    replaceInFile: invoke('fs:replaceInFile'),
   },
   run: { start: invoke('run:start'), stop: invoke('run:stop'), input: invoke('run:input'), onData: on('run:data'), onExit: on('run:exit') },
   build: {

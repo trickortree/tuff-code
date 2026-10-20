@@ -502,9 +502,14 @@
       }
       const monaco = await monacoReady;
       if (state.tabs.some((x) => x.path === p)) return openFile(p, { focus, background });
-      const model = monaco.editor.createModel(content, langFor(p));
+      const uri = monaco.Uri.file(p);
+      monaco.editor.getModel(uri)?.dispose();
+      const model = monaco.editor.createModel(content, langFor(p), uri);
       model.updateOptions({ tabSize: tabSize(), insertSpaces: true });
       t = { path: p, model, saved: model.getAlternativeVersionId(), view: null };
+      const tab = t;
+      model.onDidChangeContent(() => scheduleCheck(tab));
+      scheduleCheck(tab);
       model.onDidChangeContent(() => {
         renderTabs();
         autosave();
@@ -581,6 +586,9 @@
     const i = state.tabs.indexOf(t);
     if (i < 0) return;
     state.tabs.splice(i, 1);
+    closedTabs.push(t.path);
+    if (closedTabs.length > 20) closedTabs.shift();
+    live.problems.delete(t.path);
     if (state.active === t.path) {
       const next = state.tabs[i] || state.tabs[i - 1];
       if (next) activate(next);
@@ -662,6 +670,7 @@
 
   function updateChrome() {
     const t = activeTab();
+    updateProblems();
     $('#empty-state').classList.toggle('hidden', !!t || studio.visible);
     $('#breadcrumbs').innerHTML = t ? crumbs(t.path) : '';
     $('#sb-path').innerHTML = t ? crumbs(t.path) : state.root ? `<span>${esc(basename(state.root))}</span>` : '';
@@ -670,6 +679,176 @@
     const runFile = t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile;
     $('#runconfig-name').textContent = runFile ? basename(runFile) : 'Current File';
     document.title = t ? `${basename(state.root)} – ${basename(t.path)} – TuffCode` : `${basename(state.root || '')} – TuffCode`;
+  }
+
+  // ---------- live checking ----------
+  // Tuff checks .tuf files a moment after you stop typing and marks the first mistake.
+  const live = { timers: new Map(), problems: new Map() };
+  const closedTabs = [];
+
+  function scheduleCheck(t) {
+    if (state.settings.liveCheck === false || ext(t.path) !== 'tuf') return;
+    clearTimeout(live.timers.get(t.path));
+    live.timers.set(t.path, setTimeout(() => runCheck(t), 650));
+  }
+
+  async function runCheck(t) {
+    if (!state.tabs.includes(t) || t.model.isDisposed()) return;
+    const version = t.model.getVersionId();
+    const r = await api.checkSource(t.model.getValue());
+    if (!state.tabs.includes(t) || t.model.isDisposed() || t.model.getVersionId() !== version) return;
+    const monaco = window.monaco;
+    if (r.ok || r.unknown || !r.line) {
+      live.problems.delete(t.path);
+      monaco.editor.setModelMarkers(t.model, 'tuff-live', []);
+    } else {
+      const line = Math.min(r.line, t.model.getLineCount());
+      const max = t.model.getLineMaxColumn(line);
+      const col = Math.max(1, Math.min(r.col || 1, max));
+      const word = t.model.getWordAtPosition({ lineNumber: line, column: col });
+      const message = r.text || r.message;
+      live.problems.set(t.path, { line, col, message });
+      monaco.editor.setModelMarkers(t.model, 'tuff-live', [{
+        severity: monaco.MarkerSeverity.Error, message, source: 'Tuff',
+        startLineNumber: line, startColumn: word ? word.startColumn : Math.max(1, col - 1),
+        endLineNumber: line, endColumn: word ? word.endColumn : Math.min(max, col + 1),
+      }]);
+    }
+    updateProblems();
+  }
+
+  function updateProblems() {
+    const el = $('#sb-problems');
+    const t = activeTab();
+    if (!t || studio.visible || ext(t.path) !== 'tuf' || state.settings.liveCheck === false) { el.className = 'hidden'; return; }
+    const p = live.problems.get(t.path);
+    el.className = p ? 'bad' : 'ok';
+    el.textContent = p ? `Line ${p.line}: ${p.message}` : 'No mistakes';
+    el.title = p ? 'Jump to the mistake' : 'Tuff checks your code as you type';
+  }
+
+  function setLiveCheck(on) {
+    saveSettings({ liveCheck: on });
+    for (const t of state.tabs) {
+      if (on) scheduleCheck(t);
+      else { window.monaco?.editor.setModelMarkers(t.model, 'tuff-live', []); live.problems.delete(t.path); }
+    }
+    updateProblems();
+  }
+
+  async function reopenClosedTab() {
+    while (closedTabs.length) {
+      const p = closedTabs.pop();
+      if (state.tabs.some((t) => t.path === p)) continue;
+      if (await api.fs.exists(p)) { await openFile(p); return; }
+    }
+    toast('No closed tabs to reopen.');
+  }
+
+  function toggleZen() {
+    const on = $('#app').classList.toggle('zen');
+    if (on) toast('Zen mode. Ctrl+Alt+Z brings everything back.', 'info', 3000);
+    editor?.layout();
+  }
+
+  // ---------- find in files ----------
+  const find = { case: false, word: false, re: false, timer: 0, seq: 0, results: [], total: 0 };
+
+  function findPattern() {
+    const q = $('#ff-q').value;
+    if (!q) return null;
+    let source = find.re ? q : q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (find.word) source = `\\b(?:${source})\\b`;
+    try { new RegExp(source); } catch { return { error: true }; }
+    return { source, flags: find.case ? 'g' : 'gi' };
+  }
+
+  function openFind() {
+    showSideView('find', true);
+    const sel = editor && activeTab() ? editor.getModel().getValueInRange(editor.getSelection()) : '';
+    if (sel && !sel.includes('\n')) $('#ff-q').value = sel;
+    $('#ff-q').focus();
+    $('#ff-q').select();
+    runFind();
+  }
+
+  async function runFind() {
+    const p = findPattern();
+    const sum = $('#ff-sum');
+    if (!p) { find.results = []; renderFind(); sum.textContent = ''; return; }
+    if (p.error) { sum.textContent = "That pattern isn't a valid regular expression."; return; }
+    const seq = ++find.seq;
+    sum.textContent = 'Searching…';
+    let r;
+    try { r = await api.fs.search(state.root, p.source, p.flags); } catch (err) { sum.textContent = cleanErr(err); return; }
+    if (seq !== find.seq) return;
+    // Open tabs may have changes that aren't saved yet, so search what's in the editor for those.
+    const re = new RegExp(p.source, p.flags);
+    for (const t of state.tabs) {
+      const matches = [];
+      t.model.getLinesContent().forEach((line, i) => {
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(line))) { if (!m[0]) { re.lastIndex++; continue; } matches.push({ line: i + 1, col: m.index + 1, len: m[0].length, preview: line.slice(0, 300) }); }
+      });
+      r.results = r.results.filter((g) => g.path !== t.path);
+      if (matches.length && isUnder(t.path, state.root)) r.results.push({ path: t.path, rel: rel(t.path), matches });
+    }
+    r.results.sort((a, b) => a.rel.localeCompare(b.rel));
+    find.results = r.results;
+    find.total = r.results.reduce((n, g) => n + g.matches.length, 0);
+    sum.textContent = find.total ? `${find.total} match${find.total === 1 ? '' : 'es'} in ${r.results.length} file${r.results.length === 1 ? '' : 's'}${r.truncated ? ' (showing the first 2000)' : ''}` : 'No matches.';
+    renderFind();
+  }
+
+  function renderFind() {
+    const box = $('#ff-results');
+    box.innerHTML = '';
+    for (const g of find.results) {
+      const head = document.createElement('div');
+      head.className = 'ff-file';
+      head.innerHTML = `${fileIcon(basename(g.path), false)}<span class="nm">${esc(basename(g.path))}</span><span class="dir">${esc(dirname(g.rel))}</span><span class="n">${g.matches.length}</span>`;
+      head.onclick = () => openFile(g.path);
+      box.appendChild(head);
+      for (const m of g.matches.slice(0, 200)) {
+        const row = document.createElement('div');
+        row.className = 'ff-hit';
+        const start = Math.max(0, m.col - 1 - 40);
+        const pre = m.preview.slice(start, m.col - 1);
+        row.innerHTML = `<span class="ln">${m.line}</span><span class="tx">${start ? '…' : ''}${esc(pre.trimStart())}<mark>${esc(m.preview.slice(m.col - 1, m.col - 1 + m.len))}</mark>${esc(m.preview.slice(m.col - 1 + m.len))}</span>`;
+        row.onclick = async () => {
+          await goToLine(g.path, m.line, m.col);
+          editor.setSelection(new window.monaco.Range(m.line, m.col, m.line, m.col + m.len));
+        };
+        box.appendChild(row);
+      }
+    }
+  }
+
+  async function replaceAllInFiles() {
+    const p = findPattern();
+    if (!p || p.error || !find.total) return toast('Search for something first.');
+    const rep = $('#ff-r').value;
+    const files = find.results.length;
+    const ok = await ask({ title: `Replace ${find.total} match${find.total === 1 ? '' : 'es'} in ${files} file${files === 1 ? '' : 's'} with "${rep}"?`, confirm: true, okLabel: 'Replace all' });
+    if (!ok) return;
+    const re = new RegExp(p.source, p.flags);
+    for (const g of find.results) {
+      const t = state.tabs.find((x) => x.path === g.path);
+      if (t) {
+        const text = t.model.getValue();
+        const next = text.replace(re, find.re ? rep : () => rep);
+        if (next !== text) {
+          t.model.pushEditOperations([], [{ range: t.model.getFullModelRange(), text: next }], () => null);
+          await saveTab(t);
+        }
+      } else {
+        await api.fs.replaceInFile(g.path, p.source, p.flags, rep, find.re);
+      }
+    }
+    renderTabs();
+    toast(`Replaced in ${files} file${files === 1 ? '' : 's'}. Ctrl+Z undoes it in open files.`, 'ok', 4000);
+    runFind();
   }
 
   // ---------- run ----------
@@ -1164,6 +1343,14 @@
     studio: { label: 'Design Studio', sc: 'Ctrl+Shift+D', run: () => openStudio() },
     searchEverywhere: { label: 'Search Everywhere', sc: 'Double Shift', run: () => openSearch('all') },
     goToFile: { label: 'Go to File…', sc: 'Ctrl+Shift+N', run: () => openSearch('files') },
+    findInFiles: { label: 'Find in Files…', sc: 'Ctrl+Shift+F', run: openFind },
+    goToSymbol: { label: 'Go to Function or Widget…', sc: 'Ctrl+Shift+O', run: ed('editor.action.quickOutline') },
+    goToDefinition: { label: 'Go to Definition', sc: 'F12', run: ed('editor.action.revealDefinition') },
+    findUses: { label: 'Find All Uses', sc: 'Shift+F12', run: ed('editor.action.goToReferences') },
+    renameSymbol: { label: 'Rename Everywhere…', sc: 'F2', run: ed('editor.action.rename') },
+    reopenTab: { label: 'Reopen Closed Tab', sc: 'Ctrl+Shift+T', run: reopenClosedTab },
+    zen: { label: 'Zen Mode', sc: 'Ctrl+Alt+Z', run: toggleZen },
+    liveCheck: { label: 'Check for Mistakes as You Type (on/off)', run: () => { setLiveCheck(state.settings.liveCheck === false); toast(state.settings.liveCheck === false ? 'Live checking is off.' : 'Live checking is on.'); } },
     nextTab: { label: 'Next Tab', sc: 'Ctrl+Tab', run: () => cycleTab(1) },
     prevTab: { label: 'Previous Tab', sc: 'Ctrl+Shift+Tab', run: () => cycleTab(-1) },
     zoomIn: { label: 'Increase Font Size', sc: 'Ctrl+=', run: zoom(1) },
@@ -1185,16 +1372,18 @@
     'Ctrl+Alt+S': 'settings', 'Ctrl+Alt+L': 'autoSort', 'Ctrl+S': 'saveAll', 'Ctrl+O': 'openFolder', 'Ctrl+Alt+N': 'newFile', 'Ctrl+F4': 'closeTab', 'Ctrl+W': 'closeTab',
     'Ctrl+Shift+N': 'goToFile', 'Ctrl+E': 'goToFile', 'Alt+1': 'toggleProject', 'Alt+2': 'learn', 'Alt+3': 'plugins', 'Alt+4': 'toggleRun', 'Ctrl+Shift+D': 'studio',
     'Shift+F10': 'run', 'Ctrl+Shift+F10': 'run', 'Ctrl+F5': 'rerun', 'Ctrl+F2': 'stop', 'Ctrl+F9': 'build',
-    'Ctrl+Tab': 'nextTab', 'Ctrl+Shift+Tab': 'prevTab', 'Ctrl+Shift+I': 'devtools', 'F12': 'devtools',
+    'Ctrl+Tab': 'nextTab', 'Ctrl+Shift+Tab': 'prevTab', 'Ctrl+Shift+I': 'devtools', 'F12': 'goToDefinition',
+    'Ctrl+Shift+F': 'findInFiles', 'Ctrl+Shift+T': 'reopenTab', 'Ctrl+Alt+Z': 'zen',
     'Ctrl+=': 'zoomIn', 'Ctrl++': 'zoomIn', 'Ctrl+Shift++': 'zoomIn', 'Ctrl+-': 'zoomOut', 'Ctrl+0': 'zoomReset',
     'Ctrl+D': 'dupLine', 'Ctrl+Y': 'deleteLine', 'Ctrl+Shift+Z': 'redo', 'Ctrl+R': 'replace',
   };
 
   const menus = [
     ['File', ['newFile', 'newFolder', 'openFolder', 'sep', 'saveAll', 'closeTab', 'sep', 'settings', 'sep', 'exit']],
-    ['Edit', ['undo', 'redo', 'sep', 'find', 'replace', 'sep', 'autoSort', 'comment', 'dupLine', 'deleteLine', 'selectAll']],
-    ['View', ['toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'sep', 'searchEverywhere', 'goToFile', 'sep', 'zoomIn', 'zoomOut', 'zoomReset', 'sep', 'settings', 'devtools']],
-    ['Run', ['run', 'rerun', 'stop', 'sep', 'build']],
+    ['Edit', ['undo', 'redo', 'sep', 'find', 'replace', 'findInFiles', 'sep', 'renameSymbol', 'autoSort', 'comment', 'dupLine', 'deleteLine', 'selectAll']],
+    ['View', ['toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'sep', 'zen', 'zoomIn', 'zoomOut', 'zoomReset', 'sep', 'settings', 'devtools']],
+    ['Go', ['searchEverywhere', 'goToFile', 'goToSymbol', 'sep', 'goToDefinition', 'findUses', 'sep', 'reopenTab', 'nextTab', 'prevTab']],
+    ['Run', ['run', 'rerun', 'stop', 'sep', 'build', 'sep', 'liveCheck']],
     ['Help', ['learn', 'replayIntro', 'sep', 'checkUpdates', 'about']],
   ];
 
@@ -1249,6 +1438,7 @@
     $('#up-auto').checked = state.settings.autoUpdate !== false;
     $('#up-hours').value = String([1, 2, 4, 8].includes(Number(state.settings.updateHours)) ? state.settings.updateHours : 2);
     $('#st-sort-run').checked = !!state.settings.sortOnRun;
+    $('#st-live').checked = state.settings.liveCheck !== false;
   }
 
   function openSettings() {
@@ -1355,6 +1545,7 @@
     api.update.reschedule();
   };
   $('#st-sort-run').onchange = (e) => saveSettings({ sortOnRun: e.target.checked });
+  $('#st-live').onchange = (e) => setLiveCheck(e.target.checked);
 
   function cycleAccent() {
     const list = window.TUFF_ACCENTS;
@@ -1551,6 +1742,18 @@
   });
   $('#learn-hide').onclick = () => showSideView('learn', false);
   $('#pl-hide').onclick = () => showSideView('plugins', false);
+  $('#ff-hide').onclick = () => showSideView('find', false);
+  $('#ff-q').addEventListener('input', () => { clearTimeout(find.timer); find.timer = setTimeout(runFind, 250); });
+  $('#ff-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') runFind(); if (e.key === 'Escape') showSideView('find', false); });
+  for (const [id, key] of [['#ff-case', 'case'], ['#ff-word', 'word'], ['#ff-re', 're']]) {
+    $(id).onclick = () => { find[key] = !find[key]; $(id).classList.toggle('on', find[key]); runFind(); };
+  }
+  $('#ff-replace').onclick = replaceAllInFiles;
+  $('#sb-problems').onclick = () => {
+    const t = activeTab();
+    const p = t && live.problems.get(t.path);
+    if (p) goToLine(t.path, p.line, p.col);
+  };
 
   $('#project-widget').onclick = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
