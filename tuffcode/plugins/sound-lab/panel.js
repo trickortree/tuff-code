@@ -342,6 +342,16 @@ TuffPlugins.register('sound-lab', (t) => {
   const $ = (s) => root.querySelector(s);
   const $$ = (s) => [...root.querySelectorAll(s)];
 
+  // The IDE catches shortcut keys on the document before they reach this panel, even while you type the
+  // sound's name: Ctrl+Y would delete a line of the open code file, Ctrl+D copy one, Ctrl+Shift+Z redo there.
+  // So while a text box here has focus, those keys stay with the box. This listens on the window, which hears
+  // keys before the document does.
+  function keepKeys(e) {
+    const el = e.target;
+    if (!root?.contains(el) || !el.matches?.('textarea, input:not([type="range"]):not([type="checkbox"])')) return;
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[zydr]$/i.test(e.key)) e.stopPropagation();
+  }
+
   // ---------------------------------------------------------------- the panel
   const rowHtml = (s) => {
     const d = SLIDERS.get(s.k);
@@ -399,6 +409,7 @@ TuffPlugins.register('sound-lab', (t) => {
       box.addEventListener('pointerenter', () => { if (Date.now() - listedAt > 5000) listSounds(); else renderUse(); });
       const name = $('.sl-name');
       name.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') save(); });
+      window.addEventListener('keydown', keepKeys, true);
       const adv = $('.sl-adv');
       adv.open = !!t.storage.get('advanced', false);
       adv.addEventListener('toggle', () => t.storage.set('advanced', adv.open));
@@ -809,6 +820,7 @@ game:clicked on_click
   return () => {
     remember(true);
     clearTimeout(rememberTimer);
+    window.removeEventListener('keydown', keepKeys, true);
     stopAll();
     resize?.disconnect();
     try { audio?.close(); } catch {}

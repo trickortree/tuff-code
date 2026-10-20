@@ -161,6 +161,15 @@ export default async (t, ctx) => {
 
   // 3. draw: a red pencil line and a blue rectangle outline, then save as hero
   await typeInto('[data-f="name"]', 'hero');
+  // Shortcut keys while typing the name stay with the box: the IDE would copy a line of main.tuf (Ctrl+D),
+  // open its Replace box (Ctrl+R) or delete a line (Ctrl+Y), and move the typing into the code.
+  const nameKeysBefore = await t.code();
+  await ctrl('d');
+  await ctrl('r');
+  await ctrl('y');
+  await t.sleep(200);
+  const nameKeys = await ev(`({ focus: document.activeElement === ${q('[data-f="name"]')}, name: ${q('[data-f="name"]')}.value, replace: !!document.querySelector('.monaco-editor .find-widget.visible') })`);
+  check('Ctrl+D, Ctrl+R and Ctrl+Y in the Name box leave the code file alone, and the box keeps the focus', (await t.code()) === nameKeysBefore && nameKeys.focus && nameKeys.name === 'hero' && !nameKeys.replace, { nameKeys, code: await t.code() });
   await clickEl(`[data-color="${RED}"]`);
   await drag([[2, 3], [4, 3], [7, 3], [9, 3]]);
   await clickEl(`[data-color="${BLUE}"]`);

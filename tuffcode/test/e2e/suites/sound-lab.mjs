@@ -177,6 +177,14 @@ export default async (t, ctx) => {
   const all = Object.entries(files);
   check('Clicking a preset plays it (Web Audio after a real click), with no errors', autoPlays && !(await data('playError')) && (await data('audio')) === 'running', { plays: await plays(), audio: await data('audio'), err: await data('playError') });
   check('Every preset saves a .wav into the project\'s sounds folder', all.every(([, f]) => f.buf), all.map(([k, f]) => `${k}:${!!f.buf}`));
+  // Shortcut keys while typing the name stay with the box: the IDE would copy a line of main.tuf (Ctrl+D),
+  // delete one (Ctrl+Y) or redo there (Ctrl+Shift+Z), and move the typing into the code.
+  const nameKeysBefore = await t.code();
+  await click(inPanel('.sl-name'));
+  for (const [k, mods] of [['D', 2], ['Y', 2], ['Z', 10]]) await t.key(k, mods);
+  await t.sleep(200);
+  const nameKeys = await ev(`({ focus: document.activeElement === ${P}.querySelector('.sl-name'), name: ${P}.querySelector('.sl-name').value })`);
+  check('Ctrl+D, Ctrl+Y and Ctrl+Shift+Z in the name box leave the code file alone, and the box keeps the focus', (await t.code()) === nameKeysBefore && nameKeys.focus && nameKeys.name === 'e2e_random', { nameKeys, code: await t.code() });
   const headerBad = all.filter(([, { wav: w }]) => !w || w.riff !== 'RIFF' || w.wave !== 'WAVE' || w.riffSize !== w.fileSize - 8 || w.endsAt !== w.fileSize
     || w.chunks.join() !== 'fmt ,data,LIST' || !w.fmt || w.fmt.format !== 1 || w.fmt.channels !== 1 || w.fmt.rate !== 44100 || w.fmt.bits !== 16 || w.fmt.byteRate !== 88200 || w.fmt.align !== 2);
   check('RIFF/WAVE header: PCM, mono, 44100 Hz, 16-bit, byte rate 88200, block align 2, RIFF size = file size - 8', !headerBad.length, headerBad.map(([k, f]) => [k, f.wav && { ...f.wav, data: undefined, list: undefined }]));

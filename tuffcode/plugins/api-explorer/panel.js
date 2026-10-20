@@ -343,7 +343,18 @@
     t.command('open', 'API Explorer: Open', () => panel.toggle());
 
     // ---------------------------------------------------------------- events
+    // The IDE catches shortcut keys on the document before they reach this panel, even while you type in
+    // one of its boxes: Ctrl+Y would delete a line of the open code file, Ctrl+D copy one, Ctrl+Shift+Z redo
+    // there. So while a box here has focus, those keys stay with the box. This listens on the window, which
+    // hears keys before the document does.
+    function keepKeys(e) {
+      const el = e.target;
+      if (!root?.contains(el) || !el.matches?.('input, textarea')) return;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && /^[zydr]$/i.test(e.key)) e.stopPropagation();
+    }
+
     function wire() {
+      window.addEventListener('keydown', keepKeys, true);
       $('.ax-bar').addEventListener('submit', (e) => { e.preventDefault(); send(); });
       $('.ax-method').addEventListener('change', (e) => setMethod(e.target.value));
       $('.ax-url').addEventListener('input', (e) => { S.url = e.target.value; });
@@ -864,6 +875,9 @@
         </div>`;
     }
 
-    return () => clearInterval(ticker);
+    return () => {
+      clearInterval(ticker);
+      window.removeEventListener('keydown', keepKeys, true);
+    };
   });
 })();

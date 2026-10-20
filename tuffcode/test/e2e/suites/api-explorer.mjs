@@ -163,6 +163,17 @@ export default async (t, ctx) => {
     check('It starts on GET, with no Body for a GET', first.method === 'GET' && !first.body, first);
     await shoot('api-explorer-1-examples-400.png');
 
+    // Shortcut keys pressed while typing in the address box stay with the box: the IDE's Ctrl+D (copy a line),
+    // Ctrl+Y (delete a line) and Ctrl+Shift+Z (redo) would change the open code file and move the cursor there.
+    const keysBefore = await t.code();
+    await fill(q('.ax-url'), `${BASE}/weather`);
+    await t.key('D', 2);
+    await t.key('Y', 2);
+    await t.key('Z', 10);
+    await sleep(200);
+    const keysAfter = { code: await t.code(), focus: await ev(`document.activeElement === document.querySelector('.ax-url')`), url: await ev(`document.querySelector('.ax-url').value`) };
+    check('Ctrl+D, Ctrl+Y and Ctrl+Shift+Z in the address box leave the code file alone, and the box keeps the focus', keysAfter.code === keysBefore && keysAfter.focus && keysAfter.url === `${BASE}/weather`, { keysBefore, keysAfter });
+
     // ---------------------------------------------------------------- 2. a GET with JSON: status, time, size, the tree
     await sendTo(`${BASE}/weather`);
     const st = await status();
@@ -331,6 +342,11 @@ export default async (t, ctx) => {
     const bodyErr = await ev(`(() => { const e = document.querySelector('.ax-bodyerr'); return e.classList.contains('hidden') ? null : e.textContent; })()`);
     check("A body that isn't JSON yet is caught, in plain words, and nothing is sent", !!bodyErr && /isn't JSON yet/.test(bodyErr) && /double quotes/.test(bodyErr) && seen.length === nBefore, { bodyErr, sent: seen.length - nBefore });
     await fill(`document.querySelector('.ax-body')`, bodyJson, 6);
+    const bodyKeysBefore = await t.code();
+    await t.key('D', 2);
+    await t.key('Y', 2);
+    await sleep(200);
+    check('Ctrl+D and Ctrl+Y in the Body box leave the code file alone', (await t.code()) === bodyKeysBefore && (await ev(`document.activeElement === document.querySelector('.ax-body') && document.querySelector('.ax-body').value`)) === bodyJson, await t.code());
     await setWidth(300);
     await click(q('.ax-send'), 'Send');
     await answered();

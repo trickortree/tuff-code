@@ -1019,7 +1019,8 @@ TuffPlugins.register('sprite-studio', (t) => {
 
   // Ctrl+Z and Ctrl+Y belong to the sprite while you're in this panel. The IDE catches keys on the document
   // first (Ctrl+Y would delete a line in the code editor), so this listens on the window, and only while focus
-  // is inside the panel.
+  // is inside the panel. In a text box, Ctrl+D and Ctrl+R stay with the box too (the IDE would copy a line of
+  // the code file, or open its Replace box).
   function onKey(e) {
     if (!root || !root.contains(document.activeElement)) return;
     const el = e.target;
@@ -1034,6 +1035,7 @@ TuffPlugins.register('sprite-studio', (t) => {
       return;
     }
     if (typing) {
+      if (ctrl && !e.altKey && (k === 'd' || k === 'r')) e.stopPropagation();
       if (e.key === 'Enter' && el.dataset.f === 'hex') { e.preventDefault(); applyHex(); }
       if (e.key === 'Enter' && (el.dataset.f === 'cw' || el.dataset.f === 'ch')) { e.preventDefault(); $('[data-a="resize"]').click(); }
       return;
