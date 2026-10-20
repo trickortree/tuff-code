@@ -11,8 +11,31 @@ const ASSET_EXTS = new Set(['.png', '.gif', '.ico', '.jpg', '.jpeg', '.webp', '.
 // Libraries whose windows are web views (tuff_view.py and its page, tuff_view_web): each is tuff_<name>.py.
 const VIEW_LIBS = ['atgui', 'tgame'];
 // Files a web view program can also use: sounds, models and more kinds of picture.
-const VIEW_ASSET_EXTS = new Set(['.mp3', '.ogg', '.m4a', '.webp', '.bmp', '.svg', '.glb']);
+const VIEW_ASSET_EXTS = new Set(['.mp3', '.ogg', '.m4a', '.webp', '.bmp', '.svg', '.avif', '.glb']);
+// Folders that are never packed: earlier builds, tools' folders and hidden ones (.git and so on).
+const SKIP_DIRS = new Set(['dist', 'build', 'node_modules', '__pycache__', 'venv']);
 const usesLib = (src, lib) => new RegExp(`^\\s*(import|mention)\\s+${lib}\\b`, 'm').test(src);
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// The files a program can use: the ones next to it, and everything in a folder its code names in a
+// path (like "sprites/hero.png", or "sounds/" + name), where Sprite Studio and Sound Lab save.
+// Gives paths relative to the program's folder, with / between folders.
+async function programFiles(dir, src, wanted) {
+  const found = [];
+  const walk = async (folder, rel, all) => {
+    for (const entry of await fsp.readdir(folder, { withFileTypes: true })) {
+      const r = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name.toLowerCase())) continue;
+        if (all || new RegExp(`["'](\\./)?${escapeRe(entry.name)}[\\\\/]`, 'i').test(src)) await walk(path.join(folder, entry.name), r, true);
+      } else if (entry.isFile() && wanted(path.extname(entry.name).toLowerCase())) {
+        found.push(r);
+      }
+    }
+  };
+  await walk(dir, '', false);
+  return found;
+}
 const PY = process.platform === 'win32' ? { cmd: 'py', args: ['-3'] } : { cmd: 'python3', args: [] };
 // What the build makes: an .exe on Windows, an app elsewhere.
 const WIN = process.platform === 'win32';
@@ -220,6 +243,34 @@ async function build(opts, emit) {
     'if os.path.isfile(icon):',
     '    os.environ["TUFF_APP_ICON"] = icon',
     'import tuff',
+    // An app with no console shows its errors in tkinter's box, but only tgui apps carry tkinter.
+    // The others (games, atgui apps) use the system's own box, so they never just close without a word.
+    ...(usesGuiEarly ? [] : [
+      '_report = tuff.report',
+      '_shown = set()',
+      'def _box(text):',
+      '    if sys.platform == "win32":',
+      '        import ctypes',
+      '        ctypes.windll.user32.MessageBoxW(None, text, "Something went wrong", 0x10 | 0x10000 | 0x40000)  # error icon, in front',
+      '    elif sys.platform == "darwin":',
+      '        import subprocess',
+      "        subprocess.run([\"osascript\", \"-e\", \"on run argv\", \"-e\", 'display alert \"Something went wrong\" message (item 1 of argv) as critical', \"-e\", \"end run\", text], capture_output=True)",
+      'def report(err, src):',
+      '    _report(err, src)',
+      '    if not tuff.WINDOWED:',
+      '        return',
+      '    lines = src.splitlines()',
+      '    text = f"Tuff error on line {err.line}: {err.msg}" if err.line else f"Tuff error: {err.msg}"',
+      '    if err.line and 0 < err.line <= len(lines):',
+      '        text += f"\\n  {err.line} | {lines[err.line - 1]}"',
+      '    if text not in _shown:  # the same error again (a key pressed over and over) is shown once',
+      '        _shown.add(text)',
+      '        try:',
+      '            _box(text)',
+      '        except Exception:',
+      '            pass',
+      'tuff.report = report',
+    ]),
     'sys.argv = [sys.argv[0], os.path.join(base, "program.tuf")]',
     'sys.exit(tuff.main())',
     '',
@@ -245,15 +296,10 @@ async function build(opts, emit) {
   // The icon goes in a folder of its own inside the app, so no project file can clash with it.
   const addData = [`${programCopy}${sep}.`];
   if (fs.existsSync(iconPng)) addData.push(`${iconPng}${sep}_tuffcode`);
-  const assets = [];
   if (viewLibs.length) addData.push(`${path.join(work, 'tuff_view_web')}${sep}tuff_view_web`);
-  for (const entry of await fsp.readdir(path.dirname(program), { withFileTypes: true })) {
-    const ext = path.extname(entry.name).toLowerCase();
-    if (entry.isFile() && (ASSET_EXTS.has(ext) || (viewLibs.length && VIEW_ASSET_EXTS.has(ext)))) {
-      assets.push(entry.name);
-      addData.push(`${path.join(path.dirname(program), entry.name)}${sep}.`);
-    }
-  }
+  // Each file keeps its folder inside the app, so "sprites/hero.png" works there as it does here.
+  const assets = await programFiles(path.dirname(program), programSrc, (ext) => ASSET_EXTS.has(ext) || (viewLibs.length > 0 && VIEW_ASSET_EXTS.has(ext)));
+  for (const rel of assets) addData.push(`${path.join(path.dirname(program), rel)}${sep}${path.posix.dirname(rel)}`);
   // On a Mac the app's icon has to be .icns; macOS's own sips tool makes one from the PNG.
   let macIcon = null;
   if (process.platform === 'darwin') {
