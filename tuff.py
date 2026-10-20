@@ -198,12 +198,22 @@ class Parser:
 
     def block(self, opener_optional=False):
         tok = self.peek()
-        if self.at("COLON") or self.at("KW", "then"):
+        # A ':' glued to the next word (then:say "hi", else:say, func f():say) is read as a method's ':', but no
+        # method call can start here, so it's this block's ':'.
+        if self.at("COLON") or self.at("METHOD") or self.at("KW", "then"):
             # "then:" works too: people often write both.
-            if self.next().kind == "KW" and self.at("COLON"):
+            if self.next().kind == "KW" and (self.at("COLON") or self.at("METHOD")):
                 self.next()
         elif not (opener_optional and self.at("NEWLINE")):
-            raise TuffError(f"Expected ':' or 'then' to start a block, but found {tok.show()}.", tok.line, tok.col)
+            # if x:say "hi" -> x:say was read as a method call, so the block's ':' seems to be missing
+            j = self.i - 1
+            while j >= 0 and self.toks[j].line == tok.line and self.toks[j].kind != "METHOD":
+                j -= 1
+            after = self.toks[j + 1] if j >= 0 and self.toks[j].kind == "METHOD" and self.toks[j].line == tok.line else None
+            tip = " Put a space after the ':' that starts the block (with a word right after it, ':' is read as a method)." \
+                if after is not None and ((after.kind == "KW" and after.value in ("say", "return", "break", "continue", "flush"))
+                                          or (tok.kind == "OP" and tok.value in ASSIGN_OPS)) else ""
+            raise TuffError(f"Expected ':' or 'then' to start a block, but found {tok.show()}.{tip}", tok.line, tok.col)
         if not self.at("NEWLINE"):
             stmt = self.simple_statement()
             self.end_line()
