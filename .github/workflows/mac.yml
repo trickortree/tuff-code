@@ -53,7 +53,7 @@ jobs:
         run: python3 -c "import tkinter; print('Tk', tkinter.TkVersion)"
 
       - name: Install PyInstaller
-        run: python3 -m pip install pyinstaller
+        run: python3 -m pip install pyinstaller certifi
 
       - name: Build the Tuff runtime
         run: npm run build:runtime:mac

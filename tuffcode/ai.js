@@ -120,10 +120,8 @@ async function removeModel(id) {
 }
 
 // ---------------------------------------------------------------- the worker
-function workerFile() {
-  const f = path.join(__dirname, 'ai-worker.mjs');
-  return app.isPackaged ? f.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`) : f;
-}
+// It stays inside app.asar with node-llama-cpp's JavaScript; only its native files are unpacked.
+const workerFile = () => path.join(__dirname, 'ai-worker.mjs');
 
 function unload() {
   clearTimeout(idleTimer);

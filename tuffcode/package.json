@@ -29,10 +29,18 @@
       "agents.js",
       "shellpath.js",
       "plugins.js",
+      "ai.js",
+      "ai-worker.mjs",
       "plugins/**/*",
       "mcp/**/*",
       "renderer/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/node-llama-cpp/llama/gitRelease.bundle",
+      "!node_modules/node-llama-cpp/templates{,/**/*}",
+      "!node_modules/@node-llama-cpp/*-cuda{,/**/*}",
+      "!node_modules/@node-llama-cpp/*-cuda-ext{,/**/*}",
+      "!node_modules/@node-llama-cpp/win-arm64{,/**/*}",
+      "!node_modules/@node-llama-cpp/linux-*{,/**/*}"
     ],
     "extraResources": [
       {
@@ -91,7 +99,10 @@
     "asarUnpack": [
       "mcp/**/*",
       "renderer/js/tuff-lang.js",
-      "renderer/js/tuff-templates.js"
+      "renderer/js/tuff-templates.js",
+      "node_modules/node-llama-cpp/bins/**/*",
+      "node_modules/node-llama-cpp/llama/localBuilds/**/*",
+      "node_modules/@node-llama-cpp/**/*"
     ]
   },
   "devDependencies": {
@@ -100,6 +111,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.10",
-    "monaco-editor": "^0.52.2"
+    "monaco-editor": "^0.52.2",
+    "node-llama-cpp": "3.22.2"
   }
 }
