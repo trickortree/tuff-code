@@ -37,7 +37,7 @@ Real focus events only fire while the window is the foreground one, so `widgets.
 | `selftest` | A program that drives itself: `:set`, `:value`, `:add`, `:remove`, `:clear`, pages, timers and `app:closed` |
 | `errors` | A mistake in a click, a keystroke and a timer function is reported once each, with its line, and the app keeps working |
 | `popups` | `app:ask`, `app:confirm` (a real Space press on the focused Yes, and Escape for No) and `app:alert` in the top-level code; timers keep running meanwhile |
-| `osclose` | Closing with WM_CLOSE (the X button), through plain `tuff.py`: exit 0, `app:closed` ran |
+| `osclose` | Closing with WM_CLOSE (the X button), through plain `tuff.py`, at every moment: the instant the window appears (its page not ready yet), 0.15 s later and while a timer runs: exit 0, `app:closed` ran once. Then the process is ended the moment its window has gone, as Cmd+Q on a Mac or logging off Windows does: `app:closed`, which takes a moment, had already finished |
 | `frameless` | `app:titlebar`: drag regions, the three buttons, maximize and restore (button and double-click), resize, close |
 | `latency` | 100 clicks and 100 keystrokes, each timed from the DOM event to the Tuff function's change in the page |
 | `biglist` | 1,000 list items in a scroll area: scrolled for 3 s, a step every frame, with the frames timed; then item 900 is picked |
