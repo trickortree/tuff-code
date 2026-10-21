@@ -479,11 +479,12 @@
       id: 'tap-ok',
       title: 'When it goes wrong',
       body: `<p>Sometimes a site can't find what you asked for. Then <code>res:status</code> is 404 (not found) instead of 200, and your program keeps going.</p>
-             <p><code>res:ok</code> is true when it worked. Check it before you use the answer, and say something friendly when it didn't.</p>`,
-      example: 'mention tap\n\nname = input "Which Pokémon? "\nname = name:trim():lower()\nres = tap.get("https://pokeapi.co/api/v2/pokemon/" + name)\nif res:ok:\n    mon = res:json\n    say name + " weighs " + (mon:get("weight") / 10) + " kg"\nelse:\n    say "There is no Pokémon called " + name + " (error " + res:status + ")"',
+             <p><code>res:ok</code> is true when it worked. Check it before you use the answer, and say something friendly when it didn't.</p>
+             <p>Check for an empty name first, in case someone just presses <kbd>Enter</kbd>. With no name, the address gets a list of every Pokémon instead. That works, so <code>res:ok</code> would be true, but the list has no weight in it.</p>`,
+      example: 'mention tap\n\nname = input "Which Pokémon? "\nname = name:trim():lower()\nif name is "":\n    say "Type a name first!"\nelse:\n    res = tap.get("https://pokeapi.co/api/v2/pokemon/" + name)\n    if res:ok:\n        mon = res:json\n        say name + " weighs " + (mon:get("weight") / 10) + " kg"\n    else:\n        say "There is no Pokémon called " + name + " (error " + res:status + ")"',
       task: 'Ask for a GitHub username (try <code>octocat</code>). If <code>res:ok</code>, say how many <code>"public_repos"</code> they have. If not, say a friendly message.',
       starter: '# Section 3, Lesson 3: When it goes wrong\n# Ask for a GitHub username. If res:ok, say how many "public_repos" they have.\n# If not, say a friendly message.\n\nmention tap\n\n',
-      solution: 'mention tap\n\nwho = input "GitHub username? "\nwho = who:trim()\nres = tap.get("https://api.github.com/users/" + who)\nif res:ok:\n    user = res:json\n    say who + " has " + user:get("public_repos") + " public repos"\nelse:\n    say "Couldn\'t find " + who + " (error " + res:status + ")"\n',
+      solution: 'mention tap\n\nwho = input "GitHub username? "\nwho = who:trim()\nif who is "":\n    say "Type a name first!"\nelse:\n    res = tap.get("https://api.github.com/users/" + who)\n    if res:ok:\n        user = res:json\n        say who + " has " + user:get("public_repos") + " public repos"\n    else:\n        say "Couldn\'t find " + who + " (error " + res:status + ")"\n',
       check: (src, out) => {
         if (!/\binput\b/.test(src)) return 'Ask for the name with: who = input "GitHub username? "';
         if (!/:ok\b/.test(src)) return 'Check the answer first: if res:ok:';
