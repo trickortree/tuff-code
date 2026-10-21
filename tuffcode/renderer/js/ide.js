@@ -40,7 +40,6 @@
     const ICONS = {
       '': svg('<path d="M4 6l4 4 4-4"/>'), // chevron down
       '': svg('<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2L13.5 13.5"/>'), // search
-      '': svg('<circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.8M8 12.4v1.8M1.8 8h1.8M12.4 8h1.8M3.6 3.6l1.3 1.3M11.1 11.1l1.3 1.3M3.6 12.4l1.3-1.3M11.1 4.9l1.3-1.3"/>'), // settings
       '': svg('<path d="M8 2a6 6 0 100 12c1 0 1.4-.7 1.1-1.5-.4-1 .2-1.9 1.3-1.9H12a2 2 0 002-2A6 6 0 008 2z"/><circle cx="5" cy="7" r=".8"/><circle cx="7.5" cy="4.8" r=".8"/><circle cx="10.5" cy="5.6" r=".8"/>'), // palette
       '': svg('<path d="M3 8h10"/>'),
       '': svg('<rect x="3.5" y="3.5" width="9" height="9"/>'),
