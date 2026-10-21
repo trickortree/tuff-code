@@ -487,7 +487,7 @@
       title: 'When it goes wrong',
       body: `<p>Sometimes a site can't find what you asked for. Then <code>res:status</code> is 404 (not found) instead of 200, and your program keeps going.</p>
              <p><code>res:ok</code> is true when it worked. Check it before you use the answer, and say something friendly when it didn't.</p>
-             <p>Check for an empty name first, in case someone just presses <kbd>Enter</kbd>. With no name, the address gets a list of every Pokémon instead. That works, so <code>res:ok</code> would be true, but the list has no weight in it.</p>`,
+             <p>Check for an empty name first, in case someone just presses <kbd>Enter</kbd>. With no name, the address gets a list of Pokémon instead (just the first 20). That works, so <code>res:ok</code> would be true, but the list has no weight in it.</p>`,
       example: 'mention tap\n\nname = input "Which Pokémon? "\nname = name:trim():lower()\nif name is "":\n    say "Type a name first!"\nelse:\n    res = tap.get("https://pokeapi.co/api/v2/pokemon/" + name)\n    if res:ok:\n        mon = res:json\n        say name + " weighs " + (mon:get("weight") / 10) + " kg"\n    else:\n        say "There is no Pokémon called " + name + " (error " + res:status + ")"',
       task: 'Ask for a GitHub username (try <code>octocat</code>). If <code>res:ok</code>, say how many <code>"public_repos"</code> they have. If not, say a friendly message.',
       starter: '# Section 3, Lesson 3: When it goes wrong\n# Ask for a GitHub username. If res:ok, say how many "public_repos" they have.\n# If not, say a friendly message.\n\nmention tap\n\n',
@@ -696,8 +696,10 @@
       solution: "mention tgame\n\ngame = tgame.window(\"Coin Dash\", 800, 600)\ngame:background \"navy\"\nscore = 0\nscore_label = game:text(\"Score: 0\", 400, 30, 24, \"white\")\nplayer = game:box(400, 520, 50, 50, \"lime\")\nplayer:on_edge \"stop\"\ncoin = game:circle(200, 200, 14, \"gold\")\nenemy = game:box(100, 80, 40, 40, \"red\")\nball = game:circle(600, 300, 12, \"white\")\nball:speed(200, 150)\nball:on_edge \"bounce\"\n\ngame:every_frame player_arrows\ngame:every_frame coin_collect\ngame:every_frame enemy_chase\ngame:every_frame enemy_hurts\n\n# Tuff Engine: player moves with the arrow keys\nfunc player_arrows(dt):\n    if game:held(\"left\"):\n        player:move(-300 * dt, 0)\n    if game:held(\"right\"):\n        player:move(300 * dt, 0)\n    if game:held(\"up\"):\n        player:move(0, -300 * dt)\n    if game:held(\"down\"):\n        player:move(0, 300 * dt)\n\n# Tuff Engine: player collects coin\nfunc coin_collect(dt):\n    if coin:touches(player):\n        score += 1\n        score_label:set \"Score: \" + score\n        game:sound \"coin\"\n        coin:move_to(game:random_spot())\n\n# Tuff Engine: enemy chases player\nfunc enemy_chase(dt):\n    enemy:point_at(player)\n    enemy:forward(120 * dt)\n\n# Tuff Engine: game over when enemy touches player\nfunc enemy_hurts(dt):\n    if enemy:touches(player) and not game:paused():\n        game:sound \"lose\"\n        game:game_over(\"Score: \" + score, play_again)\n\n# Tuff Engine: play again after a game over\nfunc play_again():\n    score = 0\n    score_label:set \"Score: 0\"\n    player:move_to(400, 520)\n    coin:move_to(200, 200)\n    enemy:move_to(100, 80)\n",
       check: (src) => {
         if (!/:held\b/.test(src)) return 'Add a Player from the Add list in Tuff Engine: it moves with the arrow keys.';
-        if (!/:touches\b/.test(src)) return 'Add a Coin: it comes with "Collect it".';
-        if (!/:game_over\b/.test(src)) return 'Add an Enemy too: it chases the player.';
+        // Collect it is what adds to the score (an enemy's Game over has :touches too). A coin or an enemy that's there
+        // without its behaviour (taken off in the Inspector) gets told how to give it back, not to add another one.
+        if (!/\bscore\s*\+=/.test(src)) return /^coin\w*\s*=\s*\w+:circle\b/m.test(src) ? 'Select your coin in Tuff Engine and pick "+ Add behaviour…", then "Collect it".' : 'Add a Coin: it comes with "Collect it".';
+        if (!/:game_over\b/.test(src)) return /^enemy\w*\s*=\s*\w+:box\b/m.test(src) ? 'Select your enemy in Tuff Engine and pick "+ Add behaviour…", then "Game over when it touches…".' : 'Add an Enemy too: it chases the player.';
         return /\bwait\s*\(/.test(src) ? 'Take out wait(): it freezes a game.' : true;
       },
     },
@@ -956,7 +958,7 @@
     // lesson's own check (true, or the hint it would show).
     sections: () => SECTIONS.map((s) => ({
       id: s.id, title: s.title, optional: !!s.optional,
-      lessons: s.lessons.map((l) => ({ id: l.id, title: l.title, file: fileName(l), example: l.example, starter: l.starter, solution: l.solution ?? null })),
+      lessons: s.lessons.map((l) => ({ id: l.id, title: l.title, file: fileName(l), body: l.body, example: l.example, starter: l.starter, solution: l.solution ?? null })),
     })),
     check: (id, src, out = '') => byId(id).check(withoutComments(src), out),
   };

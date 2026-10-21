@@ -142,6 +142,18 @@ export default async (t, ctx) => {
   // A starter with the lesson's answers written in its # comments still isn't accepted.
   const commented = await ev(`window.TuffLearn.check('tgame-own', '# game:held("left") star:touches(basket) score += 1 game:game_over("x", start)\\nmention tgame\\ngame = tgame.window("G")\\n')`);
   check('Checks ignore # comments: code that only mentions the answers in comments gets a hint', commented !== true && /control/.test(commented), commented);
+  // The Tuff Engine lesson: a coin or an enemy that's there without its behaviour (taken off in the Inspector) gets
+  // a hint to give it back, not one to add a coin or an enemy, which would only make a second one.
+  const engineGame = secs.flatMap((s) => s.lessons).find((l) => l.id === 'tgame-engine').solution;
+  const withoutFn = (code, fn) => code.replace(new RegExp(`\\ngame:every_frame ${fn}\\n`), '\n').replace(new RegExp(`\\n# Tuff Engine: [^\\n]*\\nfunc ${fn}\\(dt\\):\\n(?:    [^\\n]*\\n)+`), '\n');
+  const noCollect = withoutFn(engineGame, 'coin_collect');
+  const noHurts = withoutFn(withoutFn(engineGame, 'enemy_hurts'), 'enemy_chase');
+  const hints = await ev(`[${JSON.stringify(noCollect)}, ${JSON.stringify(noHurts.replace(/^enemy = .*\n/m, ''))}, ${JSON.stringify(noHurts)}].map((src) => window.TuffLearn.check('tgame-engine', src))`);
+  check('Tuff Engine lesson: a coin without Collect it gets "Select your coin … Add behaviour", an enemy without Game over the same, and no enemy at all "Add an Enemy"',
+    /^Select your coin in Tuff Engine/.test(hints[0]) && /^Add an Enemy too/.test(hints[1]) && /^Select your enemy in Tuff Engine/.test(hints[2]) && !/coin_collect/.test(noCollect) && !/enemy_hurts/.test(noHurts), hints);
+  // PokéAPI lists come a page at a time: an address with no name gets the first 20, not every Pokémon.
+  const tapOk = secs.flatMap((s) => s.lessons).find((l) => l.id === 'tap-ok');
+  check('"When it goes wrong" says an address with no name gets a list of the first 20 Pokémon (not every one)', /a list of Pokémon instead \(just the first 20\)/.test(tapOk.body) && !/every Pokémon/.test(tapOk.body), tapOk.body);
 
   // ---------------------------------------------------------------- tuff --check on every lesson's code
   const failed = [];

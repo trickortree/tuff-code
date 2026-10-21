@@ -558,6 +558,239 @@ export default async (t, ctx) => {
   const fx = await ev(`['coin_dash', 'island_walk'].every((id) => { const c = window.TuffEngine.templates().find((t) => t.id === id).code.split('\\n'); return window.TuffEngine.fixups(c).join('\\n') === c.join('\\n'); })`);
   check(fx, "fixups leaves the templates as they are (they're already right)", null);
 
+  // ================================================================ what the kid wrote stays, and the kid's pace
+  // Edits made on a scratch model with Tuff Engine's own Edits (what the Inspector and the tiles call), checked line
+  // for line. The tab keeps showing kid.tuf.
+  const edit = (src, fn) => ev(`(() => {
+    const E = window.TuffEngine;
+    const m = window.monaco.editor.createModel(${JSON.stringify(src)});
+    m.setEOL(0);
+    const was = E.test.useModel(m, ${JSON.stringify(path.join(ctx.root, 'scratch.tuf'))});
+    try { (${fn})(E.parse(m.getValue()), E.test.edits, m); return m.getValue(); } finally { E.test.useModel(...was); m.dispose(); }
+  })()`);
+  const tplCode = (id) => ev(`window.TuffEngine.templates().find((x) => x.id === ${JSON.stringify(id)}).code`);
+  // A behaviour's settings change only its own lines: the kid's comments in its function stay (spec §8.2).
+  const commented = coinDash.replace('func player_arrows(dt):\n    if game:held("left"):\n        player:move(-300 * dt, 0)\n',
+    'func player_arrows(dt):\n    # TODO: make it faster when I get a power-up\n    if game:held("left"):\n        player:move(-300 * dt, 0)   # left\n\n');
+  const faster = await edit(commented, `(P, E) => E.setBehaviour(P, P.behaviours.find((b) => b.type === 'arrows'), { S: 400 })`);
+  check(changedLines(commented, faster)?.length === 4 && faster.includes('    # TODO: make it faster when I get a power-up\n    if game:held("left"):\n        player:move(-400 * dt, 0)   # left\n\n'),
+    "Speed 300 → 400 in a commented player_arrows changes its four numbers; the kid's comment line, '# left' and the blank line stay", changedLines(commented, faster));
+  const updown = await edit(commented, `(P, E) => E.setBehaviour(P, P.behaviours.find((b) => b.type === 'arrows'), { dirs: 'updown' })`);
+  check(updown.includes('    # TODO: make it faster when I get a power-up\n\n    if game:held("up"):') && !/held\("(left|right)"\)/.test(updown), 'Up/down takes away just the left and right lines', updown.split('\n').slice(19, 27));
+  // play_again follows where things start, and keeps the comments at the ends of its lines.
+  const paNote = coinDash.replace('    coin:move_to(200, 200)\n', '    coin:move_to(200, 200)  # back to the start\n');
+  const paMoved = await edit(paNote, `(P, E) => E.setArgs(P, P.byVar.coin, { x: 300, y: 300 })`);
+  const paBall = await edit(paNote, `(P, E) => E.setArgs(P, P.byVar.ball, { x: 650, y: 350 })`);
+  check(changedLines(paNote, paMoved)?.[1]?.[2] === '    coin:move_to(300, 300)  # back to the start' && changedLines(paNote, paBall)?.length === 1,
+    "the coin moved to 300, 300: play_again's line follows and keeps its comment; moving the ball (no behaviour) leaves play_again alone", { coin: changedLines(paNote, paMoved), ball: changedLines(paNote, paBall) });
+  // After the game loop: that code runs once the window has closed, so it isn't the thing's setup.
+  const loopGame = 'mention tgame\n\ngame = tgame.window("G", 800, 600)\ngame:background "navy"\ncoin = game:circle(200, 200, 14, "gold")\n\nwhile game:open():\n    game:frame()\n\n# after the window closes\ncoin:hide()\ngame:background "black"\nsay "Thanks for playing"\n';
+  const loopRed = await edit(loopGame, `(P, E) => E.setSetting(P, [['background', ['red']]])`);
+  const loopShow = await edit(loopGame, `(P, E) => E.setProp(P, P.byVar.coin, 'hide', [])`);
+  check(changedLines(loopGame, loopRed)?.[0]?.[2] === 'game:background "red"' && changedLines(loopGame, loopRed)?.[0]?.[0] === 4 && loopShow.endsWith('# after the window closes\ncoin:hide()\ngame:background "black"\nsay "Thanks for playing"\n') && /"gold"\)\ncoin:hide\(\)\n\nwhile/.test(loopShow),
+    'Background and Hidden at start change the setup above the game loop, never the lines after it', { red: changedLines(loopGame, loopRed), hide: loopShow.split('\n').slice(3, 7) });
+  // Names in other languages: renaming pi leaves pièce alone.
+  const accents = 'mention tgame\n\ngame = tgame.window("G", 800, 600)\npi = game:circle(100, 100, 10, "gold")\npièce = 3\nsay pièce\n';
+  const renamedPi = await edit(accents, `(P, E) => E.rename(P, P.byVar.pi, 'disc')`);
+  check(renamedPi === accents.replace('pi = game', 'disc = game'), 'renaming pi to disc changes pi only: pièce, a name of its own in Tuff, stays', firstDiff(accents.replace('pi = game', 'disc = game'), renamedPi));
+  // The screen layer: a new Screen text goes under the 3D score, not on top of it.
+  const islandCode = await tplCode('island_walk');
+  const hudText = await edit(islandCode, `(P, E) => E.add(P, 'hudtext')`);
+  check(hudText.includes('\nhud_text = hud:text("Lives: 3", 90, 64, 22, "white")\n'), 'Island Walk, then Screen text: it goes under the score (90, 64), not on it (90, 30)', hudText.split('\n').filter((l) => /hud:text/.test(l)));
+  // A Coin and an Enemy added before the Player get their behaviours from it.
+  const late = await edit(await tplCode('blank2d'), `(P, E, m) => { for (const id of ['coin', 'enemy', 'player']) E.add(window.TuffEngine.parse(m.getValue()), id); }`);
+  const lateP = await ev(`window.TuffEngine.parse(${JSON.stringify(late)}).behaviours.map((b) => b.type).sort().join()`);
+  check(lateP === 'arrows,chase,collect,hurts' && /func play_again\(\):/.test(late) && (await toasts()).includes('Coin and enemy work with player now.'),
+    'Coin, Enemy, then Player: the Player gives the coin Collect it and the enemy Chases and Game over, and says so', { lateP, toasts: (await toasts()).slice(-3) });
+  check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'late_check.tuf'), late), path.join(ctx.tmp, 'late_check.tuf'))).trim()), 'and that game passes tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'late_check.tuf')));
+
+  // Number fields at a kid's pace: the code follows the field, and everything typed before it's left is one Ctrl+Z.
+  await ev(`window.TuffEngine.test.select('v:enemy')`);
+  await t.sleep(200);
+  const slowBefore = await code();
+  await ev(`(() => { const b = [...document.querySelectorAll('#en-inspector .en-beh')].find((x) => x.dataset.beh === 'chase'); b.querySelector('input[type="number"]').id = 'en-test-slow'; return 1; })()`);
+  await t.click(...(await rect('#en-test-slow')).slice(0, 2).map((v, j) => v + (j ? 10 : 20)));
+  await t.key('a', CTRL); // (t.key selects all on a Mac too)
+  const seen = [];
+  for (const ch of '250') {
+    await t.type(ch, 0);
+    await t.sleep(450);
+    seen.push((await code()).match(/enemy:forward\((\d+) \* dt\)/)?.[1]);
+  }
+  check(seen.join() === '2,25,250', `typed slowly (450 ms a key) in Chases → speed, the code follows the field: ${seen.join(', ')}`, seen);
+  await ev(`document.querySelector('#en-stage').focus()`);
+  await t.key('z', CTRL);
+  await waitFor(`window.__code() === ${JSON.stringify(slowBefore)}`, 4000);
+  check(await code() === slowBefore, 'and one Ctrl+Z takes the whole 250 back to 120', firstDiff(await code(), slowBefore));
+  await settle();
+  // The game's Width: no error for the 1 and the 10 of 1000 while typing, and one step.
+  const widthField = `(() => { const i = [...document.querySelectorAll('#en-inspector .en-num')].find((l) => l.textContent.trim().startsWith('Width')).querySelector('input'); i.id = 'en-test-width'; return 1; })()`;
+  await ev(`window.TuffEngine.test.select('root')`);
+  await t.sleep(200);
+  await ev(widthField);
+  const nToasts = (await toasts()).length;
+  await t.click(...(await rect('#en-test-width')).slice(0, 2).map((v, j) => v + (j ? 10 : 20)));
+  await t.key('a', CTRL);
+  for (const ch of '1000') { await t.type(ch, 0); await t.sleep(450); }
+  await waitFor(`window.__code().includes('tgame.window("My Game", 1000, 600)')`, 3000);
+  const typedToasts = (await toasts()).slice(nToasts);
+  check(/tgame\.window\("My Game", 1000, 600\)/.test(await code()) && !typedToasts.length, 'typing 1000 slowly in Width writes 1000, with no error for the 1 and the 10 on the way', { toasts: typedToasts, line: (await code()).split('\n')[2] });
+  await ev(`document.querySelector('#en-stage').focus()`);
+  await t.key('z', CTRL);
+  await waitFor(`window.__code() === ${JSON.stringify(slowBefore)}`, 4000);
+  check(await code() === slowBefore, 'one Ctrl+Z puts 800 back', firstDiff(await code(), slowBefore));
+  await settle();
+  await ev(widthField);
+  await t.click(...(await rect('#en-test-width')).slice(0, 2).map((v, j) => v + (j ? 10 : 20)));
+  await t.key('a', CTRL);
+  const nToasts2 = (await toasts()).length;
+  for (const ch of '50') { await t.type(ch, 0); await t.sleep(400); }
+  await key('Tab', 'Tab', 9);
+  await t.sleep(400);
+  const smallToasts = (await toasts()).slice(nToasts2);
+  check(smallToasts.length === 1 && /A game is at least 100 wide/.test(smallToasts[0]) && await code() === slowBefore && await ev(`document.querySelector('#en-test-width')?.value`) === '800',
+    'leaving Width at 50 says once that a game is at least 100 wide, and the field goes back to 800', { smallToasts, value: await ev(`document.querySelector('#en-test-width')?.value`) });
+  await settle();
+
+  // Things a function made: Objects and the Inspector give the line once.
+  const snakeFile = path.join(ctx.root, 'snake.tuf');
+  fs.copyFileSync(path.join(GAMES, 'snake.tuf'), snakeFile);
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(snakeFile)})`);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(snakeFile)}`, 5000);
+  await settle(25000);
+  await waitFor(`document.querySelectorAll('#en-objects .en-group').length > 0`, 8000);
+  const snakeRows = await ev(`[...document.querySelectorAll('#en-objects .en-group .what')].map((r) => r.textContent)`);
+  const startGroup = (await dbg()).groups.find((g) => g.why === 'made by start()');
+  if (startGroup) await ev(`window.TuffEngine.test.select(${JSON.stringify(startGroup.key)})`);
+  await t.sleep(150);
+  const groupTip = await ev(`document.querySelector('#en-inspector .in-tip')?.textContent || ''`);
+  check(snakeRows.includes('made by start() (line 52)') && !snakeRows.some((r) => /on line \d+ \(line/.test(r)) && /^Made by your code on line 52 \(made by start\(\)\)\./.test(groupTip),
+    'snake.tuf: Objects says "made by start() (line 52)" and the Inspector "Made by your code on line 52 (made by start())", the line once each', { snakeRows, groupTip });
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(kid)})`);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(kid)}`, 5000);
+  await settle();
+
+  // The title bar's Run, the status bar and the window's title follow the game Tuff Engine shows.
+  await ev(`window.TuffIDE.openFile(${JSON.stringify(main)}).then(() => 1)`);
+  await waitFor(`document.querySelector('#engine').classList.contains('hidden')`, 3000);
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(kid)})`);
+  await waitFor(`!document.querySelector('#engine').classList.contains('hidden')`, 3000);
+  await t.sleep(300);
+  const chrome = await ev(`({ run: document.querySelector('#runconfig-name').textContent, path: document.querySelector('#sb-path').textContent, title: document.title })`);
+  await clickSel('#runconfig-widget');
+  const runItem = await ev(`document.querySelector('#context-menu:not(.hidden) .mi')?.textContent || ''`);
+  await ev(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); 1`);
+  check(chrome.run === 'kid.tuf' && /kid\.tuf$/.test(chrome.path) && /– kid\.tuf –/.test(chrome.title) && /Run 'kid\.tuf'/.test(runItem),
+    "with main.tuf's tab open and Tuff Engine on kid.tuf: the title bar's Run, its menu, the status bar and the window title all say kid.tuf", { chrome, runItem });
+
+  // Edit > Undo while Tuff Engine shows undoes the game's last change, not the hidden code tab's typing.
+  const notes = path.join(ctx.root, 'notes.tuf');
+  await ev(`window.TuffIDE.openFile(${JSON.stringify(notes)}).then(() => 1)`);
+  await waitFor(`document.querySelector('#engine').classList.contains('hidden')`, 3000);
+  await ev(`(() => { const e = window.TuffIDE.editor(); const m = e.getModel(); e.setPosition({ lineNumber: m.getLineCount(), column: m.getLineMaxColumn(m.getLineCount()) }); e.focus(); return 1; })()`);
+  await t.type('\nsay "my work"', 30);
+  await t.sleep(300);
+  const notesModel = `(async () => (await window.TuffIDE.getModel(${JSON.stringify(notes)})).getValue().replace(/\\r\\n/g, '\\n'))()`;
+  const notesTyped = await ev(notesModel);
+  await clickSel('.tab.engine-tab');
+  await waitFor(`!document.querySelector('#engine').classList.contains('hidden')`, 3000);
+  const preBox = await code();
+  await clickSel('.en-tile[data-tile="box"]');
+  await waitFor(`window.__code() !== ${JSON.stringify(preBox)}`, 4000);
+  const menuItem = async (label) => {
+    await ev(`[...document.querySelectorAll('.menu-root > button')].find((b) => b.textContent === 'Edit').click()`);
+    await t.sleep(150);
+    const r = await ev(`(() => { const m = [...document.querySelectorAll('.menu-root.open .mi')].find((x) => x.querySelector('span').textContent === ${JSON.stringify(label)}); const b = m?.getBoundingClientRect(); return b ? [b.left + b.width / 2, b.top + b.height / 2] : null; })()`);
+    await t.click(r[0], r[1]);
+    await t.sleep(300);
+  };
+  await menuItem('Undo');
+  await waitFor(`window.__code() === ${JSON.stringify(preBox)}`, 3000);
+  check(await code() === preBox && await ev(notesModel) === notesTyped && await visible(), 'Edit > Undo takes away the Box in the game, and leaves the typing in notes.tuf (the hidden code tab)', { game: firstDiff(await code(), preBox), notes: await ev(notesModel) });
+  await menuItem('Delete Line');
+  check(await ev(notesModel) === notesTyped && await code() === preBox && await visible(), "Edit > Delete Line while Tuff Engine shows deletes nothing (there's no line on screen)", await ev(notesModel));
+  await menuItem('Find…');
+  await waitFor(`document.querySelector('#engine').classList.contains('hidden') && !!document.querySelector('.find-widget.visible')`, 3000);
+  check(await ev(`document.querySelector('#engine').classList.contains('hidden') && window.TuffIDE.editor().getModel().uri.fsPath.toLowerCase() === ${JSON.stringify(kid.toLowerCase())} && !!document.querySelector('.find-widget.visible')`),
+    "Edit > Find… opens the game's code (kid.tuf), with the find box", await ev(`window.TuffIDE.editor().getModel().uri.fsPath`));
+  await key('Escape', 'Escape', 27);
+
+  // The game's file tab closed while Tuff Engine shows it: the next click still does what it says.
+  await ev(`window.TuffIDE.openFile(${JSON.stringify(notes)}).then(() => 1)`); // another tab is the active one, so Tuff Engine stays open
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(kid)})`);
+  await waitFor(`!document.querySelector('#engine').classList.contains('hidden')`, 3000);
+  await settle();
+  const preClose = await code();
+  await ev(`(() => { [...document.querySelectorAll('#tabs .tab')].find((x) => x.title === ${JSON.stringify(kid)}).querySelector('.x').click(); return 1; })()`);
+  await t.sleep(400);
+  check(await visible() && !(await ev(`[...document.querySelectorAll('#tabs .tab')].some((x) => x.title === ${JSON.stringify(kid)})`)), "kid.tuf's tab is closed and Tuff Engine still shows the game", null);
+  await clickSel('.en-tile[data-tile="circle"]');
+  await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kid)})).getValue().includes('circle = game:circle(400, 300, 20, "teal")'))()`, 5000);
+  const afterClose = await ev(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kid)})).getValue().replace(/\\r\\n/g, '\\n'))()`);
+  check(afterClose.includes('circle = game:circle(400, 300, 20, "teal")\n') && afterClose.replace('circle = game:circle(400, 300, 20, "teal")\n', '') === preClose,
+    'one click on Circle opens the file again and adds the circle (the click is not lost)', firstDiff(preClose, afterClose));
+  await ev(`(async () => { window.__kid = await window.TuffIDE.getModel(${JSON.stringify(kid)}); return 1; })()`);
+  await ev(`document.querySelector('#en-stage').focus()`);
+  await t.key('z', CTRL);
+  await waitFor(`window.__code() === ${JSON.stringify(preClose)}`, 4000);
+  await settle();
+
+  // Ask an agent: when Tuff Agents couldn't send it (an agent is still replying), the box and the words stay.
+  await ev(`(() => { window.__realAsk = window.tuffAskAgent; window.__asked = []; window.tuffAskAgent = async (text) => { window.__asked.push(text); return false; }; return 1; })()`);
+  await ev(`document.querySelector('#en-ask').click()`);
+  await waitFor(`!!document.querySelector('.en-askbox textarea')`, 3000);
+  await ev(`(() => { document.querySelector('.en-askbox textarea').value = 'and add three lives please'; return 1; })()`);
+  await clickSel('.en-askbox [data-mode="edit"]');
+  await t.sleep(300);
+  check(await ev(`!!document.querySelector('.en-askbox') && document.querySelector('.en-askbox textarea').value === 'and add three lives please' && !document.querySelector('.en-askbox [data-mode="edit"]').disabled`) && (await ev('window.__asked')).length === 1,
+    "Ask an agent: when it couldn't be sent, the box stays open with what the kid wrote", await ev('window.__asked'));
+  await ev(`(() => { document.querySelector('.en-askbox [data-a="x"]')?.click(); if (window.__realAsk) window.tuffAskAgent = window.__realAsk; else delete window.tuffAskAgent; return 1; })()`);
+
+  // The smallest window (900 × 560) with Learn open: Code and Play still show, in 2D and in 3D.
+  await ev(`window.TuffIDE.showSideView('learn', true); 1`);
+  fs.mkdirSync(path.join(ctx.root, 'lessons'), { recursive: true });
+  const lessonFile = path.join(ctx.root, 'lessons', 'tgame-08-engine.tuf');
+  fs.writeFileSync(lessonFile, coinDash);
+  const islandFile = path.join(ctx.root, 'island_small.tuf');
+  fs.writeFileSync(islandFile, islandCode);
+  const fits = [];
+  for (const [w, h] of [[900, 560], [960, 600], [1280, 720]]) {
+    await t.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 0, mobile: false });
+    for (const f of [lessonFile, islandFile]) {
+      await ev(`window.TuffIDE.openEngine(${JSON.stringify(f)})`);
+      await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(f)} && !!window.TuffEngine.debug().mode`, 5000);
+      await t.sleep(400);
+      fits.push(await ev(`(() => { const r = (s) => document.querySelector(s).getBoundingClientRect(); const p = r('#en-play'); const c = r('#en-code'); const hit = document.elementFromPoint(p.left + p.width / 2, p.top + p.height / 2); return { size: '${w}x${h}', mode: window.TuffEngine.debug().mode, engine: Math.round(r('#engine').width), play: p.right <= innerWidth && p.width > 20 && !!hit?.closest('#en-play'), code: c.right <= p.left && c.width > 20, templates: r('#en-templates').width > 0 }; })()`));
+    }
+    if (w === 900) await t.shot('engine_small_window_learn.png');
+  }
+  await t.send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 880, deviceScaleFactor: 0, mobile: false });
+  await ev(`window.TuffIDE.showSideView('learn', false); 1`);
+  check(fits.length === 6 && fits.every((f) => f.play && f.code) && fits.filter((f) => f.size === '1280x720').every((f) => f.templates),
+    'with Learn open, Tuff Engine shows Code and Play at 900 × 560 and 960 × 600 (about 500 px), for the lesson game and a 3D world; at 1280 × 720 nothing is hidden', fits);
+
+  // The gamepad never opens an empty Tuff Engine: a game it showed that's gone gives way to the .tuf tab that's open.
+  const gone = path.join(ctx.root, 'gone.tuf');
+  fs.writeFileSync(gone, coinDash);
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(gone)})`);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(gone)}`, 5000);
+  await clickSel('.tab.engine-tab .x');
+  await waitFor(`!document.querySelector('.tab.engine-tab')`, 3000);
+  await ev(`(() => { [...document.querySelectorAll('#tabs .tab')].find((x) => x.title === ${JSON.stringify(gone)})?.querySelector('.x').click(); return 1; })()`);
+  await t.sleep(300);
+  fs.rmSync(gone);
+  const fresh = path.join(ctx.root, 'fresh.tuf');
+  fs.writeFileSync(fresh, '');
+  await ev(`window.TuffIDE.openFile(${JSON.stringify(fresh)}).then(() => 1)`);
+  const nToasts3 = (await toasts()).length;
+  await clickSel('#toolstrip .ts-btn[data-tool="engine"]');
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(fresh)} && !!document.querySelector('#en-start:not(.hidden) [data-a="2d"]')`, 5000);
+  check(await ev(`window.TuffEngine.debug().file`) === fresh && !(await toasts()).slice(nToasts3).some((x) => /Couldn't open/.test(x)) && await ev(`!!document.querySelector('#en-start:not(.hidden) [data-a="2d"]')`),
+    "the gamepad, after the game Tuff Engine showed was deleted: it opens the .tuf tab that's open (its start card), not a blank tab", { file: await ev(`window.TuffEngine.debug().file`), toasts: (await toasts()).slice(nToasts3) });
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(kid)})`);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(kid)}`, 5000);
+  await settle();
+
   // ================================================================ full size, leaving and closing
   await ev(`document.querySelector('#en-stage').focus()`);
   await key('F11', 'F11', 122);
@@ -587,6 +820,23 @@ export default async (t, ctx) => {
   await clickSel('.tab.engine-tab .x');
   await waitFor(`!document.querySelector('.tab.engine-tab')`, 3000);
   check(!(await visible()) && !(await ev(`!!document.querySelector('.tab.engine-tab')`)), 'its X closes the tab', null);
+
+  // A new, empty folder (opened from the project menu's recent folders): the gamepad makes main.tuf and opens it on
+  // the start card, not on an empty Tuff Engine (and not on the last folder's game).
+  const emptyDir = path.join(ctx.tmp, 'new game');
+  fs.mkdirSync(emptyDir, { recursive: true });
+  await ev(`window.TuffIDE.saveSettings({ recent: [${JSON.stringify(emptyDir)}, ...(window.TuffIDE.settings().recent || [])] })`);
+  await clickSel('#project-widget');
+  await t.sleep(200);
+  const recentAt = await ev(`(() => { const m = [...document.querySelectorAll('#context-menu .mi')].find((x) => x.querySelector('span').textContent === 'new game'); const b = m?.getBoundingClientRect(); return b ? [b.left + b.width / 2, b.top + b.height / 2] : null; })()`);
+  await t.click(recentAt[0], recentAt[1]);
+  await waitFor(`window.TuffIDE.root() === ${JSON.stringify(emptyDir)}`, 5000);
+  await t.sleep(300);
+  await clickSel('#toolstrip .ts-btn[data-tool="engine"]');
+  const newMain = path.join(emptyDir, 'main.tuf');
+  await waitFor(`!!document.querySelector('#en-start:not(.hidden) [data-a="2d"]')`, 6000);
+  check(fs.existsSync(newMain) && await ev(`window.TuffEngine.debug().file`) === newMain && /Make a game in main\.tuf/.test(await ev(`document.querySelector('#en-start').textContent`)),
+    'in a new, empty folder the gamepad makes main.tuf and opens it on the start card (Make a 2D game here)', { exists: fs.existsSync(newMain), file: await ev(`window.TuffEngine.debug().file`), card: await ev(`document.querySelector('#en-start').textContent`) });
   const errors = t.events.filter((x) => /tuff-engine.js|engine-host|host.js|Tuff Engine/.test(x));
   check(!errors.length, 'no errors in the page', errors);
   fs.rmSync(PLAY, { recursive: true, force: true });

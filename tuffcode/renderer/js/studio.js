@@ -310,7 +310,8 @@
     }
   }
 
-  // Rename identifiers in one line of code, skipping strings, comments, .members and :methods.
+  // Rename identifiers in one line of code, skipping strings, comments, .members and :methods. A name is read whole the
+  // way Tuff reads it (letters in any language, digits, _), so renaming pi leaves pièce alone.
   function renameIdents(line, map) {
     let out = '';
     let quote = null;
@@ -325,7 +326,7 @@
       }
       if (c === '"' || c === "'") { quote = c; out += c; i++; continue; }
       if (c === '#') { out += line.slice(i); break; }
-      const m = /^[A-Za-z_]\w*/.exec(line.slice(i));
+      const m = /^[\p{L}_][\p{L}\p{N}_]*/u.exec(line.slice(i));
       if (m) {
         const prev = line[i - 1];
         const own = Object.prototype.hasOwnProperty.call(map, m[0]);
@@ -382,7 +383,9 @@
       },
       remove(ln) { del.add(ln); },
       // finish(lines) -> lines: a last pass over the whole new text, inside the same undo step (Tuff Engine's fixups).
-      commit(finish) {
+      // open / close: start a new undo step before the edit, and end it after. Tuff Engine leaves the step open while
+      // a number field is typed in, so 2, 25 and 250 are one Ctrl+Z, and ends it when the field is left.
+      commit(finish, { open = true, close = true } = {}) {
         const out = [];
         const at = {};
         let count = 0;
@@ -419,9 +422,9 @@
         }
         const s = model.getPositionAt(start);
         const e = model.getPositionAt(end);
-        model.pushStackElement();
+        if (open) model.pushStackElement();
         model.pushEditOperations([], [{ range: new window.monaco.Range(s.lineNumber, s.column, e.lineNumber, e.column), text, forceMoveMarkers: true }], () => null);
-        model.pushStackElement();
+        if (close) model.pushStackElement();
         return at;
       },
     };
@@ -1844,6 +1847,9 @@
     },
     show,
     onKey,
+    // Edit > Undo and Redo while the Studio shows (ide.js): the Studio's file, not the hidden code editor's.
+    undo: () => undoRedo('undo'),
+    redo: () => undoRedo('redo'),
     closeCustomizer,
     parse,
     templates: () => TEMPLATES.map((t) => ({ ...t })),

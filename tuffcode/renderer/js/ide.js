@@ -627,6 +627,7 @@
     }
     if (background) {
       renderTabs();
+      updateChrome(); // Tuff Engine's game may be the file on screen
       return t;
     }
     activate(t, focus);
@@ -714,11 +715,30 @@
     updateChrome();
   }
 
+  // Which game to show: the first of these that is there (so a deleted game Tuff Engine showed last never hides the
+  // tab that's open now): the file asked for, the last game it showed and the file run last (in this folder), the
+  // open .tuf tab, main.tuf. Then the project's first game, or its first .tuf. A folder with no .tuf at all gets an
+  // empty main.tuf, so Tuff Engine opens on its start card ("Make a 2D game here") instead of an empty tab.
   async function openEngine(file) {
     hideMenus();
     const t = activeTab();
-    let target = file || engine.file || (t && ext(t.path) === 'tuf' ? t.path : null) || state.lastRunFile;
-    if (!target || !(await api.fs.exists(target))) target = join(state.root, 'main.tuf');
+    const here = (p) => (p && state.root && isUnder(p, state.root) ? p : null);
+    const want = [file, here(engine.file), t && ext(t.path) === 'tuf' ? t.path : null, here(state.lastRunFile), state.root && join(state.root, 'main.tuf')];
+    let target = null;
+    for (const p of want) if (p && (await api.fs.exists(p))) { target = p; break; }
+    if (!target && state.root) {
+      const tufs = (await api.fs.listAll(state.root)).filter((f) => f.name.endsWith('.tuf') && !/^(dist|build)[\\/]/.test(f.rel)).sort((a, b) => a.rel.localeCompare(b.rel));
+      for (const f of tufs.slice(0, 80)) {
+        try { if (/^[ \t]*(?:import|mention)[ \t]+tgame\b/m.test(await api.fs.readFile(f.path))) { target = f.path; break; } } catch { /* unreadable */ }
+      }
+      target = target || tufs[0]?.path || null;
+      if (!target) {
+        target = join(state.root, 'main.tuf');
+        try { await api.fs.createFile(target); } catch { /* made meanwhile */ }
+        await refreshTree();
+      }
+    }
+    if (!target) { toast('Open a folder first.'); return; }
     showEngine(target);
   }
 
@@ -854,17 +874,28 @@
     return parts.map((x) => `<span>${esc(x)}</span>`).join('<span class="sep">›</span>');
   }
 
+  // While Tuff Engine shows, its game is the file on screen: the title bar's Run runs it, and the status bar and the
+  // window title name it (TuffIDE.activeFile() says the same). Otherwise it's the code tab's file.
+  function runTarget() {
+    const t = activeTab();
+    return (engine.visible && engine.file) || (t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile);
+  }
+  function shownTab() {
+    return (engine.visible && engine.file && state.tabs.find((x) => x.path === engine.file)) || activeTab();
+  }
+
   function updateChrome() {
     const t = activeTab();
+    const s = shownTab();
     updateProblems();
     $('#empty-state').classList.toggle('hidden', !!t || studio.visible || engine.visible);
     $('#breadcrumbs').innerHTML = t ? crumbs(t.path) : '';
-    $('#sb-path').innerHTML = t ? crumbs(t.path) : state.root ? `<span>${esc(basename(state.root))}</span>` : '';
-    $('#sb-lang').textContent = t ? LANG_NAMES[langFor(t.path)] : 'Tuff';
-    $('#sb-eol').textContent = t && t.model.getEOL() === '\n' ? 'LF' : 'CRLF';
-    const runFile = t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile;
+    $('#sb-path').innerHTML = s ? crumbs(s.path) : state.root ? `<span>${esc(basename(state.root))}</span>` : '';
+    $('#sb-lang').textContent = s ? LANG_NAMES[langFor(s.path)] : 'Tuff';
+    $('#sb-eol').textContent = s && s.model.getEOL() === '\n' ? 'LF' : 'CRLF';
+    const runFile = runTarget();
     $('#runconfig-name').textContent = runFile ? basename(runFile) : 'Current File';
-    document.title = t ? `${basename(state.root)} – ${basename(t.path)} – TuffCode` : `${basename(state.root || '')} – TuffCode`;
+    document.title = s ? `${basename(state.root)} – ${basename(s.path)} – TuffCode` : `${basename(state.root || '')} – TuffCode`;
   }
 
   // ---------- live checking ----------
@@ -1235,8 +1266,7 @@
   }
 
   async function runCurrent() {
-    const t = activeTab();
-    const file = t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile;
+    const file = runTarget();
     if (!file) return toast('Open a .tuf file to run it.');
     if (state.settings.sortOnRun) {
       const tab = state.tabs.find((x) => x.path === file);
@@ -1520,7 +1550,20 @@
   }, () => saveSettings({ bottomH: rootStyle.getPropertyValue('--bottom-h') }));
 
   // ---------- commands ----------
-  const ed = (id) => () => { if (!editor || !activeTab()) return; editor.focus(); editor.trigger('menu', id, null); };
+  // The Edit menu's commands work on the code on screen. While Tuff Engine or Design Studio shows, the code editor is
+  // hidden (and may hold another file): Undo and Redo are the view's own, Find and Replace open the view's file in
+  // the editor first, and the line commands do nothing, so nothing changes where you can't see it.
+  const ed = (id) => () => {
+    const view = engine.visible ? { file: engine.file, api: window.TuffEngine } : studio.visible ? { file: studio.file, api: window.TuffStudio } : null;
+    if (view) {
+      if (id === 'undo' || id === 'redo') { view.api?.[id]?.(); return; }
+      if ((id !== 'actions.find' && id !== 'editor.action.startFindReplaceAction') || !view.file) return;
+      return openFile(view.file).then((t) => { if (t) { editor.focus(); editor.trigger('menu', id, null); } });
+    }
+    if (!editor || !activeTab()) return;
+    editor.focus();
+    editor.trigger('menu', id, null);
+  };
   const zoom = (d) => () => {
     state.fontSize = d === 0 ? 14 : Math.max(9, Math.min(32, state.fontSize + d));
     editor?.updateOptions({ fontSize: state.fontSize, lineHeight: Math.round(state.fontSize * 1.6) });
@@ -2004,8 +2047,7 @@
   };
   $('#runconfig-widget').onclick = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
-    const t = activeTab();
-    const cur = t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile;
+    const cur = runTarget();
     showMenu(r.left, r.bottom + 4, [
       state.running
         ? { label: 'Stop', sc: 'Ctrl+F2', run: () => api.run.stop() }

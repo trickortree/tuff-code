@@ -95,6 +95,9 @@
   const range = (a, b) => { const out = []; for (let i = a; i <= b; i++) out.push(i); return out; };
   const cap = (s) => String(s).charAt(0).toUpperCase() + String(s).slice(1);
   const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+  // A whole name in a line of code. Tuff's names can hold letters in any language, so \b (A-Z only) would find coin
+  // inside coinça.
+  const wordRe = (name) => new RegExp(String.raw`(?<![\p{L}\p{N}_])${name}(?![\p{L}\p{N}_])`, 'u');
   // A number as code: at most 2 decimals, and never -0.
   const num = (n) => { const v = +(+n).toFixed(2); return String(Object.is(v, -0) ? 0 : v); };
 
@@ -294,7 +297,7 @@
     const lines = String(code ?? '').split(/\r?\n/);
     const P = {
       lines, lineCount: lines.length, importLine: 0, lastImport: 0, other: null, game: null, settings: {}, regs: [], nodes: [],
-      byVar: {}, byLine: {}, hud: null, player: null, funcs: [], scoreLine: 0, score: null, loopLine: 0, behaviours: [], busy: new Set(),
+      byVar: {}, byLine: {}, hud: null, player: null, funcs: [], scoreLine: 0, score: null, loopLine: 0, gameLoop: 0, behaviours: [], busy: new Set(),
     };
     let fn = null;
     for (let i = 0; i < lines.length; i++) {
@@ -322,6 +325,10 @@
         continue;
       }
       if (!P.loopLine && /^while\b/.test(c)) P.loopLine = ln;
+      if (!P.gameLoop && /^while\b/.test(c) && isGameLoop(lines, i, c)) P.gameLoop = ln;
+      // What comes after the game's loop runs only once its window has closed: it isn't how the game starts, so it
+      // isn't read as a thing's setup, and Inspector edits never touch it (spec §8.2). Functions still count.
+      if (P.gameLoop && ln > P.gameLoop) continue;
       if ((m = c.match(GAME_RE))) {
         const call = callOf(full, c, m[3]);
         P.game = { key: 'root', kind: 'game', var: m[1], mode: m[2] === 'world' ? '3d' : '2d', line: ln, comment, call, args: call.vals, text: full };
@@ -389,6 +396,14 @@
     }
     P.behaviours = recognise(P);
     return P;
+  }
+
+  // A top-level while loop is the game's loop when it asks game:open() or calls game:frame(): where tgame's preview
+  // stops (a while loop that only sets things up runs to its end, and the setup goes on after it).
+  function isGameLoop(lines, i, c) {
+    if (/:(?:open|frame)\s*\(/.test(c)) return true;
+    for (let j = i + 1; j < lines.length && (/^\s/.test(lines[j]) || !lines[j].trim()); j++) if (/:frame\s*\(/.test(K.stripComment(lines[j]).code)) return true;
+    return false;
   }
 
   const scoreLabel = (P) => P.nodes.find((n) => n.kind === 'text' && n.var && typeof n.args[0] === 'string' && n.args[0].startsWith('Score: ')) || null;
@@ -529,6 +544,9 @@
     return out;
   }
 
+  // Which play_again line a line is: the thing a move_to moves (its spot changes), or the line itself.
+  const paKey = (code) => code.replace(/^([A-Za-z_]\w*:move_to)\(.*$/, '$1');
+
   function ownedPlayAgain(P, f) {
     return !!(f && f.mark && P.lines[f.mark - 1].trim() === PA_MARK && f.body.every((b) => PA_LINE.test(K.stripComment(b.text).code.trim())));
   }
@@ -580,17 +598,23 @@
     if (hurts.length) {
       const name = hurts[0].p.PA;
       const f = P.funcs.find((x) => x.name === name);
-      const body = playAgainBody(P).map((t) => `    ${t}`);
-      if (!f) tail = [PA_MARK, `func ${name}():`, ...body];
-      else if (ownedPlayAgain(P, f) && !same(lines.slice(f.line, f.end), body)) {
-        for (const l of range(f.line + 1, f.end)) del.add(l);
-        after.set(f.line, body);
+      if (!f) tail = [PA_MARK, `func ${name}():`, ...playAgainBody(P).map((t) => `    ${t}`)];
+      else if (ownedPlayAgain(P, f)) {
+        // Written again only when it changes, in its own indent, and each line keeps the comment at its end (found by
+        // what the line is: score = 0, the label's set, or which thing it moves).
+        const ind = f.body[0]?.text.match(/^[ \t]*/)[0] || '    ';
+        const tails = new Map(f.body.map((b) => { const { code } = K.stripComment(b.text); return [paKey(code.trim()), b.text.slice(code.length)]; }));
+        const body = playAgainBody(P).map((t) => `${ind}${t}${tails.get(paKey(t)) || ''}`);
+        if (!same(f.body.map((b) => b.text), body)) {
+          for (const l of range(f.line + 1, f.end)) del.add(l);
+          after.set(f.line, body);
+        }
       }
     } else {
       for (const f of P.funcs) {
         if (!ownedPlayAgain(P, f)) continue;
         const own = new Set([f.mark, ...range(f.line, f.end)]);
-        const word = new RegExp(String.raw`\b${f.name}\b`);
+        const word = wordRe(f.name);
         if (lines.some((l, i) => !own.has(i + 1) && word.test(K.stripComment(l).code))) continue;
         for (const l of own) del.add(l);
         if (f.mark > 1 && !lines[f.mark - 2].trim()) del.add(f.mark - 1);
@@ -657,8 +681,25 @@
     };
   }
 
+  // Every edit is one undo step, except while a number field is typed in (numbers()): S.typing is that field's step
+  // during its edit, and its edits join one step (the 2, 25 and 250 of a slowly typed 250 are one Ctrl+Z) until the
+  // field is left, or until something else changes the code in between.
   function commit(ed, blocks = []) {
-    return ed.commit((lines) => fixups(blocks.reduce(appendBlock, lines)));
+    const finish = (lines) => fixups(blocks.reduce(appendBlock, lines));
+    const step = S.typing;
+    if (!step) { closeStep(); return ed.commit(finish); }
+    const join = S.openStep === step && step.model === S.model && step.ver === S.model.getAlternativeVersionId();
+    if (!join) closeStep();
+    const at = ed.commit(finish, { open: !join, close: false });
+    step.model = S.model;
+    step.ver = S.model.getAlternativeVersionId();
+    S.openStep = step;
+    return at;
+  }
+  function closeStep() {
+    const step = S.openStep;
+    S.openStep = null;
+    if (step?.model && !step.model.isDisposed()) step.model.pushStackElement();
   }
 
   const BASE = { box: 'box', circle: 'circle', line: 'line', text: 'words', image: 'picture', sphere: 'ball', cylinder: 'cylinder', cone: 'cone', plane: 'plane', spawn: 'thing', light: 'lamp', player: 'player' };
@@ -677,6 +718,14 @@
       if (!pl.hud) { pl.hud = nm('hud'); ed.insertAfter(A.settingsEnd, `${pl.hud} = ${G}:hud()`); }
       return pl.hud;
     };
+    // A free spot on the screen (the HUD) for new text or a picture: from (x, y) down, row by row, until nothing on
+    // the screen is near it. (The 3D score and Screen text both start at 90, 30.)
+    const onScreen = P.nodes.filter((n) => n.layer === 'hud' && isNum(n.pos.x) && isNum(n.pos.y)).map((n) => [n.pos.x, n.pos.y]);
+    pl.hudSpot = (x, y) => {
+      for (let i = 0; i < 12 && onScreen.some(([hx, hy]) => Math.abs(hx - x) < 150 && Math.abs(hy - y) < 30); i++) y += 34;
+      onScreen.push([x, y]);
+      return [x, y];
+    };
     pl.needScore = () => {
       if (P.score || pl.scored) return;
       if (is3d) pl.needHud();
@@ -686,12 +735,14 @@
       if (have) pl.label = have.var;
       else {
         pl.label = nm('score_label');
-        out.push(is3d ? `${pl.label} = ${pl.hud}:text("Score: 0", 90, 30, 26, "white")` : `${pl.label} = ${G}:text("Score: 0", ${Math.round(W / 2)}, 30, 24, "white")`);
+        const [sx, sy] = is3d ? pl.hudSpot(90, 30) : [Math.round(W / 2), 30];
+        out.push(is3d ? `${pl.label} = ${pl.hud}:text("Score: 0", ${sx}, ${sy}, 26, "white")` : `${pl.label} = ${G}:text("Score: 0", ${sx}, ${sy}, 24, "white")`);
       }
       if (out.length) ed.insertAfter(Math.max(A.settingsEnd, P.hud?.line || 0), out.join('\n'));
       pl.scored = true;
     };
-    pl.playAgain = () => P.behaviours.find((b) => b.type === 'hurts')?.p.PA || (P.funcs.some((f) => f.name === 'play_again') ? 'play_again' : nm('play_again'));
+    // (One name for the whole edit: two enemies given Game over in one step share it.)
+    pl.playAgain = () => (pl.pa = pl.pa || P.behaviours.find((b) => b.type === 'hurts')?.p.PA || (P.funcs.some((f) => f.name === 'play_again') ? 'play_again' : nm('play_again')));
     // A behaviour's function (at the end of the file) and its registration. falls is registered by a prop line
     // (V:clicked V_chop), which it gives back for the caller to put with V's lines.
     pl.beh = (type, V, params) => {
@@ -754,6 +805,47 @@
     else pl.ed.insertAfter(pl.A.settingsEnd, settingLine(pl.G, method, args));
   }
 
+  // A behaviour's function body changed to want ([level, text] rows), line by line: comment lines, blank lines and the
+  // comments at the ends of lines stay as they are (spec §8.2), and so does each line's own indent. The code lines
+  // that stay the same are found first; between them, old and new lines pair up in order (a new speed changes a line
+  // where it is), and what's left over goes (Left/right only: the up and down lines) or comes in after the line before.
+  function rewriteBody(pl, fn, want) {
+    const rows = fn.body.map((b) => {
+      const { code } = K.stripComment(b.text);
+      return { line: b.line, indent: b.text.match(/^[ \t]*/)[0], code: code.trim(), tail: b.text.slice(code.length) };
+    }).filter((r) => r.code);
+    const widths = [...new Set(rows.map((r) => r.indent.length))].sort((a, b) => a - b);
+    rows.forEach((r) => { r.level = widths.indexOf(r.indent.length) + 1; });
+    const indentFor = (level) => rows.find((r) => r.level === level)?.indent ?? '    '.repeat(level);
+    const a = rows.map((r) => `${r.level}|${r.code}`);
+    const b = want.map(([l, t]) => `${l}|${t}`);
+    // The longest run of lines that stay (a and b are a few lines each).
+    const L = a.map(() => new Array(b.length + 1).fill(0));
+    L.push(new Array(b.length + 1).fill(0));
+    for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    const keep = [];
+    for (let i = 0, j = 0; i < a.length && j < b.length;) {
+      if (a[i] === b[j]) { keep.push([i, j]); i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) i++; else j++;
+    }
+    keep.push([a.length, b.length]);
+    let prev = fn.line;
+    let i = 0;
+    let j = 0;
+    for (const [ki, kj] of keep) {
+      for (; i < ki && j < kj; i++, j++) {
+        const r = rows[i];
+        const [level, text] = want[j];
+        pl.ed.replace(r.line, `${level === r.level ? r.indent : indentFor(level)}${text}${r.tail}`);
+        prev = r.line;
+      }
+      for (; i < ki; i++) pl.ed.remove(rows[i].line);
+      for (; j < kj; j++) pl.ed.insertAfter(prev, `${indentFor(want[j][0])}${want[j][1]}`);
+      if (ki < rows.length) prev = rows[ki].line;
+      i = ki + 1;
+      j = kj + 1;
+    }
+  }
+
   // The lines of a behaviour: its registration, the Engine comment, the function, and the blank line before them.
   function behLines(P, b) {
     const out = [b.reg.line, ...range(b.fn.line, b.fn.end)];
@@ -775,6 +867,27 @@
   const firstMover = (P) => P.behaviours.find((b) => b.type === 'arrows' && b.node.var)?.V || null;
   const target3 = (P) => P.player?.var || null;
 
+  // A Coin or Enemy tile added before there was a Player got no behaviours (there was nothing to collect it or to
+  // chase). The first Player gives them theirs, in the same step: the coin's Collect it, the enemy's Chases and Game
+  // over. Only the tiles' own things count (a gold circle of 14, a red 40 × 40 box; in 3D a coin model and a red box
+  // you walk through) that have none of those yet. Gives the toast that says so, or null.
+  function connectWaiting(pl, V) {
+    const { P, is3d } = pl;
+    const has = (n, types) => P.behaviours.some((b) => b.V === n.var && types.includes(b.type));
+    const coins = P.nodes.filter((n) => n.var && !has(n, ['collect']) && (is3d
+      ? n.layer === 'world' && n.kind === 'spawn' && n.args[0] === 'coin'
+      : n.layer === 'game' && n.kind === 'circle' && fieldOf(n, 'r') === 14 && fieldOf(n, 'color') === 'gold'));
+    const enemies = P.nodes.filter((n) => n.var && !has(n, ['chase', 'hurts']) && (is3d
+      ? n.layer === 'world' && n.kind === 'box' && fieldOf(n, 'size') === 1 && fieldOf(n, 'color') === 'red' && n.props.solid?.args[0] === false
+      : n.layer === 'game' && n.kind === 'box' && fieldOf(n, 'w') === 40 && fieldOf(n, 'h') === 40 && fieldOf(n, 'color') === 'red'));
+    for (const c of coins) pl.beh('collect', c.var, { C: V, P: 1, sound: 'coin' });
+    for (const e of enemies) { pl.beh('chase', e.var, { T: V, S: is3d ? 2 : 120 }); pl.beh('hurts', e.var, { T: V, sound: 'lose' }); }
+    const names = [...coins, ...enemies].map((n) => n.var);
+    if (!names.length) return null;
+    const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+    return `${cap(list)} ${names.length === 1 ? 'works' : 'work'} with ${V} now.`;
+  }
+
   const KIT_NATURE = ['tree', 'pine', 'rock', 'bush', 'flower'];
   const KIT_BUILDINGS = ['house', 'hut', 'sign', 'crate', 'fence'];
   const SHAPES3 = { box: ['box', 'box', 'orange'], ball: ['sphere', 'ball', 'teal'], cylinder: ['cylinder', 'cylinder', 'gray'], cone: ['cone', 'cone', 'red'], plane: ['plane', 'plane', 'sand'] };
@@ -794,10 +907,12 @@
       if (!is3d) {
         switch (id) {
           case 'player': {
+            const first = !firstMover(P);
             const n = nm('player');
             const [x, y] = freeSpot2(P, r(W / 2), r(H - 80));
             put(n, `${n} = ${G}:box(${x}, ${y}, 50, 50, "lime")`, `${n}:on_edge "stop"`);
             pl.beh('arrows', n, { S: 300, dirs: 'all' });
+            if (first) say = connectWaiting(pl, n);
             break;
           }
           case 'coin': {
@@ -845,6 +960,7 @@
             if (P.player) { ide.toast('This world has a player already. A world can have one.'); return null; }
             put(nm('player'), '');
             lines = [`${V} = ${G}:player("first person")`];
+            say = connectWaiting(pl, V);
             break;
           case 'coin': {
             const T = target3(P);
@@ -892,14 +1008,16 @@
       if (id === 'hudtext' || id === 'hudbox') {
         const hud = pl.needHud();
         const n = nm(id === 'hudtext' ? 'hud_text' : 'bar');
-        put(n, id === 'hudtext' ? `${n} = ${hud}:text("Lives: 3", 90, 30, 22, "white")` : `${n} = ${hud}:box(${r(W / 2)}, ${r(H - 20)}, 200, 16, "green")`);
+        const [x, y] = id === 'hudtext' ? pl.hudSpot(90, 30) : [];
+        put(n, id === 'hudtext' ? `${n} = ${hud}:text("Lives: 3", ${x}, ${y}, 22, "white")` : `${n} = ${hud}:box(${r(W / 2)}, ${r(H - 20)}, 200, 16, "green")`);
       } else if (id.startsWith('pic:')) {
         const rel = id.slice(4);
         const n = nm(rel.split('/').pop().replace(/\.[^.]+$/, ''));
         const wide = (S.picSize.get(rel)?.[0] || 0) > 160;
         if (is3d) {
           const hud = pl.needHud();
-          put(n, `${n} = ${hud}:image(${JSON.stringify(rel)}, 90, 90${wide ? ', 128' : ''})`);
+          const [x, y] = pl.hudSpot(90, 90);
+          put(n, `${n} = ${hud}:image(${JSON.stringify(rel)}, ${x}, ${y}${wide ? ', 128' : ''})`);
         } else {
           const [x, y] = freeSpot2(P, r(W / 2), r(H / 2));
           put(n, `${n} = ${G}:image(${JSON.stringify(rel)}, ${x}, ${y}${wide ? ', 128' : ''})`);
@@ -1014,7 +1132,7 @@
       for (const b of [...own, ...needs]) behLines(P, b).forEach(del);
       pl.done();
       const name = node.var || KIND_LABEL(node).toLowerCase();
-      const still = node.var && S.model.getLinesContent().some((l) => new RegExp(String.raw`\b${node.var}\b`).test(K.stripComment(l).code));
+      const still = node.var && S.model.getLinesContent().some((l) => wordRe(node.var).test(K.stripComment(l).code));
       if (still) ide.toast(`Removed. Some code still mentions ${node.var}. Check the red marks when you run.`, 'error', 5000);
       else if (needs.length) {
         const by = new Map();
@@ -1049,12 +1167,10 @@
       return `v:${V}`;
     },
 
-    // A behaviour's parameters changed: only its function's body is written again.
+    // A behaviour's parameters changed: only the lines of its function that change are written again.
     setBehaviour(P, b, params) {
       const pl = plan(P);
-      const p = { ...b.p, ...params };
-      for (const l of range(b.fn.line + 1, b.fn.end)) pl.ed.remove(l);
-      pl.ed.insertAfter(b.fn.line, bodyLines(b.type, p).join('\n'));
+      rewriteBody(pl, b.fn, BEH[b.type].body({ ...b.p, ...params }));
       pl.done();
       return b.node.key;
     },
@@ -1279,10 +1395,14 @@ func play_again():
     file: null, model: null, sub: null, parsed: null, dump: null, dumpParsed: null, dumpVer: null, join: null, sceneVer: 0,
     sel: 'root', selfEdit: false, version: 0, ready: false, webgl: null, cams: new Map(), assetEpoch: 0, tables: null, busy: false,
     loadSeq: 0, loadedSeq: 0, hostFile: null, hostErr: null, camMode: 'editor', zoom: 'fit', tab: 'add', picSize: new Map(),
-    files: [], log: [], asks: new Map(), askNo: 0, timer: null, frameRO: null,
+    files: [], log: [], asks: new Map(), askNo: 0, timer: null, frameRO: null, typing: null, openStep: null,
   };
   const host = () => $('#engine');
   const is3d = () => S.parsed?.game?.mode === '3d';
+  // The code and its version as they are now: '' and -1 once the file's tab was closed (act() opens it again).
+  const live = () => !!S.model && !S.model.isDisposed();
+  const codeNow = () => (live() ? S.model.getValue() : '');
+  const verNow = () => (live() ? S.model.getAlternativeVersionId() : -1);
 
   const KIND_LABEL = (n) => {
     if (n.kind === 'spawn') { const m = typeof n.args[0] === 'string' ? n.args[0] : ''; return /\.glb$/i.test(m) ? 'Model' : cap(m || 'Model'); }
@@ -1405,7 +1525,8 @@ func play_again():
     const w = /^(for|while|if)\b/.exec(text);
     if (w) return w[1] === 'for' ? 'inside a for loop' : w[1] === 'while' ? 'inside a while loop' : 'inside an if';
     const call = /^(?:[A-Za-z_]\w*\s*=\s*)?([A-Za-z_]\w*)\s*\(/.exec(text);
-    if (t.made.length > 1 && call && P.funcs.some((f) => f.name === call[1])) return `made by ${call[1]}() on line ${m0}`;
+    // (No line number: every place that shows this adds the line itself.)
+    if (t.made.length > 1 && call && P.funcs.some((f) => f.name === call[1])) return `made by ${call[1]}()`;
     if (t.made.length > 1) return 'made by a function';
     return 'this line does more than one thing';
   }
@@ -1444,8 +1565,12 @@ func play_again():
     if (m.phase !== 'end' || !S.join || !S.model) return;
     const key = m.i === 'player' ? S.join.playerKey : S.join.iToKey.get(m.i);
     if (!key || key === 'root' || key.startsWith('g:')) return;
-    // Lines may have moved since this scene was made: a name still finds its thing, a line number may not.
-    if (key.startsWith('l:') && S.dumpVer !== S.model.getAlternativeVersionId()) { requestScene(); return; }
+    // Lines may have moved since this scene was made: a name still finds its thing, a line number may not. (When the
+    // file's tab was closed, act() opens it again and draws a new scene.)
+    if (key.startsWith('l:') && (S.model.isDisposed() || S.dumpVer !== S.model.getAlternativeVersionId())) {
+      if (S.model.isDisposed()) act(() => null); else requestScene();
+      return;
+    }
     act((P) => {
       const node = find(P, key);
       if (!node) return null;
@@ -1478,8 +1603,13 @@ func play_again():
   // focus while the scene, Objects and the preview catch up); otherwise everything is drawn again.
   function act(fn, { form = false } = {}) {
     if (!S.model) return;
-    if (S.model.isDisposed()) { if (ide.engineVisible()) show(S.file); return; } // its tab was closed: open it again
-    S.parsed = parse(S.model.getValue());
+    if (S.model.isDisposed()) {
+      // Its tab was closed while Tuff Engine showed it: open the file again, then do what the kid asked.
+      const gone = S.model;
+      if (ide.engineVisible()) show(S.file).then(() => { if (S.model && S.model !== gone && !S.model.isDisposed()) act(fn, { form }); });
+      return;
+    }
+    S.parsed = parse(codeNow());
     const before = S.model.getAlternativeVersionId();
     S.selfEdit = form;
     let key;
@@ -1502,7 +1632,8 @@ func play_again():
   }
 
   function undoRedo(which) {
-    if (!S.model) return;
+    if (!S.model || S.model.isDisposed()) return;
+    closeStep();
     S.selfEdit = false;
     S.model[which]();
   }
@@ -1662,10 +1793,12 @@ func play_again():
   async function show(file) {
     if (!host().firstChild) skeleton();
     if (file && file !== S.file) {
+      closeStep();
       S.file = file;
       S.sel = 'root';
       S.dump = null;
       S.dumpParsed = null;
+      S.dumpVer = null; // (the last file's version number could match this file's)
       S.join = null;
       S.hostErr = null;
       if (S.loadSeq) $('#en-stage').classList.add('switching'); // the last file's scene hides until this one's is drawn
@@ -1673,8 +1806,17 @@ func play_again():
     const want = S.file;
     const model = await ide.getModel(want);
     if (want !== S.file) return; // another file was asked for meanwhile: that show() draws it
-    if (!model) { ide.toast(`Couldn't open ${ide.basename(S.file)}.`, 'error'); return; }
     S.sub?.dispose();
+    S.sub = null;
+    if (!model) {
+      // Nothing to edit. The last file's model goes too (edits would land in the wrong file), and the start card
+      // offers what works without one: a template as a new file, or another file.
+      ide.toast(`Couldn't open ${ide.basename(S.file)}.`, 'error');
+      S.model = null;
+      fillFiles();
+      render(true);
+      return;
+    }
     S.model = model;
     S.sub = model.onDidChangeContent(K.debounce(() => {
       if (!ide.engineVisible() || model !== S.model) return;
@@ -1691,13 +1833,14 @@ func play_again():
 
   function hide() {
     clearTimeout(S.timer);
+    closeStep();
     $$('.sd-modal', host()).forEach((m) => m.remove());
   }
 
   // ---------------------------------------------------------------- drawing the tab
   function render(withForm = true) {
-    if (!S.model || S.model.isDisposed()) return;
-    S.parsed = parse(S.model.getValue());
+    if (S.model && S.model.isDisposed()) return;
+    S.parsed = parse(codeNow());
     const P = S.parsed;
     const kind = $('#en-kind');
     const g = P.game;
@@ -1706,8 +1849,8 @@ func play_again():
     $('#en-zoom').classList.toggle('hidden', !g || g.mode === '3d');
     $('#en-cam').classList.toggle('hidden', !g || g.mode !== '3d');
     $$('#en-cam button').forEach((b) => b.classList.toggle('on', b.dataset.cam === S.camMode));
-    $('#en-undo').disabled = !S.model.canUndo();
-    $('#en-redo').disabled = !S.model.canRedo();
+    $('#en-undo').disabled = !S.model?.canUndo();
+    $('#en-redo').disabled = !S.model?.canRedo();
     renderPlay();
     const start = !g || P.other;
     $('#en-stage').classList.toggle('start', !!start);
@@ -1749,7 +1892,10 @@ func play_again():
     const show = !P.game || P.other;
     box.classList.toggle('hidden', !show);
     if (!show) return;
-    if (P.other) {
+    if (!S.model) {
+      box.innerHTML = `<div class="en-card">${ICON.pad}<b>Couldn't open ${esc(ide.basename(S.file || 'the game'))}</b><span>Start a new game from a template, or pick another file.</span>
+        <div class="en-btns"><button class="btn primary" data-a="tpl">${UI.grid}New game from a template…</button></div>${filePick()}</div>`;
+    } else if (P.other) {
       const studio = P.other !== 'atgui';
       box.innerHTML = `<div class="en-card">${ICON.game}<b>This is an app, not a game.</b><span>Tuff Engine makes tgame games. ${esc(ide.basename(S.file))} uses ${esc(P.other)}, which opens an app window${studio ? ': Design Studio builds those' : ''}.</span>
         <div class="en-btns">${studio ? `<button class="btn primary" data-a="studio">${UI.palette}Open in Design Studio</button>` : ''}<button class="btn" data-a="tpl">${UI.grid}New game from a template…</button></div>${filePick()}</div>`;
@@ -1788,6 +1934,7 @@ func play_again():
       } else if (d.stopped === 'timeout') html = 'Your code took more than 5 seconds before the game started, so Tuff Engine stopped it. Press Play to run it.';
       else if (d.stopped === 'other-window') { html = 'Tuff Engine shows tgame games. This file also opens a tgui, mtgui or atgui window.'; studio = true; }
       else if (d.stopped === 'too-big') html = 'This game makes too many things to show them all here. Press Play to see it.';
+      else if (d.stopped === 'too-much') html = 'Your code makes something too big for the preview before the game starts (like a very long range), so Tuff Engine stopped there. Press Play to run it.';
       else if (d.stopped === 'crashed') html = `The preview couldn't run: ${esc(d.message || 'something went wrong')}`;
       else if (S.webgl === false && d.mode === '3d') html = "This computer can't show 3D worlds: its 3D graphics (WebGL) aren't working. 2D games still work.";
       else if (S.hostErr) html = `The preview couldn't draw something: ${esc(S.hostErr)}`;
@@ -2035,7 +2182,10 @@ func play_again():
   }
   function fieldEl(label, control, hint) { return K.field(label, control, hint); }
 
-  // A row of small number inputs: [label, value, onChange(number), { step, min }].
+  // A row of small number inputs: [label, value, onChange(number), { step, min, tooSmall }]. The code follows the
+  // field as it's typed in (a short pause writes it), and everything typed before the field is left is one undo step.
+  // tooSmall: the message for a number under min. While typing, a smaller number (the 1 and 10 of 1000) just isn't
+  // written yet; only a field left with one shows the message once, and goes back to the last number that was.
   function numbers(items) {
     const row = document.createElement('div');
     row.className = 'pf en-nums';
@@ -2043,7 +2193,25 @@ func play_again():
       const l = document.createElement('label');
       l.className = 'en-num';
       l.innerHTML = `<span>${esc(label)}</span>`;
-      const inp = K.control('number', isNum(value) ? +num(value) : '', {}, (v) => { if (v === '' && !o.blank) return; onChange(v); });
+      const step = { model: null, ver: null };
+      let good = isNum(value) ? +num(value) : '';
+      const inp = K.control('number', good, {}, (v) => {
+        if (v === '' && !o.blank) return;
+        if (o.tooSmall && !(v >= o.min)) return;
+        good = v;
+        S.typing = document.activeElement === inp ? step : null;
+        try { onChange(v); } finally { S.typing = null; }
+      });
+      const leave = () => { if (S.openStep === step) closeStep(); };
+      inp.addEventListener('blur', leave);
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') leave(); });
+      if (o.tooSmall) {
+        inp.addEventListener('change', () => {
+          if (inp.value !== '' && +inp.value >= o.min) return;
+          if (inp.value !== '') ide.toast(o.tooSmall, 'error');
+          inp.value = good;
+        });
+      }
       if (o.step) inp.step = o.step;
       if (o.min !== undefined) inp.min = o.min;
       if (o.disabled) inp.disabled = true;
@@ -2160,13 +2328,13 @@ func play_again():
     const form = document.createElement('div');
     form.className = 'in-form';
     const title = typeof g.args[0] === 'string' ? g.args[0] : '';
-    const sizeOk = (v) => { if (!(v >= 100)) { ide.toast('A game is at least 100 wide and 100 high.', 'error'); return false; } return true; };
+    const small = { min: 100, tooSmall: 'A game is at least 100 wide and 100 high.' };
     const setG = (patch) => act((Q) => Edits.setGame(Q, patch), { form: true });
     const sizes = K.chips(['600×400', '800×600', '960×540'], `${W}×${H}`, (o) => { const [w, h] = o.split('×').map(Number); act((Q) => Edits.setGame(Q, { width: w, height: h })); });
     sizes.classList.add('sizes');
     form.append(sec('Window', [
       fieldEl('Title', textEl(title, (v) => setG({ title: v }))),
-      numbers([['Width', W, (v) => sizeOk(v) && setG({ width: Math.round(v) }), { min: 100 }], ['Height', H, (v) => sizeOk(v) && setG({ height: Math.round(v) }), { min: 100 }]]),
+      numbers([['Width', W, (v) => setG({ width: Math.round(v) }), small], ['Height', H, (v) => setG({ height: Math.round(v) }), small]]),
       fieldEl('Size', sizes),
     ]));
     const set = (changes, rerender = false) => act((Q) => Edits.setSetting(Q, changes), { form: !rerender });
@@ -2278,9 +2446,11 @@ func play_again():
       if (!v) return back('Code needs a name to talk to this, so it keeps its old one.', 'info');
       if (!NAME_RE.test(v)) return back("Names use letters, numbers and _ and can't start with a number.");
       if (KEYWORDS().includes(v) || BUILTINS.includes(v) || LIBS.includes(v)) return back(`'${v}' is part of Tuff. Pick another name.`);
-      const fresh = parse(S.model.getValue());
-      if (K.takenNames(fresh, S.model.getValue()).has(v)) return back(`'${v}' is already used. Pick another name.`);
-      act((Q) => { const n = find(Q, key); return n ? Edits.rename(Q, n, v) : null; });
+      act((Q) => {
+        if (K.takenNames(Q, Q.lines.join('\n')).has(v)) { back(`'${v}' is already used. Pick another name.`); return null; }
+        const n = find(Q, key);
+        return n ? Edits.rename(Q, n, v) : null;
+      });
     };
     name.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); name.blur(); } if (e.key === 'Escape') { name.value = node.var || ''; name.blur(); } };
     name.onblur = commitName;
@@ -2292,7 +2462,7 @@ func play_again():
     const notes = [];
     if (node.kind === 'spawn' && q.form === 'none') notes.push('Random spot (changes every run). Drag it to give it a spot.');
     if (q.form === 'code') notes.push('This spot comes from code.');
-    else if (t && S.dumpVer === S.model.getAlternativeVersionId() && ['xy', 'spot', 'line'].includes(q.form)) {
+    else if (t && S.dumpVer === verNow() && ['xy', 'spot', 'line'].includes(q.form)) {
       const far = Math.abs((t.x ?? 0) - q.x) > 0.5 || Math.abs((t.y ?? 0) - (q.y ?? 0)) > 0.5 || (is3 && Math.abs((t.z ?? 0) - (q.z ?? 0)) > 0.5);
       if (far && node.kind !== 'line') notes.push('Your code moves this when the game starts.');
     }
@@ -2310,7 +2480,7 @@ func play_again():
     if (node.kind === 'player') {
       const [sx, sz] = playerStart(P);
       const mt = (x, z) => { const old = node.props.move_to?.args; const y = isNum(old?.[1]) && !Array.isArray(old?.[0]) ? old[1] : 0; setP('move_to', [v3(x), y, v3(z)]); };
-      form.append(sec('Start spot', [numbers([['X', sx, (v) => mt(v, playerStart(parse(S.model.getValue()))[1])], ['Z', sz, (v) => mt(playerStart(parse(S.model.getValue()))[0], v)]])]));
+      form.append(sec('Start spot', [numbers([['X', sx, (v) => mt(v, playerStart(parse(codeNow()))[1])], ['Z', sz, (v) => mt(playerStart(parse(codeNow()))[0], v)]])]));
       const mode = typeof node.args[0] === 'string' ? node.args[0] : 'first person';
       const look = [
         fieldEl('Camera', selectEl(tbl('players', ['first person', 'third person']).map((x) => [x, cap(x)]), mode, (v) => setA({ mode: v }))),
@@ -2326,12 +2496,12 @@ func play_again():
       form.append(sec('Where', [numbers([['X1', q.x1, (v) => setA({ x1: v2(v) })], ['Y1', q.y1, (v) => setA({ y1: v2(v) })], ['X2', q.x2, (v) => setA({ x2: v2(v) })], ['Y2', q.y2, (v) => setA({ y2: v2(v) })]])]));
     } else if (is3) {
       const disabled = !posOK;
-      const cur = () => { const n = find(parse(S.model.getValue()), key); return n ? n.pos : q; };
+      const cur = () => { const n = find(parse(codeNow()), key); return n ? n.pos : q; };
       const put3 = (k, v) => { const c = cur(); setA({ x: c.x ?? t?.x ?? 0, y: c.y ?? t?.y ?? 0, z: c.z ?? t?.z ?? 0, [k]: v3(v) }); };
       form.append(sec('Where', [numbers([['X', q.x ?? t?.x, (v) => put3('x', v), { step: 0.5, disabled }], ['Y (bottom)', q.y ?? t?.y, (v) => put3('y', v), { step: 0.5, disabled }], ['Z', q.z ?? t?.z, (v) => put3('z', v), { step: 0.5, disabled }]])]));
     } else {
       const disabled = !posOK;
-      const cur = () => { const n = find(parse(S.model.getValue()), key); return n ? n.pos : q; };
+      const cur = () => { const n = find(parse(codeNow()), key); return n ? n.pos : q; };
       const put2 = (k, v) => { const c = cur(); setA({ x: c.x ?? t?.x ?? 0, y: c.y ?? t?.y ?? 0, [k]: v2(v) }); };
       form.append(sec('Where', [numbers([['X', q.x ?? t?.x, (v) => put2('x', v), { disabled }], ['Y', q.y ?? t?.y, (v) => put2('y', v), { disabled }]])]));
     }
@@ -2390,7 +2560,7 @@ func play_again():
       const list = Array.isArray(size);
       const dims = k === 'box' ? ['Width', 'Height', 'Depth'] : k === 'plane' ? ['Width', 'Depth'] : k === 'sphere' ? null : ['Width', 'Height'];
       // The list as it is now (another of its fields may have just changed it).
-      const curSize = () => { const n = find(parse(S.model.getValue()), node.key); const s = n && fieldOf(n, 'size'); return (Array.isArray(s) ? s : size).slice(); };
+      const curSize = () => { const n = find(parse(codeNow()), node.key); const s = n && fieldOf(n, 'size'); return (Array.isArray(s) ? s : size).slice(); };
       if (list && dims) kids.push(numbers(dims.map((lab, j) => [lab, size[j], (v) => { if (!(v > 0)) return; const s = curSize(); s[j] = v3(v); setA({ size: s }); }, { step: 0.5, min: 0.1 }])));
       else kids.push(numbers([['Size', isNum(size) ? size : '', (v) => v > 0 && setA({ size: v3(v) }), { step: 0.5, min: 0.1, disabled: !isNum(size) && size !== undefined }]]));
       if (dims) {
@@ -2428,7 +2598,7 @@ func play_again():
     const sp = node.props.speed?.args || [];
     const n0 = (i) => (isNum(sp[i]) ? sp[i] : 0);
     const kids = [];
-    const cur = () => { const n = find(parse(S.model.getValue()), node.key); const a = n?.props.speed?.args || []; return [0, 1, 2].map((i) => (isNum(a[i]) ? a[i] : 0)); };
+    const cur = () => { const n = find(parse(codeNow()), node.key); const a = n?.props.speed?.args || []; return [0, 1, 2].map((i) => (isNum(a[i]) ? a[i] : 0)); };
     const speed = (j, v) => { const s = cur().slice(0, is3 ? 3 : 2); s[j] = is3 ? +num(v) : Math.round(v); setP('speed', s); };
     kids.push(fieldEl('Moves by itself', numbers(is3
       ? [['vx', n0(0), (v) => speed(0, v)], ['vy', n0(1), (v) => speed(1, v)], ['vz', n0(2), (v) => speed(2, v)]]
@@ -2511,9 +2681,9 @@ func play_again():
       card.className = 'sd-tcard en-tcard';
       card.dataset.id = t.id;
       card.innerHTML = `<div class="en-tthumb">${ICON[t.icon] || ICON.game}<span>${t.mode === '3d' ? '3D' : '2D'}</span></div><div class="sd-tinfo"><b>${esc(t.name)}</b><span>${esc(t.desc)}</span>
-        <div class="sd-tbtns"><button class="btn sm primary" data-a="new">New file</button><button class="btn sm" data-a="here">Use here</button></div></div>`;
+        <div class="sd-tbtns"><button class="btn sm primary" data-a="new">New file</button>${S.model ? '<button class="btn sm" data-a="here">Use here</button>' : ''}</div></div>`;
       $('[data-a="new"]', card).onclick = () => { close(); templateAsFile(t); };
-      $('[data-a="here"]', card).onclick = () => { close(); templateHere(t); };
+      $('[data-a="here"]', card)?.addEventListener('click', () => { close(); templateHere(t); });
       grid.appendChild(card);
     }
     const close = () => { box.remove(); document.removeEventListener('keydown', onEsc, true); };
@@ -2525,7 +2695,9 @@ func play_again():
   }
 
   async function templateHere(t) {
-    if (S.model.getValue().trim()) {
+    if (S.model && !live()) await show(S.file); // its tab was closed: open it again first, so it asks before replacing
+    if (!live()) return;
+    if (codeNow().trim()) {
       const ok = await ide.ask({ title: `Replace the code in ${ide.basename(S.file)} with the ${t.name} template? (Ctrl+Z undoes it.)`, confirm: true, okLabel: 'Replace' });
       if (!ok) return;
     }
@@ -2586,7 +2758,8 @@ func play_again():
     document.addEventListener('keydown', onEsc, true);
     box.onmousedown = (e) => { if (e.target === box) close(); };
     $('[data-a="x"]', box).onclick = close;
-    $$('[data-mode]', box).forEach((b) => (b.onclick = () => {
+    const btns = $$('[data-mode]', box);
+    btns.forEach((b) => (b.onclick = async () => {
       const text = ta.value.trim();
       if (!text) { ta.focus(); ide.toast('Write what you want first.'); return; }
       if (typeof window.tuffAskAgent !== 'function') {
@@ -2595,7 +2768,16 @@ func play_again():
         return;
       }
       S.lastAsk = { text, mode: b.dataset.mode, note: noteFor(about) };
-      window.tuffAskAgent(text, { mode: b.dataset.mode, note: S.lastAsk.note });
+      btns.forEach((x) => { x.disabled = true; });
+      let sent;
+      try { sent = await window.tuffAskAgent(text, { mode: b.dataset.mode, note: S.lastAsk.note }); } catch { sent = false; }
+      // Not sent (an agent is still replying, or isn't ready: Tuff Agents' toast says which): the box and what the
+      // kid wrote stay, to send again. Tuff Agents gives false then; anything else means it went.
+      if (sent === false) {
+        btns.forEach((x) => { x.disabled = false; });
+        if (box.isConnected) ta.focus();
+        return;
+      }
       close();
     }));
     ta.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('[data-mode="edit"]', box).click(); } };
@@ -2688,6 +2870,9 @@ func play_again():
     show,
     hide,
     onKey,
+    // Edit > Undo and Redo while Tuff Engine shows (ide.js): the game's file, not the hidden code editor's.
+    undo: () => undoRedo('undo'),
+    redo: () => undoRedo('redo'),
     parse,
     lineFor: (node, args, name) => lineFor(node, args, name),
     fixups,
@@ -2698,7 +2883,7 @@ func play_again():
       mode: S.parsed?.game?.mode || null, stopped: S.dump?.stopped ?? null, error: S.dump?.error ?? null, ms: S.dump?.ms ?? null,
       things: S.dump?.things?.length ?? 0, keys: S.parsed?.nodes.map((n) => n.key) || [], groups: S.join?.groups.map((g) => ({ key: g.key, why: g.why, n: S.join.byKey.get(g.key)?.is.length })) || [],
       behaviours: S.parsed?.behaviours.map((b) => ({ id: b.id, type: b.type, V: b.V, p: b.p })) || [], banner: $('#en-banner')?.classList.contains('hidden') ? '' : $('#en-banner')?.textContent || '',
-      zoom: S.zoom, camMode: S.camMode, cam: S.cams.get(S.file) || null, selIs: selIs(), lastAsk: S.lastAsk || null, dumpCurrent: !!S.model && S.dumpVer === S.model.getAlternativeVersionId(),
+      zoom: S.zoom, camMode: S.camMode, cam: S.cams.get(S.file) || null, selIs: selIs(), lastAsk: S.lastAsk || null, dumpCurrent: live() && S.dumpVer === verNow(),
     }),
     // For the e2e suite: drive the frame and read what happened.
     test: {
@@ -2715,7 +2900,8 @@ func play_again():
       noteFor: (about) => noteFor(about),
       parsed: () => S.parsed,
       // Edits work on this model (a Monaco model, or a stand-in with the same methods) without the tab showing.
-      useModel: (model, file) => { S.model = model; if (file) S.file = file; },
+      // Gives the model and file it replaced, to put back with useModel(...was).
+      useModel: (model, file) => { const was = [S.model, S.file]; S.model = model; if (file) S.file = file; return was; },
     },
   };
 })();
