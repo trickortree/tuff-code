@@ -593,6 +593,16 @@ export default async (t, ctx) => {
   const accents = 'mention tgame\n\ngame = tgame.window("G", 800, 600)\npi = game:circle(100, 100, 10, "gold")\npièce = 3\nsay pièce\n';
   const renamedPi = await edit(accents, `(P, E) => E.rename(P, P.byVar.pi, 'disc')`);
   check(renamedPi === accents.replace('pi = game', 'disc = game'), 'renaming pi to disc changes pi only: pièce, a name of its own in Tuff, stays', firstDiff(accents.replace('pi = game', 'disc = game'), renamedPi));
+  // The screen layer: a new Screen text goes under the 3D score, not on top of it.
+  const islandCode = await tplCode('island_walk');
+  const hudText = await edit(islandCode, `(P, E) => E.add(P, 'hudtext')`);
+  check(hudText.includes('\nhud_text = hud:text("Lives: 3", 90, 64, 22, "white")\n'), 'Island Walk, then Screen text: it goes under the score (90, 64), not on it (90, 30)', hudText.split('\n').filter((l) => /hud:text/.test(l)));
+  // A Coin and an Enemy added before the Player get their behaviours from it.
+  const late = await edit(await tplCode('blank2d'), `(P, E, m) => { for (const id of ['coin', 'enemy', 'player']) E.add(window.TuffEngine.parse(m.getValue()), id); }`);
+  const lateP = await ev(`window.TuffEngine.parse(${JSON.stringify(late)}).behaviours.map((b) => b.type).sort().join()`);
+  check(lateP === 'arrows,chase,collect,hurts' && /func play_again\(\):/.test(late) && (await toasts()).includes('Coin and enemy work with player now.'),
+    'Coin, Enemy, then Player: the Player gives the coin Collect it and the enemy Chases and Game over, and says so', { lateP, toasts: (await toasts()).slice(-3) });
+  check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'late_check.tuf'), late), path.join(ctx.tmp, 'late_check.tuf'))).trim()), 'and that game passes tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'late_check.tuf')));
 
   // ================================================================ full size, leaving and closing
   await ev(`document.querySelector('#en-stage').focus()`);

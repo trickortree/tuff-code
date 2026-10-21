@@ -701,6 +701,14 @@
       if (!pl.hud) { pl.hud = nm('hud'); ed.insertAfter(A.settingsEnd, `${pl.hud} = ${G}:hud()`); }
       return pl.hud;
     };
+    // A free spot on the screen (the HUD) for new text or a picture: from (x, y) down, row by row, until nothing on
+    // the screen is near it. (The 3D score and Screen text both start at 90, 30.)
+    const onScreen = P.nodes.filter((n) => n.layer === 'hud' && isNum(n.pos.x) && isNum(n.pos.y)).map((n) => [n.pos.x, n.pos.y]);
+    pl.hudSpot = (x, y) => {
+      for (let i = 0; i < 12 && onScreen.some(([hx, hy]) => Math.abs(hx - x) < 150 && Math.abs(hy - y) < 30); i++) y += 34;
+      onScreen.push([x, y]);
+      return [x, y];
+    };
     pl.needScore = () => {
       if (P.score || pl.scored) return;
       if (is3d) pl.needHud();
@@ -710,12 +718,14 @@
       if (have) pl.label = have.var;
       else {
         pl.label = nm('score_label');
-        out.push(is3d ? `${pl.label} = ${pl.hud}:text("Score: 0", 90, 30, 26, "white")` : `${pl.label} = ${G}:text("Score: 0", ${Math.round(W / 2)}, 30, 24, "white")`);
+        const [sx, sy] = is3d ? pl.hudSpot(90, 30) : [Math.round(W / 2), 30];
+        out.push(is3d ? `${pl.label} = ${pl.hud}:text("Score: 0", ${sx}, ${sy}, 26, "white")` : `${pl.label} = ${G}:text("Score: 0", ${sx}, ${sy}, 24, "white")`);
       }
       if (out.length) ed.insertAfter(Math.max(A.settingsEnd, P.hud?.line || 0), out.join('\n'));
       pl.scored = true;
     };
-    pl.playAgain = () => P.behaviours.find((b) => b.type === 'hurts')?.p.PA || (P.funcs.some((f) => f.name === 'play_again') ? 'play_again' : nm('play_again'));
+    // (One name for the whole edit: two enemies given Game over in one step share it.)
+    pl.playAgain = () => (pl.pa = pl.pa || P.behaviours.find((b) => b.type === 'hurts')?.p.PA || (P.funcs.some((f) => f.name === 'play_again') ? 'play_again' : nm('play_again')));
     // A behaviour's function (at the end of the file) and its registration. falls is registered by a prop line
     // (V:clicked V_chop), which it gives back for the caller to put with V's lines.
     pl.beh = (type, V, params) => {
@@ -840,6 +850,27 @@
   const firstMover = (P) => P.behaviours.find((b) => b.type === 'arrows' && b.node.var)?.V || null;
   const target3 = (P) => P.player?.var || null;
 
+  // A Coin or Enemy tile added before there was a Player got no behaviours (there was nothing to collect it or to
+  // chase). The first Player gives them theirs, in the same step: the coin's Collect it, the enemy's Chases and Game
+  // over. Only the tiles' own things count (a gold circle of 14, a red 40 × 40 box; in 3D a coin model and a red box
+  // you walk through) that have none of those yet. Gives the toast that says so, or null.
+  function connectWaiting(pl, V) {
+    const { P, is3d } = pl;
+    const has = (n, types) => P.behaviours.some((b) => b.V === n.var && types.includes(b.type));
+    const coins = P.nodes.filter((n) => n.var && !has(n, ['collect']) && (is3d
+      ? n.layer === 'world' && n.kind === 'spawn' && n.args[0] === 'coin'
+      : n.layer === 'game' && n.kind === 'circle' && fieldOf(n, 'r') === 14 && fieldOf(n, 'color') === 'gold'));
+    const enemies = P.nodes.filter((n) => n.var && !has(n, ['chase', 'hurts']) && (is3d
+      ? n.layer === 'world' && n.kind === 'box' && fieldOf(n, 'size') === 1 && fieldOf(n, 'color') === 'red' && n.props.solid?.args[0] === false
+      : n.layer === 'game' && n.kind === 'box' && fieldOf(n, 'w') === 40 && fieldOf(n, 'h') === 40 && fieldOf(n, 'color') === 'red'));
+    for (const c of coins) pl.beh('collect', c.var, { C: V, P: 1, sound: 'coin' });
+    for (const e of enemies) { pl.beh('chase', e.var, { T: V, S: is3d ? 2 : 120 }); pl.beh('hurts', e.var, { T: V, sound: 'lose' }); }
+    const names = [...coins, ...enemies].map((n) => n.var);
+    if (!names.length) return null;
+    const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+    return `${cap(list)} ${names.length === 1 ? 'works' : 'work'} with ${V} now.`;
+  }
+
   const KIT_NATURE = ['tree', 'pine', 'rock', 'bush', 'flower'];
   const KIT_BUILDINGS = ['house', 'hut', 'sign', 'crate', 'fence'];
   const SHAPES3 = { box: ['box', 'box', 'orange'], ball: ['sphere', 'ball', 'teal'], cylinder: ['cylinder', 'cylinder', 'gray'], cone: ['cone', 'cone', 'red'], plane: ['plane', 'plane', 'sand'] };
@@ -859,10 +890,12 @@
       if (!is3d) {
         switch (id) {
           case 'player': {
+            const first = !firstMover(P);
             const n = nm('player');
             const [x, y] = freeSpot2(P, r(W / 2), r(H - 80));
             put(n, `${n} = ${G}:box(${x}, ${y}, 50, 50, "lime")`, `${n}:on_edge "stop"`);
             pl.beh('arrows', n, { S: 300, dirs: 'all' });
+            if (first) say = connectWaiting(pl, n);
             break;
           }
           case 'coin': {
@@ -910,6 +943,7 @@
             if (P.player) { ide.toast('This world has a player already. A world can have one.'); return null; }
             put(nm('player'), '');
             lines = [`${V} = ${G}:player("first person")`];
+            say = connectWaiting(pl, V);
             break;
           case 'coin': {
             const T = target3(P);
@@ -957,14 +991,16 @@
       if (id === 'hudtext' || id === 'hudbox') {
         const hud = pl.needHud();
         const n = nm(id === 'hudtext' ? 'hud_text' : 'bar');
-        put(n, id === 'hudtext' ? `${n} = ${hud}:text("Lives: 3", 90, 30, 22, "white")` : `${n} = ${hud}:box(${r(W / 2)}, ${r(H - 20)}, 200, 16, "green")`);
+        const [x, y] = id === 'hudtext' ? pl.hudSpot(90, 30) : [];
+        put(n, id === 'hudtext' ? `${n} = ${hud}:text("Lives: 3", ${x}, ${y}, 22, "white")` : `${n} = ${hud}:box(${r(W / 2)}, ${r(H - 20)}, 200, 16, "green")`);
       } else if (id.startsWith('pic:')) {
         const rel = id.slice(4);
         const n = nm(rel.split('/').pop().replace(/\.[^.]+$/, ''));
         const wide = (S.picSize.get(rel)?.[0] || 0) > 160;
         if (is3d) {
           const hud = pl.needHud();
-          put(n, `${n} = ${hud}:image(${JSON.stringify(rel)}, 90, 90${wide ? ', 128' : ''})`);
+          const [x, y] = pl.hudSpot(90, 90);
+          put(n, `${n} = ${hud}:image(${JSON.stringify(rel)}, ${x}, ${y}${wide ? ', 128' : ''})`);
         } else {
           const [x, y] = freeSpot2(P, r(W / 2), r(H / 2));
           put(n, `${n} = ${G}:image(${JSON.stringify(rel)}, ${x}, ${y}${wide ? ', 128' : ''})`);
