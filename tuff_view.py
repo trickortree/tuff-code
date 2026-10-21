@@ -434,8 +434,9 @@ class View:
                                 f"the Microsoft Edge WebView2 Runtime ({WEBVIEW2_URL}).")
         if self._failure:
             raise self._failure
-        if self._closed:
-            raise ViewClosed()
+        # A window closed before its page was ready (its X clicked the moment it appeared) still gives a View, a
+        # closed one, rather than raising ViewClosed: the program can then register its close handlers (atgui's
+        # app:closed), and the first frame() or loop() runs them before the program ends.
         threading.Thread(target=self._send_loop, name="tuff-view-send", daemon=True).start()
 
     # ------------------------------------------------ the window (main thread and pywebview's threads)
