@@ -1043,7 +1043,10 @@ class Interpreter:
         else:
             obj = plain(self.eval(s.target.obj, env))
             if not isinstance(obj, list):
-                raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.")
+                owner = node_text(s.target.obj) or "thing"
+                tip = f" Use :set instead, like {owner}:set({key_example(s.target.index)}, value)." \
+                    if isinstance(obj, Native) and "keys" in obj.methods and "set" in obj.methods else ""
+                raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.{tip}")
             obj[self.list_index(obj, self.eval(s.target.index, env))] = value
         return value
 
@@ -1148,8 +1151,8 @@ class Interpreter:
         if k == "index":
             obj = plain(self.eval(e.obj, env))
             if not isinstance(obj, (list, str)):
-                owner = e.obj.name if e.obj.kind == "var" else "thing"
-                tip = f" Use :get instead, like {owner}:get(\"name\")." if isinstance(obj, Native) and "keys" in obj.methods else ""
+                owner = node_text(e.obj) or "thing"
+                tip = f" Use :get instead, like {owner}:get({key_example(e.index)})." if isinstance(obj, Native) and "keys" in obj.methods else ""
                 raise TuffError(f"Can't use [ ] on {type_name(obj)}.{tip}")
             return obj[self.list_index(obj, self.eval(e.index, env))]
         if k == "call":
@@ -1370,6 +1373,29 @@ def dot_help(what, obj_node, name, kind=None):
     alt = PY_METHODS.get(kind, {}).get(name.lower(), name)
     owner = obj_node.name if getattr(obj_node, "kind", None) == "var" else "thing"
     return f"Only libraries use '.', and this is {what}. For methods use ':', like {owner}:{alt}"
+
+
+def node_text(e):
+    """Short code as it was written, for messages: user, "name", 3, user:get("address"), users[0]. None if it's longer."""
+    if e.kind == "var":
+        return e.name
+    if e.kind == "const" and isinstance(e.value, str):
+        return f'"{e.value}"' if e.value.isprintable() and '"' not in e.value and len(e.value) <= 30 else None
+    if e.kind == "const" and isinstance(e.value, int) and not isinstance(e.value, bool):
+        return str(e.value)
+    if e.kind in ("method", "index"):
+        obj = node_text(e.obj)
+        parts = [node_text(a) for a in (e.args if e.kind == "method" else [e.index])]
+        if obj is None or None in parts:
+            return None
+        return f"{obj}:{e.name}({', '.join(parts)})" if e.kind == "method" else f"{obj}[{parts[0]}]"
+    return None
+
+
+def key_example(index):
+    """What a [ ] input looks like given to :get or :set, for messages: user["name"] gives "name", user[k] gives k."""
+    text = node_text(index) if index.kind in ("const", "var") else None
+    return text if text and not text[0].isdigit() else '"name"'
 
 
 def leaves_folder(path, folder):
@@ -1820,8 +1846,15 @@ class Checker:
             elif s.target.kind == "index":
                 self.expr(s.target.obj, scope)
                 self.expr(s.target.index, scope)
-                if self.kind(s.target.obj) == "$text":
+                obj, who = self.kind(s.target.obj), node_text(s.target.obj)
+                if obj == "$text":
                     self.problem(s, "You can only set items in a list, not in text. Build new text with + instead.")
+                elif obj == "data object":
+                    self.problem(s, f"You can only set items in a list, not in a data object. Use :set instead, like "
+                                    f"{who or 'thing'}:set({key_example(s.target.index)}, value).")
+                elif self.kind(s.target.index) == "$text" and self.json_like(s.target.obj):
+                    self.problem(s, f"List positions must be whole numbers, not text. If {who + ' is' if who else 'it is'} a data object "
+                                    f"(from :json), use :set instead, like {who or 'thing'}:set({key_example(s.target.index)}, value).")
             if s.op == "=" and target in self.func_count and target not in self.params and target not in self.loop_vars \
                     and self.kind(s.value) not in ("$func", "$builtin"):
                 self.problem(s, f"{target} is a function, and giving it a value replaces it, so {target}() won't work afterwards. Use another name for the value.")
@@ -2106,9 +2139,29 @@ class Checker:
             if self.is_decimal(n):
                 self.problem(n, "This is a decimal (it comes from /), even if it looks whole, so it can't repeat text. Use floor(...) around the division.")
 
+    def json_like(self, e, seen=frozenset()):
+        """Could this be one of tap's data objects: one made with tap.data(), a response's :json (an object, unless
+        the server sent a list), or what :get or [ ] gave back from one of those?"""
+        if self.kind(e) == "data object":
+            return True
+        if e.kind == "method":
+            return (e.name == "json" and not e.args) or (e.name == "get" and self.json_like(e.obj, seen))
+        if e.kind == "index":
+            return self.json_like(e.obj, seen)
+        if e.kind == "var" and e.name not in seen and e.name not in self.params and e.name not in self.loop_vars:
+            sets = self.assigned.get(e.name, [])
+            return bool(sets) and all(s.op == "=" and self.json_like(s.value, seen | {e.name}) for s in sets)
+        return False
+
     def check_index(self, e):
         idx = self.kind(e.index)
-        if idx == "$text":
+        who = node_text(e.obj)
+        if self.kind(e.obj) == "data object":  # what the run says: [ ] doesn't work on a data object at all
+            self.problem(e, f"Can't use [ ] on a data object. Use :get instead, like {who or 'thing'}:get({key_example(e.index)}).")
+        elif idx == "$text" and self.json_like(e.obj):
+            self.problem(e, f"List positions must be whole numbers, not text. If {who + ' is' if who else 'it is'} a data object "
+                            f"(from :json), use :get instead, like {who or 'thing'}:get({key_example(e.index)}).")
+        elif idx == "$text":
             who = self.describe(e.index)
             self.problem(e, "List positions must be whole numbers, not text." + (f" Use number({who})." if who and self.typed(e.index) else ""))
         elif self.is_decimal(e.index):

@@ -96,6 +96,12 @@ async function caught(name, code, message) {
   const chk = await tuff(code, true);
   check(`--check catches ${name}`, chk.code === 1 && chk.out.includes(message), chk);
 }
+// The run stops with this message on this line, and --check catches it first, saying checkMessage.
+async function stopsAndCaught(name, code, message, line, checkMessage = message) {
+  const [run, chk] = await Promise.all([tuff(code), tuff(code, true)]);
+  check(name, run.code === 1 && run.out.includes(message) && run.out.includes(`Tuff error on line ${line}:`), run);
+  check(`${name}: --check says so first`, chk.code === 1 && chk.out.includes(checkMessage) && chk.out.includes(`Tuff error on line ${line}:`), chk);
+}
 
 // The timeout takes 15 seconds, so it runs while the other checks do.
 const timeout = tuff('res = tap.get("BASE/slow")\nsay "not reached"\n');
@@ -234,6 +240,16 @@ await stops('a number body is refused', 'res = tap.post("BASE/echo", 5)\n', 'tap
 await stops('headers must be a data object', 'res = tap.get("BASE/text", "X-Token: 1")\n', "tap.get's headers have to be a data object", 3);
 await stops('a data object can\'t hold a function', 'func f():\n    return 1\nd = tap.data()\nd:set("f", f)\n', 'A data object can only hold text, numbers, true/false, nil, lists and data objects, not a function.', 6);
 await stops('data object names are text', 'd = tap.data()\nd:set(1, "x")\n', 'data:set needs a name as text', 4);
+// [ ] on a data object: the run says to use :get (or :set), and so does --check, not "List positions must be whole numbers".
+await stopsAndCaught('user["name"] on a :json data object says to use :get', 'user = tap.get("BASE/json"):json\nsay user["name"]\n',
+  'Can\'t use [ ] on a data object. Use :get instead, like user:get("name").', 4,
+  'List positions must be whole numbers, not text. If user is a data object (from :json), use :get instead, like user:get("name").');
+await stopsAndCaught('d["name"] on tap.data() says to use :get', 'd = tap.data()\nd:set("name", "Ada")\nsay d["name"]\n',
+  'Can\'t use [ ] on a data object. Use :get instead, like d:get("name").', 5);
+await stopsAndCaught('a nested object\'s ["city"] says which :get', 'user = tap.get("BASE/json"):json\nsay user:get("address")["city"]\n',
+  'Use :get instead, like user:get("address"):get("city").', 4, 'use :get instead, like user:get("address"):get("city").');
+await stopsAndCaught('d["name"] = ... on a data object says to use :set', 'd = tap.data()\nd["name"] = "Ada"\n',
+  'You can only set items in a list, not in a data object. Use :set instead, like d:set("name", value).', 4);
 
 await caught('a response method typo', 'res = tap.get("BASE/text")\nsay res:stauts\n', "A response doesn't have :stauts. Did you mean :status?");
 await caught('a data object method typo', 'd = tap.data()\nsay d:gett("x")\n', "A data object doesn't have :gett. Did you mean :get?");
