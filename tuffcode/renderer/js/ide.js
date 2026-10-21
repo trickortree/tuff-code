@@ -627,6 +627,7 @@
     }
     if (background) {
       renderTabs();
+      updateChrome(); // Tuff Engine's game may be the file on screen
       return t;
     }
     activate(t, focus);
@@ -873,17 +874,28 @@
     return parts.map((x) => `<span>${esc(x)}</span>`).join('<span class="sep">›</span>');
   }
 
+  // While Tuff Engine shows, its game is the file on screen: the title bar's Run runs it, and the status bar and the
+  // window title name it (TuffIDE.activeFile() says the same). Otherwise it's the code tab's file.
+  function runTarget() {
+    const t = activeTab();
+    return (engine.visible && engine.file) || (t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile);
+  }
+  function shownTab() {
+    return (engine.visible && engine.file && state.tabs.find((x) => x.path === engine.file)) || activeTab();
+  }
+
   function updateChrome() {
     const t = activeTab();
+    const s = shownTab();
     updateProblems();
     $('#empty-state').classList.toggle('hidden', !!t || studio.visible || engine.visible);
     $('#breadcrumbs').innerHTML = t ? crumbs(t.path) : '';
-    $('#sb-path').innerHTML = t ? crumbs(t.path) : state.root ? `<span>${esc(basename(state.root))}</span>` : '';
-    $('#sb-lang').textContent = t ? LANG_NAMES[langFor(t.path)] : 'Tuff';
-    $('#sb-eol').textContent = t && t.model.getEOL() === '\n' ? 'LF' : 'CRLF';
-    const runFile = t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile;
+    $('#sb-path').innerHTML = s ? crumbs(s.path) : state.root ? `<span>${esc(basename(state.root))}</span>` : '';
+    $('#sb-lang').textContent = s ? LANG_NAMES[langFor(s.path)] : 'Tuff';
+    $('#sb-eol').textContent = s && s.model.getEOL() === '\n' ? 'LF' : 'CRLF';
+    const runFile = runTarget();
     $('#runconfig-name').textContent = runFile ? basename(runFile) : 'Current File';
-    document.title = t ? `${basename(state.root)} – ${basename(t.path)} – TuffCode` : `${basename(state.root || '')} – TuffCode`;
+    document.title = s ? `${basename(state.root)} – ${basename(s.path)} – TuffCode` : `${basename(state.root || '')} – TuffCode`;
   }
 
   // ---------- live checking ----------
@@ -1254,8 +1266,7 @@
   }
 
   async function runCurrent() {
-    const t = activeTab();
-    const file = t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile;
+    const file = runTarget();
     if (!file) return toast('Open a .tuf file to run it.');
     if (state.settings.sortOnRun) {
       const tab = state.tabs.find((x) => x.path === file);
@@ -2023,8 +2034,7 @@
   };
   $('#runconfig-widget').onclick = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
-    const t = activeTab();
-    const cur = t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile;
+    const cur = runTarget();
     showMenu(r.left, r.bottom + 4, [
       state.running
         ? { label: 'Stop', sc: 'Ctrl+F2', run: () => api.run.stop() }

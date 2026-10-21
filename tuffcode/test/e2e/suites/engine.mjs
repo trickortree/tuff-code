@@ -670,6 +670,19 @@ export default async (t, ctx) => {
   await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(kid)}`, 5000);
   await settle();
 
+  // The title bar's Run, the status bar and the window's title follow the game Tuff Engine shows.
+  await ev(`window.TuffIDE.openFile(${JSON.stringify(main)}).then(() => 1)`);
+  await waitFor(`document.querySelector('#engine').classList.contains('hidden')`, 3000);
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(kid)})`);
+  await waitFor(`!document.querySelector('#engine').classList.contains('hidden')`, 3000);
+  await t.sleep(300);
+  const chrome = await ev(`({ run: document.querySelector('#runconfig-name').textContent, path: document.querySelector('#sb-path').textContent, title: document.title })`);
+  await clickSel('#runconfig-widget');
+  const runItem = await ev(`document.querySelector('#context-menu:not(.hidden) .mi')?.textContent || ''`);
+  await ev(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); 1`);
+  check(chrome.run === 'kid.tuf' && /kid\.tuf$/.test(chrome.path) && /– kid\.tuf –/.test(chrome.title) && /Run 'kid\.tuf'/.test(runItem),
+    "with main.tuf's tab open and Tuff Engine on kid.tuf: the title bar's Run, its menu, the status bar and the window title all say kid.tuf", { chrome, runItem });
+
   // The game's file tab closed while Tuff Engine shows it: the next click still does what it says.
   await ev(`window.TuffIDE.openFile(${JSON.stringify(notes)}).then(() => 1)`); // another tab is the active one, so Tuff Engine stays open
   await ev(`window.TuffIDE.openEngine(${JSON.stringify(kid)})`);
