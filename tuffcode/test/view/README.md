@@ -22,7 +22,7 @@ The 2D, 3D and latency windows ask to stay on top.
 | `view_2d_stress.py` | **(b)** 300 sprites moved by Python every frame at 60 fps (`--sweep`: 1000, 2000, 5000); a negative-radius circle; 1,000 shapes made and removed leave no ids behind |
 | `view_3d_test.py` | **(c)** three.js, 200 cubes, a first-person camera moved from Python, raycast clicks, crosshair picks |
 | `view_latency.py` | **(d)** one event, page → Python → page, in both loop styles, plus `ask()` |
-| `view_close_test.py` | Closing the window ends the program cleanly in every loop style; a crash closes it too. The close handler runs at any moment: closed before the page is ready, closed behind a handler waiting in `frame()`, and before the window has gone (the process ended right then, like Cmd+Q). A tgame program closed the instant its window appears still runs the code after its loop |
+| `view_close_test.py` | Closing the window ends the program cleanly in every loop style; a crash closes it too. The close handler runs at any moment: closed before the page is ready, closed behind a handler waiting in `frame()`, and before the window has gone (the process ended right then, like Cmd+Q), with no stall while the program is calling the window. A tgame program closed the instant its window appears still runs the code after its loop |
 | `view_window_test.py` | Frameless, not resizable, `.png`/`.ico`/`TUFF_APP_ICON` icons, title, resize, no WebView2, no pywebview (Win32 checks) |
 | `view_server_test.py` | The page's file server, with no window: it serves a file with its token, and a dropped connection prints no traceback |
 | `freeze.py` | **(5)** The 3D test frozen with PyInstaller `--onefile --windowed`, then run |
@@ -31,7 +31,7 @@ The 2D, 3D and latency windows ask to stay on top.
 ## Measured on this PC
 
 i9-12900K, RX 7900 XTX, Windows 11, a monitor that WebView2 drives at **~132 Hz**. Python 3.12.10, pywebview 6.2.1, WebView2 155.0.4283.62.
-The last full run: **77 checks passed, 0 failed**; the numbers below are from an earlier one (62 checks). The frozen exe passed 9/9.
+The last full run: **79 checks passed, 0 failed**; the numbers below are from an earlier one (62 checks). The frozen exe passed 9/9.
 
 **Target met: 60 fps for (b) and (c), with Python using about 3% of each frame.**
 

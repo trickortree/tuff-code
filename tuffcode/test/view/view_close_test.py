@@ -15,6 +15,8 @@ And the moments that once lost the close:
              does -> ViewClosed unwinds that batch, and the close handler still runs; exit 0;
   - grace:   the process is ended the moment its window has gone (Cmd+Q on a Mac, logging off Windows) -> a
              close handler that takes 0.3 s had already finished; exit 7 (the child ending itself);
+  - calls:   closed while the program calls the window all the time (set_title, resize: on Windows each waits
+             for the window's thread) -> the closing window doesn't wait for the handler then, so no 2 s stall;
   - tgame:   a tgame program (through tuff.py) closed the instant its window appears, and 0.15 s later, still
              runs the code after its `while game:open():` loop, tgame's way to react to the window closing.
 
@@ -30,7 +32,7 @@ import time
 
 from harness import REPO, Checks, finish, tuff_view, watchdog
 
-CASES = {"frame": 0, "loop": 0, "idle": 0, "program": 5, "crash": 1, "early": 0, "queued": 0, "grace": 7}
+CASES = {"frame": 0, "loop": 0, "idle": 0, "program": 5, "crash": 1, "early": 0, "queued": 0, "grace": 7, "calls": 0}
 TGAME = """mention tgame
 
 game = tgame.window("TITLE", 300, 200)
@@ -115,13 +117,20 @@ def child(case):
                 time.sleep(0.3)  # a close handler with something to do, like saving a file
             print("close handler ran", flush=True)
         view.on("close", closed)
-        if case in ("frame", "loop", "idle", "grace"):
+        if case in ("frame", "loop", "idle", "grace", "calls"):
             close_later(title, 1.5)
         if case in ("frame", "early"):
             while True:
                 view.frame()
         elif case in ("loop", "grace"):
             view.every_frame(lambda dt: None)
+            view.loop()
+        elif case == "calls":
+            def busy(dt):  # the Tuff thread is nearly always inside a call to the window
+                for i in range(20):
+                    view.set_title(title)
+                    view.resize(420 + i % 2, 240)
+            view.every_frame(busy)
             view.loop()
         elif case == "idle":
             view.loop()
@@ -201,7 +210,7 @@ def parent():
         took = time.perf_counter() - start
         out, err = p.stdout, p.stderr
         numbers[case] = {"exit": p.returncode, "seconds": round(took, 2)}
-        if case in ("frame", "loop", "idle", "early"):
+        if case in ("frame", "loop", "idle", "early", "calls"):
             posted = float(out.split("at ")[1].split()[0]) if "posting WM_CLOSE" in out else None
             ended = float(out.split("run() returned")[1].split("at ")[1].split()[0]) if "run() returned" in out else None
             gone = round((ended - posted) * 1000) if posted and ended else None
@@ -211,6 +220,9 @@ def parent():
                 checks.check(ok and "View() came back, is_open False" in out,
                              f"early: closed before its page was ready, View() came back closed and the close handler "
                              f"registered after it ran (exit {p.returncode}, run() returned {gone} ms after WM_CLOSE)")
+            elif case == "calls":
+                checks.check(ok, f"calls: closed while it calls the window all the time, the close handler ran with no "
+                                 f"stall (exit {p.returncode}, run() returned {gone} ms after WM_CLOSE)")
             else:
                 checks.check(ok, f"{case}: closing the window ended the program (exit {p.returncode}, run() returned {gone} ms after WM_CLOSE)")
         elif case == "queued":
