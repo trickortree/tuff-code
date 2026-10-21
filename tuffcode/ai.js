@@ -33,9 +33,9 @@ const MODELS = [
 // Tuff Bench (tuff-ai/bakeoff/RESULTS.md, "Thinking levels").
 const LEVELS = [
   { id: 'off', name: 'Off', sub: 'Answers straight away', budget: 0, plan: false, temperature: 0.2 },
-  { id: 'low', name: 'Low', sub: 'Thinks for a moment first', budget: 192, plan: false, temperature: 0.2 },
-  { id: 'medium', name: 'Medium', sub: 'Rewrites your request, then thinks', budget: 512, plan: true, temperature: 0.2 },
-  { id: 'high', name: 'High', sub: 'Plans and thinks longest. Slow on a laptop', budget: 1024, plan: true, temperature: 0.2 },
+  { id: 'low', name: 'Low', sub: 'Thinks for a moment first', budget: 128, plan: false, temperature: 0.2 },
+  { id: 'medium', name: 'Medium', sub: 'Rewrites your request, then thinks', budget: 256, plan: true, temperature: 0.2 },
+  { id: 'high', name: 'High', sub: 'Plans and thinks longest. Slower, and not always better', budget: 512, plan: true, temperature: 0.2 },
 ];
 const DEFAULT_LEVEL = 'low';
 const level = (id) => LEVELS.find((l) => l.id === id) || LEVELS.find((l) => l.id === DEFAULT_LEVEL);
@@ -275,7 +275,7 @@ function relevant(text, n = 2, { first = [], skip = [] } = {}) {
 function systemPrompt() {
   const m = MODELS[0];
   return `You are ${m.name}, TuffCode's own AI model. You power Tuff AI, the helper built into TuffCode, the code editor for the Tuff programming language. ${m.name} is based on ${m.base}, an open model by the Qwen team at Alibaba Cloud (${m.licence} licence). You run on the person's own computer, with no internet.
-If they ask who or what you are, which model you are, or who made you, say it in a sentence or two: you're ${m.name}, TuffCode's model, based on the open ${m.base} model, running on their computer. Tuff AI is the helper; you're the model inside it. You are not ChatGPT, Claude, Gemini or Qwen's own chat app, and you're not a person.
+If they ask who or what you are, which model you are, or who made you, say it in a sentence or two: you're ${m.name}, TuffCode's model, based on the open ${m.base} model, running on their computer. Answer like this: "I'm ${m.name}, TuffCode's own AI model. I'm based on the open ${m.base} model, and I run right here on your computer." You are not ChatGPT, Claude, Gemini or Qwen's own chat app, and you're not a person.
 You help beginners, often kids, with the Tuff programming language.
 Tuff is its own language, not Python. Only use what the Tuff guide below shows.
 Keep answers short and friendly. When you give a program, give the whole program in one \`\`\`tuff code block.

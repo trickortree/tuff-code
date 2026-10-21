@@ -57,7 +57,7 @@ function thinkReport(dir) {
     out.push('');
   }
   // What the improver changed, level by level.
-  const pairs = ORDER.map((lv) => [gpu.find((r) => r.level === lv && !r.improve && r.dev !== 'cpu'), gpu.find((r) => r.level === lv && r.improve)]).filter(([a, b]) => a && b);
+  const pairs = gpu.filter((r) => !r.improve).map((a) => [a, gpu.find((b) => b.improve && b.level === a.level && b.budget === a.budget && b.temp === a.temp)]).filter(([, b]) => b);
   if (pairs.length) {
     out.push('**The improver, task by task** (the same tasks with and without it):', '');
     for (const [a, b] of pairs) {

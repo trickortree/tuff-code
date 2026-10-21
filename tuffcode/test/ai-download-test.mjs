@@ -364,7 +364,7 @@ try {
   check('The model is called Pumice 1, with its base model and licence for the credit line', m.name === 'Pumice 1' && m.base === 'Qwen3.5-2B' && m.licence === 'Apache 2.0' && /Qwen3\.5-2B/.test(m.sub), m);
   check('... and keeps the id and file name 1.0.4 used, so a downloaded model is still found', m.id === 'qwen3.5-2b' && m.file === 'Qwen3.5-2B-Q4_K_M.gguf', m);
   const sys = ai.systemPrompt();
-  check('The system prompt says it is Pumice 1, based on Qwen3.5-2B, on this computer, and not another assistant', /^You are Pumice 1\b/.test(sys) && /based on Qwen3\.5-2B/.test(sys) && /run on the person's own computer/.test(sys) && /Tuff AI is the helper; you're the model inside it/.test(sys) && /not ChatGPT, Claude, Gemini or Qwen's own chat app/.test(sys) && !/You are Tuff AI/.test(sys), sys.slice(0, 600));
+  check('The system prompt says it is Pumice 1, based on Qwen3.5-2B, on this computer, and not another assistant', /^You are Pumice 1\b/.test(sys) && /based on Qwen3\.5-2B/.test(sys) && /run on the person's own computer/.test(sys) && /Answer like this: "I'm Pumice 1, TuffCode's own AI model\. I'm based on the open Qwen3\.5-2B model, and I run right here on your computer\."/.test(sys) && /not ChatGPT, Claude, Gemini or Qwen's own chat app/.test(sys) && !/You are Tuff AI/.test(sys), sys.slice(0, 600));
   const now = await ai.status();
   check('status() names Pumice 1 for the download card', now.models[0].name === 'Pumice 1' && now.models[0].base === 'Qwen3.5-2B', now.models[0]);
 

@@ -41,3 +41,44 @@ Made by `report.mjs` from `results/`. Every score comes from running the model's
 - **granite-4.0-1b-lean:** fails the checker 109, runs, wrong output 46, no code block 27, stops with an error when run 8, app is missing a needed part 4
 - **qwen3.5-2b-guide:** fails the checker 99, runs, wrong output 42, stops with an error when run 21, no code block 9, app is missing a needed part 6
 - **qwen3.5-2b-lean:** fails the checker 119, runs, wrong output 48, no code block 11, stops with an error when run 7
+
+## Thinking levels (Pumice 1, 2026-10-20)
+Tuff Bench through the app's own Tuff AI code (`run.mjs --app`), Qwen3.5-2B Q4_K_M as Pumice 1: 40 write, 10 app and 30 fix tasks per row on the GPU (Medium (256) used 20/5/15), and 10 tasks per row on the CPU with 4 threads. "Improver" is the request card the app adds before the question; Medium and High also let the model rewrite the request first. Tuff Bench is for scoring only, never training.
+
+**On the GPU** (vulkan):
+
+| Level (thought budget) | Improver | Tasks | **Pass, after 1 retry** | First try | Write | Apps | Fix | Fix: explained | Median s | 90th pct s | Thought tokens (mean) | Cut by the budget | Looping when cut |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Off | off | 80 | **24%** | 23% | 13% | 10% | 43% | 77% | 2.1 | 4.3 | 0 | – | – |
+| Off | on | 80 | **34%** | 31% | 20% | 30% | 53% | 73% | 1.6 | 4.0 | 0 | – | – |
+| Low (128) | on | 80 | **38%** | 34% | 28% | 20% | 57% | 80% | 2.9 | 7.2 | 168 | 80 of 80 | 0 |
+| Low (192) | off | 80 | **26%** | 20% | 15% | 20% | 43% | 77% | 3.2 | 7.4 | 264 | 80 of 80 | 3 |
+| Low (192) | on | 80 | **39%** | 33% | 30% | 20% | 57% | 73% | 3.5 | 7.5 | 257 | 80 of 80 | 1 |
+| Medium (256) | on | 40 | **43%** | 38% | 30% | 20% | 67% | 73% | 4.0 | 7.2 | 346 | 40 of 40 | 1 |
+| Medium (512) | off | 80 | **28%** | 25% | 20% | 30% | 37% | 67% | 7.1 | 14.0 | 721 | 80 of 80 | 40 |
+| Medium (512) | on | 80 | **35%** | 31% | 23% | 20% | 57% | 60% | 6.8 | 13.9 | 672 | 80 of 80 | 23 |
+| High (1024) | off | 39 | **15%** | 15% | 15% | – | – | – | 7.7 | 15.0 | 1202 | 30 of 39 | 24 |
+
+**On the CPU** (4 threads):
+
+| Level (thought budget) | Improver | Tasks | **Pass, after 1 retry** | First try | Write | Apps | Fix | Fix: explained | Median s | 90th pct s | Thought tokens (mean) | Cut by the budget | Looping when cut |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Off | on | 10 | **20%** | 20% | 17% | 0% | 33% | 67% | 32.7 | 65.7 | 0 | – | – |
+| Low (192) | on | 10 | **40%** | 40% | 33% | 0% | 67% | 67% | 50.0 | 76.7 | 211 | 10 of 10 | 0 |
+
+- Low (192) with the improver adds a median of **21.0 s** per answer on the CPU over Off (90th percentile 25.4 s, over the same 10 tasks).
+
+**The improver, task by task** (the same tasks with and without it):
+
+- Off: the improver turned 13 failures into passes and 5 passes into failures.
+- Low (192): the improver turned 15 failures into passes and 5 passes into failures.
+- Medium (512): the improver turned 13 failures into passes and 7 passes into failures.
+
+**What was chosen** (`LEVELS` in `tuffcode/ai.js`):
+- **The improver is always on.** It's free and gives the biggest jump: Off goes from 24% to 34%.
+- **Off** (no thinking): 34%, 1.6 s median on the GPU.
+- **Low** (128 thought tokens), **the default**: 38%, 2.9 s. 192 tokens scored about the same (39%) and adds about 21 s per answer on a 4-thread CPU, so 128 was taken to keep laptops quicker (not measured on the CPU at 128; expect about two-thirds of that).
+- **Medium** (256 tokens, plus the rewrite): 43% on 40 tasks, 4.0 s, the best measured.
+- **High** (512 tokens, plus the rewrite): 35%, 6.8 s. Its old budget of 1024 did worst of all (15% on 39 tasks), because the model loops when it thinks long; its description says it's slower and not always better.
+- The run was cut short on purpose to ship sooner: High (1024) stopped at 39 tasks, and High with the improver wasn't run.
+
