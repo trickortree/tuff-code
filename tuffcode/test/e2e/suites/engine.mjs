@@ -610,7 +610,7 @@ export default async (t, ctx) => {
   const slowBefore = await code();
   await ev(`(() => { const b = [...document.querySelectorAll('#en-inspector .en-beh')].find((x) => x.dataset.beh === 'chase'); b.querySelector('input[type="number"]').id = 'en-test-slow'; return 1; })()`);
   await t.click(...(await rect('#en-test-slow')).slice(0, 2).map((v, j) => v + (j ? 10 : 20)));
-  await key('a', 'KeyA', 65, CTRL);
+  await t.key('a', CTRL); // (t.key selects all on a Mac too)
   const seen = [];
   for (const ch of '250') {
     await t.type(ch, 0);
@@ -630,7 +630,7 @@ export default async (t, ctx) => {
   await ev(widthField);
   const nToasts = (await toasts()).length;
   await t.click(...(await rect('#en-test-width')).slice(0, 2).map((v, j) => v + (j ? 10 : 20)));
-  await key('a', 'KeyA', 65, CTRL);
+  await t.key('a', CTRL);
   for (const ch of '1000') { await t.type(ch, 0); await t.sleep(450); }
   await waitFor(`window.__code().includes('tgame.window("My Game", 1000, 600)')`, 3000);
   const typedToasts = (await toasts()).slice(nToasts);
@@ -642,7 +642,7 @@ export default async (t, ctx) => {
   await settle();
   await ev(widthField);
   await t.click(...(await rect('#en-test-width')).slice(0, 2).map((v, j) => v + (j ? 10 : 20)));
-  await key('a', 'KeyA', 65, CTRL);
+  await t.key('a', CTRL);
   const nToasts2 = (await toasts()).length;
   for (const ch of '50') { await t.type(ch, 0); await t.sleep(400); }
   await key('Tab', 'Tab', 9);
@@ -754,19 +754,20 @@ export default async (t, ctx) => {
   const islandFile = path.join(ctx.root, 'island_small.tuf');
   fs.writeFileSync(islandFile, islandCode);
   const fits = [];
-  for (const [w, h] of [[900, 560], [960, 600]]) {
+  for (const [w, h] of [[900, 560], [960, 600], [1280, 720]]) {
     await t.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 0, mobile: false });
     for (const f of [lessonFile, islandFile]) {
       await ev(`window.TuffIDE.openEngine(${JSON.stringify(f)})`);
       await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(f)} && !!window.TuffEngine.debug().mode`, 5000);
       await t.sleep(400);
-      fits.push(await ev(`(() => { const r = (s) => document.querySelector(s).getBoundingClientRect(); const p = r('#en-play'); const c = r('#en-code'); const hit = document.elementFromPoint(p.left + p.width / 2, p.top + p.height / 2); return { size: '${w}x${h}', mode: window.TuffEngine.debug().mode, engine: Math.round(r('#engine').width), play: p.right <= innerWidth && p.width > 20 && !!hit?.closest('#en-play'), code: c.right <= p.left && c.width > 20 }; })()`));
+      fits.push(await ev(`(() => { const r = (s) => document.querySelector(s).getBoundingClientRect(); const p = r('#en-play'); const c = r('#en-code'); const hit = document.elementFromPoint(p.left + p.width / 2, p.top + p.height / 2); return { size: '${w}x${h}', mode: window.TuffEngine.debug().mode, engine: Math.round(r('#engine').width), play: p.right <= innerWidth && p.width > 20 && !!hit?.closest('#en-play'), code: c.right <= p.left && c.width > 20, templates: r('#en-templates').width > 0 }; })()`));
     }
+    if (w === 900) await t.shot('engine_small_window_learn.png');
   }
-  await t.shot('engine_small_window_learn.png');
   await t.send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 880, deviceScaleFactor: 0, mobile: false });
   await ev(`window.TuffIDE.showSideView('learn', false); 1`);
-  check(fits.length === 4 && fits.every((f) => f.play && f.code), 'at 900 × 560 and 960 × 600 with Learn open, Tuff Engine (about 500 px) still shows Code and Play, for the lesson game and for a 3D world', fits);
+  check(fits.length === 6 && fits.every((f) => f.play && f.code) && fits.filter((f) => f.size === '1280x720').every((f) => f.templates),
+    'with Learn open, Tuff Engine shows Code and Play at 900 × 560 and 960 × 600 (about 500 px), for the lesson game and a 3D world; at 1280 × 720 nothing is hidden', fits);
 
   // The gamepad never opens an empty Tuff Engine: a game it showed that's gone gives way to the .tuf tab that's open.
   const gone = path.join(ctx.root, 'gone.tuf');
