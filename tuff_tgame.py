@@ -384,8 +384,25 @@ class Game:
 
     # ---- helpers
     def engine_error(self, exc, where):
-        sys.stderr.write(f"Tuff error: the game window had a problem ({where}): {exc}\n")
-        sys.stderr.flush()
+        """Problems the game window finds: a picture, sound or model that won't load, or a bug in the page or in tgame.
+        They go through tuff.py's report() like any Tuff error: the Run window shows them, and so does a built app's
+        error box (build.js's launcher wraps report()), which is all a game with no console has."""
+        import re
+        import urllib.parse
+        err_type = type(self.rt.error(""))
+        if not isinstance(exc, err_type):
+            where = re.sub(r"^the window \((.*)\)$", r"\1", where)
+            # The page names files by their address (http://127.0.0.1:port/token/assets/broken.png): use the file's name.
+            detail, files = re.subn(r"\S*/assets/([^\s?#]+)\S*", lambda m: "'" + urllib.parse.unquote(m.group(1)) + "'", str(exc))
+            hint = " Check that the file opens on its own, or save it again." if files else ""
+            exc = self.rt.error(f"The game window had a problem ({where}): {detail.rstrip('.')}.{hint}")
+        tuff = sys.modules.get(type(self.rt).__module__)  # tuff.py (__main__ when it's run directly)
+        report = getattr(tuff, "report", None)
+        if report is not None:
+            report(exc, self.rt.interp.src)
+        else:
+            sys.stderr.write(f"Tuff error: {exc}\n")
+            sys.stderr.flush()
 
     def num(self, v, what):
         return self.rt.number(v, what)

@@ -259,7 +259,7 @@ async function build(opts, emit) {
       '    _report(err, src)',
       '    if not tuff.WINDOWED:',
       '        return',
-      '    lines = src.splitlines()',
+      '    lines = tuff.source_lines(src)  # numbered as the error\'s line is: only a newline ends a line',
       '    text = f"Tuff error on line {err.line}: {err.msg}" if err.line else f"Tuff error: {err.msg}"',
       '    if err.line and 0 < err.line <= len(lines):',
       '        text += f"\\n  {err.line} | {lines[err.line - 1]}"',
