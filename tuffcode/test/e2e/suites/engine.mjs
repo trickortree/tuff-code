@@ -15,17 +15,18 @@ import { REPO, python } from '../launch.mjs';
 const PLAY = fs.mkdtempSync(path.join(os.tmpdir(), 'tuffcode-engine-play-'));
 const PLAN = path.join(PLAY, 'plan.json');
 fs.writeFileSync(PLAN, JSON.stringify({ on_top: false, timeout: 20, out: PLAY, steps: [
+  // Room between steps for a slow machine (a CI Mac draws a few frames a second).
   { at: 0.4, dump: 'start.json' },
   { at: 0.5, tuff: 'coin:move_to(player:spot())' },
-  { at: 0.8, dump: 'coin.json' },
-  { at: 0.9, tuff: 'enemy:move_to(player:spot())' },
-  { at: 1.2, dump: 'over.json' },
-  { at: 1.4, key: 'space' },
-  { at: 1.8, dump: 'again.json' },
-  { at: 1.9, hold: 'right', for: 0.5 },
-  { at: 2.6, dump: 'moved.json' },
-  { at: 2.7, shot: 'play.png' },
-  { at: 2.9, close: true },
+  { at: 1.1, dump: 'coin.json' },
+  { at: 1.2, tuff: 'enemy:move_to(player:spot())' },
+  { at: 1.9, dump: 'over.json' },
+  { at: 2.0, key: 'space' },
+  { at: 2.6, dump: 'again.json' },
+  { at: 2.7, hold: 'right', for: 0.5 },
+  { at: 3.5, dump: 'moved.json' },
+  { at: 3.6, shot: 'play.png' },
+  { at: 3.8, close: true },
 ] }));
 
 export const meta = { title: 'Tuff Engine: the visual game editor tab', timeout: 600000, env: { TUFF_TGAME_AUTOPILOT: PLAN } };
@@ -233,6 +234,7 @@ export default async (t, ctx) => {
   }
   await t.click(speedRect[0] + 20, speedRect[1] + 10);
   await key('a', 'KeyA', 65, CTRL);
+  await ev(`document.activeElement?.select?.(); 1`); // a made-up Ctrl+A selects nothing in a Mac text box
   await t.type('200', 30);
   await waitFor(`window.__code().includes('enemy:forward(200 * dt)')`, 4000);
   const speedLines = changedLines(before, await code());
@@ -248,6 +250,7 @@ export default async (t, ctx) => {
   await t.sleep(100);
   await clickSel('#en-name');
   await key('a', 'KeyA', 65, CTRL);
+  await ev(`document.activeElement?.select?.(); 1`); // a made-up Ctrl+A selects nothing in a Mac text box
   await t.type('gem', 30);
   await t.key('Enter');
   await waitFor(`window.__code().includes('gem = game:circle')`, 4000);
@@ -433,55 +436,62 @@ export default async (t, ctx) => {
   check(fs.existsSync(island) && fs.readFileSync(island, 'utf8') === repoGame('island_walk.tuf') && await ev(`document.querySelector('#en-file').value`) === island,
     'New file makes island_walk.tuf with the template and opens it in Tuff Engine', await ev(`document.querySelector('#en-file').value`));
   check(await settle(25000), 'the 3D world loads', await dbg());
-  await t.sleep(500);
-  st = await stats();
-  const d3 = await dbg();
-  check(st.mode === '3d' && st.sceneBg === '#bfe2ff' && st.marker === true && d3.keys.join() === 'v:score_label,v:player,v:coin,v:tree,v:hut,v:enemy' && await ev(`document.querySelector('#en-kind').textContent`) === '3D world',
-    "it's a 3D world in the real engine: the day sky, the player's start marker, and every thing", { st, keys: d3.keys });
-  await t.shot('engine_3d_island_walk.png');
-  const treeI = await thingOf('v:tree');
-  const [tx, ty] = await onScreen(treeI);
-  await t.click(tx, ty);
-  await waitFor(`window.TuffEngine.debug().sel === 'v:tree'`, 4000);
-  const treeBeh = await ev(`[...document.querySelectorAll('#en-inspector .en-beh-h')].map((x) => x.textContent)`);
-  check((await dbg()).sel === 'v:tree' && treeBeh.some((x) => /Falls over when clicked \(grows back in 5 s\)/.test(x)), 'a real click on the tree selects it; it falls over when clicked (its behaviour)', treeBeh);
-  const before3 = fs.readFileSync(island, 'utf8');
-  const islandModel = () => ev(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(island)})).getValue().replace(/\\r\\n/g, '\\n'))()`);
-  const hutI = await thingOf('v:hut');
-  const [hx, hy] = await onScreen(hutI);
-  await drag(hx, hy, hx - 120, hy, 10);
-  await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(island)})).getValue().replace(/\\r\\n/g, '\\n') !== ${JSON.stringify(before3)})()`, 5000);
-  const hutLines = changedLines(before3, await islandModel());
-  check(hutLines && hutLines.length === 1 && /^hut = game:spawn\("hut", -?\d+(\.5)?, 0, -?\d+(\.5)?\)$/.test(hutLines[0][2]) && !/"hut", 8, 0, -16/.test(hutLines[0][2]),
-    'dragging the hut moves it over the ground: one line, x and z snapped to 0.5', hutLines);
-  await settle();
-  await t.shot('engine_3d_dragged.png');
-  await ev(`document.querySelector('#en-stage').focus()`);
-  await t.key('z', CTRL);
-  await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(island)})).getValue().replace(/\\r\\n/g, '\\n') === ${JSON.stringify(before3)})()`, 4000);
-  check(await islandModel() === before3, 'Ctrl+Z undoes it', firstDiff(await islandModel(), before3));
-  await clickSel('#en-cam [data-cam="game"]');
-  await t.sleep(300);
-  st = await stats();
-  check(st.camMode === 'game' && st.marker === false, "the Game camera shows what the game shows when it starts", st);
-  await t.shot('engine_3d_game_camera.png');
-  await clickSel('#en-cam [data-cam="editor"]');
-  await settle();
-  // The World's sky.
-  await ev(`window.TuffEngine.test.select('root')`);
-  await t.sleep(150);
-  await ev(`(() => { const s = [...document.querySelectorAll('#en-inspector select')].find((x) => [...x.options].some((o) => o.value === 'sunset')); s.value = 'sunset'; s.dispatchEvent(new Event('change')); return 1; })()`);
-  await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(island)})).getValue().includes('game:sky "sunset"'))()`, 4000);
-  const skyLines = changedLines(before3, await islandModel());
-  check(skyLines && skyLines.length === 1 && skyLines[0][2] === 'game:sky "sunset"', 'the World: Sky → Sunset changes the sky line', skyLines);
-  await settle();
-  check((await stats()).sceneBg !== '#bfe2ff', 'and the preview gets the sunset sky', await stats());
-  await t.shot('engine_3d_sunset.png');
-  await ev(`document.querySelector('#en-stage').focus()`);
-  await t.key('z', CTRL);
-  await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(island)})).getValue().replace(/\\r\\n/g, '\\n') === ${JSON.stringify(before3)})()`, 4000);
-  await settle();
+  // GitHub's Intel Macs have no WebGL: there Tuff Engine says it can't show 3D, and only the code is checked.
+  const gl = (await dbg()).webgl !== false;
+  if (!gl) {
+    const banner = await ev(`document.querySelector('#en-banner')?.textContent || ''`);
+    check(/can't show 3D worlds/.test(banner), 'with no WebGL, Tuff Engine says this computer can\'t show 3D worlds (2D still works)', banner.slice(0, 200));
+  } else {
+    await t.sleep(500);
+    st = await stats();
+    const d3 = await dbg();
+    check(st.mode === '3d' && st.sceneBg === '#bfe2ff' && st.marker === true && d3.keys.join() === 'v:score_label,v:player,v:coin,v:tree,v:hut,v:enemy' && await ev(`document.querySelector('#en-kind').textContent`) === '3D world',
+      "it's a 3D world in the real engine: the day sky, the player's start marker, and every thing", { st, keys: d3.keys });
+    await t.shot('engine_3d_island_walk.png');
+    const treeI = await thingOf('v:tree');
+    const [tx, ty] = await onScreen(treeI);
+    await t.click(tx, ty);
+    await waitFor(`window.TuffEngine.debug().sel === 'v:tree'`, 4000);
+    const treeBeh = await ev(`[...document.querySelectorAll('#en-inspector .en-beh-h')].map((x) => x.textContent)`);
+    check((await dbg()).sel === 'v:tree' && treeBeh.some((x) => /Falls over when clicked \(grows back in 5 s\)/.test(x)), 'a real click on the tree selects it; it falls over when clicked (its behaviour)', treeBeh);
+    const before3 = fs.readFileSync(island, 'utf8');
+    const islandModel = () => ev(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(island)})).getValue().replace(/\\r\\n/g, '\\n'))()`);
+    const hutI = await thingOf('v:hut');
+    const [hx, hy] = await onScreen(hutI);
+    await drag(hx, hy, hx - 120, hy, 10);
+    await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(island)})).getValue().replace(/\\r\\n/g, '\\n') !== ${JSON.stringify(before3)})()`, 5000);
+    const hutLines = changedLines(before3, await islandModel());
+    check(hutLines && hutLines.length === 1 && /^hut = game:spawn\("hut", -?\d+(\.5)?, 0, -?\d+(\.5)?\)$/.test(hutLines[0][2]) && !/"hut", 8, 0, -16/.test(hutLines[0][2]),
+      'dragging the hut moves it over the ground: one line, x and z snapped to 0.5', hutLines);
+    await settle();
+    await t.shot('engine_3d_dragged.png');
+    await ev(`document.querySelector('#en-stage').focus()`);
+    await t.key('z', CTRL);
+    await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(island)})).getValue().replace(/\\r\\n/g, '\\n') === ${JSON.stringify(before3)})()`, 4000);
+    check(await islandModel() === before3, 'Ctrl+Z undoes it', firstDiff(await islandModel(), before3));
+    await clickSel('#en-cam [data-cam="game"]');
+    await t.sleep(300);
+    st = await stats();
+    check(st.camMode === 'game' && st.marker === false, "the Game camera shows what the game shows when it starts", st);
+    await t.shot('engine_3d_game_camera.png');
+    await clickSel('#en-cam [data-cam="editor"]');
+    await settle();
+    // The World's sky.
+    await ev(`window.TuffEngine.test.select('root')`);
+    await t.sleep(150);
+    await ev(`(() => { const s = [...document.querySelectorAll('#en-inspector select')].find((x) => [...x.options].some((o) => o.value === 'sunset')); s.value = 'sunset'; s.dispatchEvent(new Event('change')); return 1; })()`);
+    await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(island)})).getValue().includes('game:sky "sunset"'))()`, 4000);
+    const skyLines = changedLines(before3, await islandModel());
+    check(skyLines && skyLines.length === 1 && skyLines[0][2] === 'game:sky "sunset"', 'the World: Sky → Sunset changes the sky line', skyLines);
+    await settle();
+    check((await stats()).sceneBg !== '#bfe2ff', 'and the preview gets the sunset sky', await stats());
+    await t.shot('engine_3d_sunset.png');
+    await ev(`document.querySelector('#en-stage').focus()`);
+    await t.key('z', CTRL);
+    await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(island)})).getValue().replace(/\\r\\n/g, '\\n') === ${JSON.stringify(before3)})()`, 4000);
+    await settle();
 
+  }
   // A 3D world from the start card: the island, a player and a tree.
   const kid3 = path.join(ctx.root, 'kid3d.tuf');
   fs.writeFileSync(kid3, '');
@@ -502,7 +512,7 @@ export default async (t, ctx) => {
   await settle(25000);
   await t.sleep(600);
   st = await stats();
-  check(st.mode === '3d' && st.marker === true && st.things >= 3, 'the preview shows the island, the player and the trees', st);
+  if (gl) check(st.mode === '3d' && st.marker === true && st.things >= 3, 'the preview shows the island, the player and the trees', st);
   await ev(`window.TuffEngine.test.select('v:tree')`);
   await t.sleep(400);
   await t.shot('engine_3d_world.png');
