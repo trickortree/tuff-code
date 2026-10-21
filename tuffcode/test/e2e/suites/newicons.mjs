@@ -46,4 +46,20 @@ export default async (t) => {
   await t.shot('ni_rightbar.png', await rect('#rightbar'));
   const ts = await rect('#toolstrip-right');
   if (ts) await t.shot('ni_toolstrip.png', { x: ts.x - 4, y: ts.y - 4, width: ts.width + 8, height: Math.min(ts.height + 8, 120) });
+
+  // Settings is a drawn cog wheel (8 teeth around a hole) on every system, not a font glyph, and the
+  // Gear Customizer's gear in the editor margin is the same cog.
+  const cog = await ev(`(() => { const b = document.querySelector('#btn-settings'); const s = b?.querySelector('svg.i-cog'); const r = s?.getBoundingClientRect(); return s && { d: s.querySelector('path').getAttribute('d'), fill: getComputedStyle(s).fill, w: r.width, h: r.height, glyph: !!b.querySelector('.fl') }; })()`);
+  const teeth = (d) => (d.match(/A8\.5 8\.5/g) || []).length;
+  check('Settings: the button draws a cog wheel with 8 teeth and a hole, filled in the icon colour', !!cog && teeth(cog.d) === 8 && /a3\.4 3\.4/.test(cog.d) && cog.fill !== 'none' && cog.w === 16 && cog.h === 16 && !cog.glyph, cog && { ...cog, d: cog.d.slice(0, 60) });
+  const marginGear = await ev(`(() => { for (const sh of document.styleSheets) { let rules; try { rules = sh.cssRules; } catch { continue; } for (const r of rules) if (r.selectorText === '.tuff-gear') return decodeURIComponent(r.style.backgroundImage || ''); } return ''; })()`);
+  check('The Gear Customizer draws the same cog', !!cog && marginGear.includes(cog.d.slice(0, 120)), marginGear.slice(0, 160));
+  const sb = await rect('#btn-settings');
+  const idle = await ev(`getComputedStyle(document.querySelector('#btn-settings svg')).fill`);
+  await t.move(sb.x + sb.width / 2, sb.y + sb.height / 2);
+  const hot = await ev(`getComputedStyle(document.querySelector('#btn-settings svg')).fill`);
+  check('Settings: the cog brightens on hover like the other buttons', hot !== idle, { idle, hot });
+  await t.shot('ni_settings.png', { x: sb.x - 50, y: sb.y - 5, width: sb.width + 60, height: sb.height + 10 });
+  await ev(`document.querySelector('#btn-settings').click(); 1`);
+  check('Settings: clicking the cog opens Settings', await t.waitFor(`!document.querySelector('#settings').classList.contains('hidden')`, 5000));
 };
