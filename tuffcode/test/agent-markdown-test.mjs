@@ -16,11 +16,11 @@ const short = (p) => String(p || '').split(/[\\/]/).pop();
 const icon = () => '';
 const lit = new Map();
 const t = { project: { root: () => 'C:\\Users\\jacks\\OneDrive\\Documents\\TuffProjects\\HelloTuff' }, editor: { replaceAll: () => {} } };
-const api = new Function('esc', 'short', 'icon', 'lit', 't', `${body}\nreturn { md, inline, linkTarget, fileQuestion: typeof fileQuestion === 'function' ? fileQuestion : null };`)(esc, short, icon, lit, t);
+const api = new Function('esc', 'short', 'icon', 'lit', 't', `${body}\nreturn { md, inline, linkTarget, fileQuestion: typeof fileQuestion === 'function' ? fileQuestion : null, webQuestion: typeof webQuestion === 'function' ? webQuestion : null };`)(esc, short, icon, lit, t);
 
 let fails = 0;
 const check = (name, ok, got) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : '\n      got: ' + got}`); if (!ok) fails++; };
-const { md, linkTarget, fileQuestion } = api;
+const { md, linkTarget, fileQuestion, webQuestion } = api;
 
 const user = `Here's who answered each of your earlier messages:
 
@@ -96,5 +96,17 @@ h = md('```tuff\nsay "[x](file:///C:/a.tuf)"\n```');
 check('links inside a code block stay code', !h.includes('<a '), h);
 h = md('[a "quote"](https://x.y/"onmouseover=alert(1))');
 check('quotes in a URL can\'t break out of the attribute', !/data-url="[^"]*"onmouseover/.test(h), h);
+// The question before a web link opens always shows the whole site.
+const wq = (x) => (webQuestion ? webQuestion(x) : '(no webQuestion)');
+h = md('[web](https://tuffcode.dev.docs.getting-started.for-kids.learn-tuff-the-easy-way.lesson-one.welcome@evil.example/)');
+check('a name before the site (https://tuffcode.dev…@evil.example/) is dropped, and the question names evil.example', h.includes('data-url="https://evil.example/"') && wq('https://evil.example/') === 'Open https://evil.example/ in your web browser?', h + ' / ' + wq('https://evil.example/'));
+const longPath = `https://evil.example/${'lesson/'.repeat(30)}end.html?x=1`;
+check('a long address is shortened in the middle of its path, never in the site', /^Open https:\/\/evil\.example\/.*….*end\.html\?x=1 in your web browser\?$/.test(wq(longPath)) && wq(longPath).length < 120, wq(longPath));
+const longHost = `https://${'tuffcode-dev-docs-for-kids-'.repeat(4)}evil.example/${'a/'.repeat(40)}`;
+check('a long site name shows whole', wq(longHost).includes(`//${'tuffcode-dev-docs-for-kids-'.repeat(4)}evil.example/`) && wq(longHost).includes('…'), wq(longHost));
+check('a look-alike site name shows as the browser sees it (xn--…)', /^Open https:\/\/xn--/.test(wq('https://еxample.com/tuff')), wq('https://еxample.com/tuff'));
+check('the example.com/tuff link asks as before', wq('https://example.com/tuff') === 'Open https://example.com/tuff in your web browser?' && wq('https://tuff.dev') === 'Open https://tuff.dev in your web browser?', wq('https://example.com/tuff'));
+h = md('[x](https://x.com:99999/a) and https://x.com:99999/b');
+check('an address the browser can\'t open stays text', !h.includes('<a ') && h.includes('https://x.com:99999/b'), h);
 console.log(fails ? `${fails} failed` : 'all passed');
 process.exit(fails ? 1 : 0);

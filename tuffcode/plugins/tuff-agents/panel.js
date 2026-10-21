@@ -1018,7 +1018,8 @@ TuffPlugins.register('tuff-agents', (t) => {
         else open();
       } else if (a.dataset.url) {
         const url = a.dataset.url;
-        t.ask({ title: `Open ${url.length > 90 ? url.slice(0, 87) + '…' : url} in your web browser?`, confirm: true, okLabel: 'Open' }).then((ok) => ok && t.openWeb(url));
+        const q = webQuestion(url);
+        if (q) t.ask({ title: q, confirm: true, okLabel: 'Open' }).then((ok) => ok && t.openWeb(url));
       }
       return;
     }
@@ -1110,7 +1111,14 @@ TuffPlugins.register('tuff-agents', (t) => {
 
   function linkTarget(href) {
     let h = String(href || '').trim();
-    if (/^https?:\/\/[^/\s]/i.test(h)) return { url: h };
+    if (/^https?:\/\/[^/\s]/i.test(h)) {
+      // A name before the site (https://tuffcode.dev@other.example/) only hides where the link goes: it's
+      // dropped. An address the browser couldn't open stays text.
+      let u;
+      try { u = new URL(h); } catch { return null; }
+      if (u.username || u.password) { u.username = ''; u.password = ''; h = u.href; }
+      return { url: h };
+    }
     let line = 0;
     const hash = h.match(/#L?(\d+)(?:[-:]L?\d+)?$/i);
     if (hash) { line = +hash[1]; h = h.slice(0, hash.index); }
@@ -1169,6 +1177,16 @@ TuffPlugins.register('tuff-agents', (t) => {
     const where = clip(file, (file.match(/^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+(?:[\\/][^\\/]+)?[\\/]?)/i) || [''])[0].length);
     if (/^[\\/]{2}/.test(file)) return `Open ${where} from another computer?`;
     return inProject(file) ? '' : `Open ${where} from outside your project?`;
+  }
+
+  // What to ask before a web link opens. The whole site always shows (as the browser will see it, so a
+  // look-alike name shows as xn--…); only the middle of a long path after it is shortened.
+  function webQuestion(url) {
+    let u;
+    try { u = new URL(url); } catch { return ''; }
+    const site = `${u.protocol}//${u.host}`;
+    const rest = (u.pathname === '/' && !url.endsWith('/') ? '' : u.pathname) + u.search + u.hash;
+    return `Open ${clip(site + rest, site.length + 1)} in your web browser?`;
   }
 
   // A long path or address made shorter in the middle. The first keep characters (the drive, computer or
