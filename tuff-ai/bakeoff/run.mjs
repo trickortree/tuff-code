@@ -1,32 +1,200 @@
-// Tuff AI Phase 1 bake-off: runs a GGUF model on Tuff Bench on the CPU and scores it with the real interpreter.
+// Tuff AI bake-off: runs a GGUF model on Tuff Bench and scores it with the real interpreter.
+//
+// Phase 1 (a model on its own, as the bake-off first ran it):
 //   node tuff-ai/bakeoff/run.mjs --model <file.gguf> --name <label> [--runtime <dir with node_modules/node-llama-cpp>]
 //        [--mode lean|guide] [--threads 8] [--ctx 8192] [--only write,gui,fix] [--limit N] [--out results/<name>-<mode>.jsonl]
 // lean:  short system prompt + the guide's core sections; the 2 most relevant other sections go in the message.
 // guide: the whole guide (minus the MCP-only "Using the tools") in the system prompt.
 // Each task is a fresh chat with the same system prompt. If the code fails tuff.py --check, the model gets
 // one retry with the error, the way Tuff AI would do it in the app. Results append to --out, so a run can resume.
+//
+// The app (--app): Tuff AI exactly as TuffCode runs it. It loads tuffcode/ai.js with a stand-in for Electron,
+// and ai.js starts the real tuffcode/ai-worker.mjs in a Node child process, so the system prompt, the
+// improver, the thinking levels, the plan, the checker retry and the worker are the app's own code.
+//   node tuff-ai/bakeoff/run.mjs --app --model <file.gguf> --level off|low|medium|high --improve on|off
+//        [--gpu auto|cpu] [--threads N] [--budget N] [--sample write:40,gui:10,fix:30] [--out results/think/<...>.jsonl]
+// --gpu auto is what the app does (Vulkan on a real graphics card); --threads only matters on the CPU.
+// --budget overrides the level's thought budget, to try other budgets. The questions are what a beginner
+// would type in the app: the task (for a fix, with the broken program as the open file, the error, and
+// "Can you fix it?").
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
+import Module from 'node:module';
+import { fork } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { tuff, norm, hasNeed } from '../bench/verify.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
 const arg = (k, d) => { const i = process.argv.indexOf('--' + k); return i > 0 ? process.argv[i + 1] : d; };
+const flag = (k) => process.argv.includes('--' + k);
 const MODEL = arg('model');
+const APP = flag('app');
 const NAME = arg('name', path.basename(MODEL || '', '.gguf'));
 const MODE = arg('mode', 'lean');
-const THREADS = Number(arg('threads', 8));
+const LEVEL = arg('level', 'off');
+const IMPROVE = arg('improve', 'on') !== 'off';
+const GPU = arg('gpu', APP ? 'auto' : 'false'); // Phase 1: e.g. --gpu vulkan; scores don't depend on it, only the speed does
+const THREADS = Number(arg('threads', APP ? 0 : 8));
 const CTX = Number(arg('ctx', 8192));
 const ONLY = arg('only', 'write,gui,fix').split(',');
 const LIMIT = Number(arg('limit', 0));
 const MAX_TOKENS = Number(arg('max-tokens', 600));
 const CKPT = arg('checkpoint-interval');
-const OUT = arg('out', path.join(HERE, 'results', `${NAME}-${MODE}.jsonl`));
+const OUT = arg('out', APP
+  ? path.join(HERE, 'results', 'think', `${LEVEL}${arg('budget') ? `-${arg('budget')}` : ''}-${IMPROVE ? 'improved' : 'plain'}-${GPU === 'cpu' ? `cpu${THREADS || ''}` : 'gpu'}.jsonl`)
+  : path.join(HERE, 'results', `${NAME}-${MODE}.jsonl`));
 if (!MODEL) { console.error('--model is required'); process.exit(2); }
-
 const runtime = arg('runtime');
+
+// ---------------------------------------------------------------- scoring
+function codeOf(text) {
+  const m = /```[ \t]*tuff[^\n]*\n([\s\S]*?)```/i.exec(text) || /```[^\n]*\n([\s\S]*?)```/.exec(text);
+  return m ? m[1] : null;
+}
+const proseOf = (text) => text.replace(/```[\s\S]*?(```|$)/g, ' ');
+
+async function score(x, code) {
+  if (code == null) return { ok: false, why: 'no code block' };
+  const c = await tuff(code, { check: true });
+  if (c.code !== 0) return { ok: false, check: false, why: [c.out, c.err].filter(Boolean).join('\n').split('\n').slice(0, 3).join('\n') };
+  if (x.type === 'gui') {
+    const missing = (x.needs || []).filter((s) => !hasNeed(code, s));
+    return missing.length ? { ok: false, check: true, why: `missing ${missing.map((s) => JSON.stringify(s)).join(', ')}` } : { ok: true, check: true };
+  }
+  for (const [i, t] of (x.type === 'fix' ? x.tests : x.tests).entries()) {
+    const r = await tuff(code, { stdin: t.stdin || '' });
+    if (r.code !== 0) return { ok: false, check: true, why: `test ${i} exits ${r.code}: ${[r.out, r.err].join('\n').trim().split('\n').slice(-2).join(' | ')}` };
+    if (r.out !== norm(t.stdout)) return { ok: false, check: true, why: `test ${i} output: ${JSON.stringify(r.out.slice(0, 200))}` };
+  }
+  return { ok: true, check: true };
+}
+
+// ---------------------------------------------------------------- tasks
+const load = (f) => fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split(/\r?\n/).filter((l) => l.trim()).map((l) => JSON.parse(l)) : [];
+// --tasks <file> runs just that file (for a quick test); otherwise the bench files picked by --only.
+// --sample write:40,gui:10,fix:30 takes that many tasks from each file, evenly spread through it.
+const SAMPLE = Object.fromEntries((arg('sample') || '').split(',').filter(Boolean).map((p) => p.split(':')).map(([k, n]) => [k, Number(n)]));
+const spread = (xs, n) => (n && n < xs.length ? Array.from({ length: n }, (_, i) => xs[Math.floor((i * xs.length) / n)]) : xs);
+let tasks = arg('tasks') ? load(arg('tasks'))
+  : (arg('sample') ? Object.keys(SAMPLE) : ONLY).flatMap((k) => spread(load(path.join(ROOT, 'tuff-ai', 'bench', `${k}.jsonl`)), SAMPLE[k]));
+const ids = arg('ids');
+if (ids) { const want = new Set(ids.split(',')); tasks = tasks.filter((x) => want.has(x.id)); }
+if (LIMIT) tasks = tasks.slice(0, LIMIT);
+fs.mkdirSync(path.dirname(OUT), { recursive: true });
+const done = new Set(load(OUT).map((r) => r.id));
+tasks = tasks.filter((x) => !done.has(x.id));
+
+if (APP) {
+  await appBench();
+  process.exit(0);
+}
+
+// ---------------------------------------------------------------- the app's own code, with a stand-in for Electron
+// A thought that ran to the budget and was going round in circles: some line of it comes back 3 times or more.
+function loops(thought) {
+  const seen = new Map();
+  for (const l of thought.split(/\n+/).map((s) => s.trim()).filter((s) => s.length >= 12)) seen.set(l, (seen.get(l) || 0) + 1);
+  return Math.max(0, ...seen.values()) >= 3;
+}
+
+async function appBench() {
+  if (runtime) process.env.TUFFCODE_LLAMA_RUNTIME = path.resolve(runtime);
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'tuff-bench-'));
+  // utilityProcess.fork: the real worker in a Node child process, with process.parentPort made from Node's IPC.
+  const host = path.join(userData, 'host.mjs');
+  fs.writeFileSync(host, "import { pathToFileURL } from 'node:url';\nprocess.parentPort = { postMessage: (m) => process.send(m), on: (ev, fn) => { if (ev === 'message') process.on('message', (data) => fn({ data })); } };\nawait import(pathToFileURL(process.argv[2]).href);\n");
+  const children = [];
+  const utilityProcess = {
+    fork(file, args, opts = {}) {
+      const child = fork(host, [file], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: opts.env });
+      children.push(child);
+      const proc = new EventEmitter();
+      Object.assign(proc, { stdout: child.stdout, stderr: child.stderr, postMessage: (m) => { if (child.connected) child.send(m); }, kill: () => child.kill() });
+      child.on('message', (m) => proc.emit('message', m));
+      child.on('exit', (code) => proc.emit('exit', code ?? 0));
+      return proc;
+    },
+  };
+  const electron = { app: { getPath: () => userData }, utilityProcess, net: {} };
+  const realLoad = Module._load;
+  Module._load = function (request, ...rest) { return request === 'electron' ? electron : realLoad.call(this, request, ...rest); };
+  const ai = createRequire(import.meta.url)(path.join(ROOT, 'tuffcode', 'ai.js'));
+  const m = ai.MODELS[0];
+  fs.mkdirSync(path.join(userData, 'models'));
+  const linked = path.join(userData, 'models', m.file);
+  try { fs.linkSync(MODEL, linked); } catch { fs.symlinkSync(path.resolve(MODEL), linked); }
+  const lv = ai.LEVELS.find((l) => l.id === LEVEL);
+  if (!lv) { console.error(`--level must be one of ${ai.LEVELS.map((l) => l.id).join(', ')}`); process.exit(2); }
+  if (arg('budget')) lv.budget = Number(arg('budget'));
+  if (arg('temp')) lv.temperature = Number(arg('temp'));
+  if (arg('topk')) lv.topK = Number(arg('topk'));
+  if (arg('topp')) lv.topP = Number(arg('topp'));
+  ai.setup({
+    settings: () => ({ aiGpu: GPU === 'cpu' ? 'cpu' : 'auto', ...(THREADS ? { aiThreads: THREADS } : {}) }),
+    // Like main.js's checkSource: tuff.py --check, and its "Tuff error on line …" line.
+    checkSource: async (code) => {
+      const c = await tuff(code, { check: true });
+      const lines = `${c.out}\n${c.err}`.split('\n');
+      return { ok: c.code === 0, message: lines.find((l) => /^Tuff error/.test(l)) || '' };
+    },
+  });
+  let n = 0;
+  const ask = (parts) => new Promise((resolve) => {
+    const got = { events: [], thought: [''], plan: '', stages: [] };
+    ai.run({ runId: `b${++n}`, prompt: parts.question, model: m.id, effort: LEVEL, ai: parts, improve: IMPROVE }, (e) => {
+      if (e.kind === 'thinking') got.thought[got.thought.length - 1] += e.text;
+      else if (e.kind === 'break') got.thought.push('');
+      else if (e.kind === 'stage') got.stages.push(e.text);
+      else if (e.kind === 'improved') got.improved = e.text;
+      else if (e.kind === 'model' || e.kind === 'note') got[e.kind] = e.name || e.text;
+      else if (e.kind === 'done') resolve({ ...got, done: e });
+    });
+  });
+  const question = (x) => (x.type !== 'fix' ? { question: x.task } : {
+    question: x.kind === 'error' ? `${x.task}\nWhen I run it, I get this error:\n${x.error}\nCan you fix it?` : `${x.task}\nBut when I run it, it shows this instead:\n${x.got}\nCan you fix it?`,
+    file: 'program.tuf',
+    code: x.broken,
+    ...(x.kind === 'error' ? { runError: x.error } : {}),
+  });
+  // The first question also starts the model and reads the system prompt, so it isn't timed.
+  const warm = await ask({ question: 'Say hi in one word.' });
+  if (!warm.done.ok) { console.error(`The model didn't start: ${warm.done.error}`); process.exit(1); }
+  const loaded = await ai.status();
+  console.log(JSON.stringify({ event: 'start', app: true, level: LEVEL, budget: lv.budget, plan: lv.plan && IMPROVE, temperature: lv.temperature, topK: lv.topK, topP: lv.topP, improve: IMPROVE, gpu: loaded.loaded?.gpu, device: loaded.loaded?.device, threads: THREADS || 'auto', todo: tasks.length, warmMs: warm.done.stats.ms }));
+  for (const x of tasks) {
+    const a = await ask(question(x));
+    const s = a.done.stats || {};
+    const answers = s.answers || [];
+    const r1 = await score(x, codeOf(answers[0] || ''));
+    const r = answers.length > 1 ? await score(x, codeOf(answers[answers.length - 1])) : r1;
+    const thought = a.thought.join('\n\n');
+    const res = {
+      id: x.id, type: x.type, cat: x.cat, level: x.level, kind: x.kind, mistake: x.mistake,
+      think: LEVEL, budget: lv.budget, temp: lv.temperature, improve: IMPROVE, dev: loaded.loaded?.gpu || 'cpu', threads: THREADS || null,
+      ok: a.done.ok, error: a.done.error || undefined,
+      pass1: r1.ok, check1: !!r1.check, why1: r1.ok ? undefined : r1.why, pass: r.ok, why: r.ok ? undefined : r.why, retried: answers.length > 1,
+      ms: s.ms, planMs: s.planMs, thinkMs: s.thinkMs, thinkTokens: s.thinkTokens, cut: s.cut, loop: s.cut > 0 && loops(thought),
+      reqKind: s.kind, target: s.target, stages: [...new Set(a.stages)],
+      improved: a.improved, plan: s.plan || undefined,
+      // The start and end of the thinking, enough to see what it did without keeping all of it.
+      thought: thought.length > 700 ? `${thought.slice(0, 350)} … ${thought.slice(-350)}` : thought || undefined,
+      reply1: answers[0], reply2: answers[1],
+    };
+    if (x.type === 'fix') res.explained = (x.explain_words || []).some((w) => proseOf(answers[0] || '').toLowerCase().includes(String(w).toLowerCase()));
+    fs.appendFileSync(OUT, JSON.stringify(res) + '\n');
+    console.log(`${x.id.padEnd(12)} ${res.pass1 ? 'PASS' : res.pass ? 'pass*' : 'fail'} ${String(s.ms).padStart(6)} ms  think ${String(s.thinkTokens || 0).padStart(4)} tok${s.cut ? ' CUT' : ''}${res.loop ? ' LOOP' : ''}  plan ${s.planMs || 0} ms`);
+  }
+  ai.quit();
+  for (const c of children) try { c.kill(); } catch {}
+  console.log(JSON.stringify({ event: 'end', level: LEVEL, improve: IMPROVE }));
+  try { fs.rmSync(userData, { recursive: true, force: true }); } catch {}
+}
+
+// ---------------------------------------------------------------- Phase 1: the model on its own
 const lib = await import(runtime ? pathToFileURL(path.join(runtime, 'node_modules', 'node-llama-cpp', 'dist', 'index.js')).href : 'node-llama-cpp');
 const { getLlama, LlamaChatSession, QwenChatWrapper } = lib;
 
@@ -73,45 +241,10 @@ function userMessage(x) {
   return `${ref}${x.task}`;
 }
 
-function codeOf(text) {
-  const m = /```[ \t]*tuff[^\n]*\n([\s\S]*?)```/i.exec(text) || /```[^\n]*\n([\s\S]*?)```/.exec(text);
-  return m ? m[1] : null;
-}
-const proseOf = (text) => text.replace(/```[\s\S]*?(```|$)/g, ' ');
-
-async function score(x, code) {
-  if (code == null) return { ok: false, why: 'no code block' };
-  const c = await tuff(code, { check: true });
-  if (c.code !== 0) return { ok: false, check: false, why: [c.out, c.err].filter(Boolean).join('\n').split('\n').slice(0, 3).join('\n') };
-  if (x.type === 'gui') {
-    const missing = (x.needs || []).filter((s) => !hasNeed(code, s));
-    return missing.length ? { ok: false, check: true, why: `missing ${missing.map((s) => JSON.stringify(s)).join(', ')}` } : { ok: true, check: true };
-  }
-  for (const [i, t] of (x.type === 'fix' ? x.tests : x.tests).entries()) {
-    const r = await tuff(code, { stdin: t.stdin || '' });
-    if (r.code !== 0) return { ok: false, check: true, why: `test ${i} exits ${r.code}: ${[r.out, r.err].join('\n').trim().split('\n').slice(-2).join(' | ')}` };
-    if (r.out !== norm(t.stdout)) return { ok: false, check: true, why: `test ${i} output: ${JSON.stringify(r.out.slice(0, 200))}` };
-  }
-  return { ok: true, check: true };
-}
-
-// ---------------------------------------------------------------- tasks
-const load = (f) => fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split(/\r?\n/).filter((l) => l.trim()).map((l) => JSON.parse(l)) : [];
-// --tasks <file> runs just that file (for a quick test); otherwise the bench files picked by --only.
-let tasks = arg('tasks') ? load(arg('tasks'))
-  : ONLY.flatMap((k) => load(path.join(ROOT, 'tuff-ai', 'bench', `${k}.jsonl`)));
-const ids = arg('ids');
-if (ids) { const want = new Set(ids.split(',')); tasks = tasks.filter((x) => want.has(x.id)); }
-if (LIMIT) tasks = tasks.slice(0, LIMIT);
-fs.mkdirSync(path.dirname(OUT), { recursive: true });
-const done = new Set(load(OUT).map((r) => r.id));
-tasks = tasks.filter((x) => !done.has(x.id));
-
 // ---------------------------------------------------------------- model
 let peak = 0;
 const sample = () => { peak = Math.max(peak, process.memoryUsage().rss); };
 const sampler = setInterval(sample, 100);
-const GPU = arg('gpu', 'false'); // e.g. --gpu vulkan; scores don't depend on it, only the speed does
 const llama = await getLlama({ gpu: GPU === 'false' ? false : GPU, build: 'never', logLevel: 'error' });
 const t0 = Date.now();
 const model = await llama.loadModel({ modelPath: MODEL, useMmap: false }); // mmap costs ~500 MB extra on CPU (probe.mjs)

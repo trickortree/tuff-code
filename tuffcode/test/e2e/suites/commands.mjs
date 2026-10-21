@@ -105,6 +105,13 @@ export default async (t, ctx) => {
   // Tuff AI only answers: Plan and Edit are off on its tab.
   await ev(`document.querySelector('.ta-agents button[data-id="tuffai"]').click()`);
   check('On the Tuff AI tab, Plan and Edit are switched off', await ev(`(() => { const b = [...document.querySelectorAll('.ta-mode button')]; return b.find(x => x.dataset.m === 'plan').disabled && b.find(x => x.dataset.m === 'edit').disabled && b.find(x => x.dataset.m === 'ask').classList.contains('on'); })()`), null);
+  // Without its model: the download card names Pumice 1 (with the credit to Qwen3.5-2B), and the Model and
+  // Thinking chips wait until it's downloaded.
+  await waitFor(`!!document.querySelector('.ta-status .ta-card, .ta-status .ta-note:not(:empty)') && !/Checking Tuff AI/.test(document.querySelector('.ta-status').textContent)`, 10000);
+  const card = await ev(`({ text: document.querySelector('.ta-status')?.textContent || '', get: document.querySelector('.ta-status [data-a="ai-get"]')?.textContent || '', chips: document.querySelector('.ta-opts').classList.contains('hidden') })`);
+  if (card.get) {
+    check('The Tuff AI card offers to download Pumice 1, credits Qwen3.5-2B, and hides the chips until then', /^Download Pumice 1 \(1\.3 GB\)$/.test(card.get) && /Its model is Pumice 1/.test(card.text) && /Pumice 1 · based on Qwen3\.5-2B \(Apache 2\.0\)/.test(card.text) && card.chips, card);
+  } else t.skip('The Tuff AI download card', `this copy has no node-llama-cpp: ${card.text.slice(0, 80)}`);
   // Tuff AI only reads the last few messages, so it can't sum up the chat for everyone.
   const summaries = () => ev(`document.querySelectorAll('.ta-msg.agent.summary').length`);
   const sumBefore = await summaries();

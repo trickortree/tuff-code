@@ -1,5 +1,6 @@
 // Runs Tuff AI's backend inside Electron, the way the app does, and prints what the panel would get.
-// Then checks Stop while the model starts, and a model file that won't load.
+// Then checks who Pumice 1 says it is, the thinking levels, Stop while it thinks, Stop while the model
+// starts, and a model file that won't load.
 //   npx electron test/ai-smoke.js <model folder with the .gguf> ["question"]
 // Needs node-llama-cpp: the app's own, or TUFFCODE_LLAMA_RUNTIME pointing at a separate install.
 const { app } = require('electron');
@@ -43,11 +44,51 @@ app.whenReady().then(async () => {
   const fails = [];
   const check = (name, ok, got) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`); if (!ok) { console.log('      got', JSON.stringify(got).slice(0, 500)); fails.push(name); } };
   // Every event of one question. onEvent can act on them as they come.
-  const events = (q, id, onEvent = () => {}) => new Promise((done) => {
+  const events = (q, id, onEvent = () => {}, extra = {}) => new Promise((done) => {
     const got = [];
-    ai.run({ runId: id, prompt: q, model: m.id }, (e) => { got.push(e); onEvent(e); if (e.kind === 'done') done(got); });
+    ai.run({ runId: id, prompt: q, model: m.id, ...extra }, (e) => { got.push(e); onEvent(e); if (e.kind === 'done') done(got); });
   });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Who it says it is: Pumice 1, based on Qwen3.5-2B, never ChatGPT, Qwen's own assistant or "Tuff AI".
+  const answer = async (q, effort, id) => {
+    const got = await events(q, id, () => {}, { effort, ai: { question: q } });
+    return { text: got.filter((e) => e.kind === 'delta').map((e) => e.text).join('').trim(), got };
+  };
+  const falseClaim = /\bI(?:'m| am) (?:an? )?(?:ChatGPT|Claude|Gemini|Qwen\b(?!3)|Tuff AI\b)|\b(?:made|created|developed|built|trained) by (?:OpenAI|Anthropic|Google|Alibaba)/i;
+  for (const [q, lv] of [['Who are you?', 'off'], ['What model are you?', 'low'], ['Are you ChatGPT?', 'off'], ['Are you Qwen?', 'off'], ['Are you Tuff AI?', 'low']]) {
+    const a = await answer(q, lv, `who-${q}`);
+    console.log(`[${lv}] ${q}\n      ${a.text.replace(/\s+/g, ' ').slice(0, 300)}`);
+    check(`"${q}" (${lv}): it says it's Pumice 1, and claims to be nothing else`, /Pumice 1/.test(a.text) && !falseClaim.test(a.text), a.text);
+  }
+
+  // The thinking levels with the real model.
+  const run = async (q, effort, id, onEvent) => {
+    const t = Date.now();
+    const got = await events(q, id, onEvent, { effort, ai: { question: q } });
+    return { got, ms: Date.now() - t, kinds: got.map((e) => e.kind), thought: got.find((e) => e.kind === 'thought'), stages: got.filter((e) => e.kind === 'stage').map((e) => e.text) };
+  };
+  const off = await run('Make a program that says the numbers 1 to 3.', 'off', 'lv-off');
+  check(`Off: no thinking, and an answer (${off.ms} ms)`, !off.kinds.includes('thinking') && off.kinds.includes('delta') && off.got[off.got.length - 1].ok, off.stages);
+  const low = ai.LEVELS.find((l) => l.id === 'low');
+  const lo = await run('Make a program that says the numbers 1 to 3.', 'low', 'lv-low');
+  check(`Low: it thinks (${lo.thought?.tokens} tokens, budget ${low.budget}), then answers (${lo.ms} ms)`, lo.kinds.includes('thinking') && lo.thought && lo.thought.tokens <= low.budget + 8 && lo.kinds.includes('delta') && lo.stages.includes('Thinking') && lo.stages.includes('Writing'), { thought: lo.thought, stages: lo.stages });
+  const med = await run('Make a program that asks for a name and says Hi to it.', 'medium', 'lv-med');
+  const plan = med.got.filter((e) => e.kind === 'plan').map((e) => e.text).join('');
+  check(`Medium: it rewrites the request, thinks, then answers (${med.ms} ms)`, plan.trim().length > 10 && !/```/.test(plan) && med.kinds.includes('thinking') && med.kinds.includes('delta') && med.stages.slice(0, 3).join() === 'Reading your question,Planning,Thinking', { plan, stages: med.stages });
+  console.log(`      plan: ${plan.replace(/\s+/g, ' ').slice(0, 300)}`);
+
+  // Stop while it thinks: it stops straight away, and the next question isn't kept waiting.
+  let stoppedAt = 0;
+  const late2 = [];
+  const st = await run('Make a guessing game where I guess a number from 1 to 10.', 'high', 'lv-stop', (e) => {
+    if (stoppedAt && e.kind !== 'done') late2.push(e.kind);
+    if (e.kind === 'thinking' && !stoppedAt) { stoppedAt = Date.now(); ai.stop('lv-stop'); }
+  });
+  const stopMs = Date.now() - stoppedAt;
+  check(`Stop while it thinks: done in ${stopMs} ms, with no answer after it`, st.got[st.got.length - 1].ok && !late2.includes('delta') && stopMs < 3000, { late2, stopMs });
+  const after = await run('Say hello in Tuff.', 'off', 'lv-after');
+  check(`... and the next question gets its answer (${after.ms} ms)`, after.kinds.includes('delta') && after.got[after.got.length - 1].ok, after.kinds);
 
   // Stop while the model is starting: that question gets no answer, and the next one isn't kept waiting.
   ai.quit();
