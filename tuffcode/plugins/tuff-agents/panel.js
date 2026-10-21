@@ -143,8 +143,13 @@ TuffPlugins.register('tuff-agents', (t) => {
     // the agent isn't installed.
     if (!S.agents) await looking;
     if (S.view === 'setup') showSetup(false);
-    if (S.run) { t.toast('Wait for the reply to finish, or press Stop, then try again.'); return; }
-    send(text, opts);
+    if (S.run) { t.toast('Wait for the reply to finish, or press Stop, then try again.'); return false; }
+    // true once the question is on its way (send sets S.run before it waits for the reply), false if it
+    // stopped early (not installed, not signed in): Tuff Engine's Ask box stays open with the text then.
+    const sending = send(text, opts);
+    if (S.run) return true;
+    await sending;
+    return false;
   }
 
   // ---------------------------------------------------------------- layout

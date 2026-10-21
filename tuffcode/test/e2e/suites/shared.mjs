@@ -51,4 +51,14 @@ export default async (t, ctx) => {
   check('Claude resumes its own session (--resume)', (l3.args || []).includes('--resume'), l3.args);
   check('…and is caught up on what happened while Codex answered', /Since you last answered, this happened in the chat \(for context only[^)]*\):\n<chat>/.test(p3) && /<message>\nand what did codex say\?\n<\/message>/.test(p3) && /Codex( \([^)]*\))?: Codex says: your code looks fine\./.test(p3), p3.slice(p3.indexOf('Since you last')).slice(0, 600));
   check('…without repeating its own earlier turns', !/what model are you\?/.test(p3.slice(p3.indexOf('Since you last'))), p3.slice(p3.indexOf('Since you last')).slice(0, 600));
+
+  // Tuff Engine's "Ask an agent" (window.tuffAskAgent) says whether the question went: true when it's on its
+  // way, false while another reply is still coming (so the Engine keeps its box and the kid's text).
+  const asked = await ev(`window.tuffAskAgent('make the coin bigger SLOW')`);
+  await waitFor(`!!document.querySelector('.ta-send.stop')`, 5000);
+  const busy = await ev(`window.tuffAskAgent('and add a second coin')`);
+  const toast = await ev(`[...document.querySelectorAll('.toast')].map(x => x.textContent).join(' | ')`);
+  check('tuffAskAgent gives true when the question goes, and false (with "Wait for the reply") while one is running', asked === true && busy === false && /Wait for the reply to finish/.test(toast), { asked, busy, toast });
+  await ev(`document.querySelector('.ta-send.stop')?.click()`);
+  await idle();
 };
