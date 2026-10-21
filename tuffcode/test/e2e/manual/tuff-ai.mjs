@@ -87,7 +87,7 @@ try {
   await send('Who are you?');
   await idle();
   const who = await last();
-  check('Asked who it is, it says Pumice 1, based on Qwen3.5-2B', /Pumice 1/.test(who?.text || '') && !/\bI(?:'m| am) (?:ChatGPT|Qwen\b|Tuff AI\b)/i.test(who?.text || ''), who?.text);
+  check('Asked who it is, it says Pumice 1, and never names the base model', /Pumice 1/.test(who?.text || '') && !/qwen|alibaba/i.test(who?.text || '') && !/\bI(?:'m| am) (?:ChatGPT|Tuff AI\b)/i.test(who?.text || ''), who?.text);
   console.log(`      "Who are you?" -> ${(who?.text || '').replace(/\s+/g, ' ').slice(0, 300)}`);
 
   // Thinking levels: Off answers straight away; High plans, then thinks, and Stop works while it thinks.
@@ -143,7 +143,7 @@ try {
     await ev(`(() => { document.querySelector('.ta-top [data-a="menu"]').click(); [...document.querySelectorAll('.ta-menu button')].find(b => /look for agents again/i.test(b.textContent))?.click(); return 1; })()`);
     const card = await waitFor(`!!document.querySelector('.ta-status [data-a="ai-get"]')`, 20000);
     const text = await ev(`document.querySelector('.ta-status')?.textContent || ''`);
-    check('Without the model: a preview card for Pumice 1 with the download size, free memory and the credit to Qwen3.5-2B', card && /1\.3 GB/.test(text) && /preview/i.test(text) && /free memory/.test(text) && /Download Pumice 1/.test(text) && /based on Qwen3\.5-2B/.test(text), text);
+    check('Without the model: a preview card for Pumice 1 with the download size and free memory, and no base model named', card && /1\.3 GB/.test(text) && /preview/i.test(text) && /free memory/.test(text) && /Download Pumice 1/.test(text) && !/qwen/i.test(text), text);
     if (process.argv.includes('--no-download')) console.log('SKIP  The download itself (--no-download)');
     else {
       await ev(`document.querySelector('.ta-status [data-a="ai-get"]').click()`);

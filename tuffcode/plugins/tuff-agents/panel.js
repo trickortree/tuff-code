@@ -716,7 +716,6 @@ TuffPlugins.register('tuff-agents', (t) => {
         <span>${icon('offline')}Works offline</span>
       </div>
       <p class="${low ? 'ta-warn' : 'tas-small'}">It needs about ${GB(s.ram.need)} of free memory while it answers (${GB(s.ram.free)} free right now${low ? '. Close some apps first' : ''}).</p>
-      ${m.base ? `<p class="tas-small ta-credit">${esc(m.name)} · based on ${esc(m.base)}${m.licence ? ` (${esc(m.licence)})` : ''}</p>` : ''}
       <div class="ta-btns"><button class="btn sm primary" data-a="ai-get">Download ${esc(m.name)} (${GB(m.size)})</button><button class="btn sm" data-a="recheck">Check again</button></div>
     </div>`;
   }
@@ -1544,6 +1543,7 @@ TuffPlugins.register('tuff-agents', (t) => {
   function updateSend() {
     const b = $('.ta-send', root);
     b.textContent = S.run ? 'Stop' : 'Send';
+    b.setAttribute('aria-label', b.textContent); // a screen reader reads this, not the text
     b.classList.toggle('stop', !!S.run);
     b.title = S.run ? 'Stop the agent' : 'Send (Enter)';
     renderLock();

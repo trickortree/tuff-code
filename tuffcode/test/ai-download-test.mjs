@@ -242,6 +242,18 @@ try {
   r = await within(ai.fetchModel(m.id), 10000);
   check('After the disk has room again, the download carries on and finishes', !r.e && !r.timeout && matches() && /^bytes=\d+-$/.test(seen[seen.length - 1]), { r, seen });
 
+  // A download that fails at the end: the message never shows the model's file (it's named after the base
+  // model) or its path, and a file held by something else (an antivirus, after 5 tries) is said in plain words.
+  const realRename = fs.promises.rename;
+  for (const [code, label] of [['EXDEV', 'a rename error with both paths in it'], ['EPERM', 'a file something else is using']]) {
+    fresh();
+    fs.promises.rename = async (from, to) => { throw Object.assign(new Error(`${code}: operation failed, rename '${from}' -> '${to}'`), { code }); };
+    r = await within(ai.fetchModel(m.id), 15000);
+    fs.promises.rename = realRename;
+    const said = last().error || '';
+    check(`A failed download (${label}) shows no file name or path`, r.e && !r.timeout && said && !/qwen|\.gguf|\.part|[\\/]/i.test(said) && (code !== 'EPERM' || /something else is using its file/.test(said)), said);
+  }
+
   fresh();
   mode.slow = true;
   const going = ai.fetchModel(m.id);
@@ -361,19 +373,19 @@ try {
   check('Unloading in the middle of an answer still finishes the question, with a message (#13)', !fin.timeout && !fin.e && a.events.filter((x) => x.kind === 'done').length === 1 && /Pumice 1 stopped/.test(a.events.find((x) => x.kind === 'done')?.error || ''), { fin, done: a.events.filter((x) => x.kind === 'done') });
 
   // ---------------------------------------------------------------- Pumice 1: name, identity, levels, improver
-  check('The model is called Pumice 1, with its base model and licence for the credit line', m.name === 'Pumice 1' && m.base === 'Qwen3.5-2B' && m.licence === 'Apache 2.0' && /Qwen3\.5-2B/.test(m.sub), m);
+  check('The model is called Pumice 1, and what it shows never names the base model', m.name === 'Pumice 1' && /TuffCode's own AI/.test(m.sub) && !/qwen|apache|alibaba/i.test(m.sub) && !('base' in m) && !('licence' in m), m);
   check('... and keeps the id and file name 1.0.4 used, so a downloaded model is still found', m.id === 'qwen3.5-2b' && m.file === 'Qwen3.5-2B-Q4_K_M.gguf', m);
   const sys = ai.systemPrompt();
-  check('The system prompt says it is Pumice 1, based on Qwen3.5-2B, on this computer, and not another assistant', /^You are Pumice 1\b/.test(sys) && /based on Qwen3\.5-2B/.test(sys) && /run on the person's own computer/.test(sys) && /not ChatGPT, Claude, Gemini or Qwen's own chat app/.test(sys) && !/You are Tuff AI/.test(sys), sys.slice(0, 600));
+  check('The system prompt says it is Pumice 1, on this computer, and not another assistant, and never names the base model', /^You are Pumice 1\b/.test(sys) && !/qwen|alibaba|based on/i.test(sys) && /run on the person's own computer/.test(sys) && /not ChatGPT, Claude or Gemini/.test(sys) && !/You are Tuff AI/.test(sys), sys.slice(0, 600));
   // With the sentence to say in the system prompt, the 2B began almost every answer with it (58 of 60 in
   // Tuff Bench), so only the card for "who are you?" has it.
-  const intro = "I'm Pumice 1, TuffCode's own AI model. I'm based on the open Qwen3.5-2B model, and I run right here on your computer.";
+  const intro = "I'm Pumice 1, TuffCode's own AI model, and I run right here on your computer.";
   check('... without a sentence to say word for word, and told not to say who it is unless they ask', !/I'm Pumice|Answer like this/.test(sys) && /When they ask about anything else, don't say who you are/.test(sys), sys.slice(0, 900));
   const whoCard = ai.improve({ question: 'Who are you?' }).text;
   const sayCard = ai.improve({ question: 'What does say do?', file: 'main.tuf', code: 'say "Hello"\n' }).text;
-  check('The card for "Who are you?" has the sentence to answer with; the card for another question does not', whoCard.includes(intro) && !/Pumice/.test(sayCard) && !/Pumice/.test(ai.improve({ question: 'Make a program that counts from 1 to 10.' }).text), { whoCard, sayCard });
+  check('The card for "Who are you?" has the sentence to answer with; the card for another question does not', whoCard.includes(intro) && !/qwen/i.test(whoCard) && !/Pumice/.test(sayCard) && !/Pumice/.test(ai.improve({ question: 'Make a program that counts from 1 to 10.' }).text), { whoCard, sayCard });
   const now = await ai.status();
-  check('status() names Pumice 1 for the download card', now.models[0].name === 'Pumice 1' && now.models[0].base === 'Qwen3.5-2B', now.models[0]);
+  check('status() names Pumice 1 for the download card, and nothing else about the model', now.models[0].name === 'Pumice 1' && !('base' in now.models[0]) && !('licence' in now.models[0]) && !/qwen/i.test(now.models[0].sub), now.models[0]);
 
   const L = Object.fromEntries(ai.LEVELS.map((l) => [l.id, l]));
   check('Four thinking levels: Off, Low, Medium, High', ai.LEVELS.map((l) => l.name).join() === 'Off,Low,Medium,High', ai.LEVELS);
