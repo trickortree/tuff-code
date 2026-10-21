@@ -38,6 +38,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     chip: '<rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6 1.5V4M10 1.5V4M6 12v2.5M10 12v2.5M1.5 6H4M1.5 10H4M12 6h2.5M12 10h2.5"/>',
     offline: '<path d="M2.5 8a8 8 0 0 1 11 0M4.5 10a5 5 0 0 1 7 0M8 12.5h.01"/><path d="M2.5 2.5l11 11"/>',
     info: '<circle cx="8" cy="8" r="5.5"/><path d="M8 7.5v3.5M8 5h.01"/>',
+    bulb: '<path d="M6.2 12.5h3.6M6.7 14.5h2.6"/><path d="M8 1.5a4.5 4.5 0 0 0-2.6 8.2c.5.4.8.9.8 1.5v.3h3.6v-.3c0-.6.3-1.1.8-1.5A4.5 4.5 0 0 0 8 1.5z"/>',
     warn: '<path d="M8 2.5 14 13H2z"/><path d="M8 6.5v3M8 11.5h.01"/>',
   };
   const icon = (n, cls = 'ta-ic') => `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[n] || ''}</svg>`;
@@ -127,7 +128,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     S.aiProg = p;
     if (p.done) {
       if (p.error) t.toast(p.error, 'error', 7000);
-      else if (!p.stopped) t.toast('Tuff AI is ready. Ask it anything about Tuff.', 'ok', 5000);
+      else if (!p.stopped) t.toast(`${S.ai?.models[0]?.name || 'The model'} is downloaded, so Tuff AI is ready. Ask it anything about Tuff.`, 'ok', 5000);
       refreshAgents();
     } else if (S.agent === 'tuffai') renderStatus();
   });
@@ -213,6 +214,12 @@ TuffPlugins.register('tuff-agents', (t) => {
     }, true);
     root.addEventListener('mousedown', (e) => { if (!e.target.closest('.ta-menu, [data-a="menu"]')) $('.ta-menu', root).classList.add('hidden'); });
     $('.ta-msgs', root).addEventListener('click', onMsgClick);
+    // A reply is drawn again on every event, so remember which of its folds are open.
+    $('.ta-msgs', root).addEventListener('toggle', (e) => {
+      const d = e.target.closest?.('details[data-fold]');
+      const m = d && S.msgs[+d.closest('.ta-msg')?.dataset.i];
+      if (m) m.open = { ...(m.open || {}), [d.dataset.fold]: d.open };
+    }, true);
     renderAgents();
     renderMode();
     renderMsgs();
@@ -220,6 +227,7 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
 
   const current = () => S.agents?.find((a) => a.id === S.agent);
+  const isLocal = (id) => id === 'tuffai';
 
   let looking = Promise.resolve(); // settles once the latest look for agents has filled in S.agents
   async function refreshAgents() {
@@ -263,9 +271,15 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
 
   // The model the agent will use (null = its default) and the thinking levels on offer for it.
+  // Tuff AI has one model, Pumice 1, and always a level: the one picked, or its default.
   function picked(id = S.agent) {
     const list = S.models[id] || {};
     const p = S.pick[id] || {};
+    if (isLocal(id)) {
+      const model = (list.models || []).find((m) => m.id === p.model) || (list.models || [])[0] || null;
+      const efforts = model?.efforts || [];
+      return { list, model, efforts, effort: efforts.find((e) => e.id === p.effort) || efforts.find((e) => e.id === model?.defaultEffort) || null };
+    }
     const model = (list.models || []).find((m) => m.id === p.model) || null;
     let efforts = model ? model.efforts : list.efforts || [];
     if (!model && !efforts.length) { // default model: offer every level the agent knows
@@ -352,7 +366,7 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
 
   const MODEL_ICON = '<svg class="ta-dd-ic" viewBox="0 0 16 16"><path d="M8 1.5l1.7 4.8L14.5 8l-4.8 1.7L8 14.5l-1.7-4.8L1.5 8l4.8-1.7z"/></svg>';
-  const LEVEL_BARS = { minimal: 1, low: 1, medium: 2, high: 3, xhigh: 4, max: 5, ultra: 5 };
+  const LEVEL_BARS = { off: 0, minimal: 1, low: 1, medium: 2, high: 3, xhigh: 4, max: 5, ultra: 5 };
   const LEVEL_SUB = { minimal: 'Fastest', low: 'Quick answers', medium: 'Balanced', high: 'Thinks it through', xhigh: 'Thinks longer', max: 'Most thorough', ultra: 'Deepest and slowest' };
   const levelIcon = (id) => `<span class="ta-dd-lv" aria-hidden="true">${[1, 2, 3, 4, 5].map((n) => `<i class="${n <= (LEVEL_BARS[id] || 0) ? 'on' : ''}" style="height:${4 + n * 2}px"></i>`).join('')}</span>`;
 
@@ -368,6 +382,24 @@ TuffPlugins.register('tuff-agents', (t) => {
       return;
     }
     const wait = S.run ? 'Wait for the reply to finish (or press Stop) to change this.' : '';
+    if (isLocal(S.agent)) {
+      // Pumice 1 and its own levels: Off, Low, Medium, High, with no "Default" entry (a level is always on).
+      dd.model.set({
+        list: (list.models || []).map((m) => ({ id: m.id, name: m.name, sub: m.sub || '', icon: MODEL_ICON })),
+        val: model?.id || '',
+        text: model?.name || 'Pumice 1',
+        disabled: !!S.run || !!list.error,
+        tip: list.error ? `Couldn't get the model list: ${list.error}` : wait || `${model?.name || 'Pumice 1'}: ${model?.sub || ''}`,
+      });
+      dd.effort.set({
+        list: efforts.map((e) => ({ id: e.id, name: e.id === model?.defaultEffort ? `${e.name} (default)` : e.name, sub: e.sub || '', icon: levelIcon(e.id) })),
+        val: effort?.id || '',
+        text: effort?.name || 'Off',
+        disabled: !!S.run || !efforts.length,
+        tip: wait || `How hard ${model?.name || 'Pumice 1'} thinks before it answers. Higher is slower but more careful.`,
+      });
+      return;
+    }
     const used = S.used[S.agent];
     dd.model.set({
       list: [
@@ -662,7 +694,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     const p = S.aiProg && !S.aiProg.done ? S.aiProg : null;
     if (p) {
       const pct = p.total ? Math.floor((100 * p.got) / p.total) : 0;
-      return `<div class="ta-card ta-ai"><b class="ta-card-h">Downloading Tuff AI… ${pct}%</b>
+      return `<div class="ta-card ta-ai"><b class="ta-card-h">Downloading ${esc(m.name)}… ${pct}%</b>
         <div class="ta-prog"><i style="width:${pct}%"></i></div>
         <p>${GB(p.got)} of ${GB(p.total)}. You can keep coding. If it stops, it carries on from here next time.</p>
         <div class="ta-btns"><button class="btn sm" data-a="ai-cancel">Stop</button></div></div>`;
@@ -670,14 +702,15 @@ TuffPlugins.register('tuff-agents', (t) => {
     const low = s.ram.free < s.ram.need;
     return `<div class="ta-card ta-ai">
       <b class="ta-card-h">Tuff AI <span class="ta-tag">preview</span></b>
-      <p>Runs on this computer: no account, and no internet once it's downloaded. This preview uses ${esc(m.name)} before it's trained on Tuff, so expect mistakes. TuffCode checks every program it writes.</p>
+      <p>Runs on this computer: no account, and no internet once it's downloaded. Its model is ${esc(m.name)}, TuffCode's own. It isn't trained on Tuff yet, so expect mistakes. TuffCode checks every program it writes.</p>
       <div class="ta-chips">
         <span>${icon('cloud')}Download: ${GB(m.size)}</span>
         <span class="${low ? 'ta-warn' : ''}">${icon('chip')}Needs ${GB(s.ram.need)} free memory</span>
         <span>${icon('offline')}Works offline</span>
       </div>
       <p class="${low ? 'ta-warn' : 'tas-small'}">It needs about ${GB(s.ram.need)} of free memory while it answers (${GB(s.ram.free)} free right now${low ? '. Close some apps first' : ''}).</p>
-      <div class="ta-btns"><button class="btn sm primary" data-a="ai-get">Download (${GB(m.size)})</button><button class="btn sm" data-a="recheck">Check again</button></div>
+      ${m.base ? `<p class="tas-small ta-credit">${esc(m.name)} · based on ${esc(m.base)}${m.licence ? ` (${esc(m.licence)})` : ''}</p>` : ''}
+      <div class="ta-btns"><button class="btn sm primary" data-a="ai-get">Download ${esc(m.name)} (${GB(m.size)})</button><button class="btn sm" data-a="recheck">Check again</button></div>
     </div>`;
   }
 
@@ -698,7 +731,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     const m = $('.ta-menu', root);
     const a = current();
     const items = [['new', 'New chat'], ['setup', 'Agent tools: set up and check']];
-    if (a?.local && a.installed) items.push(['ai-remove', `Delete Tuff AI's model (${GB(S.ai?.models[0]?.size || 0)})`]);
+    if (a?.local && a.installed) items.push(['ai-remove', `Delete ${S.ai?.models[0]?.name || "Tuff AI's model"} (${GB(S.ai?.models[0]?.size || 0)})`]);
     else if (a?.installed) items.push(S.conn[a.id] ? ['disconnect', `Remove TuffCode tools from ${a.name}`] : ['connect', `Add TuffCode tools to ${a.name}${a.id === 'claude' ? ' everywhere' : ''}`]);
     items.push(['recheck', 'Look for agents again']);
     m.innerHTML = items.map(([id, label]) => `<button data-m="${id}">${esc(label)}</button>`).join('');
@@ -711,7 +744,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       if (id === 'connect') connect(true);
       if (id === 'disconnect') connect(false);
       if (id === 'recheck') refreshAgents();
-      if (id === 'ai-remove') t.ask({ title: "Delete Tuff AI's model? You can download it again later.", confirm: true, okLabel: 'Delete' }).then((ok) => ok && t.agents.ai.remove(S.ai?.models[0]?.id).then(refreshAgents));
+      if (id === 'ai-remove') t.ask({ title: `Delete ${S.ai?.models[0]?.name || 'the model'}, Tuff AI's model? You can download it again later.`, confirm: true, okLabel: 'Delete' }).then((ok) => ok && t.agents.ai.remove(S.ai?.models[0]?.id).then(refreshAgents));
     };
   }
 
@@ -911,14 +944,34 @@ TuffPlugins.register('tuff-agents', (t) => {
       return `<div class="ta-msg user${old}" data-i="${i}"><div class="ta-bubble">${esc(m.text).replace(/\n/g, '<br>')}</div>${m.ctx ? `<div class="ta-with">${esc(m.ctx)}</div>` : ''}</div>`;
     }
     const tools = m.tools.map((x) => `<div class="ta-tool ${x.ok === false ? 'bad' : x.ok ? 'ok' : 'run'}">${toolIcon(x.text)}<span>${esc(x.text)}</span><i></i></div>`).join('');
-    const status = m.status === 'running' ? `<div class="ta-typing"><i></i><i></i><i></i><span>${m.text ? 'Writing' : m.tools.length ? 'Working' : 'Thinking'}</span></div>`
+    const typing = (label, tag = 'div') => `<${tag} class="ta-typing"><i></i><i></i><i></i><span>${esc(label)}</span></${tag}>`;
+    // While it thinks, the thinking's own fold carries the "Thinking…" label instead.
+    const thinking = m.status === 'running' && !!m.thinkFrom;
+    const status = m.status === 'running' ? (thinking ? '' : typing(m.stage || (m.text ? 'Writing' : m.tools.length ? 'Working' : 'Thinking')))
       : m.status === 'stopped' ? '<div class="ta-small ta-stopped">Stopped.</div>'
         : m.status === 'error' ? `<div class="ta-err">${icon('warn')}<span>${esc(m.error)}</span></div>` : '';
     const notes = (m.notes || []).map((n) => `<div class="ta-small ta-note-l">${icon('info')}<span>${esc(n)}</span></div>`).join('');
     return `<div class="ta-msg agent${m.status === 'running' ? ' live' : ''}${m.summary ? ' summary' : ''}${old}" data-i="${i}">
       <div class="ta-head"><div class="ta-who">${m.summary ? '<span class="ta-who-s">Chat summary · </span>' : ''}<span class="ta-who-n">${esc(SHORT[m.agent])}</span>${m.model ? `<span class="ta-who-m"> · ${esc(m.model)}</span>` : ''}${m.mode === 'edit' ? '<span class="ta-who-e"> · Edit</span>' : m.mode === 'plan' ? '<span class="ta-who-p"> · Plan</span>' : ''}</div></div>
-      <div class="ta-body">${tools ? `<div class="ta-tools">${tools}</div>` : ''}
+      <div class="ta-body">${foldsHtml(m, thinking, typing)}${tools ? `<div class="ta-tools">${tools}</div>` : ''}
       <div class="ta-md">${md(m.text)}</div>${notes}${status}${followUp(m, i)}</div></div>`;
+  }
+
+  // Tuff AI's request as the improver rewrote it (with its own plan at Medium and High), and its thinking.
+  // Both start folded; the reply remembers which ones you opened.
+  function foldsHtml(m, thinking, typing) {
+    const fold = (key, cls, summary, body) => `<details class="ta-fold ${cls}" data-fold="${key}"${m.open?.[key] ? ' open' : ''}><summary>${summary}</summary><div class="ta-fold-b">${body}</div></details>`;
+    const out = [];
+    if (m.improved) {
+      const plan = String(m.plan || '').replace(/(```|\*\*Answer|Answer:)[\s\S]*$/, '').trim();
+      out.push(fold('improved', 'ta-improved', `${icon('spark')}<span>Made your request clearer</span>`,
+        `${prose(m.improved)}${plan ? `<div class="ta-fold-h">${esc(m.name || 'Pumice 1')} rewrote it as</div>${prose(plan)}` : ''}`));
+    }
+    if (m.thought) {
+      const secs = Math.max(1, Math.round((m.thinkMs || 0) / 1000));
+      out.push(fold('thought', 'ta-thought', thinking ? typing('Thinking…', 'span') : `${icon('bulb')}<span>Thought for ${secs} s</span>`, esc(m.thought.trim())));
+    }
+    return out.join('');
   }
 
   // Under the latest reply: Plan answers get "Go ahead", and an Ask answer that offers a change (code, or
@@ -1040,15 +1093,17 @@ TuffPlugins.register('tuff-agents', (t) => {
     return { text: map[n] || n.replace(/^mcp__\w+?__/, ''), changes: /^(Edit|MultiEdit|Write|NotebookEdit)$/.test(n) };
   }
 
-  // Tuff AI is a small model that reads slowly on a laptop CPU, so it gets a short prompt. ai.js adds the
-  // Tuff guide's basics and the sections that match the question.
-  function aiPrompt(text) {
+  // Tuff AI is a small model that reads slowly on a laptop CPU, so it gets a short prompt. The panel sends
+  // the question's parts, and ai.js turns them into a clearer task (the improver), with the Tuff guide's
+  // basics and the sections that match.
+  function aiParts(text) {
+    const parts = { question: text };
     const file = t.editor.file();
-    const fence = '```';
-    const parts = [];
-    if (file && S.useFile) parts.push(`Their open file, ${short(file)}:\n${fence}${/\.tuf$/i.test(file) ? 'tuff' : ''}\n${trim(t.editor.code(), 6000)}\n${fence}`);
+    if (file && S.useFile) Object.assign(parts, { file: short(file), code: String(t.editor.code() ?? '').slice(0, 60000) });
     const lines = t.editor.selectionLines();
-    if (S.useSel && lines) parts.push(`They selected lines ${lines[0]} to ${lines[1]}:\n${fence}\n${trim(t.editor.selection(), 3000)}\n${fence}`);
+    if (S.useSel && lines) parts.selection = { from: lines[0], to: lines[1], text: t.editor.selection() };
+    const err = file && S.useFile ? lastRunError(parts.code) : '';
+    if (err) parts.runError = err;
     const earlier = chatSoFar().slice(-6);
     const said = [];
     let used = 0;
@@ -1059,15 +1114,28 @@ TuffPlugins.register('tuff-agents', (t) => {
       said.unshift(l);
       used += l.length;
     }
-    if (said.length) parts.push(`Earlier in this chat (already answered):\n${said.join('\n')}`);
-    parts.push(`Their question:\n${text}`);
-    return parts.join('\n\n');
+    if (said.length) parts.history = said;
+    return parts;
+  }
+
+  // The Tuff error from the last run in the Run panel, if it's about the open file as it is now: the line
+  // the error quotes ("  3 | for n in range(1, 3)") must still be that line of the file.
+  function lastRunError(code) {
+    const errs = [...document.querySelectorAll('#run-output .err')];
+    let at = errs.length - 1;
+    while (at >= 0 && !/Tuff error on line \d+/.test(errs[at].textContent)) at--;
+    if (at < 0) return '';
+    // The error can come in more than one piece; leave out the Explain button's text.
+    const text = errs.slice(at).map((s) => [...s.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('')).join('').replace(/\r\n/g, '\n').trim();
+    const m = /Tuff error on line (\d+)[^\n]*\n\s*\1 \| ([^\n]*)/.exec(text);
+    const line = m ? String(code || '').split(/\r?\n/)[+m[1] - 1] : null;
+    return m && line != null && line.trim() === m[2].trim() ? text : '';
   }
 
   // bare: just the message (no open file, selection or chat history), for the tools test.
   // full: the whole chat since the last summary (for /compact), not just what's new to this agent.
   function buildPrompt(text, { mode = S.mode, bare = false, full = false } = {}) {
-    if (S.agent === 'tuffai' && !bare) return aiPrompt(text);
+    if (isLocal(S.agent)) return text; // its parts go separately (aiParts)
     const file = t.editor.file();
     const parts = [
       "You're helping someone inside TuffCode, the code editor for the Tuff programming language (.tuf files). They may be a beginner, so explain things simply and keep code short and readable. Write Tuff unless they ask for another language.",
@@ -1149,9 +1217,12 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (compacting) S.msgs.push({ role: 'note', text: `${a.name} is summing up the chat (/compact)…` });
     else S.msgs.push({ role: 'user', text: test ? `Test ${a.name}'s TuffCode tools` : text, ctx: ctx ? `with ${ctx}` : '', test });
     const prompt = buildPrompt(text, { mode, bare: test, full: compacting });
+    const parts = a.local ? aiParts(text) : null;
     const { model, effort } = picked();
+    // Pumice 1 with thinking off is just "Pumice 1".
+    const level = a.local && effort?.id === 'off' ? null : effort;
     // model: what the reply header shows ('Opus 5.5 · High'); name: just the model, for other agents.
-    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running', model: [model?.name, effort?.name].filter(Boolean).join(' · '), name: model?.name || '', picked: !!model, effort: effort?.name || '', test, compacting };
+    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running', model: [model?.name, level?.name].filter(Boolean).join(' · '), name: model?.name || '', picked: !!model, effort: level?.name || '', test, compacting };
     S.msgs.push(msg);
     const runId = `run-${Date.now()}`;
     S.run = { id: runId, msg, changed: false, test, mcp: new Set() };
@@ -1163,7 +1234,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     renderMsgs();
     updateSend();
     try {
-      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode, session: !test && !compacting && ['claude', 'antigravity'].includes(S.agent) ? S.sessions[S.agent] : null, model: model?.id || '', effort: effort?.id || '' });
+      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode, session: !test && !compacting && ['claude', 'antigravity'].includes(S.agent) ? S.sessions[S.agent] : null, model: model?.id || '', effort: effort?.id || '', ...(parts ? { ai: parts } : {}) });
     } catch (err) {
       onEvent({ runId, kind: 'done', ok: false, error: err.message });
     }
@@ -1198,7 +1269,18 @@ TuffPlugins.register('tuff-agents', (t) => {
       }
       case 'note': m.notes = [...(m.notes || []), ev.text]; break;
       case 'error': m.error = ev.text; break;
+      // Tuff AI: what it's doing now, its thinking, and the request as the improver rewrote it.
+      case 'stage': m.stage = ev.text; break;
+      case 'thinking':
+        if (!m.thinkFrom) m.thinkFrom = Date.now();
+        m.thought = (m.thought || '') + (m.thinkGap ? '\n\n' : '') + ev.text;
+        m.thinkGap = false;
+        break;
+      case 'thought': m.thinkMs = (m.thinkMs || 0) + (ev.ms || 0); m.thinkFrom = 0; m.thinkGap = true; break;
+      case 'improved': m.improved = ev.text; break;
+      case 'plan': m.plan = (m.plan || '') + ev.text; break;
       case 'done':
+        endThinking(m);
         m.status = ev.ok ? 'done' : 'error';
         if (!ev.ok) m.error = m.error || ev.error || 'Something went wrong.';
         if (ev.session && !S.run.test && !m.compacting) { S.sessions[m.agent] = ev.session; m.inSession = true; }
@@ -1236,11 +1318,18 @@ TuffPlugins.register('tuff-agents', (t) => {
     }
   }
 
+  // A reply that ends (or is stopped) while it's still thinking: the time so far counts.
+  function endThinking(m) {
+    if (m.thinkFrom) m.thinkMs = (m.thinkMs || 0) + Date.now() - m.thinkFrom;
+    m.thinkFrom = 0;
+  }
+
   function stop() {
     if (!S.run) return;
     t.agents.stop(S.run.id);
     S.run.msg.status = 'stopped';
     const m = S.run.msg;
+    endThinking(m);
     finish();
     rerender(m);
   }

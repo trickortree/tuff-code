@@ -129,6 +129,23 @@
 .ta-typing span { margin-left: 5px; font: 600 12px var(--font-ui); background: linear-gradient(90deg, var(--text-muted) 0%, var(--text-muted) 35%, var(--text) 50%, var(--text-muted) 65%, var(--text-muted) 100%); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: ta-shimmer 1.8s linear infinite; }
 @keyframes ta-shimmer { from { background-position: 125% 0; } to { background-position: -125% 0; } }
 @keyframes ta-hop { 0%, 60%, 100% { transform: none; opacity: .5; } 30% { transform: translateY(-3px); opacity: 1; } }
+/* Tuff AI's folds: the request the improver made clearer, and the thinking ("Thought for 4 s"). */
+.ta-fold { min-width: 0; font-size: 12px; color: var(--text-muted); }
+.ta-fold > summary { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 6px 2px 2px; margin-left: -2px; border-radius: 6px; cursor: pointer; list-style: none; font: 600 12px var(--font-ui); color: var(--text-dim); transition: background .12s, color .12s; }
+.ta-fold > summary::-webkit-details-marker { display: none; }
+.ta-fold > summary::after { content: ''; flex: none; width: 5px; height: 5px; margin-left: 2px; border: solid currentColor; border-width: 0 1.4px 1.4px 0; transform: rotate(-45deg); opacity: .7; transition: transform .15s; }
+.ta-fold[open] > summary::after { transform: translateY(-2px) rotate(45deg); }
+.ta-fold > summary:hover { background: var(--bg-hover); color: var(--text); }
+.ta-fold > summary:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.ta-fold > summary .ta-ic { width: 13px; height: 13px; color: var(--text-muted); }
+.ta-fold > summary .ta-typing { padding: 0; }
+.ta-fold-b { margin: 4px 0 2px; padding: 2px 0 2px 10px; border-left: 2px solid var(--ta-line); line-height: 1.5; overflow-wrap: anywhere; }
+.ta-thought .ta-fold-b { max-height: 220px; overflow-y: auto; white-space: pre-wrap; scrollbar-width: thin; }
+.ta-fold-b p, .ta-fold-b ul { margin: 0 0 4px; }
+.ta-fold-b ul { padding-left: 16px; }
+.ta-fold-b code { padding: 0 4px; border-radius: 4px; background: var(--bg-active); font: 11.5px var(--font-code); color: var(--text-dim); }
+.ta-fold-h { margin: 6px 0 2px; font: 600 11px var(--font-ui); color: var(--text-dim); }
+.ta-credit { color: var(--text-muted); }
 .ta-small { font-size: 12px; color: var(--text-muted); }
 .ta-note-l { display: flex; align-items: flex-start; gap: 6px; line-height: 1.45; }
 .ta-note-l .ta-ic { width: 13px; height: 13px; margin-top: 1px; color: var(--text-muted); }
