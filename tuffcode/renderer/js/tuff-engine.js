@@ -445,7 +445,9 @@
       label: (p) => `Collect it (by ${p.C}, +${p.P}, ${p.sound})`,
       body(p) {
         return [[1, `if ${p.V}:touches(${p.C}):`], [2, `score += ${num(p.P)}`], [2, `${p.L}:set "Score: " + score`],
-          ...(p.sound && p.sound !== 'none' ? [[2, `${p.G}:sound ${JSON.stringify(p.sound)}`]] : []), [2, `${p.V}:move_to(${p.G}:random_spot())`]];
+          ...(p.sound && p.sound !== 'none' ? [[2, `${p.G}:sound ${JSON.stringify(p.sound)}`]] : []), [2, `${p.V}:move_to(${p.G}:random_spot())`],
+          // A new spot on top of the player would be collected again straight away.
+          [2, `while ${p.V}:touches(${p.C}):`], [3, `${p.V}:move_to(${p.G}:random_spot())`]];
       },
       read(L) {
         const p = { sound: 'none' };
@@ -1312,6 +1314,8 @@ func coin_collect(dt):
         score_label:set "Score: " + score
         game:sound "coin"
         coin:move_to(game:random_spot())
+        while coin:touches(player):
+            coin:move_to(game:random_spot())
 
 # Tuff Engine: enemy chases player
 func enemy_chase(dt):
@@ -1361,6 +1365,8 @@ func coin_collect(dt):
         score_label:set "Score: " + score
         game:sound "coin"
         coin:move_to(game:random_spot())
+        while coin:touches(player):
+            coin:move_to(game:random_spot())
 
 # Tuff Engine: tree falls over when clicked
 func tree_chop(thing):

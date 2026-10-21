@@ -26,6 +26,8 @@ func coin_collect(dt):
         score_label:set "Score: " + score
         game:sound "coin"
         coin:move_to(game:random_spot())
+        while coin:touches(player):
+            coin:move_to(game:random_spot())
 
 # Tuff Engine: tree falls over when clicked
 func tree_chop(thing):
