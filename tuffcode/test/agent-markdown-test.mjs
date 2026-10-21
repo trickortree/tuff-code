@@ -50,7 +50,13 @@ check('<path with spaces> in a link', h.includes('data-file="C:\\My Docs\\x.tuf"
 h = md('> a quote\n> second line\n\n---\n\n~~old~~ new');
 check('quotes, a --- line and ~~strikethrough~~', h.includes('<blockquote>a quote<br>second line</blockquote>') && h.includes('<hr>') && h.includes('<s>old</s>'), h);
 h = md('- top\n  - under it\n  more about it\n- next');
-check('an indented item sits under the one above, and an indented line joins its item', h.includes('<li class="ta-sub">under it<br>more about it</li>') && (h.match(/<ul>/g) || []).length === 1, h);
+check('an indented item is a list inside the one above, and an indented line joins its item', h === '<ul><li>top<ul><li>under it<br>more about it</li></ul></li><li>next</li></ul>', h);
+h = md('1. Step one\n   - detail a\n   - detail b\n2. Step two\n   1. sub one\n   2. sub two\n3. Step three');
+check('bullets under numbered steps don\'t use up numbers: 3 steps in one <ol>, the sub-steps numbered in their own', h === '<ol><li>Step one<ul><li>detail a</li><li>detail b</li></ul></li><li>Step two<ol><li>sub one</li><li>sub two</li></ol></li><li>Step three</li></ol>', h);
+h = md('- a\n  - b\n    - c\n  - d\n- e');
+check('three levels deep, and back out again', h === '<ul><li>a<ul><li>b<ul><li>c</li></ul></li><li>d</li></ul></li><li>e</li></ul>', h);
+h = md('1. a\n   - x\n   1. y\n2. b');
+check('bullets then numbers inside one item: two lists side by side', h === '<ol><li>a<ul><li>x</li></ul><ol><li>y</li></ol></li><li>b</li></ol>', h);
 h = md('##### Small heading\nmy_file_name and snake_case stay, but _this_ is italic. \\*not italic\\*');
 check('#####, snake_case kept, _italic_, \\*escapes\\*', h.includes('<h4>Small heading</h4>') && h.includes('my_file_name') && h.includes('snake_case') && h.includes('<i>this</i>') && h.includes('*not italic*'), h);
 h = md('<script>alert(1)</script> and [<b>x</b>](https://a.b)');

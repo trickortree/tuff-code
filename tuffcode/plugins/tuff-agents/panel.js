@@ -1103,17 +1103,20 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
 
   // Lines of text between code blocks: headings, lists (numbered ones keep their numbers, indented items
-  // sit under the one above), tables, > quotes, --- lines and paragraphs.
+  // are a list inside the item above), tables, > quotes, --- lines and paragraphs.
   function prose(text) {
     const out = [];
-    let list = null;
+    // The list being read: lists[0] is the outer one, the last is the one the next item may join. An
+    // indented item starts a list inside the item above it, so the outer numbers still count 1, 2, 3.
+    let lists = [];
     let para = [];
     let quote = [];
     const flushPara = () => { if (para.length) out.push(`<p>${para.map(inline).join('<br>')}</p>`); para = []; };
     const flushQuote = () => { if (quote.length) out.push(`<blockquote>${quote.map(inline).join('<br>')}</blockquote>`); quote = []; };
+    const listHtml = (l) => `<${l.tag}${l.start > 1 ? ` start="${l.start}"` : ''}>${l.items.map((x) => `<li>${x.lines.map(inline).join('<br>')}${x.kids.map(listHtml).join('')}</li>`).join('')}</${l.tag}>`;
     const flushList = () => {
-      if (list) out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ''}>${list.items.map((x) => `<li${x.sub ? ' class="ta-sub"' : ''}>${x.lines.map(inline).join('<br>')}</li>`).join('')}</${list.tag}>`);
-      list = null;
+      if (lists.length) out.push(listHtml(lists[0]));
+      lists = [];
     };
     const flush = () => { flushPara(); flushQuote(); flushList(); };
     const cells = (row) => row.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim());
@@ -1138,14 +1141,32 @@ TuffPlugins.register('tuff-agents', (t) => {
       flushQuote();
       if ((m = line.match(/^(\s*)(?:[-*+•]|(\d+)[.)])\s+(.*)$/))) {
         flushPara();
-        const sub = m[1].length >= 2 && list;
+        const indent = m[1].length;
         const tag = m[2] ? 'ol' : 'ul';
-        if (!sub && (!list || list.tag !== tag)) { flushList(); list = { tag, start: m[2] ? +m[2] : 1, items: [] }; }
-        list.items.push({ sub: !!sub, lines: [m[3]] });
+        const fresh = () => ({ tag, start: m[2] ? +m[2] : 1, indent, items: [] });
+        // Out of the inner lists this item is left of ("2. Step two" after its indented bullets).
+        while (lists.length > 1 && indent < lists[lists.length - 1].indent - 1) lists.pop();
+        let l = lists[lists.length - 1];
+        if (l && indent >= l.indent + 2) {
+          // Indented under the item above: a list inside that item, numbered or not as its own items are.
+          const inner = fresh();
+          l.items[l.items.length - 1].kids.push(inner);
+          lists.push((l = inner));
+        } else if (l && l.tag !== tag) {
+          if (lists.length === 1) { flushList(); l = null; } else {
+            // Bullets after numbers (or the other way) inside an item: a new list next to the first.
+            const inner = fresh();
+            const above = lists[lists.length - 2];
+            above.items[above.items.length - 1].kids.push(inner);
+            lists[lists.length - 1] = l = inner;
+          }
+        }
+        if (!l) lists = [(l = fresh())];
+        l.items.push({ lines: [m[3]], kids: [] });
         continue;
       }
-      // An indented line under a list item belongs to that item.
-      if (list && /^\s{2,}\S/.test(line)) { list.items[list.items.length - 1].lines.push(line.trim()); continue; }
+      // An indented line under a list item belongs to that item (the innermost one).
+      if (lists.length && /^\s{2,}\S/.test(line)) { const l = lists[lists.length - 1]; l.items[l.items.length - 1].lines.push(line.trim()); continue; }
       flushList();
       para.push(line);
     }
