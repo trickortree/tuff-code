@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, net, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -17,6 +17,11 @@ const TUFF_INTERPRETER = app.isPackaged
   ? path.join(process.resourcesPath, 'runtime-src', 'tuff.py')
   : path.join(__dirname, '..', 'tuff.py');
 const SKIP_DIRS = new Set(['node_modules', '.git', '__pycache__', '.venv', 'venv']);
+
+// Tuff Engine's preview page: tuffview://app/host/ (renderer/engine-host), the game engine at tuffview://app/engine/
+// (tuff_view_web, with three.js) and the open project's pictures, sounds and models at tuffview://app/project/.
+// A real scheme, not file://: Chromium loads ES modules and WebGL textures from it.
+protocol.registerSchemesAsPrivileged([{ scheme: 'tuffview', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }]);
 
 let win;
 let runProc = null;
@@ -381,6 +386,73 @@ async function checkSource(source) {
 }
 ipcMain.handle('tuff:check', (_e, source) => checkSource(source));
 
+// Tuff Engine's preview: tuff.py --scene runs a tgame program's setup with no window (the editor's text, which may
+// not be saved, with the game file's folder for its pictures) and gives back what it made as JSON. A newer request
+// stops the one still running, which then resolves to { superseded: true }.
+let sceneProc = null;
+let sceneSeq = 0;
+ipcMain.handle('engine:scene', async (_e, file, source) => {
+  const stop = () => { if (sceneProc) { sceneProc.superseded = true; sceneProc.kill(); } };
+  stop();
+  const n = ++sceneSeq;
+  const t0 = Date.now();
+  const dir = path.join(app.getPath('temp'), 'tuffcode-scene');
+  await fsp.mkdir(dir, { recursive: true });
+  const src = path.join(dir, `scene-${process.pid}-${n}.tuf`);
+  const out = path.join(dir, `scene-${process.pid}-${n}.json`);
+  await fsp.writeFile(src, String(source), 'utf8');
+  if (n !== sceneSeq) { // a newer request came while this one was writing its file
+    fsp.rm(src, { force: true }).catch(() => {});
+    return { superseded: true, ms: Date.now() - t0 };
+  }
+  stop();
+  const { cmd, args } = tuffCommand(['--scene', String(file), src, out]);
+  const result = await new Promise((resolve) => {
+    const proc = spawn(cmd, args, { cwd: path.dirname(String(file)), windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+    sceneProc = proc;
+    let err = '';
+    proc.stdout.resume();
+    proc.stderr.on('data', (d) => { if (err.length < 4000) err += d; });
+    proc.stdin.on('error', () => {});
+    proc.stdin.end();
+    const timer = setTimeout(() => { proc.timedOut = true; proc.kill(); }, 5000);
+    proc.on('error', (e) => { clearTimeout(timer); if (sceneProc === proc) sceneProc = null; resolve({ stopped: 'crashed', message: e.message }); });
+    proc.on('close', async () => {
+      clearTimeout(timer);
+      if (sceneProc === proc) sceneProc = null;
+      if (proc.superseded) return resolve({ superseded: true });
+      if (proc.timedOut) return resolve({ stopped: 'timeout' });
+      try { resolve(JSON.parse(await fsp.readFile(out, 'utf8'))); }
+      catch { resolve({ stopped: 'crashed', message: err.trim().split(/\r?\n/).slice(-3).join('\n') }); }
+    });
+  });
+  fsp.rm(src, { force: true }).catch(() => {});
+  fsp.rm(out, { force: true }).catch(() => {});
+  return { ...result, ms: Date.now() - t0 };
+});
+
+// tuffview:// (registered at the top): the preview page, the engine, and pictures, sounds and models in the open
+// project. Nothing outside those three folders, and from the project only those kinds of file.
+const VIEW_WEB = path.join(path.dirname(TUFF_INTERPRETER), 'tuff_view_web'); // checkout: <repo>/tuff_view_web; packaged: resources/runtime-src/tuff_view_web
+const ENGINE_HOST = path.join(__dirname, 'renderer', 'engine-host'); // inside app.asar when packaged (fs reads it)
+const VIEW_MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml', '.glb': 'model/gltf-binary', '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4' };
+const PROJECT_FILES = /\.(png|jpe?g|gif|webp|bmp|svg|glb|wav|mp3|ogg|m4a)$/i;
+const isInside = (full, base) => full.startsWith(base.endsWith(path.sep) ? base : base + path.sep);
+async function serveView(req) {
+  let u;
+  try { u = new URL(req.url); } catch { return new Response('Not found', { status: 404 }); }
+  let parts;
+  try { parts = decodeURIComponent(u.pathname).replace(/^\/+/, '').split('/'); } catch { return new Response('Not found', { status: 404 }); }
+  const [area, ...rest] = parts;
+  const base = u.host === 'app' ? { engine: VIEW_WEB, host: ENGINE_HOST, project: watchedDir }[area] : null;
+  const full = base ? path.resolve(base, ...rest) : null;
+  if (!full || !isInside(full, path.resolve(base)) || (area === 'project' && !PROJECT_FILES.test(full))) return new Response('Not found', { status: 404 });
+  try { return new Response(await fsp.readFile(full), { headers: { 'content-type': VIEW_MIME[path.extname(full).toLowerCase()] || 'application/octet-stream', 'cache-control': 'no-store' } }); }
+  catch { return new Response('Not found', { status: 404 }); }
+}
+
 // plugins and Tuff Agents
 plugins.setup({ load: loadSettings, save: saveSettings });
 agents.setup({ tuffCommand: () => { const { cmd, args } = tuffCommand([]); return [cmd, ...args]; } });
@@ -454,6 +526,7 @@ function macMenu() {
 
 app.whenReady().then(() => {
   macMenu();
+  protocol.handle('tuffview', serveView);
   createWindow();
   updater.start((s) => send('update:status', s), loadSettings);
 });
@@ -462,5 +535,6 @@ app.on('will-quit', () => ai.quit());
 
 app.on('window-all-closed', () => {
   if (runProc) runProc.kill();
+  if (sceneProc) sceneProc.kill();
   app.quit();
 });
