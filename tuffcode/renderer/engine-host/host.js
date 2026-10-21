@@ -62,6 +62,11 @@
 // Controls. 2D: press a thing to pick it, drag to move it (live), click empty space to pick nothing. 3D: press a
 // thing to pick it and drag it over the ground at its height; drag empty space (or a thing that can't move, or
 // right-drag anywhere) to orbit; Shift-drag or middle-drag to pan; the wheel zooms; double-click a thing to frame it.
+// The HUD over a 3D world picks and drags like 2D, before the world. Size the iframe to the game's W:H (a 2D
+// game is letterboxed in it, filled with its background). The dump comes from window.tuff.engine.scene(file,
+// source) (preload.js); its things are { i, kind, layer, ids, x, y, z, dims, k, heading, hidden, made, var, drag },
+// where made[0] is the top-level line that made it (made.length > 1: inside a loop, an if or a function) and `var` is only the
+// last variable that held it, so judge editability by `made`, not by `var`. tests: test/e2e/suites/engine-host.mjs.
 // ==================================================================
 
 (() => {
