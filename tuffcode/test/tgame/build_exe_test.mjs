@@ -1,11 +1,12 @@
 // Build exe for a tgame program, the way the IDE does it (tuffcode/build.js, with Electron's app and nativeImage
 // stood in for), then run the built app: it has no console (--windowed), so it plays itself with tgame's autopilot
 // and the test reads the screenshot and the JSON it writes.
-//   node tuffcode/test/tgame/build_exe_test.mjs [--keep] [--only game,box,plain]
+//   node tuffcode/test/tgame/build_exe_test.mjs [--keep] [--only game,box,outside,plain]
 // Takes a few minutes (PyInstaller --onefile, three times). Exits 1 if a check failed.
 //   game     features_2d.tuf builds, runs from inside the app and draws
 //   box      on Windows: a game whose picture won't load, opened like a double-click in Explorer (no console, no
 //            pipes), shows the window's error in the app's error box (error_box.py reads it and clicks OK)
+//   outside  an mtgui app with a "../" picture stops at "Packing your program" and says why
 //   plain    a program without tgame builds as a small console app
 import fs from 'node:fs';
 import os from 'node:os';
@@ -137,6 +138,25 @@ if (only('box') && process.platform === 'win32') {
     try { state = JSON.parse(fs.readFileSync(path.join(out, 'after.json'), 'utf8')); } catch {}
     check((state.texts || []).includes('Still running'), 'it kept running after the box (its text says "Still running")', state.texts);
   }
+}
+
+// mtgui loads a "../" picture from the folder above, but a built app only holds its own folder, so it wouldn't find
+// it. Build exe says so at "Packing your program" instead of making an app that stops when it opens.
+if (only('outside')) {
+  const parent = path.join(scratch, 'Pictures Above');
+  const project = path.join(parent, 'app');
+  fs.mkdirSync(project, { recursive: true });
+  fs.copyFileSync(path.join(HERE, 'games', 'star.png'), path.join(parent, 'star.png'));
+  fs.copyFileSync(path.join(HERE, 'games', 'star.png'), path.join(project, 'inside.png'));
+  fs.writeFileSync(path.join(project, 'pics.tuf'), 'mention mtgui\n\napp = mtgui.window("Pictures")\napp:image("inside.png")\napp:image("../star.png")\n');
+  console.log('== Build exe: an mtgui app with a "../" picture');
+  const up = await buildApp(path.join(project, 'pics.tuf'), 'Outside Test');
+  const pack = up.steps.filter((s) => s.id === 'pack').pop() || {};
+  if (up.message) console.log(`  the build says: ${up.message.replace(/\n/g, ' / ')}`);
+  check(!up.ok && pack.state === 'error', 'the build stops at "Packing your program"', { ok: up.ok, pack, message: up.message });
+  check(/\.\.\/star\.png/.test(up.message || '') && /outside the folder your \.tuf file is in/.test(up.message || '')
+    && /next to your \.tuf file, or in a folder inside it/.test(up.message || ''), 'and says which picture, and where it has to be', up.message);
+  check(!up.steps.some((s) => s.id === 'build'), 'before PyInstaller ever runs', up.steps.map((s) => `${s.id}:${s.state}`));
 }
 
 // A program without a game window doesn't carry the window engine: same size as before, and a console.
