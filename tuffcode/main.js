@@ -184,8 +184,47 @@ ipcMain.handle('settings:set', (_e, patch) => saveSettings(patch));
 ipcMain.handle('project:default', () => ensureDefaultProject());
 ipcMain.handle('fs:readDir', (_e, dir) => readDir(dir));
 ipcMain.handle('fs:listAll', (_e, root) => listAllFiles(root));
-ipcMain.handle('fs:readFile', (_e, p) => fsp.readFile(p, 'utf8'));
-ipcMain.handle('fs:writeFile', (_e, p, content) => fsp.writeFile(p, content, 'utf8'));
+// Text files open with the right text whatever saved them: UTF-8 (with or without a BOM), UTF-16 with its
+// BOM (Notepad's "Unicode", what Windows PowerShell's > and Out-File write), or Windows-1252 (Notepad's
+// "ANSI", PowerShell 5's Set-Content). They save as plain UTF-8, which the Tuff runtime reads, but only
+// when the text changed. Text that isn't UTF-8 has each byte that isn't part of a UTF-8 character read as
+// Windows-1252: every byte becomes a character, so nothing turns into "�" and is lost on the next save,
+// and UTF-8 that's in there too (a line PowerShell added in UTF-8) stays right.
+const CP1252 = '€\u0081‚ƒ„…†‡ˆ‰Š‹Œ\u008DŽ\u008F\u0090‘’“”•–—˜™š›œ\u009DžŸ'; // bytes 0x80-0x9F; 0xA0-0xFF are Latin-1
+const CP1252_UTF8 = Array.from({ length: 128 }, (_, i) => Buffer.from(i < 32 ? CP1252[i] : String.fromCharCode(0x80 + i), 'utf8'));
+const isCont = (x) => x >= 0x80 && x <= 0xbf; // a UTF-8 continuation byte (undefined, past the end, isn't)
+// How many bytes the UTF-8 character at b[i] takes, or 0 when the bytes there aren't one.
+function utf8Len(b, i) {
+  const c = b[i];
+  if (c < 0x80) return 1;
+  if (c < 0xc2 || c > 0xf4) return 0;
+  if (c <= 0xdf) return isCont(b[i + 1]) ? 2 : 0;
+  const c1 = b[i + 1];
+  if (c <= 0xef) return c1 >= (c === 0xe0 ? 0xa0 : 0x80) && c1 <= (c === 0xed ? 0x9f : 0xbf) && isCont(b[i + 2]) ? 3 : 0;
+  return c1 >= (c === 0xf0 ? 0x90 : 0x80) && c1 <= (c === 0xf4 ? 0x8f : 0xbf) && isCont(b[i + 2]) && isCont(b[i + 3]) ? 4 : 0;
+}
+function decodeText(buf) {
+  if (buf[0] === 0xff && buf[1] === 0xfe) return buf.toString('utf16le', 2);
+  if (buf[0] === 0xfe && buf[1] === 0xff) return Buffer.from(buf.subarray(2, buf.length - (buf.length % 2))).swap16().toString('utf16le');
+  const start = buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf ? 3 : 0;
+  try { return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buf.subarray(start)); } catch {}
+  const out = Buffer.allocUnsafe((buf.length - start) * 3);
+  let o = 0;
+  for (let i = start; i < buf.length;) {
+    const n = utf8Len(buf, i);
+    if (n) { for (const end = i + n; i < end;) out[o++] = buf[i++]; continue; }
+    const ch = CP1252_UTF8[buf[i++] - 0x80];
+    for (let k = 0; k < ch.length; k++) out[o++] = ch[k];
+  }
+  return out.toString('utf8', 0, o);
+}
+ipcMain.handle('fs:readFile', async (_e, p) => decodeText(await fsp.readFile(p)));
+ipcMain.handle('fs:writeFile', async (_e, p, content) => {
+  const text = String(content);
+  // Unchanged text (a letter typed and deleted again) leaves the file as it was, in whatever encoding it has.
+  try { if (decodeText(await fsp.readFile(p)) === text) return; } catch {}
+  await fsp.writeFile(p, text, 'utf8');
+});
 ipcMain.handle('fs:exists', (_e, p) => fs.existsSync(p));
 // Last-moment save while the window closes (Cmd+Q, the Mac's red button, logging out): it has to be
 // synchronous, because the page is gone right after.
