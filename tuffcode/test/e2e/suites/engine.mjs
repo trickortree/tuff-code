@@ -75,6 +75,8 @@ export default async (t, ctx) => {
     await t.sleep(80);
   };
   const CTRL = 2;
+  // The IDE's own shortcuts (Ctrl+S, Ctrl+Shift+D/G) are Cmd on a Mac; Tuff Engine's own take Ctrl or Cmd.
+  const IDE = process.platform === 'darwin' ? 4 : CTRL;
   const SHIFT = 8;
   const drag = async (x0, y0, x1, y1, steps = 10) => {
     await t.move(x0, y0);
@@ -98,7 +100,7 @@ export default async (t, ctx) => {
   const code = () => ev('window.__code()');
   check(await ev(`(() => { const b = document.querySelector('#toolstrip .ts-btn[data-tool="engine"]'); return !!(b && b.querySelector('svg path') && /Ctrl\\+Shift\\+G/.test(b.title)); })()`),
     'the left toolstrip has a gamepad button for Tuff Engine (an inline SVG, so it shows on a Mac too)', null);
-  await t.key('G', CTRL | SHIFT);
+  await t.key('G', IDE | SHIFT);
   await waitFor(`!document.querySelector('#engine').classList.contains('hidden')`, 5000);
   const tabs = await ev(`[...document.querySelectorAll('#tabs .tab')].map((x) => ({ text: x.textContent.trim(), cls: x.className }))`);
   check(await visible() && await ev(`document.querySelector('#monaco').classList.contains('hidden')`) && /engine-tab/.test(tabs[0]?.cls) && /active/.test(tabs[0]?.cls) && tabs[0].text === 'Tuff Engine' && !tabs.slice(1).some((x) => /active/.test(x.cls)),
@@ -223,7 +225,13 @@ export default async (t, ctx) => {
   await t.sleep(150);
   const speedInput = await ev(`(() => { const b = [...document.querySelectorAll('#en-inspector .en-beh')].find((x) => x.dataset.beh === 'chase'); const i = b && b.querySelector('input[type="number"]'); if (!i) return null; i.id = 'en-test-speed'; return i.value; })()`);
   check(speedInput === '120', 'the enemy shows its behaviours: Chases player (speed 120)', await ev(`[...document.querySelectorAll('#en-inspector .en-beh-h')].map((x) => x.textContent)`));
-  await t.click(...(await rect('#en-test-speed')).slice(0, 2).map((v, j) => v + (j ? 10 : 20)));
+  // The Inspector can redraw just after (a scene refresh landing), which makes a new field: find it again then.
+  let speedRect = null;
+  for (let tries = 0; tries < 20 && !speedRect; tries++) {
+    speedRect = await ev(`(() => { const b = [...document.querySelectorAll('#en-inspector .en-beh')].find((x) => x.dataset.beh === 'chase'); const i = b && b.querySelector('input[type="number"]'); if (!i) return null; i.id = 'en-test-speed'; i.scrollIntoView({ block: 'center' }); const r = i.getBoundingClientRect(); return r.width ? [r.left, r.top] : null; })()`);
+    if (!speedRect) await t.sleep(100);
+  }
+  await t.click(speedRect[0] + 20, speedRect[1] + 10);
   await key('a', 'KeyA', 65, CTRL);
   await t.type('200', 30);
   await waitFor(`window.__code().includes('enemy:forward(200 * dt)')`, 4000);
@@ -388,7 +396,7 @@ export default async (t, ctx) => {
   await clickSel('#en-start [data-a="2d"]');
   await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(main)})).getValue().replace(/\\r\\n/g, '\\n').includes('tgame.window'))()`, 4000);
   await settle();
-  await key('s', 'KeyS', 83, CTRL); // Ctrl+S isn't the Engine's: it saves, as everywhere
+  await key('s', 'KeyS', 83, IDE); // Ctrl+S isn't the Engine's: it saves, as everywhere
   await waitFor(`(async () => (await window.tuff.fs.readFile(${JSON.stringify(main)})).includes('tgame.window'))()`, 5000);
   check(fs.readFileSync(main, 'utf8').includes('tgame.window'), 'Ctrl+S in Tuff Engine saves, like everywhere else', fs.readFileSync(main, 'utf8'));
   const runsBefore = ctx.readLog('claude').filter((l) => l.prompt).length;
@@ -804,10 +812,10 @@ export default async (t, ctx) => {
   await ev(`window.TuffEngine.test.select('v:coin')`);
   await ev(`document.querySelector('#en-stage').focus()`);
   const beforeKeys = await code();
-  await t.key('D', CTRL | SHIFT);
+  await t.key('D', IDE | SHIFT);
   await waitFor(`!document.querySelector('#studio').classList.contains('hidden')`, 4000);
   check(!(await visible()) && await code() === beforeKeys, 'Ctrl+Shift+D from Tuff Engine opens Design Studio (and duplicates nothing)', firstDiff(await code(), beforeKeys));
-  await t.key('G', CTRL | SHIFT);
+  await t.key('G', IDE | SHIFT);
   await waitFor(`!document.querySelector('#engine').classList.contains('hidden')`, 4000);
   check(await visible(), 'and Ctrl+Shift+G comes back', null);
   await clickSel('#tabs .tab:not(.engine-tab):not(.studio-tab)');

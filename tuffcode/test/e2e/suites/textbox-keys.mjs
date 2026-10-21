@@ -64,7 +64,7 @@ export default async (t, ctx) => {
   // The app's own shortcuts still work from the box: Ctrl+S saves, Alt+4 shows and hides the Run window
   await ev(`(() => { const m = monaco.editor.getEditors()[0].getModel(); m.pushEditOperations([], [{ range: m.getFullModelRange(), text: ${JSON.stringify(CODE + 'say "four"\n')} }], () => null); return 1; })()`);
   await intoBox();
-  await t.key('s', CTRL);
+  await t.key('s', CMD); // Cmd+S on a Mac: the IDE leaves Ctrl+letters there to the text box
   const saved = await t.waitFor(`[...document.querySelectorAll('#toasts .toast')].some(x => /All files saved/.test(x.textContent))`, 1200, 50);
   check('Ctrl+S in the message box still saves (straight away, not by the autosave)', saved && disk().includes('say "four"') && (await inBox()), { saved, disk: disk() });
   const runShown = () => ev(`!document.querySelector('#bottom-panel').classList.contains('hidden')`);
