@@ -16,11 +16,11 @@ const short = (p) => String(p || '').split(/[\\/]/).pop();
 const icon = () => '';
 const lit = new Map();
 const t = { project: { root: () => 'C:\\Users\\jacks\\OneDrive\\Documents\\TuffProjects\\HelloTuff' }, editor: { replaceAll: () => {} } };
-const api = new Function('esc', 'short', 'icon', 'lit', 't', `${body}\nreturn { md, inline, linkTarget };`)(esc, short, icon, lit, t);
+const api = new Function('esc', 'short', 'icon', 'lit', 't', `${body}\nreturn { md, inline, linkTarget, fileQuestion: typeof fileQuestion === 'function' ? fileQuestion : null };`)(esc, short, icon, lit, t);
 
 let fails = 0;
 const check = (name, ok, got) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok ? '' : '\n      got: ' + got}`); if (!ok) fails++; };
-const { md, linkTarget } = api;
+const { md, linkTarget, fileQuestion } = api;
 
 const user = `Here's who answered each of your earlier messages:
 
@@ -73,6 +73,23 @@ h = md('Write `"a\\\\b"` or `C:\\\\Users` or `\\d+\\.\\d+`. And \\* and \\`not c
 check('backslashes inside `code` are shown as written; outside, \\* and \\` are the characters', h.includes('<code>&quot;a\\\\b&quot;</code>') && h.includes('<code>C:\\\\Users</code>') && h.includes('<code>\\d+\\.\\d+</code>') && h.includes('And * and `not code`.') && noMarks(h), h);
 h = md('[x](https://a.com/my\\_page) and https://a.com/your\\_page and [f](C:\\Users\\me\\_drafts\\a.tuf)');
 check('\\_ in a web address is _, a backslash in a file path stays', h.includes('data-url="https://a.com/my_page"') && h.includes('data-url="https://a.com/your_page"') && h.includes('data-file="C:\\Users\\me\\_drafts\\a.tuf"') && noMarks(h), h);
+// Files on other computers, and files outside the project, ask before they open (and show the path).
+const ROOT = 'C:\\Users\\jacks\\OneDrive\\Documents\\TuffProjects\\HelloTuff';
+const ask = (href) => { const to = linkTarget(href); return to && to.file ? fileQuestion ? fileQuestion(to.file) : '(no fileQuestion)' : null; };
+const net = ['//127.0.0.1/no-such-share/level.tuf', '\\\\127.0.0.1\\share\\x.tuf', 'file:////evil.example/share/x.tuf', 'file://evil.example/share/x.tuf', '//evil.example/share/%2E%2E/x.tuf'];
+check('a file on another computer (\\\\server\\share, //server, file://server) always asks, naming the computer', net.every((x) => /^Open \\\\(127\.0\.0\.1|evil\.example)\\.* from another computer\?$/.test(ask(x) || '')), JSON.stringify(net.map((x) => [linkTarget(x), ask(x)])));
+check('\\\\?\\ and \\\\.\\ (devices and pipes) are never links', linkTarget('\\\\.\\pipe\\x') === null && linkTarget('//?/C:/x.tuf') === null && !md('[p](\\\\.\\pipe\\x)').includes('<a '), md('[p](\\\\.\\pipe\\x)'));
+const out = ['C:/Windows/win.ini', 'file:///C:/Windows/win.ini', 'file://C:/Windows/win.ini', '../../secret.txt', 'main.tuf/../../../x.tuf', '/x.tuf'];
+check('a file outside the project asks first and shows where it really is', ask('C:/Windows/win.ini') === 'Open C:\\Windows\\win.ini from outside your project?' && ask('../../secret.txt') === 'Open C:\\Users\\jacks\\OneDrive\\Documents\\secret.txt from outside your project?' && out.every((x) => / from outside your project\?$/.test(ask(x) || '')), JSON.stringify(out.map(ask)));
+const inside = ['main.tuf', './main.tuf:3', 'levels/one.tuf', `file:///${ROOT.replace(/\\/g, '/')}/main.tuf`, `${ROOT.toLowerCase()}\\Main.tuf`, 'levels/../main.tuf'];
+check('a file in the project opens straight away', inside.every((x) => ask(x) === ''), JSON.stringify(inside.map((x) => [linkTarget(x), ask(x)])));
+check('a project file is shown by name, one outside by its whole path', md('[a](main.tuf) [b](C:/Windows/win.ini)').includes('title="Open main.tuf"') && md('[b](C:/Windows/win.ini)').includes('title="Open C:\\Windows\\win.ini"'), md('[a](main.tuf) [b](C:/Windows/win.ini)'));
+const deep = `//fileserver.example/share/${'folder/'.repeat(20)}level.tuf`;
+check('a long path is shortened in the middle: the computer and the file name still show', /^Open \\\\fileserver\.example\\share\\.*….*\\level\.tuf from another computer\?$/.test(ask(deep) || '') && ask(deep).length < 120, ask(deep));
+const mac = { project: { root: () => '/var/folders/xy/T/proj' } };
+const macApi = new Function('esc', 'short', 'icon', 'lit', 't', `${body}\nreturn { linkTarget, fileQuestion: typeof fileQuestion === 'function' ? fileQuestion : null };`)(esc, short, icon, lit, mac);
+const macAsk = (h) => macApi.fileQuestion && macApi.fileQuestion(macApi.linkTarget(h).file);
+check('on a Mac, /private/var/… is the project in /var/…, and /etc/passwd asks', macAsk('file:///private/var/folders/xy/T/proj/main.tuf') === '' && macAsk('main.tuf') === '' && macAsk('/etc/passwd') === 'Open /etc/passwd from outside your project?', JSON.stringify([macAsk('file:///private/var/folders/xy/T/proj/main.tuf'), macAsk('main.tuf'), macAsk('/etc/passwd')]));
 h = md('<script>alert(1)</script> and [<b>x</b>](https://a.b)');
 check('HTML is escaped, in text and link labels', !h.includes('<script>') && h.includes('&lt;script&gt;') && h.includes('&lt;b&gt;x&lt;/b&gt;'), h);
 h = md('```tuff\nsay "[x](file:///C:/a.tuf)"\n```');

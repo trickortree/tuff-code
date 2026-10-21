@@ -1010,8 +1010,13 @@ TuffPlugins.register('tuff-agents', (t) => {
     const a = e.target.closest('.ta-a');
     if (a) {
       e.preventDefault();
-      if (a.dataset.file) t.openFile(a.dataset.file, +a.dataset.line || 0);
-      else if (a.dataset.url) {
+      const file = a.dataset.file;
+      if (file) {
+        const open = () => t.openFile(file, +a.dataset.line || 0);
+        const q = fileQuestion(file);
+        if (q) t.ask({ title: q, confirm: true, okLabel: 'Open' }).then((ok) => ok && open());
+        else open();
+      } else if (a.dataset.url) {
         const url = a.dataset.url;
         t.ask({ title: `Open ${url.length > 90 ? url.slice(0, 87) + '…' : url} in your web browser?`, confirm: true, okLabel: 'Open' }).then((ok) => ok && t.openWeb(url));
       }
@@ -1099,7 +1104,8 @@ TuffPlugins.register('tuff-agents', (t) => {
     const to = linkTarget(href);
     if (!to) return label;
     if (to.url) return `<a class="ta-a web" data-url="${esc(to.url)}" title="${esc(to.url)}">${label}</a>`;
-    return `<a class="ta-a file" data-file="${esc(to.file)}"${to.line ? ` data-line="${to.line}"` : ''} title="Open ${esc(short(to.file))}${to.line ? `, line ${to.line}` : ''}">${label}</a>`;
+    const name = fileQuestion(to.file) ? to.file : short(to.file); // the whole path when it's outside the project
+    return `<a class="ta-a file" data-file="${esc(to.file)}"${to.line ? ` data-line="${to.line}"` : ''} title="Open ${esc(name)}${to.line ? `, line ${to.line}` : ''}">${label}</a>`;
   }
 
   function linkTarget(href) {
@@ -1110,19 +1116,68 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (hash) { line = +hash[1]; h = h.slice(0, hash.index); }
     const lc = !line && h.match(/^(.*\.\w+):(\d+)(?::\d+)?$/); // main.tuf:12 or main.tuf:12:5
     if (lc) { h = lc[1]; line = +lc[2]; }
-    if (/^file:\/\//i.test(h)) {
-      try { h = decodeURIComponent(h.replace(/^file:\/\/(localhost)?/i, '')); } catch { return null; }
+    const fu = h.match(/^file:\/\/([^/\\]*)(.*)$/i);
+    if (fu) {
+      // file:///C:/a.tuf and file://localhost/… are on this computer, file://server/share/… is not (and
+      // file://C:/a.tuf is a drive, written with one slash too few).
+      const host = fu[1].toLowerCase() === 'localhost' ? '' : fu[1];
+      h = !host ? fu[2] : /^[a-z]:$/i.test(host) ? host + fu[2] : `//${host}${fu[2]}`;
+      try { h = decodeURIComponent(h); } catch { return null; }
       if (/^\/[a-z]:[\\/]/i.test(h)) h = h.slice(1); // file:///C:/… → C:/…
     } else if (/^[a-z][\w+.-]*:/i.test(h) && !/^[a-z]:[\\/]/i.test(h)) return null; // another scheme, not a drive
     else if (/%[\da-f]{2}/i.test(h)) { try { h = decodeURIComponent(h); } catch { /* not encoded after all: as written */ } } // my%20game.tuf
     if (!h || h.startsWith('#')) return null;
+    if (/^[\\/]{2}[?.](?:[\\/]|$)/.test(h)) return null; // \\?\… and \\.\… (devices, pipes): never a link
     const root = t.project.root();
     const abs = /^([a-z]:[\\/]|[\\/])/i.test(h);
     if (!abs && !root) return null;
-    let file = abs ? h : `${root.replace(/[\\/]+$/, '')}/${h.replace(/^\.[\\/]/, '')}`;
-    // One kind of slash, the one the project uses, so an open tab is found again instead of opened twice.
-    if (/^[a-z]:/i.test(file) || (root || '').includes('\\')) file = file.replace(/\//g, '\\');
-    return { file, line };
+    const file = abs ? h : `${root.replace(/[\\/]+$/, '')}/${h}`;
+    // One kind of slash, the one the project uses, so an open tab is found again instead of opened twice,
+    // and no . or .. left, so the question before opening one outside the project shows where it really is.
+    return { file: tidy(file, /^([a-z]:|\\\\)/i.test(file) || (root || '').includes('\\') ? '\\' : '/'), line };
+  }
+
+  // A path with one kind of slash (sep) and no "." or ".." in it: C:/a/./b/../c.tuf → C:\a\c.tuf. Its start
+  // (C:\, \\server\share or /) stays, and ".." can't climb above it.
+  function tidy(p, sep) {
+    const head = (p.match(/^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+(?:[\\/][^\\/]+)?|[\\/])/i) || [''])[0];
+    const parts = [];
+    for (const s of p.slice(head.length).split(/[\\/]+/)) {
+      if (s === '..') parts.pop();
+      else if (s && s !== '.') parts.push(s);
+    }
+    const start = head.replace(/[\\/]/g, sep);
+    return start + (parts.length && start && !start.endsWith(sep) ? sep : '') + parts.join(sep);
+  }
+
+  // Is this file in the open project? Without case on Windows; on a Mac /private/var is /var (the agent can
+  // write one and the IDE the other).
+  function inProject(file) {
+    const root = t.project.root();
+    if (!root) return false;
+    const sep = /^[a-z]:|\\/i.test(root) ? '\\' : '/';
+    const key = (p) => { const k = tidy(p, sep).replace(/^\/private(?=\/(?:var|tmp|etc)(?:\/|$))/, ''); return sep === '\\' ? k.toLowerCase() : k; };
+    const f = key(file);
+    const r = key(root).replace(/[\\/]+$/, '');
+    return f === r || f.startsWith(r + sep);
+  }
+
+  // What to ask before a file link opens, or '' to open it straight away (a file in the project). A file on
+  // another computer (\\server\share\…: Windows would connect and sign in to it) or anywhere else on this
+  // one asks first, like a web link, and shows the whole path.
+  function fileQuestion(file) {
+    const where = clip(file, (file.match(/^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+(?:[\\/][^\\/]+)?[\\/]?)/i) || [''])[0].length);
+    if (/^[\\/]{2}/.test(file)) return `Open ${where} from another computer?`;
+    return inProject(file) ? '' : `Open ${where} from outside your project?`;
+  }
+
+  // A long path or address made shorter in the middle. The first keep characters (the drive, computer or
+  // web site) and the end (the file's name) always show.
+  function clip(s, keep = 0, max = 90) {
+    const room = Math.max(max - keep - 1, 24);
+    if (s.length <= Math.max(max, keep + room + 1)) return s;
+    const tail = Math.floor(room / 2);
+    return `${s.slice(0, keep + room - tail)}…${s.slice(s.length - tail)}`;
   }
 
   // Lines of text between code blocks: headings, lists (numbered ones keep their numbers, indented items
