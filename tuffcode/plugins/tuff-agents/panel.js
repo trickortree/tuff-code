@@ -1007,13 +1007,19 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (act === 'do-edit') { send('Yes please, make that change for me.', { mode: 'edit' }); return; }
     const s = e.target.closest('[data-s]');
     if (s) { send(SUGGEST[+s.dataset.s][1]); return; }
-    const a = e.target.closest('.ta-link');
+    const a = e.target.closest('.ta-a');
     if (a) {
       e.preventDefault();
-      if (a.dataset.file) t.openFile(a.dataset.file, +a.dataset.line || 0);
-      else if (a.dataset.url) {
+      const file = a.dataset.file;
+      if (file) {
+        const open = () => t.openFile(file, +a.dataset.line || 0);
+        const q = fileQuestion(file);
+        if (q) t.ask({ title: q, confirm: true, okLabel: 'Open' }).then((ok) => ok && open());
+        else open();
+      } else if (a.dataset.url) {
         const url = a.dataset.url;
-        t.ask({ title: `Open ${url.length > 90 ? url.slice(0, 87) + '…' : url} in your web browser?`, confirm: true, okLabel: 'Open' }).then((ok) => ok && t.openWeb(url));
+        const q = webQuestion(url);
+        if (q) t.ask({ title: q, confirm: true, okLabel: 'Open' }).then((ok) => ok && t.openWeb(url));
       }
       return;
     }
@@ -1050,70 +1056,163 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
 
   // One line of text: `code`, [links](…), <web addresses>, **bold**, *italics*, ~~struck~~ and \escapes.
-  // Code spans, links and escapes become placeholders first, so their insides aren't styled again.
+  // Escapes and code spans are read first, left to right as Markdown does: \` is a backtick, and a
+  // backslash inside `code` is just a backslash. Then links, then styles. Each becomes a placeholder
+  // (NUL n NUL, or SOH n SOH for an escape), so its inside isn't read again. A link's text is styled on its
+  // own, so `code` and **bold** work there too, and its address is read as it was written.
   function inline(s) {
     const keep = [];
-    const hold = (html) => `\u0000${keep.push(html) - 1}\u0000`;
-    const x = String(s)
-      .replace(/\\([\\`*_[\]()#+\-.!~|>])/g, (_, c) => hold(esc(c)))
-      .replace(/`([^`]+)`/g, (_, c) => hold(`<code>${esc(c)}</code>`))
-      .replace(/!?\[([^\]]+)\]\(\s*(?:<([^>]+)>|([^)\s]+))(?:\s+"[^"]*")?\s*\)/g, (_, text, inAngles, href) => hold(link(text, inAngles || href)))
-      .replace(/<((?:https?|file):\/\/[^>\s]+)>/gi, (_, href) => hold(link(href, href)))
-      .replace(/\bhttps?:\/\/[^\s<>()"'`]*[^\s<>()"'`.,;:!?]/gi, (href) => hold(link(href, href)));
-    return esc(x)
-      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-      .replace(/(^|[^\w])__([^_]+)__(?=$|[^\w])/g, '$1<b>$2</b>')
-      .replace(/~~([^~]+)~~/g, '<s>$1</s>')
-      .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>')
-      .replace(/(^|[\s(])_([^_\s][^_]*)_(?=$|[\s).,;:!?])/g, '$1<i>$2</i>')
-      .replace(/\u0000(\d+)\u0000/g, (_, i) => keep[+i]);
+    const raw = [];
+    const hold = (html, src = '', mark = '\u0000') => { raw.push(src); return `${mark}${keep.push(html) - 1}${mark}`; };
+    // A link's address as written. In a web address \_ means _ (a URL has no backslashes), but in a file
+    // path a backslash is a folder separator (C:\Users\_drafts), so it stays.
+    const address = (h) => {
+      const web = /^\s*https?:/i.test(h);
+      return h.replace(/([\u0000\u0001])(\d+)\1/g, (_, mark, i) => (web && mark === '\u0001' ? raw[+i].slice(1) : raw[+i]));
+    };
+    const style = (x, links) => {
+      // Addresses can hold (balanced) brackets, like https://en.wikipedia.org/wiki/Tuff_(rock), but a bare
+      // one ends before a lone ")" (see https://x.com), a full stop, or the ** of **https://x.com**.
+      if (links) x = x
+        .replace(/!?\[([^\]]+)\]\(\s*(?:<([^>]+)>|((?:[^()\s]|\([^()\s]*\))+))(?:\s+"[^"]*")?\s*\)/g, (_, text, inAngles, href) => hold(link(style(text, false), address(inAngles || href))))
+        .replace(/<((?:https?|file):\/\/[^>\s\u0000]+)>/gi, (_, href) => { const to = address(href); return hold(link(esc(to), to)); })
+        .replace(/(?<![a-z\d])https?:\/\/(?:[^\s<>()"'`\u0000]|\([^\s<>()"'`\u0000]*\))*(?:[^\s<>()"'`\u0000.,;:!?*~]|\([^\s<>()"'`\u0000]*\))/gi, (m, at, all) => {
+          // _https://x.com_ and __https://x.com__: the closing underscores are style, not address.
+          const u = m.match(/_+$/)?.[0] || '';
+          const tail = u && all.slice(0, at).endsWith(u) ? u : '';
+          const to = address(m.slice(0, m.length - tail.length));
+          return hold(link(esc(to), to)) + tail;
+        });
+      return esc(x)
+        .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+        .replace(/(^|[^\w])__([^_]+)__(?=$|[^\w])/g, '$1<b>$2</b>')
+        .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+        .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>')
+        .replace(/(^|[\s(])_([^_\s][^_]*)_(?=$|[\s).,;:!?])/g, '$1<i>$2</i>');
+    };
+    let out = style(String(s).replace(/[\u0000\u0001]/g, '')
+      .replace(/\\([\\`*_[\]()#+\-.!~|>])|`([^`]+)`/g, (m, c, code) => (c ? hold(esc(c), m, '\u0001') : hold(`<code>${esc(code)}</code>`, m))), true);
+    // A link holds its text, which can hold code: put them back until none are left.
+    while (/([\u0000\u0001])\d+\1/.test(out)) out = out.replace(/([\u0000\u0001])(\d+)\1/g, (_, mark, i) => keep[+i]);
+    return out;
   }
 
-  // A link in a reply. Files (file:///…, a path, "main.tuf:12") open in the editor, at the line if one is
-  // given. Web pages (http and https only) ask first, because they open in the browser. Anything else
-  // (javascript:, data:…) is shown as plain text.
-  function link(text, href) {
+  // A link in a reply, around label (HTML, already styled). Files (file:///…, a path, "main.tuf:12") open
+  // in the editor, at the line if one is given; ones outside the project ask first (fileQuestion). Web
+  // pages (http and https only) ask first, because they open in the browser. Anything else (javascript:,
+  // data:…) is shown as plain text.
+  function link(label, href) {
     const to = linkTarget(href);
-    const label = esc(text);
     if (!to) return label;
-    if (to.url) return `<a class="ta-link web" data-url="${esc(to.url)}" title="${esc(to.url)}">${label}</a>`;
-    return `<a class="ta-link file" data-file="${esc(to.file)}"${to.line ? ` data-line="${to.line}"` : ''} title="Open ${esc(short(to.file))}${to.line ? `, line ${to.line}` : ''}">${label}</a>`;
+    if (to.url) return `<a class="ta-a web" data-url="${esc(to.url)}" title="${esc(to.url)}">${label}</a>`;
+    const name = fileQuestion(to.file) ? to.file : short(to.file); // the whole path when it's outside the project
+    return `<a class="ta-a file" data-file="${esc(to.file)}"${to.line ? ` data-line="${to.line}"` : ''} title="Open ${esc(name)}${to.line ? `, line ${to.line}` : ''}">${label}</a>`;
   }
 
   function linkTarget(href) {
     let h = String(href || '').trim();
-    if (/^https?:\/\/[^/\s]/i.test(h)) return { url: h };
+    if (/^https?:\/\/[^/\s]/i.test(h)) {
+      // A name before the site (https://tuffcode.dev@other.example/) only hides where the link goes: it's
+      // dropped. An address the browser couldn't open stays text.
+      let u;
+      try { u = new URL(h); } catch { return null; }
+      if (u.username || u.password) { u.username = ''; u.password = ''; h = u.href; }
+      return { url: h };
+    }
     let line = 0;
     const hash = h.match(/#L?(\d+)(?:[-:]L?\d+)?$/i);
     if (hash) { line = +hash[1]; h = h.slice(0, hash.index); }
     const lc = !line && h.match(/^(.*\.\w+):(\d+)(?::\d+)?$/); // main.tuf:12 or main.tuf:12:5
     if (lc) { h = lc[1]; line = +lc[2]; }
-    if (/^file:\/\//i.test(h)) {
-      try { h = decodeURIComponent(h.replace(/^file:\/\/(localhost)?/i, '')); } catch { return null; }
+    const fu = h.match(/^file:\/\/([^/\\]*)(.*)$/i);
+    if (fu) {
+      // file:///C:/a.tuf and file://localhost/… are on this computer, file://server/share/… is not (and
+      // file://C:/a.tuf is a drive, written with one slash too few).
+      const host = fu[1].toLowerCase() === 'localhost' ? '' : fu[1];
+      h = !host ? fu[2] : /^[a-z]:$/i.test(host) ? host + fu[2] : `//${host}${fu[2]}`;
+      try { h = decodeURIComponent(h); } catch { return null; }
       if (/^\/[a-z]:[\\/]/i.test(h)) h = h.slice(1); // file:///C:/… → C:/…
     } else if (/^[a-z][\w+.-]*:/i.test(h) && !/^[a-z]:[\\/]/i.test(h)) return null; // another scheme, not a drive
+    else if (/%[\da-f]{2}/i.test(h)) { try { h = decodeURIComponent(h); } catch { /* not encoded after all: as written */ } } // my%20game.tuf
     if (!h || h.startsWith('#')) return null;
+    if (/^[\\/]{2}[?.](?:[\\/]|$)/.test(h)) return null; // \\?\… and \\.\… (devices, pipes): never a link
     const root = t.project.root();
     const abs = /^([a-z]:[\\/]|[\\/])/i.test(h);
     if (!abs && !root) return null;
-    let file = abs ? h : `${root.replace(/[\\/]+$/, '')}/${h.replace(/^\.[\\/]/, '')}`;
-    // One kind of slash, the one the project uses, so an open tab is found again instead of opened twice.
-    if (/^[a-z]:/i.test(file) || (root || '').includes('\\')) file = file.replace(/\//g, '\\');
-    return { file, line };
+    const file = abs ? h : `${root.replace(/[\\/]+$/, '')}/${h}`;
+    // One kind of slash, the one the project uses, so an open tab is found again instead of opened twice,
+    // and no . or .. left, so the question before opening one outside the project shows where it really is.
+    return { file: tidy(file, /^([a-z]:|\\\\)/i.test(file) || (root || '').includes('\\') ? '\\' : '/'), line };
+  }
+
+  // A path with one kind of slash (sep) and no "." or ".." in it: C:/a/./b/../c.tuf → C:\a\c.tuf. Its start
+  // (C:\, \\server\share or /) stays, and ".." can't climb above it.
+  function tidy(p, sep) {
+    const head = (p.match(/^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+(?:[\\/][^\\/]+)?|[\\/])/i) || [''])[0];
+    const parts = [];
+    for (const s of p.slice(head.length).split(/[\\/]+/)) {
+      if (s === '..') parts.pop();
+      else if (s && s !== '.') parts.push(s);
+    }
+    const start = head.replace(/[\\/]/g, sep);
+    return start + (parts.length && start && !start.endsWith(sep) ? sep : '') + parts.join(sep);
+  }
+
+  // Is this file in the open project? Without case on Windows; on a Mac /private/var is /var (the agent can
+  // write one and the IDE the other).
+  function inProject(file) {
+    const root = t.project.root();
+    if (!root) return false;
+    const sep = /^[a-z]:|\\/i.test(root) ? '\\' : '/';
+    const key = (p) => { const k = tidy(p, sep).replace(/^\/private(?=\/(?:var|tmp|etc)(?:\/|$))/, ''); return sep === '\\' ? k.toLowerCase() : k; };
+    const f = key(file);
+    const r = key(root).replace(/[\\/]+$/, '');
+    return f === r || f.startsWith(r + sep);
+  }
+
+  // What to ask before a file link opens, or '' to open it straight away (a file in the project). A file on
+  // another computer (\\server\share\…: Windows would connect and sign in to it) or anywhere else on this
+  // one asks first, like a web link, and shows the whole path.
+  function fileQuestion(file) {
+    const where = clip(file, (file.match(/^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+(?:[\\/][^\\/]+)?[\\/]?)/i) || [''])[0].length);
+    if (/^[\\/]{2}/.test(file)) return `Open ${where} from another computer?`;
+    return inProject(file) ? '' : `Open ${where} from outside your project?`;
+  }
+
+  // What to ask before a web link opens. The whole site always shows (as the browser will see it, so a
+  // look-alike name shows as xn--…); only the middle of a long path after it is shortened.
+  function webQuestion(url) {
+    let u;
+    try { u = new URL(url); } catch { return ''; }
+    const site = `${u.protocol}//${u.host}`;
+    const rest = (u.pathname === '/' && !url.endsWith('/') ? '' : u.pathname) + u.search + u.hash;
+    return `Open ${clip(site + rest, site.length + 1)} in your web browser?`;
+  }
+
+  // A long path or address made shorter in the middle. The first keep characters (the drive, computer or
+  // web site) and the end (the file's name) always show.
+  function clip(s, keep = 0, max = 90) {
+    const room = Math.max(max - keep - 1, 24);
+    if (s.length <= Math.max(max, keep + room + 1)) return s;
+    const tail = Math.floor(room / 2);
+    return `${s.slice(0, keep + room - tail)}…${s.slice(s.length - tail)}`;
   }
 
   // Lines of text between code blocks: headings, lists (numbered ones keep their numbers, indented items
-  // sit under the one above), tables, > quotes, --- lines and paragraphs.
+  // are a list inside the item above), tables, > quotes, --- lines and paragraphs.
   function prose(text) {
     const out = [];
-    let list = null;
+    // The list being read: lists[0] is the outer one, the last is the one the next item may join. An
+    // indented item starts a list inside the item above it, so the outer numbers still count 1, 2, 3.
+    let lists = [];
     let para = [];
     let quote = [];
     const flushPara = () => { if (para.length) out.push(`<p>${para.map(inline).join('<br>')}</p>`); para = []; };
     const flushQuote = () => { if (quote.length) out.push(`<blockquote>${quote.map(inline).join('<br>')}</blockquote>`); quote = []; };
+    const listHtml = (l) => `<${l.tag}${l.start > 1 ? ` start="${l.start}"` : ''}>${l.items.map((x) => `<li>${x.lines.map(inline).join('<br>')}${x.kids.map(listHtml).join('')}</li>`).join('')}</${l.tag}>`;
     const flushList = () => {
-      if (list) out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ''}>${list.items.map((x) => `<li${x.sub ? ' class="ta-sub"' : ''}>${x.lines.map(inline).join('<br>')}</li>`).join('')}</${list.tag}>`);
-      list = null;
+      if (lists.length) out.push(listHtml(lists[0]));
+      lists = [];
     };
     const flush = () => { flushPara(); flushQuote(); flushList(); };
     const cells = (row) => row.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim());
@@ -1138,14 +1237,32 @@ TuffPlugins.register('tuff-agents', (t) => {
       flushQuote();
       if ((m = line.match(/^(\s*)(?:[-*+•]|(\d+)[.)])\s+(.*)$/))) {
         flushPara();
-        const sub = m[1].length >= 2 && list;
+        const indent = m[1].length;
         const tag = m[2] ? 'ol' : 'ul';
-        if (!sub && (!list || list.tag !== tag)) { flushList(); list = { tag, start: m[2] ? +m[2] : 1, items: [] }; }
-        list.items.push({ sub: !!sub, lines: [m[3]] });
+        const fresh = () => ({ tag, start: m[2] ? +m[2] : 1, indent, items: [] });
+        // Out of the inner lists this item is left of ("2. Step two" after its indented bullets).
+        while (lists.length > 1 && indent < lists[lists.length - 1].indent - 1) lists.pop();
+        let l = lists[lists.length - 1];
+        if (l && indent >= l.indent + 2) {
+          // Indented under the item above: a list inside that item, numbered or not as its own items are.
+          const inner = fresh();
+          l.items[l.items.length - 1].kids.push(inner);
+          lists.push((l = inner));
+        } else if (l && l.tag !== tag) {
+          if (lists.length === 1) { flushList(); l = null; } else {
+            // Bullets after numbers (or the other way) inside an item: a new list next to the first.
+            const inner = fresh();
+            const above = lists[lists.length - 2];
+            above.items[above.items.length - 1].kids.push(inner);
+            lists[lists.length - 1] = l = inner;
+          }
+        }
+        if (!l) lists = [(l = fresh())];
+        l.items.push({ lines: [m[3]], kids: [] });
         continue;
       }
-      // An indented line under a list item belongs to that item.
-      if (list && /^\s{2,}\S/.test(line)) { list.items[list.items.length - 1].lines.push(line.trim()); continue; }
+      // An indented line under a list item belongs to that item (the innermost one).
+      if (lists.length && /^\s{2,}\S/.test(line)) { const l = lists[lists.length - 1]; l.items[l.items.length - 1].lines.push(line.trim()); continue; }
       flushList();
       para.push(line);
     }
