@@ -349,6 +349,14 @@
     const r = g.n.el.getBoundingClientRect();
     const ndc = new g.T.Vector2(((px - r.left) / (r.width || 1)) * 2 - 1, -((py - r.top) / (r.height || 1)) * 2 + 1);
     g.n.scene.updateMatrixWorld();
+    // The camera isn't in the scene, and only a drawn frame brings it up to date. On a slow PC a click can
+    // come before that frame (just after a load, a camera fit or a resize), so bring it up to date here.
+    const cam = g.n.camera;
+    if (cam.isPerspectiveCamera && r.width && r.height && Math.abs(cam.aspect - r.width / r.height) > 1e-3) {
+      cam.aspect = r.width / r.height;
+      cam.updateProjectionMatrix();
+    }
+    cam.updateMatrixWorld();
     const rc = new g.T.Raycaster();
     rc.setFromCamera(ndc, g.n.camera);
     return { ...g, rc };
