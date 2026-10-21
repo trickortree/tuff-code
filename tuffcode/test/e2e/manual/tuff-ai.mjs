@@ -61,7 +61,7 @@ try {
 
   // Stop while the model is still starting. The question after it must not wait behind a hidden answer.
   await send('Make a program that counts from 1 to 20.');
-  const starting = await waitFor(`/Starting Tuff AI/.test([...document.querySelectorAll('.ta-msg.agent')].pop()?.textContent || '')`, 20000);
+  const starting = await waitFor(`/Starting Pumice 1/.test([...document.querySelectorAll('.ta-msg.agent')].pop()?.textContent || '')`, 20000);
   await ev(`document.querySelector('.ta-send').click()`);
   await t.sleep(300);
   check('Stop while Tuff AI is starting says Stopped', starting && await ev(`/Stopped/.test([...document.querySelectorAll('.ta-msg.agent')].pop()?.textContent || '')`), await last());

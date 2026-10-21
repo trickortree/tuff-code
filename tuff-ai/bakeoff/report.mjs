@@ -1,12 +1,78 @@
 // Sums up bake-off results into a Markdown report.
 //   node tuff-ai/bakeoff/report.mjs [results dir] > tuff-ai/bakeoff/RESULTS.md
+//   node tuff-ai/bakeoff/report.mjs --think [results/think]   the thinking levels' tables (run.mjs --app)
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const DIR = process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), 'results');
 const pct = (a, b) => (b ? `${Math.round((100 * a) / b)}%` : '–');
 const avg = (xs) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
+const readRows = (file) => fs.readFileSync(file, 'utf8').split(/\r?\n/).filter((l) => l.trim()).map((l) => JSON.parse(l));
+
+if (process.argv[2] === '--think') {
+  thinkReport(process.argv[3] || path.join(path.dirname(fileURLToPath(import.meta.url)), 'results', 'think'));
+  process.exit(0);
+}
+
+// One row per run of run.mjs --app: a level, with or without the improver, on the GPU or the CPU.
+function thinkReport(dir) {
+  const q = (xs, p) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.ceil(p * s.length) - 1)] : 0; };
+  const sec = (ms) => `${(ms / 1000).toFixed(1)}`;
+  const ORDER = ['off', 'low', 'medium', 'high'];
+  const runs = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => {
+    const rows = readRows(path.join(dir, f));
+    const r = rows[0] || {};
+    return { file: f, rows, level: r.think, budget: r.budget, temp: r.temp, improve: r.improve, dev: r.dev, threads: r.threads };
+  }).filter((r) => r.rows.length).sort((a, b) => (a.dev === 'cpu') - (b.dev === 'cpu') || ORDER.indexOf(a.level) - ORDER.indexOf(b.level) || a.budget - b.budget || a.improve - b.improve);
+  const name = (r) => `${r.level[0].toUpperCase()}${r.level.slice(1)}${r.budget ? ` (${r.budget})` : ''}${r.temp != null && r.temp !== 0.2 ? `, temperature ${r.temp}` : ''}`;
+  const n = (xs, k) => xs.filter((x) => x[k]).length;
+  const out = [];
+  const table = (list) => {
+    out.push('| Level (thought budget) | Improver | Tasks | **Pass, after 1 retry** | First try | Write | Apps | Fix | Fix: explained | Median s | 90th pct s | Thought tokens (mean) | Cut by the budget | Looping when cut |');
+    out.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+    for (const r of list) {
+      const by = (t) => r.rows.filter((x) => x.type === t);
+      const w = by('write'), g = by('gui'), f = by('fix');
+      const ms = r.rows.map((x) => x.ms || 0);
+      const cut = r.rows.filter((x) => x.cut > 0);
+      out.push(`| ${name(r)} | ${r.improve ? 'on' : 'off'} | ${r.rows.length} | **${pct(n(r.rows, 'pass'), r.rows.length)}** | ${pct(n(r.rows, 'pass1'), r.rows.length)} | ${pct(n(w, 'pass'), w.length)} | ${pct(n(g, 'pass'), g.length)} | ${pct(n(f, 'pass'), f.length)} | ${pct(n(f, 'explained'), f.length)} | ${sec(q(ms, 0.5))} | ${sec(q(ms, 0.9))} | ${Math.round(avg(r.rows.map((x) => x.thinkTokens || 0)))} | ${r.budget ? `${cut.length} of ${r.rows.length}` : '–'} | ${r.budget ? cut.filter((x) => x.loop).length : '–'} |`);
+    }
+  };
+  const gpu = runs.filter((r) => r.dev !== 'cpu');
+  const cpu = runs.filter((r) => r.dev === 'cpu');
+  if (gpu.length) { out.push(`**On the GPU** (${gpu[0].dev}):`, ''); table(gpu); out.push(''); }
+  if (cpu.length) {
+    out.push(`**On the CPU** (${cpu[0].threads || 'auto'} threads):`, '');
+    table(cpu);
+    const off = cpu.find((r) => r.level === 'off' && r.improve);
+    if (off) {
+      out.push('');
+      for (const r of cpu.filter((x) => x !== off)) {
+        const ids = new Set(off.rows.map((x) => x.id));
+        const both = r.rows.filter((x) => ids.has(x.id));
+        const extra = both.map((x) => x.ms - off.rows.find((o) => o.id === x.id).ms);
+        out.push(`- ${name(r)} with the improver adds a median of **${sec(q(extra, 0.5))} s** per answer on the CPU over Off (90th percentile ${sec(q(extra, 0.9))} s, over the same ${both.length} tasks).`);
+      }
+    }
+    out.push('');
+  }
+  // What the improver changed, level by level.
+  const pairs = ORDER.map((lv) => [gpu.find((r) => r.level === lv && !r.improve && r.dev !== 'cpu'), gpu.find((r) => r.level === lv && r.improve)]).filter(([a, b]) => a && b);
+  if (pairs.length) {
+    out.push('**The improver, task by task** (the same tasks with and without it):', '');
+    for (const [a, b] of pairs) {
+      const ids = new Set(a.rows.map((x) => x.id));
+      const both = b.rows.filter((x) => ids.has(x.id));
+      const won = both.filter((x) => x.pass && !a.rows.find((y) => y.id === x.id).pass).length;
+      const lost = both.filter((x) => !x.pass && a.rows.find((y) => y.id === x.id).pass).length;
+      out.push(`- ${name(b)}: the improver turned ${won} failures into passes and ${lost} passes into failures.`);
+    }
+    out.push('');
+  }
+  console.log(out.join('\n'));
+}
+
+const DIR = process.argv[2] || path.join(path.dirname(fileURLToPath(import.meta.url)), 'results');
 const runs = fs.readdirSync(DIR).filter((f) => f.endsWith('.jsonl')).sort().map((f) => {
   const rows = fs.readFileSync(path.join(DIR, f), 'utf8').split(/\r?\n/).filter((l) => l.trim()).map((l) => JSON.parse(l));
   const log = path.join(DIR, f.replace(/\.jsonl$/, '.log'));
