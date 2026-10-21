@@ -589,6 +589,10 @@ export default async (t, ctx) => {
   const loopShow = await edit(loopGame, `(P, E) => E.setProp(P, P.byVar.coin, 'hide', [])`);
   check(changedLines(loopGame, loopRed)?.[0]?.[2] === 'game:background "red"' && changedLines(loopGame, loopRed)?.[0]?.[0] === 4 && loopShow.endsWith('# after the window closes\ncoin:hide()\ngame:background "black"\nsay "Thanks for playing"\n') && /"gold"\)\ncoin:hide\(\)\n\nwhile/.test(loopShow),
     'Background and Hidden at start change the setup above the game loop, never the lines after it', { red: changedLines(loopGame, loopRed), hide: loopShow.split('\n').slice(3, 7) });
+  // Names in other languages: renaming pi leaves pièce alone.
+  const accents = 'mention tgame\n\ngame = tgame.window("G", 800, 600)\npi = game:circle(100, 100, 10, "gold")\npièce = 3\nsay pièce\n';
+  const renamedPi = await edit(accents, `(P, E) => E.rename(P, P.byVar.pi, 'disc')`);
+  check(renamedPi === accents.replace('pi = game', 'disc = game'), 'renaming pi to disc changes pi only: pièce, a name of its own in Tuff, stays', firstDiff(accents.replace('pi = game', 'disc = game'), renamedPi));
 
   // ================================================================ full size, leaving and closing
   await ev(`document.querySelector('#en-stage').focus()`);

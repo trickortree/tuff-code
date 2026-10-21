@@ -310,7 +310,8 @@
     }
   }
 
-  // Rename identifiers in one line of code, skipping strings, comments, .members and :methods.
+  // Rename identifiers in one line of code, skipping strings, comments, .members and :methods. A name is read whole the
+  // way Tuff reads it (letters in any language, digits, _), so renaming pi leaves pièce alone.
   function renameIdents(line, map) {
     let out = '';
     let quote = null;
@@ -325,7 +326,7 @@
       }
       if (c === '"' || c === "'") { quote = c; out += c; i++; continue; }
       if (c === '#') { out += line.slice(i); break; }
-      const m = /^[A-Za-z_]\w*/.exec(line.slice(i));
+      const m = /^[\p{L}_][\p{L}\p{N}_]*/u.exec(line.slice(i));
       if (m) {
         const prev = line[i - 1];
         const own = Object.prototype.hasOwnProperty.call(map, m[0]);

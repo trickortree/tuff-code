@@ -95,6 +95,9 @@
   const range = (a, b) => { const out = []; for (let i = a; i <= b; i++) out.push(i); return out; };
   const cap = (s) => String(s).charAt(0).toUpperCase() + String(s).slice(1);
   const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+  // A whole name in a line of code. Tuff's names can hold letters in any language, so \b (A-Z only) would find coin
+  // inside coinça.
+  const wordRe = (name) => new RegExp(String.raw`(?<![\p{L}\p{N}_])${name}(?![\p{L}\p{N}_])`, 'u');
   // A number as code: at most 2 decimals, and never -0.
   const num = (n) => { const v = +(+n).toFixed(2); return String(Object.is(v, -0) ? 0 : v); };
 
@@ -611,7 +614,7 @@
       for (const f of P.funcs) {
         if (!ownedPlayAgain(P, f)) continue;
         const own = new Set([f.mark, ...range(f.line, f.end)]);
-        const word = new RegExp(String.raw`\b${f.name}\b`);
+        const word = wordRe(f.name);
         if (lines.some((l, i) => !own.has(i + 1) && word.test(K.stripComment(l).code))) continue;
         for (const l of own) del.add(l);
         if (f.mark > 1 && !lines[f.mark - 2].trim()) del.add(f.mark - 1);
@@ -1076,7 +1079,7 @@
       for (const b of [...own, ...needs]) behLines(P, b).forEach(del);
       pl.done();
       const name = node.var || KIND_LABEL(node).toLowerCase();
-      const still = node.var && S.model.getLinesContent().some((l) => new RegExp(String.raw`\b${node.var}\b`).test(K.stripComment(l).code));
+      const still = node.var && S.model.getLinesContent().some((l) => wordRe(node.var).test(K.stripComment(l).code));
       if (still) ide.toast(`Removed. Some code still mentions ${node.var}. Check the red marks when you run.`, 'error', 5000);
       else if (needs.length) {
         const by = new Map();
