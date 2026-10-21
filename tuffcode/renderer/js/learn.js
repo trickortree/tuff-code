@@ -464,7 +464,7 @@
       title: 'Reading JSON',
       body: `<p>Most APIs answer in <b>JSON</b>, a way of writing data as names and values, like <code>{"fact": "Cats nap a lot", "length": 14}</code>.</p>
              <p><code>data = res:json</code> turns it into a <b>data object</b>. Get a value out of it with <code>data:get("fact")</code>. <code>data:keys()</code> lists every name it has.</p>`,
-      example: 'mention tap\n\nres = tap.get("https://catfact.ninja/fact")\ndata = res:json\nsay data:keys()\nsay data:get("fact")\nsay "That fact is " + data:get("length") + " letters long."',
+      example: 'mention tap\n\nres = tap.get("https://catfact.ninja/fact")\ndata = res:json\nsay data:keys()\nsay data:get("fact")\nsay "That fact is " + data:get("length") + " characters long."',
       task: 'Get a random joke, then say its <code>"setup"</code> and its <code>"punchline"</code>.',
       starter: '# Section 3, Lesson 2: Reading JSON\n# Get a random joke, then say its "setup" and its "punchline".\n\nmention tap\n\nres = tap.get("https://official-joke-api.appspot.com/random_joke")\n',
       solution: 'mention tap\n\nres = tap.get("https://official-joke-api.appspot.com/random_joke")\njoke = res:json\nsay joke:get("setup")\nsay joke:get("punchline")\n',
