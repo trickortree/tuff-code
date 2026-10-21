@@ -735,6 +735,17 @@ export default async (t, ctx) => {
   await waitFor(`window.__code() === ${JSON.stringify(preClose)}`, 4000);
   await settle();
 
+  // Ask an agent: when Tuff Agents couldn't send it (an agent is still replying), the box and the words stay.
+  await ev(`(() => { window.__realAsk = window.tuffAskAgent; window.__asked = []; window.tuffAskAgent = async (text) => { window.__asked.push(text); return false; }; return 1; })()`);
+  await ev(`document.querySelector('#en-ask').click()`);
+  await waitFor(`!!document.querySelector('.en-askbox textarea')`, 3000);
+  await ev(`(() => { document.querySelector('.en-askbox textarea').value = 'and add three lives please'; return 1; })()`);
+  await clickSel('.en-askbox [data-mode="edit"]');
+  await t.sleep(300);
+  check(await ev(`!!document.querySelector('.en-askbox') && document.querySelector('.en-askbox textarea').value === 'and add three lives please' && !document.querySelector('.en-askbox [data-mode="edit"]').disabled`) && (await ev('window.__asked')).length === 1,
+    "Ask an agent: when it couldn't be sent, the box stays open with what the kid wrote", await ev('window.__asked'));
+  await ev(`(() => { document.querySelector('.en-askbox [data-a="x"]')?.click(); if (window.__realAsk) window.tuffAskAgent = window.__realAsk; else delete window.tuffAskAgent; return 1; })()`);
+
   // The gamepad never opens an empty Tuff Engine: a game it showed that's gone gives way to the .tuf tab that's open.
   const gone = path.join(ctx.root, 'gone.tuf');
   fs.writeFileSync(gone, coinDash);

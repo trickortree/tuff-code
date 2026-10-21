@@ -2757,7 +2757,8 @@ func play_again():
     document.addEventListener('keydown', onEsc, true);
     box.onmousedown = (e) => { if (e.target === box) close(); };
     $('[data-a="x"]', box).onclick = close;
-    $$('[data-mode]', box).forEach((b) => (b.onclick = () => {
+    const btns = $$('[data-mode]', box);
+    btns.forEach((b) => (b.onclick = async () => {
       const text = ta.value.trim();
       if (!text) { ta.focus(); ide.toast('Write what you want first.'); return; }
       if (typeof window.tuffAskAgent !== 'function') {
@@ -2766,7 +2767,16 @@ func play_again():
         return;
       }
       S.lastAsk = { text, mode: b.dataset.mode, note: noteFor(about) };
-      window.tuffAskAgent(text, { mode: b.dataset.mode, note: S.lastAsk.note });
+      btns.forEach((x) => { x.disabled = true; });
+      let sent;
+      try { sent = await window.tuffAskAgent(text, { mode: b.dataset.mode, note: S.lastAsk.note }); } catch { sent = false; }
+      // Not sent (an agent is still replying, or isn't ready: Tuff Agents' toast says which): the box and what the
+      // kid wrote stay, to send again. Tuff Agents gives false then; anything else means it went.
+      if (sent === false) {
+        btns.forEach((x) => { x.disabled = false; });
+        if (box.isConnected) ta.focus();
+        return;
+      }
       close();
     }));
     ta.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('[data-mode="edit"]', box).click(); } };
