@@ -75,13 +75,9 @@ Tuff Bench through the app's own Tuff AI code (`run.mjs --app`), Qwen3.5-2B Q4_K
 - Low (192): the improver turned 15 failures into passes and 5 passes into failures.
 - Medium (512): the improver turned 13 failures into passes and 7 passes into failures.
 
-**What was chosen** (`LEVELS` in `tuffcode/ai.js`):
-- **The improver is always on.** It's free and gives the biggest jump: Off goes from 24% to 34%.
-- **Off** (no thinking): 34%, 1.6 s median on the GPU.
-- **Low** (128 thought tokens), **the default**: 38%, 2.9 s. 192 tokens scored about the same (39%) and adds about 21 s per answer on a 4-thread CPU, so 128 was taken to keep laptops quicker (not measured on the CPU at 128; expect about two-thirds of that).
-- **Medium** (256 tokens, plus the rewrite): 43% on 40 tasks, 4.0 s, the best measured.
-- **High** (512 tokens, plus the rewrite): 35%, 6.8 s. Its old budget of 1024 did worst of all (15% on 39 tasks), because the model loops when it thinks long; its description says it's slower and not always better.
+**What was chosen** (`LEVELS` in `tuffcode/ai.js`): Off 0, **Low 128 (the default)**, Medium 256 with the rewrite, High 512 with the rewrite. 1024 did worst of all (15% on 39 tasks), because the model loops when it thinks long; High says it's slower and not always better. The improver is always on.
 - The run was cut short on purpose to ship sooner: High (1024) stopped at 39 tasks, and High with the improver wasn't run.
+- **Read the next section before trusting these numbers:** a rerun with the final 1.0.5 code a few hours later didn't reproduce the gaps.
 
 **Rerun after the 1.0.5 review** (2026-10-21). The second Low (128) row is `results/think/low128-improved-v2-gpu.jsonl`: the app's code after three fixes. The system prompt no longer has the sentence to answer "who are you?" with (Pumice 1 began almost every answer with it: 76 of 80 below, and 58 of the 60 answers in the Medium (256) and CPU rows, which were measured with it). The improver no longer calls "I don't get…" or "should I…?" a fix when a file is open, and knows "make a game where you catch apples" is a tgame game. And tgame's "Games Tuff Engine can edit" section, a section of its own in the guide, no longer goes into console messages (it went into 66 of the 255): 245 of the 255 messages now get the same guide sections as when the 38% row was measured. No task's kind or target changed.
 
@@ -94,4 +90,28 @@ To compare like with like, the same 80 tasks ran on the same day and GPU, throug
 | After the fixes, with the identity line the 38% row had (`low128-v2-with-old-identity-line-gpu`) | **28%** (22) | 25% | 0 | 1.8 |
 
 So the fixes don't lower the score. None of the three reaches the 38% row, not even with that row's own identity line, so 38% doesn't reproduce today. It isn't the scoring: its saved replies still score 30 of 80 with today's `tuff.py`. Its run was also almost twice as slow (2.9 s median), so it was probably made under other conditions, maybe like the other rows of that evening; compare new runs with these three rather than with them.
+
+## Thinking levels, rerun with the final 1.0.5 code (2026-10-21)
+The same 80 tasks a row on the same GPU, with the code that ships in 1.0.5 (Pumice 1 says who it is only when asked; the improver no longer turns questions with "don't" or "should" into "fix my program"; game requests go to tgame).
+
+**On the GPU** (vulkan):
+
+| Level (thought budget) | Improver | Tasks | **Pass, after 1 retry** | First try | Write | Apps | Fix | Fix: explained | Median s | 90th pct s | Thought tokens (mean) | Cut by the budget | Looping when cut |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Off | off | 80 | **30%** | 24% | 18% | 20% | 50% | 87% | 1.6 | 2.8 | 0 | – | – |
+| Off | on | 80 | **31%** | 29% | 23% | 40% | 40% | 63% | 1.1 | 2.8 | 0 | – | – |
+| Low (128) | on | 80 | **33%** | 29% | 20% | 30% | 50% | 67% | 1.6 | 3.8 | 165 | 80 of 80 | 1 |
+| Medium (256) | on | 80 | **30%** | 30% | 20% | 10% | 50% | 83% | 2.4 | 4.7 | 333 | 80 of 80 | 6 |
+
+**The improver, task by task** (the same tasks with and without it):
+
+- Off: the improver turned 13 failures into passes and 12 passes into failures.
+
+**What this means:**
+- **The earlier gaps don't reproduce.** That evening: Off 24% → 34% with the improver, Low 38%, Medium 43%. This rerun: 30%, 31%, 33%, 30%. On 80 tasks a few tasks either way is noise.
+- The fix agent's own control runs agree: the unchanged release code scored 29% at Low the same morning, the same as the fixed code.
+- So 1.0.5 doesn't claim a score gain from the levels or the improver. What they do give:
+  - **The improver:** the question shown as a clear task, and fewer wrong "fix my program" answers.
+  - **Thinking:** visible thinking with a hard cap, so it can't loop.
+- **Low stays the default:** it costs about 0.5 s on a graphics card. On a 4-thread laptop CPU it adds about 14–21 s per answer, so Off may be the better default there (an open task).
 
