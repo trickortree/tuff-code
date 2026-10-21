@@ -385,7 +385,11 @@ const MODELS = {
 };
 
 async function models(id, fresh = false) {
-  if (id === 'tuffai') return { models: ai.MODELS.map((m) => ({ id: m.id, name: m.name, sub: m.sub, efforts: [] })), efforts: [] };
+  // Tuff AI has one model, Pumice 1, and its own thinking levels (ai.js).
+  if (id === 'tuffai') {
+    const efforts = ai.LEVELS.map((l) => ({ id: l.id, name: l.name, sub: l.sub }));
+    return { models: ai.MODELS.map((m) => ({ id: m.id, name: m.name, sub: m.sub, efforts, defaultEffort: ai.DEFAULT_LEVEL })), efforts: [] };
+  }
   if (!MODELS[id]) return { models: [], efforts: [] };
   if (modelCache[id] && !fresh) return modelCache[id];
   const file = await resolveBin(id);
@@ -750,8 +754,10 @@ function antigravityParser() {
 
 const PARSERS = { claude: claudeParser, codex: codexParser, antigravity: antigravityParser };
 
-async function run({ runId, agent, prompt, root, mode, session, model, effort }, emit) {
-  if (AGENTS[agent]?.local) return ai.run({ runId, prompt, model }, emit);
+async function run(params, emit) {
+  const { runId, agent, prompt, root, mode, session, model, effort } = params;
+  // Tuff AI also gets the question's parts (the open file, the last run's error…) for its improver.
+  if (AGENTS[agent]?.local) return ai.run({ runId, prompt, model, effort, ai: params.ai }, emit);
   const send = (e) => emit({ runId, ...e });
   const file = await resolveBin(agent);
   if (!file) { send({ kind: 'done', ok: false, error: `${AGENTS[agent].name} isn't installed. ${AGENTS[agent].install}` }); return; }
