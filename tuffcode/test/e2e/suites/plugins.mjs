@@ -30,7 +30,7 @@ export default async (t, ctx) => {
 
   // 1. marketplace
   await ev(`document.querySelector('.ts-btn[data-tool="plugins"]').click()`);
-  // The list waits for the online copy on GitHub (6 s at most), which can be slow on a CI machine.
+  // The list TuffCode comes with shows straight away; the online entries are added when they come (plugins-startup).
   await waitFor(`!!document.querySelector('.pl-card[data-id="snippets"]')`, 10000);
   await t.sleep(200);
   const ids = await ev(`[...document.querySelectorAll('.pl-card')].map(c => c.dataset.id)`);

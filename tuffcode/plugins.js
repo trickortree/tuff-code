@@ -8,11 +8,15 @@ const { pathToFileURL } = require('url');
 
 const BUILTIN_DIR = path.join(__dirname, 'plugins');
 const REGISTRY_URL = 'https://raw.githubusercontent.com/trickortree/tuff-code/main/tuffcode/plugins/registry.json';
+// The e2e tests serve their own online list (a slow one, or none) from this computer.
+const TEST_URL = /^http:\/\/(127\.0\.0\.1|localhost):\d+\//.test(process.env.TUFFCODE_REGISTRY_URL || '') ? process.env.TUFFCODE_REGISTRY_URL : null;
 const SAFE_SOURCE = /^https:\/\/(raw\.githubusercontent\.com|github\.com)\//;
 const SAFE_FILE = /^[\w-]+(\/[\w-]+)*\.(json|js|css|svg|png|md)$/;
 
 let settings = { load: () => ({}), save: () => {} };
-let cache = null;
+let bundled = null; // the marketplace list TuffCode comes with
+let online = null; // the newest list from GitHub, once it has come
+let fetching = null; // the request for it, while it's on its way
 
 const userDir = () => path.join(app.getPath('userData'), 'plugins');
 const state = () => settings.load().plugins || {};
@@ -43,25 +47,33 @@ async function bundledRegistry() {
   try { return entries(JSON.parse(await fsp.readFile(path.join(BUILTIN_DIR, 'registry.json'), 'utf8'))); } catch { return []; }
 }
 
+// The online list's entries, or null when it didn't come (offline, or no answer within 6 s).
 async function remoteRegistry() {
   try {
-    const res = await Promise.race([net.fetch(REGISTRY_URL, { headers: { 'Cache-Control': 'no-cache' } }), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))]);
-    if (!res.ok) return [];
+    const res = await Promise.race([net.fetch(TEST_URL || REGISTRY_URL, { headers: { 'Cache-Control': 'no-cache' } }), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))]);
+    if (!res.ok) return null;
     return entries(await res.json());
-  } catch { return []; }
+  } catch { return null; }
 }
 
-// The marketplace: the list that ships with TuffCode, updated from GitHub when online.
-async function registry(force) {
-  if (cache && !force) return cache;
-  const byId = new Map();
-  for (const p of await bundledRegistry()) byId.set(p.id, p);
-  for (const p of await remoteRegistry()) {
+// Asks GitHub for the newest list, one request at a time. If it doesn't come, the last one that did is kept.
+function fetchOnline() {
+  if (!fetching) fetching = remoteRegistry().then((r) => { if (r) online = r; }).finally(() => { fetching = null; });
+  return fetching;
+}
+
+// The marketplace: the list that ships with TuffCode, with the online list's entries added once it has
+// come. Only goOnline waits for the network (up to 6 s, the refresh button): startup never does, so the
+// cards show and installed plugins start straight away, and the IDE asks again for the online entries.
+async function registry(goOnline) {
+  if (!bundled) bundled = await bundledRegistry();
+  if (goOnline) await fetchOnline();
+  const byId = new Map(bundled.map((p) => [p.id, p]));
+  for (const p of online || []) {
     if (!p.id || (byId.get(p.id)?.builtin && !p.source)) continue;
     byId.set(p.id, { ...byId.get(p.id), ...p });
   }
-  cache = [...byId.values()];
-  return cache;
+  return [...byId.values()];
 }
 
 function dirFor(id, entry) {
@@ -70,8 +82,9 @@ function dirFor(id, entry) {
   return { dir: path.join(userDir(), id), builtin: false };
 }
 
-async function list(force) {
-  const reg = await registry(force);
+// goOnline: wait for the newest online list first. Without it: what TuffCode knows now, at once.
+async function list(goOnline) {
+  const reg = await registry(goOnline);
   const st = state();
   const installed = [];
   for (const [id, s] of Object.entries(st)) {
