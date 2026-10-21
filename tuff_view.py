@@ -928,3 +928,66 @@ class View:
                 while not self._closed and time.monotonic() < deadline:
                     self._cond.wait(0.1)
         self._on_closed()
+
+
+class Recorder(View):
+    """Tuff Engine's preview (tuff.py --scene): keeps every command a program's setup sends. No window, no sound.
+
+    It doesn't call View.__init__ (that opens a window): it sets just the state the inherited create, el, canvas,
+    shape, scene, obj, set, remove, call, _move_sets, on, every_frame, events, key_down, mouse_down, mouse_delta
+    and is_open use. Pictures, sounds and models come back as "asset:<path in the assets folder>"."""
+
+    def __init__(self, title="Tuff", width=900, height=600, assets=None, on_create=None, **_ignored):
+        self.title = str(title)
+        self.size = (int(width), int(height))
+        self.mouse = (0, 0)
+        self.buttons = set()
+        self.values = {}
+        self.info = {"webgl": True}
+        self.stats = {}
+        self._closed = False
+        self._ids = itertools.count(1)
+        self._cmds, self._sets, self._kids, self._parents, self._handlers = [], {}, {}, {}, {}
+        self._ticks, self._frame_events, self._keys = [], [], {}
+        self._mdx = self._mdy = 0.0
+        self._assets = os.path.abspath(assets) if assets else None
+        self._on_create = on_create
+
+    def create(self, kind, type_=None, parent=0, **props):
+        node = super().create(kind, type_, parent, **props)
+        if self._on_create:
+            self._on_create(int(node))
+        return node
+
+    def ask(self, id_, method, *args, timeout=5.0):
+        return None
+
+    def js(self, code):
+        pass
+
+    def url(self, path):
+        if not self._assets:
+            raise ViewError("This window wasn't given an assets folder.")
+        full = os.path.abspath(os.path.join(self._assets, path))
+        if not _inside(full, self._assets) or not os.path.isfile(full):
+            raise ViewError(f"Couldn't find '{path}'. Put the file in {self._assets}.")
+        return "asset:" + os.path.relpath(full, self._assets).replace(os.sep, "/")
+
+    def flush(self): pass
+    def frame(self): return 0.0
+    def loop(self): pass
+    def page_stats(self, reset=False): return {}
+    def set_title(self, title): self.title = str(title)
+    def resize(self, width, height): pass
+    def move(self, x, y): pass
+    def minimize(self): pass
+    def maximize(self): pass
+    def restore(self): pass
+    def fullscreen(self): pass
+    def close(self): self._closed = True
+
+    def record(self):
+        """Every command so far, in order (the changes still being merged go last, as a frame would send them)."""
+        if self._sets:
+            self._move_sets()
+        return self._cmds

@@ -134,15 +134,17 @@ TuffPlugins.register('tuff-agents', (t) => {
   });
   // The Run panel's Explain button on a Tuff error.
   window.tuffExplainError = (error) => quick(`I ran my program and got this error. Explain in simple words what's wrong and how to fix it:\n\`\`\`\n${error.trim()}\n\`\`\``);
+  // Tuff Engine's "Ask an agent": opts.mode ('plan' | 'ask' | 'edit') and opts.note (added to the prompt, not shown in the chat).
+  window.tuffAskAgent = (text, opts = {}) => quick(text, opts);
 
-  async function quick(text) {
+  async function quick(text, opts = {}) {
     panel.open();
     // The first time the panel opens, it's still looking for agents. Wait for that, or send() thinks
     // the agent isn't installed.
     if (!S.agents) await looking;
     if (S.view === 'setup') showSetup(false);
     if (S.run) { t.toast('Wait for the reply to finish, or press Stop, then try again.'); return; }
-    send(text);
+    send(text, opts);
   }
 
   // ---------------------------------------------------------------- layout
@@ -1216,7 +1218,7 @@ TuffPlugins.register('tuff-agents', (t) => {
 
   // bare: just the message (no open file, selection or chat history), for the tools test.
   // full: the whole chat since the last summary (for /compact), not just what's new to this agent.
-  function buildPrompt(text, { mode = S.mode, bare = false, full = false } = {}) {
+  function buildPrompt(text, { mode = S.mode, bare = false, full = false, note = '' } = {}) {
     if (isLocal(S.agent)) return text; // its parts go separately (aiParts)
     const file = t.editor.file();
     const parts = [
@@ -1276,6 +1278,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     const dropped = pool.length - kept.length;
     const said = (dropped ? `(${dropped} earlier message${dropped > 1 ? 's' : ''} left out)\n` : '') + kept.join('\n');
     if (kept.length) parts.push(`${resumes ? 'Since you last answered, this happened in the chat' : 'Earlier in this chat'} (for context only: all of it has been answered already):\n<chat>\n${said}\n</chat>`);
+    if (note && !bare) parts.push(note);
     parts.push(`Their new message. This is what to answer now:\n<message>\n${text}\n</message>`);
     return parts.join('\n\n');
   }
@@ -1298,7 +1301,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     const ctx = test || compacting ? '' : [file && S.useFile ? short(file) : '', lines && S.useSel ? `lines ${lines[0]}–${lines[1]}` : ''].filter(Boolean).join(', ');
     if (compacting) S.msgs.push({ role: 'note', text: `${a.name} is summing up the chat (/compact)…` });
     else S.msgs.push({ role: 'user', text: test ? `Test ${a.name}'s TuffCode tools` : text, ctx: ctx ? `with ${ctx}` : '', test });
-    const prompt = buildPrompt(text, { mode, bare: test, full: compacting });
+    const prompt = buildPrompt(text, { mode, bare: test, full: compacting, note: opts.note });
     const parts = a.local ? aiParts(text) : null;
     const { model, effort } = picked();
     // Pumice 1 with thinking off is just "Pumice 1".
@@ -1428,6 +1431,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     off?.();
     offAi?.();
     delete window.tuffExplainError;
+    delete window.tuffAskAgent;
     clearInterval(ctxTimer);
     if (S.run) t.agents.stop(S.run.id);
   };

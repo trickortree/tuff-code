@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Tuff Engine preview</title>
+<!-- Tuff Engine's preview: the real game engine (tuffview://app/engine/engine.js) in an iframe. host.js says how it works. -->
+<style>
+  :root { --sel: #4da3ff; --sel-shadow: rgba(0, 0, 0, .5); }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; user-select: none; -webkit-user-select: none; }
+  #tv-root { position: absolute; inset: 0; overflow: hidden; }
+  .tv-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+  #sel2d { position: absolute; pointer-events: none; border: 2px solid var(--sel); border-radius: 3px; box-shadow: 0 0 0 1px var(--sel-shadow); }
+  #sel2d[hidden] { display: none; }
+</style></head>
+<body><div id="tv-root"></div><div id="sel2d" hidden></div>
+<script src="host.js"></script>
+<script type="module" src="/engine/engine.js"></script>
+</body></html>

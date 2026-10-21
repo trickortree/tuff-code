@@ -381,7 +381,8 @@
         return id;
       },
       remove(ln) { del.add(ln); },
-      commit() {
+      // finish(lines) -> lines: a last pass over the whole new text, inside the same undo step (Tuff Engine's fixups).
+      commit(finish) {
         const out = [];
         const at = {};
         let count = 0;
@@ -393,7 +394,8 @@
           if (!del.has(ln)) push(rep.has(ln) ? rep.get(ln) : text);
           flush(ln);
         });
-        const next = out.join(eol).split(/\r?\n/);
+        let next = out.join(eol).split(/\r?\n/);
+        if (finish) next = finish(next);
         let a = 0;
         while (a < old.length && a < next.length && old[a] === next[a]) a++;
         let b = 0;
@@ -1138,8 +1140,11 @@
     $('#sd-libseg').classList.toggle('off', !p.win);
     updateUndo();
     if (!p.win) {
-      stage.innerHTML = `<div class="sd-none">${ICONS.window}<b>This file doesn't have an app window yet</b><span>Start from a template, or add an empty window and drag widgets onto it.</span>
-        <div><button class="btn primary" data-a="tpl">Pick a template</button><button class="btn" data-lib="mtgui">Empty modern window</button><button class="btn" data-lib="tgui">Empty classic window</button></div></div>`;
+      // A tgame file is a game: Tuff Engine is where it's built visually.
+      const game = /^[ \t]*(?:import|mention)[ \t]+tgame\b/m.test(S.model.getValue());
+      stage.innerHTML = `<div class="sd-none">${ICONS.window}<b>${game ? 'This is a game' : "This file doesn't have an app window yet"}</b><span>${game ? 'Games are built in Tuff Engine. Or start an app from a template, or add an empty window and drag widgets onto it.' : 'Start from a template, or add an empty window and drag widgets onto it.'}</span>
+        <div>${game ? '<button class="btn primary" data-a="engine">Open in Tuff Engine</button>' : ''}<button class="btn${game ? '' : ' primary'}" data-a="tpl">Pick a template</button><button class="btn" data-lib="mtgui">Empty modern window</button><button class="btn" data-lib="tgui">Empty classic window</button></div></div>`;
+      $('[data-a="engine"]', stage)?.addEventListener('click', () => ide.openEngine(S.file));
       $('[data-a="tpl"]', stage).onclick = openTemplates;
       $$('[data-lib]', stage).forEach((b) => (b.onclick = () => edit(() => Edits.addWindow(S.model, b.dataset.lib))));
       $('#sd-layers').innerHTML = '';
@@ -1842,5 +1847,7 @@
     closeCustomizer,
     parse,
     templates: () => TEMPLATES.map((t) => ({ ...t })),
+    // Shared with Tuff Engine (tuff-engine.js), which reads and writes tgame code the same way.
+    kit: { $, $$, esc, debounce, UI, stripComment, splitTop, closesAtEnd, parseValue, parseArgs, makeEditor, takenNames, freeName, uniqueVar, renameIdents, field, chips, control },
   };
 })();

@@ -10,6 +10,7 @@ These tests run **real .tuf games in real windows**. Each game plays itself with
 py -3 tuffcode/test/tgame/run_tests.py [test ...] [--runtime build/runtime/tuff-runtime/tuff-runtime.exe] [--out-dir folder]
 node tuffcode/test/tgame/build_exe_test.mjs          # Build exe for a game, then run the built app (about 30 s)
 node tuffcode/test/e2e/run.mjs tgame                  # (in tuffcode/) the Run button and the yellow notice, in the IDE
+node tuffcode/test/e2e/run.mjs engine-host engine     # (in tuffcode/) Tuff Engine: its preview page, then the tab itself
 ```
 
 Screenshots, the autopilot's plans and the games' JSON reports go to `tuffcode/test/tgame/out/` (ignored by git).
@@ -32,7 +33,8 @@ Don't cover the windows while the tests run: a covered page stops drawing.
 | `close` | `games/close_wait.tuf`: a loop that waits instead of calling `game:frame()` still ends when a real WM_CLOSE (the X) closes the window |
 | `hud_3d` | `games/hud_3d.tuf`: a HUD button in a 3D world gets its click, not the box behind it; 300 coins made and removed (and moved and labelled after `:remove`) don't pile up; the guide's size lists for box, cylinder, cone and plane |
 | `no_webgl` | `hud_3d.tuf` with WebGL turned off (`--disable-3d-apis`, like a PC or VM without 3D graphics): one plain Tuff error on the `tgame.world` line, not one per object |
-| `notice` | The Tuff Engine line: first in the IDE's line protocol with the `notice` style, ANSI yellow in a terminal, plain in a pipe, never for `--check`, programs without tgame or a `--windowed` app |
+| `scene` | `tuff.py --scene <game.tuf> <source.tuf> <out.json>`, Tuff Engine's preview: a game's setup run with no window (`tuff_view.Recorder`) for snake, axe_sim, breakout, features_2d, features_3d and the two templates (`coin_dash.tuf`, `island_walk.tuf`): the engine commands, every thing with the lines that made it (things made in loops and functions too), the player and what it holds, the starting camera, pictures as `asset:` paths; and that a preview never prints, waits, asks for input, goes on the internet or runs a tgui window, gives an error's line, and stops early when a setup makes too much |
+| `notice` | The Tuff Engine line ("Tuff Engine is here: open this game in TuffCode's Tuff Engine tab..."): first in the IDE's line protocol with the `notice` style, ANSI yellow in a terminal, plain in a pipe, never for `--check`, `--scene`, programs without tgame or a `--windowed` app. In the IDE the line gets an "Open Tuff Engine" button (`e2e/suites/engine.mjs` checks it) |
 | `mcp` | `tuff_run` through the MCP server shows the notice as a plain first line |
 | `checker` | `--check` accepts every game here and correct snippets, and catches 34 kinds of mistake (wrong names with "Use :box instead", input counts, colors, keys, sounds, skies, missing files, event functions) |
 | `editor` | `tuff-lang.js`: tgame's functions, docs for all 101 method names, completions that only offer tgame's own methods in files using tgame, and the 2D and 3D snippets (which pass `--check` and run) |
