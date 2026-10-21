@@ -54,7 +54,7 @@ class ViewError(Exception):
 
 
 class ViewClosed(BaseException):
-    """Raised by frame() once the window has closed, to end the program.
+    """Raised by frame() once the window has closed (after the close handlers ran), to end the program.
 
     It's a BaseException so a library's `except Exception` (like tuff.py's call_python) lets it through;
     run() catches it and returns normally.
@@ -87,9 +87,14 @@ def run(main, *args):
 
     def tuff_thread():
         try:
-            outcome["value"] = main(*args)
+            try:
+                outcome["value"] = main(*args)
+            except ViewClosed:
+                outcome["value"] = None
+                if runner.view is not None:
+                    runner.view._closing()  # the program ended because its window closed: its close handlers run
         except ViewClosed:
-            outcome["value"] = None
+            pass
         except BaseException as exc:
             outcome["error"] = exc
         finally:
@@ -392,6 +397,7 @@ class View:
         self._cond = threading.Condition()
         self._ready = threading.Event()
         self._closed = False
+        self._close_done = False  # the close handlers have run (they run once)
         self._failure = None
         self._win = None
         self._ids = itertools.count(1)
@@ -753,6 +759,23 @@ class View:
 
     def _dispatch(self, e):
         t = e.get("type")
+        if t == "close":
+            if self._close_done:
+                return
+            self._close_done = True
+        self._handle(e, t)
+
+    def _closing(self):
+        """Once the window has closed, run the close handlers now if they haven't run yet.
+
+        frame() and loop() call this as they end, because the close event can be stuck further up: in the batch
+        that _collect() was going through when a handler waited in frame() (an atgui popup does) and the window
+        closed. ViewClosed then unwinds that batch, and without this the close handlers would never run.
+        """
+        if self._closed and not self._close_done:
+            self._dispatch({"type": "close"})
+
+    def _handle(self, e, t):
         for i in e.get("path") or ():
             fns = self._handlers.get(i, NO_HANDLERS).get(t)
             if fns:
@@ -797,6 +820,7 @@ class View:
         self._check_thread()
         if self._closed:
             self._collect()
+            self._closing()
             raise ViewClosed()
         self.flush()
         self._wait_room()
@@ -805,6 +829,7 @@ class View:
         self._collect()
         self.stats["frames"] += 1
         if self._closed:
+            self._closing()
             raise ViewClosed()
         now = time.perf_counter()
         dt = now - self._last_frame if self._last_frame else 0.0
@@ -836,6 +861,7 @@ class View:
                 self._collect()
                 self.flush()
         self._collect()
+        self._closing()
 
     def _tick(self):
         """When the next frame is due. Running late by over a frame restarts the clock instead of rushing."""
