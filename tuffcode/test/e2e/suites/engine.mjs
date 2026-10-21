@@ -604,6 +604,24 @@ export default async (t, ctx) => {
     'Coin, Enemy, then Player: the Player gives the coin Collect it and the enemy Chases and Game over, and says so', { lateP, toasts: (await toasts()).slice(-3) });
   check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'late_check.tuf'), late), path.join(ctx.tmp, 'late_check.tuf'))).trim()), 'and that game passes tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'late_check.tuf')));
 
+  // Things a function made: Objects and the Inspector give the line once.
+  const snakeFile = path.join(ctx.root, 'snake.tuf');
+  fs.copyFileSync(path.join(GAMES, 'snake.tuf'), snakeFile);
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(snakeFile)})`);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(snakeFile)}`, 5000);
+  await settle(25000);
+  await waitFor(`document.querySelectorAll('#en-objects .en-group').length > 0`, 8000);
+  const snakeRows = await ev(`[...document.querySelectorAll('#en-objects .en-group .what')].map((r) => r.textContent)`);
+  const startGroup = (await dbg()).groups.find((g) => g.why === 'made by start()');
+  if (startGroup) await ev(`window.TuffEngine.test.select(${JSON.stringify(startGroup.key)})`);
+  await t.sleep(150);
+  const groupTip = await ev(`document.querySelector('#en-inspector .in-tip')?.textContent || ''`);
+  check(snakeRows.includes('made by start() (line 52)') && !snakeRows.some((r) => /on line \d+ \(line/.test(r)) && /^Made by your code on line 52 \(made by start\(\)\)\./.test(groupTip),
+    'snake.tuf: Objects says "made by start() (line 52)" and the Inspector "Made by your code on line 52 (made by start())", the line once each', { snakeRows, groupTip });
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(kid)})`);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(kid)}`, 5000);
+  await settle();
+
   // ================================================================ full size, leaving and closing
   await ev(`document.querySelector('#en-stage').focus()`);
   await key('F11', 'F11', 122);

@@ -1504,7 +1504,8 @@ func play_again():
     const w = /^(for|while|if)\b/.exec(text);
     if (w) return w[1] === 'for' ? 'inside a for loop' : w[1] === 'while' ? 'inside a while loop' : 'inside an if';
     const call = /^(?:[A-Za-z_]\w*\s*=\s*)?([A-Za-z_]\w*)\s*\(/.exec(text);
-    if (t.made.length > 1 && call && P.funcs.some((f) => f.name === call[1])) return `made by ${call[1]}() on line ${m0}`;
+    // (No line number: every place that shows this adds the line itself.)
+    if (t.made.length > 1 && call && P.funcs.some((f) => f.name === call[1])) return `made by ${call[1]}()`;
     if (t.made.length > 1) return 'made by a function';
     return 'this line does more than one thing';
   }
