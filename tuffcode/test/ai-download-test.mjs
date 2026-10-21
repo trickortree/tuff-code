@@ -507,6 +507,25 @@ try {
   const gotWithFile = Object.fromEntries(Object.keys(kindsWithFile).map((q) => [q, ai.improve({ question: q, file: 'catch.tuf', code: game }).kind]));
   check('... with their file open too: "I don\'t get…", "should I…?" and "why don\'t we…?" are not "fix my program"', Object.entries(kindsWithFile).every(([q, k2]) => gotWithFile[q] === k2), Object.fromEntries(Object.entries(gotWithFile).filter(([q, k2]) => kindsWithFile[q] !== k2)));
   check('"Asks for your name" is a console program; buttons and mtgui mean a window', ai.improve({ question: 'Make a program that asks for your name' }).target === 'console' && ai.improve({ question: 'Make an mtgui window with a button' }).target === 'window' && ai.improve({ question: 'add a score', file: 'a.tuf', code: 'mention tgui\n' }).target === 'window', null);
+  const targets = {
+    'Make a game where you catch apples': 'game',
+    'Can you make a snake game?': 'game',
+    'Make a game where you dodge falling blocks': 'game',
+    'make a pong game': 'game',
+    'Make a guessing game where the secret number is 42.': 'console',
+    'Make a program that keeps a game score in a variable.': 'console',
+    'Make an mtgui number guessing game with a Guess button': 'window',
+  };
+  const gotTargets = Object.fromEntries(Object.keys(targets).map((q) => [q, ai.improve({ question: q, file: 'main.tuf', code: 'say "Hello"\n' }).target]));
+  check('"Make a game where you catch apples" is a tgame game, even with a console program open; a guessing game or a score in a variable is still a console program', Object.entries(targets).every(([q, t]) => gotTargets[q] === t), gotTargets);
+  const apples = { question: 'Make a game where you catch apples' };
+  const applesMsg = ai.buildMessage(apples, ai.improve(apples));
+  check('... and its message has the tgame section and the tgame line in the card', /^### tgame/m.test(applesMsg) && /It's a tgame game/.test(applesMsg) && !/It's a console program/.test(applesMsg), applesMsg.slice(-600));
+  // The guide splits at every heading, so "Games Tuff Engine can edit" (under tgame) is its own section. It
+  // went into a quarter of Tuff Bench's console messages.
+  const consoleMsgs = ['Make a program that shows these three lines:\nGood morning, campers!\nBreakfast is at 8', 'Make a program that adds up the numbers in a list and shows the total.', 'Make a guessing game where the secret number is 42.'].map((q) => ai.buildMessage({ question: q }, ai.improve({ question: q })));
+  const windowMsg = ai.buildMessage({ question: 'Make an mtgui window with a heading and a button' }, ai.improve({ question: 'Make an mtgui window with a heading and a button' }));
+  check('A console or window request never gets the guide\'s tgame sections', [...consoleMsgs, windowMsg].every((t) => !/^#+ (tgame|Games Tuff Engine can edit)/m.test(t)), [...consoleMsgs, windowMsg].map((t) => t.match(/^#+ .*/gm)));
   const fixIn = { question: 'It should count to 3. Can you fix it?', file: 'C:\\p\\count.tuf', code: 'say "Counting"\nfor n in range(1, 3)\n    say n\n', runError: 'Tuff error on line 2: expected ":"\n  2 | for n in range(1, 3)\n                       ^' };
   const card = ai.improve(fixIn);
   check('A fix: the card names the file, the error\'s line and what it says, and what a good answer has', card.kind === 'fix' && /count\.tuf \(3 lines\)/.test(card.text) && /stopped at line 2 \(for n in range\(1, 3\)\): Tuff error on line 2: expected ":"/.test(card.text) && /naming the mistake and the line/.test(card.text), card.text);
