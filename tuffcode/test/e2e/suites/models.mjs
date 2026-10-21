@@ -64,10 +64,15 @@ export default async (t, ctx) => {
     await ev(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`);
     return list;
   };
+  // On a slow machine the list fills in later, and the panel can redraw (closing the menu) as it does: open the
+  // menu again if it's shut, and pick the option once it's there, in one step each time.
   const choose = async (o, v) => {
-    await ev(`${dd(o)}.querySelector('.ta-dd-btn').click()`);
-    await waitFor(`!!${dd(o)}.querySelector('.ta-dd-opt[data-v="${v}"]')`, 10000); // a slow machine fills the list later
-    await ev(`${dd(o)}.querySelector('.ta-dd-opt[data-v="${v}"]').click()`);
+    for (let i = 0; i < 60; i++) {
+      const done = await ev(`(() => { const d = ${dd(o)}; if (!d) return false; const opt = d.querySelector('.ta-dd-opt[data-v="${v}"]'); if (opt) { opt.click(); return true; } const b = d.querySelector('.ta-dd-btn'); if (b && !b.disabled && b.getAttribute('aria-expanded') !== 'true') b.click(); return false; })()`);
+      if (done) return;
+      await t.sleep(250);
+    }
+    throw new Error(`The ${o} menu never showed "${v}"`);
   };
   const shown = (o) => ev(`${dd(o)}.querySelector('.ta-dd-v').textContent`);
   const tab = (id) => ev(`document.querySelector('.ta-agents button[data-id="${id}"]').click()`);
