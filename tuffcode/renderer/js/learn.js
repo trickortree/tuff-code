@@ -149,6 +149,12 @@
       check: (src, out) => {
         if (!/\binput\b/.test(src)) return 'Ask with input first, like: n = input "A number? "';
         if (!/\bis\s+(not\s+)?err\b/.test(src)) return 'Check the answer with: if num(n) is err:';
+        // input gives text, and text is never err: what's checked has to go through num(), number() or int() first,
+        // right there (num(n) is err) or in a variable made with one (n = num(input "?") ... n is err).
+        const madeWith = (name) => new RegExp(`^\\s*${name}\\s*=\\s*(num|number|int)\\s*\\(`, 'm').test(src);
+        const converted = [...src.matchAll(/(\b(?:num|number|int)\s*\([^\n]*\)|\b\w+)\s+is\s+(?:not\s+)?err\b/g)]
+          .some(([, what]) => /^(num|number|int)\s*\(/.test(what) || madeWith(what));
+        if (!converted) return 'input gives text, and text is never err. Turn it into a number as you check: if num(n) is err:';
         return lines(out).length ? true : 'Say something with the answer.';
       },
     },

@@ -772,7 +772,19 @@ def t_scene(c):
     src = scene_source("scene_return.tuf", 'mention tgame\ngame = tgame.window("R")\nreturn 3\n')
     e = scene(src)[3].get("error") or {}
     c.check(e.get("line") == 3 and "return" in e.get("message", ""), "a return outside a function is an error on its line", e)
-    src = scene_source("scene_big.tuf", 'mention tgame\ngame = tgame.window("Big", 400, 300)\nfor i in range(1, 100000):\n    game:box(i % 400, 10)\n')
+    # Pictures come from the game's folder or a folder inside it: one in the folder above (../) is refused, even
+    # though it's there, and the message says where it has to be (the same words as --check)
+    up = os.path.join(OUT, "up")
+    os.makedirs(up, exist_ok=True)
+    with open(os.path.join(GAMES, "star.png"), "rb") as f, open(os.path.join(OUT, "star_up.png"), "wb") as g:
+        g.write(f.read())
+    src = os.path.join(up, "scene_up.tuf")
+    with open(src, "w", encoding="utf-8") as f:
+        f.write('mention tgame\ngame = tgame.window("Up", 300, 200)\nok = game:box(10, 10)\npic = game:image("../star_up.png", 50, 50)\n')
+    e = scene(src)[3].get("error") or {}
+    c.check(e.get("line") == 4 and e.get("message") == "The picture '../star_up.png' has to be next to your .tuf file, or in a folder inside it.",
+            "a picture in the folder above the game (../) is refused, saying where it has to be", e)
+    src = scene_source("scene_big.tuf",'mention tgame\ngame = tgame.window("Big", 400, 300)\nfor i in range(1, 100000):\n    game:box(i % 400, 10)\n')
     code, out, err, d, secs = scene(src)
     c.check(d.get("stopped") == "too-big" and d.get("batch") == [] and d.get("things") == [] and secs < 5,
             f"a setup that makes too much stops early as too-big ({secs:.1f} s)", (d.get("stopped"), len(d.get("batch") or []), secs))
@@ -971,6 +983,12 @@ BAD = [
     ('game = tgame.window("x")\ngame:sound "missing.wav"\n', "Couldn't find the sound 'missing.wav'."),
     ('game = tgame.window("x")\ngame:image("nope.png", 1, 2)\n', "Couldn't find the picture 'nope.png'."),
     ('game = tgame.window("x")\ngame:image("cat.txt", 1, 2)\n', "'cat.txt' isn't a picture file tgame can use."),
+    # The game window only loads files from the .tuf's folder and the folders inside it. These files are there
+    # (out/checker/../../games), but outside: they'd fail when the game runs.
+    ('game = tgame.window("x")\ngame:image("../../games/star.png", 1, 2)\n',
+     "The picture '../../games/star.png' has to be next to your .tuf file, or in a folder inside it."),
+    ('game = tgame.window("x")\ngame:sound "../../games/blip.wav"\n', "The sound '../../games/blip.wav' has to be next to your .tuf file"),
+    ('w = tgame.world("x")\nw:spawn("art/../../../games/tower.glb")\n', "The model 'art/../../../games/tower.glb' has to be next to your .tuf file"),
     ('game = tgame.window("x")\nb = game:box(1, 2)\nb:on_edge "bonce"\n', ":on_edge can be \"bounce\""),
     ('w = tgame.world("x")\nw:sky "sunny"\n', "The sky can be day, sunset, dawn, night, cloudy, space"),
     ('w = tgame.world("x")\nw:spawn("palm")\n', "tgame doesn't have a \"palm\" to spawn."),
@@ -1007,6 +1025,10 @@ GOOD_SNIPPETS = [
     'game:box(1, 2):clicked hit\ngame:clicked tap\ngame:on_key("any", key)\ngame:game_over("Bye", key)\n',
     'w = tgame.world("x")\np = w:player "third person"\na = p:hold "sword"\na:swing()\nseen = w:looking_at(4)\nif seen:\n    seen:fall()\n',
     'game = tgame.window("x")\nwhile game:open():\n    dt = game:frame()\n    if game:pressed("space") or game:held("mouse"):\n        game:sound "jump"\n',
+    # Only a newline ends a line: text holding U+2028, U+0085 or a form feed (pasted from a web page) stays one text.
+    'game = tgame.window("x")\nsay "hidden breaks in text"\ngame:text("a b\u0085c\x0cd", 10, 10)\n',
+    # Pictures in a folder inside the game's folder are fine, even written with a ../ that stays inside.
+    'game = tgame.window("x")\ngame:image("art/star.png", 1, 2)\ngame:image("art/../art/star.png", 3, 4)\n',
 ]
 
 
@@ -1015,7 +1037,9 @@ def t_checker(c):
         p = subprocess.run(tuff_cmd() + ["--check", os.path.join(GAMES, name)], capture_output=True, text=True, encoding="utf-8", timeout=60)
         c.check(p.returncode == 0 and p.stdout.strip() == "OK", f"--check accepts {name}", (p.stdout + p.stderr)[:400])
     folder = os.path.join(HERE, "out", "checker")
-    os.makedirs(folder, exist_ok=True)  # never in the temp folder: there the checker leaves file names alone
+    os.makedirs(os.path.join(folder, "art"), exist_ok=True)  # never in the temp folder: there the checker leaves file names alone
+    with open(os.path.join(GAMES, "star.png"), "rb") as f, open(os.path.join(folder, "art", "star.png"), "wb") as g:
+        g.write(f.read())
     for i, src in enumerate(GOOD_SNIPPETS):
         path = os.path.join(folder, f"good{i}.tuf")
         with open(path, "w", encoding="utf-8") as f:
