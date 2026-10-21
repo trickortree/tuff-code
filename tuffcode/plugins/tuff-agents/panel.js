@@ -1065,10 +1065,18 @@ TuffPlugins.register('tuff-agents', (t) => {
       return h.replace(/([\u0000\u0001])(\d+)\1/g, (_, mark, i) => (web && mark === '\u0001' ? raw[+i].slice(1) : raw[+i]));
     };
     const style = (x, links) => {
+      // Addresses can hold (balanced) brackets, like https://en.wikipedia.org/wiki/Tuff_(rock), but a bare
+      // one ends before a lone ")" (see https://x.com), a full stop, or the ** of **https://x.com**.
       if (links) x = x
-        .replace(/!?\[([^\]]+)\]\(\s*(?:<([^>]+)>|([^)\s]+))(?:\s+"[^"]*")?\s*\)/g, (_, text, inAngles, href) => hold(link(style(text, false), address(inAngles || href))))
+        .replace(/!?\[([^\]]+)\]\(\s*(?:<([^>]+)>|((?:[^()\s]|\([^()\s]*\))+))(?:\s+"[^"]*")?\s*\)/g, (_, text, inAngles, href) => hold(link(style(text, false), address(inAngles || href))))
         .replace(/<((?:https?|file):\/\/[^>\s\u0000]+)>/gi, (_, href) => { const to = address(href); return hold(link(esc(to), to)); })
-        .replace(/\bhttps?:\/\/[^\s<>()"'`\u0000]*[^\s<>()"'`\u0000.,;:!?]/gi, (href) => { const to = address(href); return hold(link(esc(to), to)); });
+        .replace(/(?<![a-z\d])https?:\/\/(?:[^\s<>()"'`\u0000]|\([^\s<>()"'`\u0000]*\))*(?:[^\s<>()"'`\u0000.,;:!?*~]|\([^\s<>()"'`\u0000]*\))/gi, (m, at, all) => {
+          // _https://x.com_ and __https://x.com__: the closing underscores are style, not address.
+          const u = m.match(/_+$/)?.[0] || '';
+          const tail = u && all.slice(0, at).endsWith(u) ? u : '';
+          const to = address(m.slice(0, m.length - tail.length));
+          return hold(link(esc(to), to)) + tail;
+        });
       return esc(x)
         .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
         .replace(/(^|[^\w])__([^_]+)__(?=$|[^\w])/g, '$1<b>$2</b>')
