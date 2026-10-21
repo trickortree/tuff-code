@@ -1,6 +1,6 @@
 # Tuff AI (work in progress)
 
-Tuff AI is the planned offline helper built into TuffCode. Its model is called **Pumice**, a fine-tune of Qwen3.5-2B. Nothing here ships in the app yet. The full plan lives in the project vault (`Plans/Tuff AI.md`).
+Tuff AI is the offline helper built into TuffCode. Since 1.0.4 the app has it as a preview: the Tuff AI tab in Tuff Agents downloads Qwen3.5-2B as it is and runs it with node-llama-cpp (`tuffcode/ai.js`, `tuffcode/ai-worker.mjs`). Its own model, **Pumice**, will be a fine-tune of Qwen3.5-2B. The full plan lives in the project vault (`Plans/Tuff AI.md`).
 
 This folder holds the Phase 1 work:
 
@@ -11,7 +11,7 @@ This folder holds the Phase 1 work:
   - `report.mjs`: turns the results into `RESULTS.md`.
 
 ## Running the bake-off
-node-llama-cpp isn't a dependency of the app yet, so install it somewhere outside the repo. Install only the CPU build: npm would otherwise also fetch ~570 MB of CUDA files.
+The app depends on node-llama-cpp 3.22.2 now (`tuffcode/package.json`), so after `npm ci` in `tuffcode/` you can pass `--runtime tuffcode`. To keep the bake-off separate, install it somewhere outside the repo instead. Install only the CPU build: npm would otherwise also fetch ~570 MB of CUDA files.
 
 ```bash
 mkdir ../llama-runtime
