@@ -52,6 +52,7 @@ Tuff Bench through the app's own Tuff AI code (`run.mjs --app`), Qwen3.5-2B Q4_K
 | Off | off | 80 | **24%** | 23% | 13% | 10% | 43% | 77% | 2.1 | 4.3 | 0 | – | – |
 | Off | on | 80 | **34%** | 31% | 20% | 30% | 53% | 73% | 1.6 | 4.0 | 0 | – | – |
 | Low (128) | on | 80 | **38%** | 34% | 28% | 20% | 57% | 80% | 2.9 | 7.2 | 168 | 80 of 80 | 0 |
+| Low (128) | on | 80 | **29%** | 26% | 18% | 10% | 50% | 70% | 1.6 | 4.1 | 178 | 80 of 80 | 0 |
 | Low (192) | off | 80 | **26%** | 20% | 15% | 20% | 43% | 77% | 3.2 | 7.4 | 264 | 80 of 80 | 3 |
 | Low (192) | on | 80 | **39%** | 33% | 30% | 20% | 57% | 73% | 3.5 | 7.5 | 257 | 80 of 80 | 1 |
 | Medium (256) | on | 40 | **43%** | 38% | 30% | 20% | 67% | 73% | 4.0 | 7.2 | 346 | 40 of 40 | 1 |
@@ -81,4 +82,16 @@ Tuff Bench through the app's own Tuff AI code (`run.mjs --app`), Qwen3.5-2B Q4_K
 - **Medium** (256 tokens, plus the rewrite): 43% on 40 tasks, 4.0 s, the best measured.
 - **High** (512 tokens, plus the rewrite): 35%, 6.8 s. Its old budget of 1024 did worst of all (15% on 39 tasks), because the model loops when it thinks long; its description says it's slower and not always better.
 - The run was cut short on purpose to ship sooner: High (1024) stopped at 39 tasks, and High with the improver wasn't run.
+
+**Rerun after the 1.0.5 review** (2026-10-21). The second Low (128) row is `results/think/low128-improved-v2-gpu.jsonl`: the app's code after three fixes. The system prompt no longer has the sentence to answer "who are you?" with (Pumice 1 began almost every answer with it: 76 of 80 below, and 58 of the 60 answers in the Medium (256) and CPU rows, which were measured with it). The improver no longer calls "I don't get…" or "should I…?" a fix when a file is open, and knows "make a game where you catch apples" is a tgame game. And tgame's "Games Tuff Engine can edit" section, a section of its own in the guide, no longer goes into console messages (it went into 66 of the 255): 245 of the 255 messages now get the same guide sections as when the 38% row was measured. No task's kind or target changed.
+
+To compare like with like, the same 80 tasks ran on the same day and GPU, through the app's code, as two controls in `results/think/controls/`:
+
+| Run | Pass, after 1 retry | First try | Answers that say who it is, unasked | Median s |
+| --- | --- | --- | --- | --- |
+| release/1.0.5 as it was (`low128-release-1.0.5-gpu`) | **29%** (23) | 23% | 76 of 80 | 1.8 |
+| After the fixes (`low128-improved-v2-gpu`, the row above) | **29%** (23) | 26% | 0 | 1.6 |
+| After the fixes, with the identity line the 38% row had (`low128-v2-with-old-identity-line-gpu`) | **28%** (22) | 25% | 0 | 1.8 |
+
+So the fixes don't lower the score. None of the three reaches the 38% row, not even with that row's own identity line, so 38% doesn't reproduce today. It isn't the scoring: its saved replies still score 30 of 80 with today's `tuff.py`. Its run was also almost twice as slow (2.9 s median), so it was probably made under other conditions, maybe like the other rows of that evening; compare new runs with these three rather than with them.
 
