@@ -42,10 +42,13 @@ You only do this once. On a Mac, TuffCode tells you when there's a new version a
 ## Features
 
 - **PyCharm-style IDE:** project tree, tabs, Monaco editor with Tuff highlighting, autocomplete and hover help, a Run window with input, Search Everywhere (double Shift), and PyCharm shortcuts.
-- **Learn Tuff:** a step-by-step tutorial that checks your answers.
+- **Learn Tuff:** a step-by-step tutorial that checks your answers. Every section after Basics is optional.
   - Basics: 10 lessons (the newest: checking answers with `err`).
   - Section 2, apps with tgui: 8 lessons.
-  - Section 2.2, modern apps with mtgui: 4 lessons.
+  - Section 2.1, modern apps with mtgui: 4 lessons.
+  - Section 2.2, advanced apps with atgui: 8 lessons.
+  - Section 3, the internet with tap: 7 lessons.
+  - Section 4, games with tgame: 8 lessons.
 - **tgui and mtgui:** real desktop windows with buttons, text boxes, switches, checkboxes, dropdowns, sliders, progress bars, spinners, clocks, cards and rows. mtgui adds gradients, gloss, shine and glow. Anything animated has `:speed`.
 - **atgui:** modern app windows made of real HTML and CSS, the kind of apps Claude or Codex are: sidebars, lists, chat bubbles, tables, charts, markdown, menus, pop-ups, toasts, key shortcuts, animations, glass and gradients, a custom title bar. Everything from mtgui works too.
 - **tgame:** games, like pygame. 2D sprites, keys, the mouse, collisions and sounds, or 3D worlds with a sky, an island, trees, rocks and houses, `.glb` models and a first- or third-person player. Write a `while game:open():` loop or use events. (Tuff Engine, a visual game maker, is coming soon.)
