@@ -81,6 +81,59 @@ def window_of(pid, title):
     return found[0] if found else None
 
 
+def os_close(when):
+    """Run programs/osclose.tuf through plain tuff.py and send its window WM_CLOSE (what the X sends), `when`:
+    "appears" (the instant it does), "loads" (0.15 s later), "runs" (once its timer said "running") or "gone"
+    (like "runs", then the process is ended as soon as the window has gone)."""
+    import ctypes
+    import threading
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    user32.IsWindow.argtypes = user32.IsWindowVisible.argtypes = (wintypes.HWND,)
+    proc = subprocess.Popen([sys.executable, TUFF, "tuffcode/test/atgui/programs/osclose.tuf"], cwd=REPO, env=ENV,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+    out, err = [], []
+
+    def read_out():
+        for line in proc.stdout:
+            out.append(line.rstrip("\r\n"))
+    readers = [threading.Thread(target=read_out, daemon=True),
+               threading.Thread(target=lambda: err.append(proc.stderr.read()), daemon=True)]
+    for t in readers:
+        t.start()
+    hwnd = None
+    deadline = time.monotonic() + 20
+    while hwnd is None and time.monotonic() < deadline and proc.poll() is None:
+        hwnd = window_of(proc.pid, "atgui close test")
+        if hwnd is None:
+            time.sleep(0.005)
+    if when == "loads":
+        time.sleep(0.15)
+    elif when in ("runs", "gone"):
+        while "running" not in out and time.monotonic() < deadline and proc.poll() is None:
+            time.sleep(0.01)
+        time.sleep(0.2)
+    result = {"hwnd": hwnd, "gone_ms": None}
+    closed_at = time.perf_counter()
+    if hwnd is not None:
+        user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+        if when == "gone":
+            while user32.IsWindow(hwnd) and user32.IsWindowVisible(hwnd) and time.perf_counter() - closed_at < 10:
+                time.sleep(0.001)
+            result["gone_ms"] = round((time.perf_counter() - closed_at) * 1000)
+            proc.kill()
+    try:
+        proc.wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    result["took"] = time.perf_counter() - closed_at
+    for t in readers:
+        t.join(5)
+    result.update(code=proc.returncode, lines=[x for x in out if x.strip()], err="".join(err))
+    return result
+
+
 def lines(text):
     return [x for x in text.replace("\r\n", "\n").split("\n") if x.strip()]
 
@@ -170,28 +223,24 @@ def main():
 
     if wants("osclose") and os.name == "nt":
         print("== programs/osclose.tuf: closed with WM_CLOSE (the window's X), through plain tuff.py", flush=True)
-        proc = subprocess.Popen([sys.executable, TUFF, "tuffcode/test/atgui/programs/osclose.tuf"], cwd=REPO, env=ENV,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
-        hwnd = None
-        deadline = time.monotonic() + 20
-        while hwnd is None and time.monotonic() < deadline and proc.poll() is None:
-            hwnd = window_of(proc.pid, "atgui close test")
-            time.sleep(0.05)
-        R.check(hwnd is not None, "its window opened")
-        time.sleep(0.8)
-        closed_at = time.monotonic()
-        if hwnd is not None:
-            import ctypes
-            ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
-        try:
-            out, err = proc.communicate(timeout=20)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            out, err = proc.communicate()
-        took = time.monotonic() - closed_at
-        R.check(proc.returncode == 0 and lines(out) == ["closed by the system"] and err == "",
-                f"the program ended cleanly {took:.2f} s after WM_CLOSE, and app:closed ran", (proc.returncode, out, err))
-        R.numbers["close_after_wm_close_s"] = round(took, 2)
+        # At every moment the window can be closed: the instant it appears (its page isn't ready yet, which once
+        # made app:closed never run), while its page loads, and while its timer runs. Then once more, ending the
+        # process the moment its window has gone, as Cmd+Q on a Mac or logging off Windows does.
+        for when, what in (("appears", "the instant its window appears"), ("loads", "0.15 s later, while its page loads"),
+                           ("runs", "while its timer runs"), ("gone", "and the process ended the moment its window was gone")):
+            r = os_close(when)
+            R.check(r["hwnd"] is not None, f"{when}: its window opened")
+            if when == "gone":
+                R.check("closed by the system" in r["lines"],
+                        f"gone: app:closed had run when the window went, {r['gone_ms']} ms after WM_CLOSE", r["lines"])
+                R.numbers["close_window_gone_ms"] = r["gone_ms"]
+                continue
+            R.check(r["code"] == 0 and r["lines"] and r["lines"][-1] == "closed by the system"
+                    and r["lines"].count("closed by the system") == 1 and set(r["lines"]) <= {"running", "closed by the system"}
+                    and r["err"] == "", f"{when}: closed {what}: app:closed ran once and the program ended cleanly "
+                    f"{r['took']:.2f} s after WM_CLOSE", (r["code"], r["lines"], r["err"]))
+            if when == "runs":
+                R.numbers["close_after_wm_close_s"] = round(r["took"], 2)
 
     if wants("latency"):
         print("== programs/latency.tuf: round trips", flush=True)
