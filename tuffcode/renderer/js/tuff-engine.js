@@ -2622,7 +2622,7 @@ func play_again():
     if (ctrl && !is3d() && k === '0') { setZoom(1); return true; }
     const node = find(P, S.sel);
     const thing = node && node !== P.game ? node : null;
-    if (ctrl && k === 'd') { if (thing) act((Q) => { const n = find(Q, thing.key); return n ? Edits.duplicate(Q, n) : null; }); return true; }
+    if (ctrl && !e.shiftKey && !e.altKey && k === 'd') { if (thing) act((Q) => { const n = find(Q, thing.key); return n ? Edits.duplicate(Q, n) : null; }); return true; }
     if (ctrl || e.altKey) return false;
     if (k === 'Delete' || k === 'Backspace') { if (thing) removeKey(thing.key); return true; }
     if (k === 'Escape') { hostPost({ tuffHost: 'cancel' }); select('root'); return true; }

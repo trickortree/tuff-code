@@ -567,6 +567,16 @@ export default async (t, ctx) => {
   await key('F11', 'F11', 122);
   await t.sleep(200);
   check(await ev(`!document.querySelector('#app').classList.contains('studio-full') && getComputedStyle(document.querySelector('#tabs')).display !== 'none'`), 'and F11 again gives it back', null);
+  // The IDE's own shortcuts still work from Tuff Engine (Ctrl+D is Duplicate there, Ctrl+Shift+D isn't).
+  await ev(`window.TuffEngine.test.select('v:coin')`);
+  await ev(`document.querySelector('#en-stage').focus()`);
+  const beforeKeys = await code();
+  await t.key('D', CTRL | SHIFT);
+  await waitFor(`!document.querySelector('#studio').classList.contains('hidden')`, 4000);
+  check(!(await visible()) && await code() === beforeKeys, 'Ctrl+Shift+D from Tuff Engine opens Design Studio (and duplicates nothing)', firstDiff(await code(), beforeKeys));
+  await t.key('G', CTRL | SHIFT);
+  await waitFor(`!document.querySelector('#engine').classList.contains('hidden')`, 4000);
+  check(await visible(), 'and Ctrl+Shift+G comes back', null);
   await clickSel('#tabs .tab:not(.engine-tab):not(.studio-tab)');
   await waitFor(`document.querySelector('#engine').classList.contains('hidden')`, 3000);
   check(!(await visible()) && await ev(`!document.querySelector('#monaco').classList.contains('hidden') && !document.querySelector('.tab.engine-tab').classList.contains('active') && !!document.querySelector('#tabs .tab.active:not(.engine-tab)')`),
