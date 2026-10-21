@@ -964,8 +964,9 @@ TuffPlugins.register('tuff-agents', (t) => {
     const out = [];
     if (m.improved) {
       const plan = String(m.plan || '').replace(/(```|\*\*Answer|Answer:)[\s\S]*$/, '').trim();
+      // The model reads "```tuff block"; people read "Tuff code block".
       out.push(fold('improved', 'ta-improved', `${icon('spark')}<span>Made your request clearer</span>`,
-        `${prose(m.improved)}${plan ? `<div class="ta-fold-h">${esc(m.name || 'Pumice 1')} rewrote it as</div>${prose(plan)}` : ''}`));
+        `${prose(m.improved.replace(/```tuff (block|example)/g, 'Tuff code $1'))}${plan ?`<div class="ta-fold-h">${esc(m.name || 'Pumice 1')} rewrote it as</div>${prose(plan)}` : ''}`));
     }
     if (m.thought) {
       const secs = Math.max(1, Math.round((m.thinkMs || 0) / 1000));

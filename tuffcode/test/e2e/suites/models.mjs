@@ -195,6 +195,8 @@ export default async (t, ctx) => {
   check('... and the thinking, folded, as "Thought for N s"', folds[1]?.cls.includes('ta-thought') && !folds[1].open && /^Thought for \d+ s$/.test(folds[1].summary) && /Thinking it over/.test(folds[1].body), folds[1]);
   await ev(`[...document.querySelectorAll('.ta-msg.agent')].pop().querySelector('details.ta-thought summary').click()`);
   check('Clicking "Thought for N s" opens the thinking', await ev(`[...document.querySelectorAll('.ta-msg.agent')].pop().querySelector('details.ta-thought').open`), null);
+  await ev(`[...document.querySelectorAll('.ta-msg.agent')].pop().querySelector('details.ta-improved summary').click()`);
+  await t.sleep(200);
   await t.shot('tuffai_folds.png');
   check('Its code went through the checker', await ev(`[...[...document.querySelectorAll('.ta-msg.agent')].pop().querySelectorAll('.ta-tool')].some(x => /Checked/.test(x.textContent))`), null);
 
