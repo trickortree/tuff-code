@@ -1870,7 +1870,7 @@ func play_again():
         b.dataset.tile = t.id;
         b.title = t.tip ? `${t.label}: ${t.tip}` : t.label;
         b.disabled = !!t.off;
-        b.innerHTML = `<span class="ic">${t.icon}</span><span class="lbl">${esc(t.label)}</span>`;
+        b.innerHTML = `<span class="ic${t.thumb ? ' en-pic' : ''}">${t.thumb ? `<img alt="" src="${esc(fileUrl(t.thumb))}">` : t.icon}</span><span class="lbl">${esc(t.label)}</span>`;
         b.onclick = () => clickTile(t.id);
         grid.appendChild(b);
       }
@@ -2048,6 +2048,7 @@ func play_again():
       if (o.min !== undefined) inp.min = o.min;
       if (o.disabled) inp.disabled = true;
       if (o.title) inp.title = o.title;
+      if (o.placeholder) inp.placeholder = o.placeholder;
       l.appendChild(inp);
       row.appendChild(l);
     }
@@ -2334,9 +2335,10 @@ func play_again():
       const put2 = (k, v) => { const c = cur(); setA({ x: c.x ?? t?.x ?? 0, y: c.y ?? t?.y ?? 0, [k]: v2(v) }); };
       form.append(sec('Where', [numbers([['X', q.x ?? t?.x, (v) => put2('x', v), { disabled }], ['Y', q.y ?? t?.y, (v) => put2('y', v), { disabled }]])]));
     }
+    // What it does comes first (Chases → speed), then how it looks and how it moves by itself.
+    if (!hud && node.kind !== 'player' && node.kind !== 'light') form.append(behSection(P, node));
     if (node.kind !== 'player') form.append(lookSection(P, node, setA, setP));
     if (!hud && node.kind !== 'player' && node.kind !== 'light') form.append(movesSection(node, setP));
-    if (!hud && node.kind !== 'player' && node.kind !== 'light') form.append(behSection(P, node));
     if (node.kind !== 'player' && node.kind !== 'light') {
       const clicked = node.props.clicked?.args[0]?.raw || '';
       form.append(sec('Events', [fieldEl('When clicked', fnPick(clicked, 1, (v) => act((Q) => { const n = find(Q, key); return n ? Edits.setEvent(Q, { type: 'click', node: n }, v) : null; })))]));
@@ -2370,7 +2372,7 @@ func play_again():
       const pics = (S.assets?.pictures || []).filter((x) => x.reach).map((x) => x.rel);
       const cur = typeof f('file') === 'string' ? f('file') : '';
       kids.push(fieldEl('Picture', selectEl(pics.includes(cur) ? pics : [cur, ...pics], cur, (v) => setA({ file: v }))));
-      kids.push(numbers([['Width', isNum(f('width')) ? f('width') : '', (v) => setA({ width: v === '' ? undefined : v2(v) }), { blank: true, min: 1, title: "Empty: the picture's own width" }]]));
+      kids.push(numbers([['Width', isNum(f('width')) ? f('width') : '', (v) => setA({ width: v === '' ? undefined : v2(v) }), { blank: true, min: 1, title: "Empty: the picture's own width", placeholder: 'its own' }]]));
     }
     if (!is3 && (k === 'box')) kids.push(numbers([['Width', f('w'), (v) => v >= 0 && setA({ w: v2(v) }), { min: 0 }], ['Height', f('h'), (v) => v >= 0 && setA({ h: v2(v) }), { min: 0 }]]));
     if (!is3 && k === 'circle') kids.push(numbers([['Radius', f('r'), (v) => v >= 0 && setA({ r: v2(v) }), { min: 0 }]]));
