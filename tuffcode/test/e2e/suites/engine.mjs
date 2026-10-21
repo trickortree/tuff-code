@@ -577,6 +577,12 @@ export default async (t, ctx) => {
     "Speed 300 → 400 in a commented player_arrows changes its four numbers; the kid's comment line, '# left' and the blank line stay", changedLines(commented, faster));
   const updown = await edit(commented, `(P, E) => E.setBehaviour(P, P.behaviours.find((b) => b.type === 'arrows'), { dirs: 'updown' })`);
   check(updown.includes('    # TODO: make it faster when I get a power-up\n\n    if game:held("up"):') && !/held\("(left|right)"\)/.test(updown), 'Up/down takes away just the left and right lines', updown.split('\n').slice(19, 27));
+  // play_again follows where things start, and keeps the comments at the ends of its lines.
+  const paNote = coinDash.replace('    coin:move_to(200, 200)\n', '    coin:move_to(200, 200)  # back to the start\n');
+  const paMoved = await edit(paNote, `(P, E) => E.setArgs(P, P.byVar.coin, { x: 300, y: 300 })`);
+  const paBall = await edit(paNote, `(P, E) => E.setArgs(P, P.byVar.ball, { x: 650, y: 350 })`);
+  check(changedLines(paNote, paMoved)?.[1]?.[2] === '    coin:move_to(300, 300)  # back to the start' && changedLines(paNote, paBall)?.length === 1,
+    "the coin moved to 300, 300: play_again's line follows and keeps its comment; moving the ball (no behaviour) leaves play_again alone", { coin: changedLines(paNote, paMoved), ball: changedLines(paNote, paBall) });
 
   // ================================================================ full size, leaving and closing
   await ev(`document.querySelector('#en-stage').focus()`);

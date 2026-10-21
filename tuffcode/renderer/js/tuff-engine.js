@@ -529,6 +529,9 @@
     return out;
   }
 
+  // Which play_again line a line is: the thing a move_to moves (its spot changes), or the line itself.
+  const paKey = (code) => code.replace(/^([A-Za-z_]\w*:move_to)\(.*$/, '$1');
+
   function ownedPlayAgain(P, f) {
     return !!(f && f.mark && P.lines[f.mark - 1].trim() === PA_MARK && f.body.every((b) => PA_LINE.test(K.stripComment(b.text).code.trim())));
   }
@@ -580,11 +583,17 @@
     if (hurts.length) {
       const name = hurts[0].p.PA;
       const f = P.funcs.find((x) => x.name === name);
-      const body = playAgainBody(P).map((t) => `    ${t}`);
-      if (!f) tail = [PA_MARK, `func ${name}():`, ...body];
-      else if (ownedPlayAgain(P, f) && !same(lines.slice(f.line, f.end), body)) {
-        for (const l of range(f.line + 1, f.end)) del.add(l);
-        after.set(f.line, body);
+      if (!f) tail = [PA_MARK, `func ${name}():`, ...playAgainBody(P).map((t) => `    ${t}`)];
+      else if (ownedPlayAgain(P, f)) {
+        // Written again only when it changes, in its own indent, and each line keeps the comment at its end (found by
+        // what the line is: score = 0, the label's set, or which thing it moves).
+        const ind = f.body[0]?.text.match(/^[ \t]*/)[0] || '    ';
+        const tails = new Map(f.body.map((b) => { const { code } = K.stripComment(b.text); return [paKey(code.trim()), b.text.slice(code.length)]; }));
+        const body = playAgainBody(P).map((t) => `${ind}${t}${tails.get(paKey(t)) || ''}`);
+        if (!same(f.body.map((b) => b.text), body)) {
+          for (const l of range(f.line + 1, f.end)) del.add(l);
+          after.set(f.line, body);
+        }
       }
     } else {
       for (const f of P.funcs) {
