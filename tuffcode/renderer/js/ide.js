@@ -714,11 +714,30 @@
     updateChrome();
   }
 
+  // Which game to show: the first of these that is there (so a deleted game Tuff Engine showed last never hides the
+  // tab that's open now): the file asked for, the last game it showed and the file run last (in this folder), the
+  // open .tuf tab, main.tuf. Then the project's first game, or its first .tuf. A folder with no .tuf at all gets an
+  // empty main.tuf, so Tuff Engine opens on its start card ("Make a 2D game here") instead of an empty tab.
   async function openEngine(file) {
     hideMenus();
     const t = activeTab();
-    let target = file || engine.file || (t && ext(t.path) === 'tuf' ? t.path : null) || state.lastRunFile;
-    if (!target || !(await api.fs.exists(target))) target = join(state.root, 'main.tuf');
+    const here = (p) => (p && state.root && isUnder(p, state.root) ? p : null);
+    const want = [file, here(engine.file), t && ext(t.path) === 'tuf' ? t.path : null, here(state.lastRunFile), state.root && join(state.root, 'main.tuf')];
+    let target = null;
+    for (const p of want) if (p && (await api.fs.exists(p))) { target = p; break; }
+    if (!target && state.root) {
+      const tufs = (await api.fs.listAll(state.root)).filter((f) => f.name.endsWith('.tuf') && !/^(dist|build)[\\/]/.test(f.rel)).sort((a, b) => a.rel.localeCompare(b.rel));
+      for (const f of tufs.slice(0, 80)) {
+        try { if (/^[ \t]*(?:import|mention)[ \t]+tgame\b/m.test(await api.fs.readFile(f.path))) { target = f.path; break; } } catch { /* unreadable */ }
+      }
+      target = target || tufs[0]?.path || null;
+      if (!target) {
+        target = join(state.root, 'main.tuf');
+        try { await api.fs.createFile(target); } catch { /* made meanwhile */ }
+        await refreshTree();
+      }
+    }
+    if (!target) { toast('Open a folder first.'); return; }
     showEngine(target);
   }
 

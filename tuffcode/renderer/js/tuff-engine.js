@@ -1806,8 +1806,17 @@ func play_again():
     const want = S.file;
     const model = await ide.getModel(want);
     if (want !== S.file) return; // another file was asked for meanwhile: that show() draws it
-    if (!model) { ide.toast(`Couldn't open ${ide.basename(S.file)}.`, 'error'); return; }
     S.sub?.dispose();
+    S.sub = null;
+    if (!model) {
+      // Nothing to edit. The last file's model goes too (edits would land in the wrong file), and the start card
+      // offers what works without one: a template as a new file, or another file.
+      ide.toast(`Couldn't open ${ide.basename(S.file)}.`, 'error');
+      S.model = null;
+      fillFiles();
+      render(true);
+      return;
+    }
     S.model = model;
     S.sub = model.onDidChangeContent(K.debounce(() => {
       if (!ide.engineVisible() || model !== S.model) return;
@@ -1883,7 +1892,10 @@ func play_again():
     const show = !P.game || P.other;
     box.classList.toggle('hidden', !show);
     if (!show) return;
-    if (P.other) {
+    if (!S.model) {
+      box.innerHTML = `<div class="en-card">${ICON.pad}<b>Couldn't open ${esc(ide.basename(S.file || 'the game'))}</b><span>Start a new game from a template, or pick another file.</span>
+        <div class="en-btns"><button class="btn primary" data-a="tpl">${UI.grid}New game from a template…</button></div>${filePick()}</div>`;
+    } else if (P.other) {
       const studio = P.other !== 'atgui';
       box.innerHTML = `<div class="en-card">${ICON.game}<b>This is an app, not a game.</b><span>Tuff Engine makes tgame games. ${esc(ide.basename(S.file))} uses ${esc(P.other)}, which opens an app window${studio ? ': Design Studio builds those' : ''}.</span>
         <div class="en-btns">${studio ? `<button class="btn primary" data-a="studio">${UI.palette}Open in Design Studio</button>` : ''}<button class="btn" data-a="tpl">${UI.grid}New game from a template…</button></div>${filePick()}</div>`;
@@ -2668,9 +2680,9 @@ func play_again():
       card.className = 'sd-tcard en-tcard';
       card.dataset.id = t.id;
       card.innerHTML = `<div class="en-tthumb">${ICON[t.icon] || ICON.game}<span>${t.mode === '3d' ? '3D' : '2D'}</span></div><div class="sd-tinfo"><b>${esc(t.name)}</b><span>${esc(t.desc)}</span>
-        <div class="sd-tbtns"><button class="btn sm primary" data-a="new">New file</button><button class="btn sm" data-a="here">Use here</button></div></div>`;
+        <div class="sd-tbtns"><button class="btn sm primary" data-a="new">New file</button>${S.model ? '<button class="btn sm" data-a="here">Use here</button>' : ''}</div></div>`;
       $('[data-a="new"]', card).onclick = () => { close(); templateAsFile(t); };
-      $('[data-a="here"]', card).onclick = () => { close(); templateHere(t); };
+      $('[data-a="here"]', card)?.addEventListener('click', () => { close(); templateHere(t); });
       grid.appendChild(card);
     }
     const close = () => { box.remove(); document.removeEventListener('keydown', onEsc, true); };

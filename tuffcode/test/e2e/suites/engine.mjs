@@ -690,6 +690,28 @@ export default async (t, ctx) => {
   await waitFor(`window.__code() === ${JSON.stringify(preClose)}`, 4000);
   await settle();
 
+  // The gamepad never opens an empty Tuff Engine: a game it showed that's gone gives way to the .tuf tab that's open.
+  const gone = path.join(ctx.root, 'gone.tuf');
+  fs.writeFileSync(gone, coinDash);
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(gone)})`);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(gone)}`, 5000);
+  await clickSel('.tab.engine-tab .x');
+  await waitFor(`!document.querySelector('.tab.engine-tab')`, 3000);
+  await ev(`(() => { [...document.querySelectorAll('#tabs .tab')].find((x) => x.title === ${JSON.stringify(gone)})?.querySelector('.x').click(); return 1; })()`);
+  await t.sleep(300);
+  fs.rmSync(gone);
+  const fresh = path.join(ctx.root, 'fresh.tuf');
+  fs.writeFileSync(fresh, '');
+  await ev(`window.TuffIDE.openFile(${JSON.stringify(fresh)}).then(() => 1)`);
+  const nToasts3 = (await toasts()).length;
+  await clickSel('#toolstrip .ts-btn[data-tool="engine"]');
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(fresh)} && !!document.querySelector('#en-start:not(.hidden) [data-a="2d"]')`, 5000);
+  check(await ev(`window.TuffEngine.debug().file`) === fresh && !(await toasts()).slice(nToasts3).some((x) => /Couldn't open/.test(x)) && await ev(`!!document.querySelector('#en-start:not(.hidden) [data-a="2d"]')`),
+    "the gamepad, after the game Tuff Engine showed was deleted: it opens the .tuf tab that's open (its start card), not a blank tab", { file: await ev(`window.TuffEngine.debug().file`), toasts: (await toasts()).slice(nToasts3) });
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(kid)})`);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(kid)}`, 5000);
+  await settle();
+
   // ================================================================ full size, leaving and closing
   await ev(`document.querySelector('#en-stage').focus()`);
   await key('F11', 'F11', 122);
@@ -719,6 +741,23 @@ export default async (t, ctx) => {
   await clickSel('.tab.engine-tab .x');
   await waitFor(`!document.querySelector('.tab.engine-tab')`, 3000);
   check(!(await visible()) && !(await ev(`!!document.querySelector('.tab.engine-tab')`)), 'its X closes the tab', null);
+
+  // A new, empty folder (opened from the project menu's recent folders): the gamepad makes main.tuf and opens it on
+  // the start card, not on an empty Tuff Engine (and not on the last folder's game).
+  const emptyDir = path.join(ctx.tmp, 'new game');
+  fs.mkdirSync(emptyDir, { recursive: true });
+  await ev(`window.TuffIDE.saveSettings({ recent: [${JSON.stringify(emptyDir)}, ...(window.TuffIDE.settings().recent || [])] })`);
+  await clickSel('#project-widget');
+  await t.sleep(200);
+  const recentAt = await ev(`(() => { const m = [...document.querySelectorAll('#context-menu .mi')].find((x) => x.querySelector('span').textContent === 'new game'); const b = m?.getBoundingClientRect(); return b ? [b.left + b.width / 2, b.top + b.height / 2] : null; })()`);
+  await t.click(recentAt[0], recentAt[1]);
+  await waitFor(`window.TuffIDE.root() === ${JSON.stringify(emptyDir)}`, 5000);
+  await t.sleep(300);
+  await clickSel('#toolstrip .ts-btn[data-tool="engine"]');
+  const newMain = path.join(emptyDir, 'main.tuf');
+  await waitFor(`!!document.querySelector('#en-start:not(.hidden) [data-a="2d"]')`, 6000);
+  check(fs.existsSync(newMain) && await ev(`window.TuffEngine.debug().file`) === newMain && /Make a game in main\.tuf/.test(await ev(`document.querySelector('#en-start').textContent`)),
+    'in a new, empty folder the gamepad makes main.tuf and opens it on the start card (Make a 2D game here)', { exists: fs.existsSync(newMain), file: await ev(`window.TuffEngine.debug().file`), card: await ev(`document.querySelector('#en-start').textContent`) });
   const errors = t.events.filter((x) => /tuff-engine.js|engine-host|host.js|Tuff Engine/.test(x));
   check(!errors.length, 'no errors in the page', errors);
   fs.rmSync(PLAY, { recursive: true, force: true });
