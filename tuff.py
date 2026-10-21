@@ -1372,6 +1372,20 @@ def dot_help(what, obj_node, name, kind=None):
     return f"Only libraries use '.', and this is {what}. For methods use ':', like {owner}:{alt}"
 
 
+def leaves_folder(path, folder):
+    """Does this file path point outside the folder ("../cat.png", or a full path somewhere else)? A relative path
+    is judged on its own; a full path only when the folder is known."""
+    if not os.path.isabs(path):
+        return os.path.normpath(path).replace("\\", "/").split("/")[0] == ".."
+    if not folder:
+        return False
+    folder = os.path.normcase(os.path.abspath(folder))
+    try:
+        return os.path.commonpath([os.path.normcase(os.path.abspath(path)), folder]) != folder
+    except ValueError:  # on another drive
+        return True
+
+
 def accepts(fn, count):
     """Can fn be called with this many inputs? (True when we can't tell.)"""
     try:
@@ -2634,7 +2648,14 @@ class Checker:
                          else f"'{path}' isn't a picture. Use a .png, .jpg, .gif, .webp or .svg file.")
             return
         base = self.base_dir
-        if base and not os.path.isabs(path) and not os.path.abspath(base).lower().startswith(os.path.abspath(tempfile.gettempdir()).lower()):
+        if base and os.path.abspath(base).lower().startswith(os.path.abspath(tempfile.gettempdir()).lower()):
+            base = None  # a snippet in a temporary folder: its files aren't next to it
+        # atgui's window shows pictures from the .tuf's folder and the folders inside it (a window icon can be anywhere).
+        if not icon and leaves_folder(path, base):
+            self.problem(arg, f"'{path}' is outside the folder your .tuf file is in, so atgui can't show it. "
+                              "Put the picture next to your .tuf file, or in a folder inside it.")
+            return
+        if base and not os.path.isabs(path):
             if not os.path.isfile(os.path.join(base, path)):
                 what = "icon" if icon else "image"
                 self.problem(arg, f"Couldn't find the {what} '{path}'. Put the picture in your project folder (next to your .tuf file).")

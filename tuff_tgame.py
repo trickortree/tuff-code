@@ -408,8 +408,8 @@ class Game:
             raise self.rt.error(f"Couldn't find the {what} '{rel}'. Put it in your project folder, next to your .tuf file.")
         try:
             return self.view.url(full), full
-        except self.tv.ViewError:
-            raise self.rt.error(f"The {what} '{rel}' has to be inside your project folder.")
+        except self.tv.ViewError:  # the window only serves files in the .tuf's folder and the folders inside it
+            raise self.rt.error(f"The {what} '{rel}' has to be next to your .tuf file, or in a folder inside it.")
 
     def fire(self, fn, *args):
         return self.rt.call(fn, *args)[0]
@@ -2911,6 +2911,18 @@ def check_value(kind, method, index, value, base_dir=None):
     def file_problem(exts, word):
         if not low.endswith(exts):
             return f"'{value}' isn't a {word} file tgame can use. Use {', '.join(exts[:-1])} or {exts[-1]}."
+        # The game window only loads files from the .tuf's folder and the folders inside it (Game.file_url).
+        path = value.strip()
+        if not os.path.isabs(path):
+            outside = os.path.normpath(path).replace("\\", "/").split("/")[0] == ".."
+        else:
+            try:
+                folder = os.path.normcase(os.path.abspath(base_dir)) if base_dir else None
+                outside = folder is not None and os.path.commonpath([os.path.normcase(os.path.abspath(path)), folder]) != folder
+            except ValueError:  # another drive
+                outside = True
+        if outside:
+            return f"The {word} '{path}' has to be next to your .tuf file, or in a folder inside it."
         if base_dir and not os.path.isabs(value) and not os.path.isfile(os.path.join(base_dir, value)):
             return f"Couldn't find the {word} '{value}'. Put it in your project folder, next to your .tuf file."
         return None
