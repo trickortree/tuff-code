@@ -330,8 +330,8 @@
         if (!/^\s*(import|mention)\s+atgui\b/m.test(src)) return 'Start with: mention atgui';
         if (!/atgui\.window\s*\(/.test(src)) return 'Make a window with: app = atgui.window("My App")';
         if (!/:heading\b/.test(src)) return 'Add a heading, like: app:heading "Hello!"';
-        if (!/:button\s*\(/.test(src)) return 'Add a button, like: app:button("Save", saved)';
-        return /:toast\s*\(/.test(src) ? true : 'In the button\'s function, pop up a toast: app:toast("Hi!", "info")';
+        if (!/:button\b/.test(src)) return 'Add a button, like: app:button("Save", saved)';
+        return /:toast\b/.test(src) ? true : 'In the button\'s function, pop up a toast: app:toast("Hi!", "info")';
       },
     },
     {
@@ -344,8 +344,8 @@
       starter: '# Section 2.2, Lesson 2: Icons and badges\n# Give a button an icon, and add a badge next to something.\n\nmention atgui\n\napp = atgui.window("Icons", 520, 360)\n\n',
       solution: 'mention atgui\n\napp = atgui.window("Icons", 520, 360)\nrow = app:row\nrow:heading "Messages"\nrow:badge("2 new", "info")\n\nfunc sent():\n    app:toast("Sent!", "success")\n\napp:button("Send", sent):icon "send"\n',
       check: (src) => {
-        if (!/\):icon\b|\w+:icon\s+"/.test(src)) return 'Put an icon on a button: app:button("Send", sent):icon "send"';
-        return /:badge\s*\(/.test(src) ? true : 'Add a badge, like: app:badge("New", "success")';
+        if (!/:icon\b/.test(src)) return 'Put an icon on a button: app:button("Send", sent):icon "send"';
+        return /:badge\b/.test(src) ? true : 'Add a badge, like: app:badge("New", "success")';
       },
     },
     {
@@ -358,8 +358,8 @@
       starter: '# Section 2.2, Lesson 3: Sidebars and lists\n# Make a sidebar with a list. When an item is picked, show its name in a heading.\n\nmention atgui\n\napp = atgui.window("Sidebar", 700, 420)\n\n',
       solution: 'mention atgui\n\napp = atgui.window("Sidebar", 700, 420)\nside = app:sidebar(220)\nside:heading "Pets"\npets = side:list(["Cat", "Dog", "Fish"])\nshown = app:heading "Pick a pet"\n\nfunc picked(pet):\n    shown:set "You picked " + pet\n\npets:change picked\n',
       check: (src) => {
-        if (!/:sidebar\s*\(/.test(src)) return 'Make a sidebar with: side = app:sidebar(220)';
-        if (!/:list\s*\(/.test(src)) return 'Put a list in it: items = side:list(["Ideas", "Shopping"])';
+        if (!/:sidebar\b/.test(src)) return 'Make a sidebar with: side = app:sidebar(220)';
+        if (!/:list\b/.test(src)) return 'Put a list in it: items = side:list(["Ideas", "Shopping"])';
         return /:change\b/.test(src) ? true : 'Run a function when an item is picked: items:change picked';
       },
     },
@@ -374,8 +374,8 @@
       solution: 'mention atgui\n\napp = atgui.window("Party", 480, 360)\ncard = app:card\ncard:style("radius", 20)\ncard:style("background", "pink")\nbig = card:heading "Party time"\n\nfunc party():\n    big:animate "bounce"\n\ncard:button("Bounce", party)\n',
       check: (src) => {
         if (!/:card\b/.test(src)) return 'Make a card with: card = app:card';
-        if (!/:style\s*\(/.test(src)) return 'Style it, like: card:style("radius", 20)';
-        if (!/:button\s*\(/.test(src)) return 'Add a button that runs a function: card:button("Go", go)';
+        if (!/:style\b/.test(src)) return 'Style it, like: card:style("radius", 20)';
+        if (!/:button\b/.test(src)) return 'Add a button that runs a function: card:button("Go", go)';
         return /:animate\b/.test(src) ? true : 'In the button\'s function, animate something: label:animate "bounce"';
       },
     },
@@ -389,7 +389,7 @@
       starter: '# Section 2.2, Lesson 5: Pop-ups\n# Make a button that opens a modal with a text box inside it.\n\nmention atgui\n\napp = atgui.window("Pop-ups", 520, 360)\n\n',
       solution: 'mention atgui\n\napp = atgui.window("Hello", 520, 360)\nhello = app:heading "Hello!"\ndlg = app:modal("Your name")\nbox = dlg:input "Type your name"\n\nfunc done():\n    hello:set "Hello, " + box:value() + "!"\n    dlg:close\n\nfunc ask_name():\n    dlg:open\n\ndlg:button("Done", done)\napp:button("Change name", ask_name)\n',
       check: (src) => {
-        if (!/:modal\s*\(/.test(src)) return 'Make a pop-up with: dlg = app:modal("Rename")';
+        if (!/:modal\b/.test(src)) return 'Make a pop-up with: dlg = app:modal("Rename")';
         if (!/:input\b/.test(src)) return 'Put a text box in it: box = dlg:input "New name"';
         if (!/:open\b/.test(src)) return 'Show it from a button\'s function with: dlg:open';
         return /:value\b/.test(src) ? true : 'Read what was typed with: box:value()';
@@ -405,8 +405,8 @@
       starter: '# Section 2.2, Lesson 6: Keyboard shortcuts\n# Make a key run a function that pops up a toast.\n\nmention atgui\n\napp = atgui.window("Shortcuts", 420, 300)\n\n',
       solution: 'mention atgui\n\napp = atgui.window("Space counter", 420, 300)\ncount = 0\nshown = app:heading "Press space"\n\nfunc add():\n    count += 1\n    shown:set "Pressed " + count + " times"\n    app:toast("Nice!", "info")\n\napp:key("space", add)\n',
       check: (src) => {
-        if (!/:key\s*\(/.test(src)) return 'Connect a key to a function: app:key("space", jump)';
-        return /:toast\s*\(/.test(src) ? true : 'In that function, pop up a toast: app:toast("Nice!", "info")';
+        if (!/:key\b/.test(src)) return 'Connect a key to a function: app:key("space", jump)';
+        return /:toast\b/.test(src) ? true : 'In that function, pop up a toast: app:toast("Nice!", "info")';
       },
     },
     {
@@ -419,9 +419,9 @@
       starter: '# Section 2.2, Lesson 7: Dashboards\n# Make a grid of cards with at least one chart in it.\n\nmention atgui\n\napp = atgui.window("Dashboard", 760, 420)\n\n',
       solution: 'mention atgui\n\napp = atgui.window("Game stats", 760, 420)\napp:heading "Game stats"\ngrid = app:grid(2)\nwins = grid:card\nwins:small "Wins"\nwins:heading "12"\nwins:chart([1, 3, 2, 4, 2], "bar")\nbest = grid:card\nbest:small "Best score"\nbest:heading "980"\nbest:chart([400, 650, 720, 980], "line")\n',
       check: (src) => {
-        if (!/:grid\s*\(/.test(src)) return 'Make a grid with: grid = app:grid(3)';
+        if (!/:grid\b/.test(src)) return 'Make a grid with: grid = app:grid(3)';
         if (!/:card\b/.test(src)) return 'Put cards in it: box = grid:card';
-        return /:chart\s*\(/.test(src) ? true : 'Draw a chart in a card: box:chart([3, 8, 5], "line")';
+        return /:chart\b/.test(src) ? true : 'Draw a chart in a card: box:chart([3, 8, 5], "line")';
       },
     },
     {
@@ -434,9 +434,9 @@
       starter: '# Section 2.2, Lesson 8: Build a chat app\n# Pressing Enter adds your message to a scroll area,\n# and a friend replies a second later.\n\nmention atgui\n\napp = atgui.window("Chat", 520, 560)\n\n',
       solution: 'mention atgui\n\napp = atgui.window("Chat", 520, 560)\nmsgs = app:scroll()\nbox = app:textarea "Say something"\n\nfunc answer():\n    msgs:text "Friend: Haha, nice!"\n    msgs:to_bottom\n\nfunc send():\n    said = box:value():trim()\n    if said is not "":\n        bubble = msgs:text "Me: " + said\n        bubble:animate "slide-up"\n        box:clear\n        msgs:to_bottom\n        app:after(1, answer)\n\nbox:enter send\n',
       check: (src) => {
-        if (!/:scroll\s*\(/.test(src)) return 'Make the messages area with: msgs = app:scroll()';
+        if (!/:scroll\b/.test(src)) return 'Make the messages area with: msgs = app:scroll()';
         if (!/:enter\b/.test(src)) return 'Send when Enter is pressed: box:enter send';
-        return /:after\s*\(/.test(src) ? true : 'Make the friend reply a second later: app:after(1, reply)';
+        return /:after\b/.test(src) ? true : 'Make the friend reply a second later: app:after(1, reply)';
       },
     },
   ];
@@ -470,8 +470,8 @@
       solution: 'mention tap\n\nres = tap.get("https://official-joke-api.appspot.com/random_joke")\njoke = res:json\nsay joke:get("setup")\nsay joke:get("punchline")\n',
       check: (src, out) => {
         if (!/:json\b/.test(src)) return 'Turn the answer into data with: joke = res:json';
-        if (!/:get\s*\(\s*"setup"\s*\)/.test(src)) return 'Say the setup with: say joke:get("setup")';
-        if (!/:get\s*\(\s*"punchline"\s*\)/.test(src)) return 'Now the punchline: say joke:get("punchline")';
+        if (!/:get\s*\(?\s*"setup"/.test(src)) return 'Say the setup with: say joke:get("setup")';
+        if (!/:get\s*\(?\s*"punchline"/.test(src)) return 'Now the punchline: say joke:get("punchline")';
         return lines(out).length ? true : 'Your program ran but didn\'t say anything.';
       },
     },
@@ -516,7 +516,7 @@
       starter: '# Section 3, Lesson 5: Weather in numbers\n# Say the temperature in °F too: multiply by 9, divide by 5, add 32, then round it.\n\nmention tap\n\nres = tap.get("https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.12&current=temperature_2m")\ndata = res:json\n',
       solution: 'mention tap\n\nres = tap.get("https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.12&current=temperature_2m")\ndata = res:json\ntemp = data:get("current"):get("temperature_2m")\nsay "Right now it is " + temp + "°C"\nsay "That is " + round(temp * 9 / 5 + 32) + "°F"\n',
       check: (src, out) => {
-        if (!/:get\s*\(\s*"temperature_2m"\s*\)/.test(src)) return 'Get the temperature with: data:get("current"):get("temperature_2m")';
+        if (!/:get\s*\(?\s*"temperature_2m"/.test(src)) return 'Get the temperature with: data:get("current"):get("temperature_2m")';
         if (!/\*\s*9\s*\/\s*5|\*\s*1\.8\b/.test(src)) return 'For °F, multiply by 9 / 5 and add 32: temp * 9 / 5 + 32';
         if (!/\bround\s*\(/.test(src)) return 'Round it with round(...)';
         return lines(out).length ? true : 'Your program ran but didn\'t say anything.';
@@ -533,9 +533,9 @@
       solution: 'mention tap\n\npost = tap.data()\npost:set("title", "My favorite game")\npost:set("body", "Hide and seek, because anyone can play")\npost:set("userId", 7)\nsent = tap.post("https://jsonplaceholder.typicode.com/posts", post)\nif sent:ok:\n    saved = sent:json\n    say "Saved as post number " + saved:get("id")\nelse:\n    say "That did not work: error " + sent:status\n',
       check: (src, out) => {
         if (!/tap\.data\s*\(/.test(src)) return 'Make what you send with: post = tap.data()';
-        if (!/:set\s*\(/.test(src)) return 'Fill it in: post:set("title", "My favorite game")';
+        if (!/:set\b/.test(src)) return 'Fill it in: post:set("title", "My favorite game")';
         if (!/tap\.post\s*\(/.test(src)) return 'Send it with: sent = tap.post("https://jsonplaceholder.typicode.com/posts", post)';
-        if (!/:get\s*\(\s*"id"\s*\)/.test(src)) return 'Say the id that comes back: answer = sent:json, then say answer:get("id")';
+        if (!/:get\s*\(?\s*"id"/.test(src)) return 'Say the id that comes back: answer = sent:json, then say answer:get("id")';
         return lines(out).length ? true : 'Your program ran but didn\'t say anything.';
       },
     },
@@ -551,7 +551,7 @@
       check: (src) => {
         if (!/^\s*(import|mention)\s+tap\b/m.test(src)) return 'Add: mention tap';
         if (!/\b(tgui|mtgui|atgui)\.window\s*\(/.test(src)) return 'Make a window with: app = mtgui.window("Jokes")';
-        if (!/:button\s*\(/.test(src)) return 'Add a button: app:button("Tell me a joke", joke)';
+        if (!/:button\b/.test(src)) return 'Add a button: app:button("Tell me a joke", joke)';
         if (!/tap\.get\s*\(/.test(src)) return 'In the button\'s function, get a joke with tap.get(...)';
         return /:set\b/.test(src) ? true : 'Show the joke with: setup:set data:get("setup")';
       },
@@ -573,8 +573,8 @@
         if (!/^\s*(import|mention)\s+tgame\b/m.test(src)) return 'Start with: mention tgame';
         if (!/tgame\.window\s*\(/.test(src)) return 'Make a game window with: game = tgame.window("My Game", 600, 400)';
         if (!/:background\b/.test(src)) return 'Pick a background color: game:background "navy"';
-        if (!/:circle\s*\(/.test(src) || !/:box\s*\(/.test(src)) return 'Add a circle and a box, like: game:circle(300, 200, 40, "gold")';
-        return /while\s+\w+:open\s*\(/.test(src) ? true : 'Keep the game running: while game:open(): with game:frame() inside it';
+        if (!/:circle\b/.test(src) || !/:box\b/.test(src)) return 'Add a circle and a box, like: game:circle(300, 200, 40, "gold")';
+        return /while\s+\w+:open\b/.test(src) ? true : 'Keep the game running: while game:open(): with game:frame() inside it';
       },
     },
     {
@@ -587,8 +587,8 @@
       starter: '# Section 4, Lesson 2: Moving with keys\n# Make the player move up and down too, with the up and down arrows.\n\nmention tgame\n\ngame = tgame.window("Move", 600, 400)\nplayer = game:box(300, 200, 40, 40, "lime")\nplayer:on_edge "stop"\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        player:move(-300 * dt, 0)\n    if game:held("right"):\n        player:move(300 * dt, 0)\n',
       solution: 'mention tgame\n\ngame = tgame.window("Move", 600, 400)\nplayer = game:box(300, 200, 40, 40, "lime")\nplayer:on_edge "stop"\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        player:move(-300 * dt, 0)\n    if game:held("right"):\n        player:move(300 * dt, 0)\n    if game:held("up"):\n        player:move(0, -300 * dt)\n    if game:held("down"):\n        player:move(0, 300 * dt)\n',
       check: (src) => {
-        if (!/:held\s*\(\s*"up"\s*\)/.test(src)) return 'Check the up arrow with: if game:held("up"):';
-        if (!/:held\s*\(\s*"down"\s*\)/.test(src)) return 'Now the down arrow: if game:held("down"):';
+        if (!/:held\s*\(?\s*"up"/.test(src)) return 'Check the up arrow with: if game:held("up"):';
+        if (!/:held\s*\(?\s*"down"/.test(src)) return 'Now the down arrow: if game:held("down"):';
         return /:move\s*\(\s*0\s*,/.test(src) ? true : 'Move up and down by changing y: player:move(0, -300 * dt)';
       },
     },
@@ -602,10 +602,10 @@
       starter: '# Section 4, Lesson 3: Speed and bouncing\n# Make three balls in different colors that bounce around by themselves.\n\nmention tgame\n\ngame = tgame.window("Bounce", 600, 400)\n\n# make your balls here\n\nwhile game:open():\n    game:frame()\n',
       solution: 'mention tgame\n\ngame = tgame.window("Three balls", 600, 400)\nfor color in ["red", "gold", "teal"]:\n    ball = game:circle(random(50, 550), random(50, 350), 20, color)\n    ball:speed(random(100, 250), random(100, 250))\n    ball:on_edge "bounce"\n\nwhile game:open():\n    game:frame()\n',
       check: (src) => {
-        if (!/:circle\s*\(/.test(src)) return 'Make a ball with: ball = game:circle(300, 200, 20, "gold")';
-        if (!/:speed\s*\(/.test(src)) return 'Keep a ball moving with: ball:speed(200, 150)';
+        if (!/:circle\b/.test(src)) return 'Make a ball with: ball = game:circle(300, 200, 20, "gold")';
+        if (!/:speed\b/.test(src)) return 'Keep a ball moving with: ball:speed(200, 150)';
         if (!/:on_edge\s*\(?\s*"bounce"/.test(src)) return 'Make it bounce with: ball:on_edge "bounce"';
-        return (src.match(/:circle\s*\(/g) || []).length >= 3 || /\bfor\b/.test(src) ? true : 'Make three balls. A for loop can make them for you.';
+        return (src.match(/:circle\b/g) || []).length >= 3 || /\bfor\b/.test(src) ? true : 'Make three balls. A for loop can make them for you.';
       },
     },
     {
@@ -618,7 +618,7 @@
       starter: '# Section 4, Lesson 4: Catch and score\n# When the star touches the basket, add 1 to the score, show it,\n# and send the star back to the top.\n\nmention tgame\n\ngame = tgame.window("Catch", 600, 400)\nbasket = game:box(300, 370, 80, 20, "gold")\nbasket:on_edge "stop"\nstar = game:circle(300, 0, 12, "yellow")\nscore = 0\nlabel = game:text("Score: 0", 300, 24)\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        basket:move(-400 * dt, 0)\n    if game:held("right"):\n        basket:move(400 * dt, 0)\n    star:move(0, 200 * dt)\n    if star:y() > 400:\n        star:move_to(random(20, 580), 0)\n',
       solution: 'mention tgame\n\ngame = tgame.window("Catch", 600, 400)\nbasket = game:box(300, 370, 80, 20, "gold")\nbasket:on_edge "stop"\nstar = game:circle(300, 0, 12, "yellow")\nscore = 0\nlabel = game:text("Score: 0", 300, 24)\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        basket:move(-400 * dt, 0)\n    if game:held("right"):\n        basket:move(400 * dt, 0)\n    star:move(0, 200 * dt)\n    if star:touches(basket):\n        score += 1\n        label:set "Score: " + score\n        game:sound "coin"\n        star:move_to(random(20, 580), 0)\n    elif star:y() > 400:\n        star:move_to(random(20, 580), 0)\n',
       check: (src) => {
-        if (!/:touches\s*\(/.test(src)) return 'Check for a catch with: if star:touches(basket):';
+        if (!/:touches\b/.test(src)) return 'Check for a catch with: if star:touches(basket):';
         if (!/\bscore\s*\+=/.test(src)) return 'Add to the score with: score += 1';
         return /:set\b/.test(src) ? true : 'Show the new score with: label:set "Score: " + score';
       },
@@ -633,10 +633,10 @@
       starter: '# Section 4, Lesson 5: Dodge and game over\n# Add a score that goes up by 1 every second you stay alive.\n# Show it in the game-over message, and set it back to 0 in start.\n\nmention tgame\n\ngame = tgame.window("Dodge", 400, 300)\nplayer = game:box(200, 270, 30, 30, "lime")\nplayer:on_edge "stop"\nrocks = game:group()\n\nfunc drop():\n    rock = game:circle(random(10, 390), 0, 10, "gray")\n    rock:speed(0, 150)\n    rocks:add(rock)\n\nfunc start():\n    rocks:clear()\n\ngame:every(1, drop)\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        player:move(-250 * dt, 0)\n    if game:held("right"):\n        player:move(250 * dt, 0)\n    if player:touches(rocks):\n        game:game_over("Hit by a rock!", start)\n',
       solution: 'mention tgame\n\ngame = tgame.window("Dodge", 400, 300)\nplayer = game:box(200, 270, 30, 30, "lime")\nplayer:on_edge "stop"\nrocks = game:group()\nscore = 0\nlabel = game:text("Score: 0", 200, 20)\n\nfunc drop():\n    rock = game:circle(random(10, 390), 0, 10, "gray")\n    rock:speed(0, 150)\n    rocks:add(rock)\n\nfunc tick():\n    score += 1\n    label:set "Score: " + score\n\nfunc start():\n    rocks:clear()\n    score = 0\n    label:set "Score: 0"\n\ngame:every(1, drop)\ngame:every(1, tick)\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        player:move(-250 * dt, 0)\n    if game:held("right"):\n        player:move(250 * dt, 0)\n    if player:touches(rocks):\n        game:game_over("Score: " + score, start)\n',
       check: (src) => {
-        if (!/:every\s*\(/.test(src)) return 'Drop rocks with a timer: game:every(1, drop)';
-        if (!/:game_over\s*\(/.test(src)) return 'End the game with: game:game_over("Hit!", start)';
+        if (!/:every\b/.test(src)) return 'Drop rocks with a timer: game:every(1, drop)';
+        if (!/:game_over\b/.test(src)) return 'End the game with: game:game_over("Hit!", start)';
         if (!/\bscore\s*\+=/.test(src)) return 'Count the seconds: write func tick() that does score += 1, and run it with game:every(1, tick)';
-        return /:game_over\s*\([^)\n]*\bscore\b/.test(src) ? true : 'Put the score in the message: game:game_over("Score: " + score, start)';
+        return /:game_over\b[^)\n]*\bscore\b/.test(src) ? true : 'Put the score in the message: game:game_over("Score: " + score, start)';
       },
     },
     {
@@ -652,9 +652,9 @@
       check: (src) => {
         if (!/tgame\.world\s*\(/.test(src)) return 'Make a 3D world with: game = tgame.world("My World")';
         if (!/:sky\b/.test(src)) return 'Pick a sky, like: game:sky "sunset"';
-        if (!/:island\s*\(|:ground\b/.test(src)) return 'Give it ground to stand on: game:island(60)';
-        if (!/:player\s*\(/.test(src)) return 'Add a player: player = game:player("first person")';
-        const kinds = new Set([...src.matchAll(/:spawn\s*\(\s*"(\w+)"/g)].map((m) => m[1]));
+        if (!/:(island|ground)\b/.test(src)) return 'Give it ground to stand on: game:island(60)';
+        if (!/:player\b/.test(src)) return 'Add a player: player = game:player("first person")';
+        const kinds = new Set([...src.matchAll(/:spawn\s*\(?\s*"(\w+)"/g)].map((m) => m[1]));
         return kinds.size >= 2 ? true : 'Spawn at least two kinds of things, like game:spawn("tree") and game:spawn("rock")';
       },
     },
@@ -668,10 +668,10 @@
       starter: '# Section 4, Lesson 7: Collect the coins\n# Spawn 10 coins. Clicking a coin that is close removes it,\n# adds 1 to a counter on the HUD and plays the coin sound.\n\nmention tgame\n\ngame = tgame.world("Coin hunt")\ngame:island(60)\nplayer = game:player("first person")\n\nwhile game:open():\n    game:frame()\n',
       solution: 'mention tgame\n\ngame = tgame.world("Coin hunt")\ngame:sky "day"\ngame:island(60)\nplayer = game:player("first person")\ncoins = 0\nlabel = game:hud():text("Coins: 0", 90, 30)\n\nfunc grab(coin):\n    if coin:distance(player) < 5:\n        coin:remove()\n        coins += 1\n        label:set "Coins: " + coins\n        game:sound "coin"\n\nfor i in range(1, 10):\n    coin = game:spawn("coin")\n    coin:clicked grab\n\nwhile game:open():\n    game:frame()\n',
       check: (src) => {
-        if (!/:spawn\s*\(\s*"coin"/.test(src)) return 'Make coins with: coin = game:spawn("coin")';
+        if (!/:spawn\s*\(?\s*"coin"/.test(src)) return 'Make coins with: coin = game:spawn("coin")';
         if (!/:clicked\b/.test(src)) return 'Run a function when a coin is clicked: coin:clicked grab';
         if (!/:remove\b|:hide\b/.test(src)) return 'Take the coin away with: coin:remove()';
-        if (!/:hud\s*\(/.test(src)) return 'Show the count on the HUD: label = game:hud():text("Coins: 0", 90, 30)';
+        if (!/:hud\b/.test(src)) return 'Show the count on the HUD: label = game:hud():text("Coins: 0", 90, 30)';
         return /\+=/.test(src) ? true : 'Count the coins with: coins += 1';
       },
     },
@@ -687,10 +687,10 @@
       solution: 'mention tgame\n\ngame = tgame.window("Coin dash", 600, 400)\ngame:background "#1b1b2f"\nplayer = game:box(300, 200, 30, 30, "lime")\nplayer:on_edge "stop"\ncoin = game:circle(100, 100, 12, "gold")\nbomb = game:circle(500, 300, 18, "red")\nbomb:speed(180, 140)\nbomb:on_edge "bounce"\nscore = 0\nlabel = game:text("Coins: 0", 300, 24, 22, "white")\n\nfunc start():\n    score = 0\n    label:set "Coins: 0"\n    player:move_to(300, 200)\n    bomb:move_to(500, 300)\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        player:move(-300 * dt, 0)\n    if game:held("right"):\n        player:move(300 * dt, 0)\n    if game:held("up"):\n        player:move(0, -300 * dt)\n    if game:held("down"):\n        player:move(0, 300 * dt)\n    if player:touches(coin):\n        score += 1\n        label:set "Coins: " + score\n        game:sound "coin"\n        coin:move_to(game:random_spot())\n    if player:touches(bomb) and not game:paused():\n        game:sound "boom"\n        game:game_over("Coins collected: " + score, start)\n',
       check: (src) => {
         if (!/tgame\.(window|world)\s*\(/.test(src)) return 'Start with a window: game = tgame.window("My Game", 600, 400)';
-        if (!/:held\s*\(|:pressed\s*\(|:on_key\s*\(|:clicked\b|:player\s*\(/.test(src)) return 'Give the player something to control, like: if game:held("left"):';
-        if (!/:touches\s*\(|:clicked\b/.test(src)) return 'Add something to catch or dodge, and check for it with :touches';
+        if (!/:(held|pressed|on_key|clicked|player)\b/.test(src)) return 'Give the player something to control, like: if game:held("left"):';
+        if (!/:(touches|clicked)\b/.test(src)) return 'Add something to catch or dodge, and check for it with :touches';
         if (!/\+=/.test(src)) return 'Keep a score: score += 1';
-        return /:game_over\s*\(/.test(src) ? true : 'End with game:game_over("Score: " + score, start), so people can play again.';
+        return /:game_over\b/.test(src) ? true : 'End with game:game_over("Score: " + score, start), so people can play again.';
       },
     },
   ];
