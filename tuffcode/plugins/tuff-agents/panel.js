@@ -1114,6 +1114,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       try { h = decodeURIComponent(h.replace(/^file:\/\/(localhost)?/i, '')); } catch { return null; }
       if (/^\/[a-z]:[\\/]/i.test(h)) h = h.slice(1); // file:///C:/… → C:/…
     } else if (/^[a-z][\w+.-]*:/i.test(h) && !/^[a-z]:[\\/]/i.test(h)) return null; // another scheme, not a drive
+    else if (/%[\da-f]{2}/i.test(h)) { try { h = decodeURIComponent(h); } catch { /* not encoded after all: as written */ } } // my%20game.tuf
     if (!h || h.startsWith('#')) return null;
     const root = t.project.root();
     const abs = /^([a-z]:[\\/]|[\\/])/i.test(h);

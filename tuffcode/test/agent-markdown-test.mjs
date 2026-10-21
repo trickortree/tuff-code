@@ -45,6 +45,7 @@ check('javascript:, data: and mailto: are plain text, never links', !h.includes(
 check('main.tuf:12 → the file and line 12', JSON.stringify(linkTarget('main.tuf:12')) === JSON.stringify({ file: 'C:\\Users\\jacks\\OneDrive\\Documents\\TuffProjects\\HelloTuff\\main.tuf', line: 12 }), JSON.stringify(linkTarget('main.tuf:12')));
 check('file:///…#L7 → line 7', linkTarget('file:///C:/a/b.tuf#L7').line === 7 && linkTarget('file:///C:/a/b.tuf#L7').file === 'C:\\a\\b.tuf', JSON.stringify(linkTarget('file:///C:/a/b.tuf#L7')));
 check('%20 in a file link is a space', linkTarget('file:///C:/My%20Docs/a.tuf').file === 'C:\\My Docs\\a.tuf', JSON.stringify(linkTarget('file:///C:/My%20Docs/a.tuf')));
+check('%20 in a relative or a plain path link is a space too', linkTarget('my%20game.tuf:4').file === 'C:\\Users\\jacks\\OneDrive\\Documents\\TuffProjects\\HelloTuff\\my game.tuf' && linkTarget('my%20game.tuf:4').line === 4 && linkTarget('C:/My%20Docs/a.tuf').file === 'C:\\My Docs\\a.tuf' && linkTarget('100%.tuf').file.endsWith('\\100%.tuf'), JSON.stringify([linkTarget('my%20game.tuf:4'), linkTarget('C:/My%20Docs/a.tuf'), linkTarget('100%.tuf')]));
 h = md('[x](<C:/My Docs/x.tuf>)');
 check('<path with spaces> in a link', h.includes('data-file="C:\\My Docs\\x.tuf"'), h);
 h = md('> a quote\n> second line\n\n---\n\n~~old~~ new');
