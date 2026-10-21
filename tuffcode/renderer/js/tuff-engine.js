@@ -681,8 +681,25 @@
     };
   }
 
+  // Every edit is one undo step, except while a number field is typed in (numbers()): S.typing is that field's step
+  // during its edit, and its edits join one step (the 2, 25 and 250 of a slowly typed 250 are one Ctrl+Z) until the
+  // field is left, or until something else changes the code in between.
   function commit(ed, blocks = []) {
-    return ed.commit((lines) => fixups(blocks.reduce(appendBlock, lines)));
+    const finish = (lines) => fixups(blocks.reduce(appendBlock, lines));
+    const step = S.typing;
+    if (!step) { closeStep(); return ed.commit(finish); }
+    const join = S.openStep === step && step.model === S.model && step.ver === S.model.getAlternativeVersionId();
+    if (!join) closeStep();
+    const at = ed.commit(finish, { open: !join, close: false });
+    step.model = S.model;
+    step.ver = S.model.getAlternativeVersionId();
+    S.openStep = step;
+    return at;
+  }
+  function closeStep() {
+    const step = S.openStep;
+    S.openStep = null;
+    if (step?.model && !step.model.isDisposed()) step.model.pushStackElement();
   }
 
   const BASE = { box: 'box', circle: 'circle', line: 'line', text: 'words', image: 'picture', sphere: 'ball', cylinder: 'cylinder', cone: 'cone', plane: 'plane', spawn: 'thing', light: 'lamp', player: 'player' };
@@ -1615,7 +1632,8 @@ func play_again():
   }
 
   function undoRedo(which) {
-    if (!S.model) return;
+    if (!S.model || S.model.isDisposed()) return;
+    closeStep();
     S.selfEdit = false;
     S.model[which]();
   }
@@ -1775,10 +1793,12 @@ func play_again():
   async function show(file) {
     if (!host().firstChild) skeleton();
     if (file && file !== S.file) {
+      closeStep();
       S.file = file;
       S.sel = 'root';
       S.dump = null;
       S.dumpParsed = null;
+      S.dumpVer = null; // (the last file's version number could match this file's)
       S.join = null;
       S.hostErr = null;
       if (S.loadSeq) $('#en-stage').classList.add('switching'); // the last file's scene hides until this one's is drawn
@@ -1804,6 +1824,7 @@ func play_again():
 
   function hide() {
     clearTimeout(S.timer);
+    closeStep();
     $$('.sd-modal', host()).forEach((m) => m.remove());
   }
 
@@ -2148,7 +2169,10 @@ func play_again():
   }
   function fieldEl(label, control, hint) { return K.field(label, control, hint); }
 
-  // A row of small number inputs: [label, value, onChange(number), { step, min }].
+  // A row of small number inputs: [label, value, onChange(number), { step, min, tooSmall }]. The code follows the
+  // field as it's typed in (a short pause writes it), and everything typed before the field is left is one undo step.
+  // tooSmall: the message for a number under min. While typing, a smaller number (the 1 and 10 of 1000) just isn't
+  // written yet; only a field left with one shows the message once, and goes back to the last number that was.
   function numbers(items) {
     const row = document.createElement('div');
     row.className = 'pf en-nums';
@@ -2156,7 +2180,25 @@ func play_again():
       const l = document.createElement('label');
       l.className = 'en-num';
       l.innerHTML = `<span>${esc(label)}</span>`;
-      const inp = K.control('number', isNum(value) ? +num(value) : '', {}, (v) => { if (v === '' && !o.blank) return; onChange(v); });
+      const step = { model: null, ver: null };
+      let good = isNum(value) ? +num(value) : '';
+      const inp = K.control('number', good, {}, (v) => {
+        if (v === '' && !o.blank) return;
+        if (o.tooSmall && !(v >= o.min)) return;
+        good = v;
+        S.typing = document.activeElement === inp ? step : null;
+        try { onChange(v); } finally { S.typing = null; }
+      });
+      const leave = () => { if (S.openStep === step) closeStep(); };
+      inp.addEventListener('blur', leave);
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'Escape') leave(); });
+      if (o.tooSmall) {
+        inp.addEventListener('change', () => {
+          if (inp.value !== '' && +inp.value >= o.min) return;
+          if (inp.value !== '') ide.toast(o.tooSmall, 'error');
+          inp.value = good;
+        });
+      }
       if (o.step) inp.step = o.step;
       if (o.min !== undefined) inp.min = o.min;
       if (o.disabled) inp.disabled = true;
@@ -2273,13 +2315,13 @@ func play_again():
     const form = document.createElement('div');
     form.className = 'in-form';
     const title = typeof g.args[0] === 'string' ? g.args[0] : '';
-    const sizeOk = (v) => { if (!(v >= 100)) { ide.toast('A game is at least 100 wide and 100 high.', 'error'); return false; } return true; };
+    const small = { min: 100, tooSmall: 'A game is at least 100 wide and 100 high.' };
     const setG = (patch) => act((Q) => Edits.setGame(Q, patch), { form: true });
     const sizes = K.chips(['600×400', '800×600', '960×540'], `${W}×${H}`, (o) => { const [w, h] = o.split('×').map(Number); act((Q) => Edits.setGame(Q, { width: w, height: h })); });
     sizes.classList.add('sizes');
     form.append(sec('Window', [
       fieldEl('Title', textEl(title, (v) => setG({ title: v }))),
-      numbers([['Width', W, (v) => sizeOk(v) && setG({ width: Math.round(v) }), { min: 100 }], ['Height', H, (v) => sizeOk(v) && setG({ height: Math.round(v) }), { min: 100 }]]),
+      numbers([['Width', W, (v) => setG({ width: Math.round(v) }), small], ['Height', H, (v) => setG({ height: Math.round(v) }), small]]),
       fieldEl('Size', sizes),
     ]));
     const set = (changes, rerender = false) => act((Q) => Edits.setSetting(Q, changes), { form: !rerender });

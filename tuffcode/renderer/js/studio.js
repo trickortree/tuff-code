@@ -383,7 +383,9 @@
       },
       remove(ln) { del.add(ln); },
       // finish(lines) -> lines: a last pass over the whole new text, inside the same undo step (Tuff Engine's fixups).
-      commit(finish) {
+      // open / close: start a new undo step before the edit, and end it after. Tuff Engine leaves the step open while
+      // a number field is typed in, so 2, 25 and 250 are one Ctrl+Z, and ends it when the field is left.
+      commit(finish, { open = true, close = true } = {}) {
         const out = [];
         const at = {};
         let count = 0;
@@ -420,9 +422,9 @@
         }
         const s = model.getPositionAt(start);
         const e = model.getPositionAt(end);
-        model.pushStackElement();
+        if (open) model.pushStackElement();
         model.pushEditOperations([], [{ range: new window.monaco.Range(s.lineNumber, s.column, e.lineNumber, e.column), text, forceMoveMarkers: true }], () => null);
-        model.pushStackElement();
+        if (close) model.pushStackElement();
         return at;
       },
     };

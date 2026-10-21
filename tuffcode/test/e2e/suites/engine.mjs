@@ -604,6 +604,54 @@ export default async (t, ctx) => {
     'Coin, Enemy, then Player: the Player gives the coin Collect it and the enemy Chases and Game over, and says so', { lateP, toasts: (await toasts()).slice(-3) });
   check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'late_check.tuf'), late), path.join(ctx.tmp, 'late_check.tuf'))).trim()), 'and that game passes tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'late_check.tuf')));
 
+  // Number fields at a kid's pace: the code follows the field, and everything typed before it's left is one Ctrl+Z.
+  await ev(`window.TuffEngine.test.select('v:enemy')`);
+  await t.sleep(200);
+  const slowBefore = await code();
+  await ev(`(() => { const b = [...document.querySelectorAll('#en-inspector .en-beh')].find((x) => x.dataset.beh === 'chase'); b.querySelector('input[type="number"]').id = 'en-test-slow'; return 1; })()`);
+  await t.click(...(await rect('#en-test-slow')).slice(0, 2).map((v, j) => v + (j ? 10 : 20)));
+  await key('a', 'KeyA', 65, CTRL);
+  const seen = [];
+  for (const ch of '250') {
+    await t.type(ch, 0);
+    await t.sleep(450);
+    seen.push((await code()).match(/enemy:forward\((\d+) \* dt\)/)?.[1]);
+  }
+  check(seen.join() === '2,25,250', `typed slowly (450 ms a key) in Chases → speed, the code follows the field: ${seen.join(', ')}`, seen);
+  await ev(`document.querySelector('#en-stage').focus()`);
+  await t.key('z', CTRL);
+  await waitFor(`window.__code() === ${JSON.stringify(slowBefore)}`, 4000);
+  check(await code() === slowBefore, 'and one Ctrl+Z takes the whole 250 back to 120', firstDiff(await code(), slowBefore));
+  await settle();
+  // The game's Width: no error for the 1 and the 10 of 1000 while typing, and one step.
+  const widthField = `(() => { const i = [...document.querySelectorAll('#en-inspector .en-num')].find((l) => l.textContent.trim().startsWith('Width')).querySelector('input'); i.id = 'en-test-width'; return 1; })()`;
+  await ev(`window.TuffEngine.test.select('root')`);
+  await t.sleep(200);
+  await ev(widthField);
+  const nToasts = (await toasts()).length;
+  await t.click(...(await rect('#en-test-width')).slice(0, 2).map((v, j) => v + (j ? 10 : 20)));
+  await key('a', 'KeyA', 65, CTRL);
+  for (const ch of '1000') { await t.type(ch, 0); await t.sleep(450); }
+  await waitFor(`window.__code().includes('tgame.window("My Game", 1000, 600)')`, 3000);
+  const typedToasts = (await toasts()).slice(nToasts);
+  check(/tgame\.window\("My Game", 1000, 600\)/.test(await code()) && !typedToasts.length, 'typing 1000 slowly in Width writes 1000, with no error for the 1 and the 10 on the way', { toasts: typedToasts, line: (await code()).split('\n')[2] });
+  await ev(`document.querySelector('#en-stage').focus()`);
+  await t.key('z', CTRL);
+  await waitFor(`window.__code() === ${JSON.stringify(slowBefore)}`, 4000);
+  check(await code() === slowBefore, 'one Ctrl+Z puts 800 back', firstDiff(await code(), slowBefore));
+  await settle();
+  await ev(widthField);
+  await t.click(...(await rect('#en-test-width')).slice(0, 2).map((v, j) => v + (j ? 10 : 20)));
+  await key('a', 'KeyA', 65, CTRL);
+  const nToasts2 = (await toasts()).length;
+  for (const ch of '50') { await t.type(ch, 0); await t.sleep(400); }
+  await key('Tab', 'Tab', 9);
+  await t.sleep(400);
+  const smallToasts = (await toasts()).slice(nToasts2);
+  check(smallToasts.length === 1 && /A game is at least 100 wide/.test(smallToasts[0]) && await code() === slowBefore && await ev(`document.querySelector('#en-test-width')?.value`) === '800',
+    'leaving Width at 50 says once that a game is at least 100 wide, and the field goes back to 800', { smallToasts, value: await ev(`document.querySelector('#en-test-width')?.value`) });
+  await settle();
+
   // Things a function made: Objects and the Inspector give the line once.
   const snakeFile = path.join(ctx.root, 'snake.tuf');
   fs.copyFileSync(path.join(GAMES, 'snake.tuf'), snakeFile);
