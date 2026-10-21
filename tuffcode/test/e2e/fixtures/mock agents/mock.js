@@ -58,9 +58,11 @@ process.stdin.on('end', async () => {
   log({ args, cwd: process.cwd(), prompt });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // "LINKS" in the prompt: a reply with the Markdown real agents write (file:/// links like Antigravity's,
-  // file:line links, a table, numbered items split by blank lines, a web link and a link that must stay text).
+  // file:line links, a table, numbered items split by blank lines, a web link and a link that must stay text),
+  // then steps with bullets under them, `code` in a link, a **bold** address, and links that must ask first:
+  // a file on another computer, one outside the project, and a web link with a name before its site.
   const url = (f) => 'file:///' + path.join(process.cwd(), f).replace(/\\/g, '/').replace(/^\//, '');
-  const links = () => `Right now you've got [main.tuf](${url('main.tuf')}) open. Line two is [main.tuf:2](main.tuf:2).\n\n1. Claude Code answered first.\n\n2. Tuff AI answered next.\n\n| Who | Messages |\n| --- | --- |\n| Claude Code | **3** |\n| Antigravity | \`1\` |\n\nMore at https://example.com/tuff. [Not a link](javascript:alert(1))`;
+  const links = () => `Right now you've got [main.tuf](${url('main.tuf')}) open. Line two is [main.tuf:2](main.tuf:2).\n\n1. Claude Code answered first.\n\n2. Tuff AI answered next.\n\n| Who | Messages |\n| --- | --- |\n| Claude Code | **3** |\n| Antigravity | \`1\` |\n\nMore at https://example.com/tuff. [Not a link](javascript:alert(1))\n\nSteps:\n\n1. Open [\`notes.tuf\`](notes.tuf)\n   - press **Run**\n   - watch it\n2. Go to **http://localhost:8000**\n3. Done\n\nAlso [level](//127.0.0.1/no-such-share/level.tuf), [outside](../outside.tuf) and [docs](https://tuffcode.dev@example.com/docs).`;
   if (who === 'claude') {
     let mcpCfg = null;
     const i = args.indexOf('--mcp-config');
