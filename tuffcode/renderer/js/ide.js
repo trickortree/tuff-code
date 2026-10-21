@@ -1897,6 +1897,24 @@
   let shiftClean = false;
   let lastShift = 0;
 
+  // A box you type in that isn't the code editor: Tuff Agents' message box, a plugin's field, the Run
+  // window's input, a name in Design Studio. (Monaco's own text area and its find box are the editor.)
+  const inTextBox = (el) => !!el?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])') && !el.closest('.monaco-editor');
+  // The shortcuts that still work while you type in one of those boxes: ones for the whole app. The others
+  // work on the code (Ctrl+Y deletes a line, Ctrl+D copies one, Ctrl+Shift+Z redoes, Ctrl+R, Ctrl+Alt+L, F12)
+  // and moved you into the editor, so a Ctrl+Z after them undid code too. In a box they stay the box's own.
+  // Ctrl+Alt ones (Settings, New File, Zen) stay out too: on Windows Ctrl+Alt is AltGr, which types ł, ż, ś.
+  const APP_WIDE = new Set(['saveAll', 'openFolder', 'closeTab', 'goToFile', 'findInFiles', 'reopenTab', 'nextTab', 'prevTab',
+    'toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'engine', 'run', 'rerun', 'stop', 'build', 'devtools', 'zoomIn', 'zoomOut', 'zoomReset']);
+  function worksInTextBox(id, combo, e) {
+    // On a Mac, Ctrl+letter in a text box is the box's editing (Ctrl+A, Ctrl+E, Ctrl+K, Ctrl+Y...); shortcuts are Cmd.
+    if (api.platform === 'darwin' && e.ctrlKey && !e.metaKey && /^Key/.test(e.code)) return false;
+    if (e.altKey && /^Numpad/.test(e.code)) return false; // Alt with the number pad types a character (Alt+0233 is é)
+    if (APP_WIDE.has(id)) return true;
+    // A plugin's own shortcut (Ctrl+Shift+A opens Tuff Agents) works too, unless it's a box's own key.
+    return id.startsWith('plugin.') && !/^Ctrl\+Alt\+|^Ctrl\+[ACVXYZ]$|^Ctrl\+Shift\+Z$/.test(combo);
+  }
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Shift') { if (!e.repeat) shiftClean = true; return; }
     shiftClean = false;
@@ -1915,7 +1933,7 @@
     const key = (api.platform === 'darwin' && e.altKey && (e.metaKey || e.ctrlKey) && phys) || (e.key.length === 1 ? e.key.toUpperCase() : e.key);
     const combo = [(e.ctrlKey || e.metaKey) && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', key].filter(Boolean).join('+');
     const id = keymap[combo];
-    if (id) {
+    if (id && (!inTextBox(e.target) || worksInTextBox(id, combo, e))) {
       e.preventDefault();
       e.stopPropagation();
       commands[id].run();
