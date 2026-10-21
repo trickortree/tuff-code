@@ -898,3 +898,10 @@ body.enter #statusbar { animation: upin .55s .3s cubic-bezier(.2,.9,.25,1) both;
   .sd-left:not(.layers) .en-tabs { flex-direction: column; padding: 8px; }
   .sd-left:not(.layers) .en-tabs .lbl { display: none; }
 }
+/* The smallest window with Learn open leaves Tuff Engine about 500 px: Code and Play must still show. The file list
+   gets narrower first; zoom stays on Ctrl+= and Ctrl+wheel, and Templates on the start card. */
+@container studio (max-width: 640px) {
+  #en-zoom, #en-templates { display: none; }
+  #en-file { flex: 0 1 110px; min-width: 60px; }
+  .en .sd-bar .sd-seg button { padding: 0 7px; }
+}

@@ -746,6 +746,28 @@ export default async (t, ctx) => {
     "Ask an agent: when it couldn't be sent, the box stays open with what the kid wrote", await ev('window.__asked'));
   await ev(`(() => { document.querySelector('.en-askbox [data-a="x"]')?.click(); if (window.__realAsk) window.tuffAskAgent = window.__realAsk; else delete window.tuffAskAgent; return 1; })()`);
 
+  // The smallest window (900 × 560) with Learn open: Code and Play still show, in 2D and in 3D.
+  await ev(`window.TuffIDE.showSideView('learn', true); 1`);
+  fs.mkdirSync(path.join(ctx.root, 'lessons'), { recursive: true });
+  const lessonFile = path.join(ctx.root, 'lessons', 'tgame-08-engine.tuf');
+  fs.writeFileSync(lessonFile, coinDash);
+  const islandFile = path.join(ctx.root, 'island_small.tuf');
+  fs.writeFileSync(islandFile, islandCode);
+  const fits = [];
+  for (const [w, h] of [[900, 560], [960, 600]]) {
+    await t.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 0, mobile: false });
+    for (const f of [lessonFile, islandFile]) {
+      await ev(`window.TuffIDE.openEngine(${JSON.stringify(f)})`);
+      await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(f)} && !!window.TuffEngine.debug().mode`, 5000);
+      await t.sleep(400);
+      fits.push(await ev(`(() => { const r = (s) => document.querySelector(s).getBoundingClientRect(); const p = r('#en-play'); const c = r('#en-code'); const hit = document.elementFromPoint(p.left + p.width / 2, p.top + p.height / 2); return { size: '${w}x${h}', mode: window.TuffEngine.debug().mode, engine: Math.round(r('#engine').width), play: p.right <= innerWidth && p.width > 20 && !!hit?.closest('#en-play'), code: c.right <= p.left && c.width > 20 }; })()`));
+    }
+  }
+  await t.shot('engine_small_window_learn.png');
+  await t.send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 880, deviceScaleFactor: 0, mobile: false });
+  await ev(`window.TuffIDE.showSideView('learn', false); 1`);
+  check(fits.length === 4 && fits.every((f) => f.play && f.code), 'at 900 × 560 and 960 × 600 with Learn open, Tuff Engine (about 500 px) still shows Code and Play, for the lesson game and for a 3D world', fits);
+
   // The gamepad never opens an empty Tuff Engine: a game it showed that's gone gives way to the .tuf tab that's open.
   const gone = path.join(ctx.root, 'gone.tuf');
   fs.writeFileSync(gone, coinDash);
