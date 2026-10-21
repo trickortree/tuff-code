@@ -754,6 +754,47 @@
     else pl.ed.insertAfter(pl.A.settingsEnd, settingLine(pl.G, method, args));
   }
 
+  // A behaviour's function body changed to want ([level, text] rows), line by line: comment lines, blank lines and the
+  // comments at the ends of lines stay as they are (spec §8.2), and so does each line's own indent. The code lines
+  // that stay the same are found first; between them, old and new lines pair up in order (a new speed changes a line
+  // where it is), and what's left over goes (Left/right only: the up and down lines) or comes in after the line before.
+  function rewriteBody(pl, fn, want) {
+    const rows = fn.body.map((b) => {
+      const { code } = K.stripComment(b.text);
+      return { line: b.line, indent: b.text.match(/^[ \t]*/)[0], code: code.trim(), tail: b.text.slice(code.length) };
+    }).filter((r) => r.code);
+    const widths = [...new Set(rows.map((r) => r.indent.length))].sort((a, b) => a - b);
+    rows.forEach((r) => { r.level = widths.indexOf(r.indent.length) + 1; });
+    const indentFor = (level) => rows.find((r) => r.level === level)?.indent ?? '    '.repeat(level);
+    const a = rows.map((r) => `${r.level}|${r.code}`);
+    const b = want.map(([l, t]) => `${l}|${t}`);
+    // The longest run of lines that stay (a and b are a few lines each).
+    const L = a.map(() => new Array(b.length + 1).fill(0));
+    L.push(new Array(b.length + 1).fill(0));
+    for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    const keep = [];
+    for (let i = 0, j = 0; i < a.length && j < b.length;) {
+      if (a[i] === b[j]) { keep.push([i, j]); i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) i++; else j++;
+    }
+    keep.push([a.length, b.length]);
+    let prev = fn.line;
+    let i = 0;
+    let j = 0;
+    for (const [ki, kj] of keep) {
+      for (; i < ki && j < kj; i++, j++) {
+        const r = rows[i];
+        const [level, text] = want[j];
+        pl.ed.replace(r.line, `${level === r.level ? r.indent : indentFor(level)}${text}${r.tail}`);
+        prev = r.line;
+      }
+      for (; i < ki; i++) pl.ed.remove(rows[i].line);
+      for (; j < kj; j++) pl.ed.insertAfter(prev, `${indentFor(want[j][0])}${want[j][1]}`);
+      if (ki < rows.length) prev = rows[ki].line;
+      i = ki + 1;
+      j = kj + 1;
+    }
+  }
+
   // The lines of a behaviour: its registration, the Engine comment, the function, and the blank line before them.
   function behLines(P, b) {
     const out = [b.reg.line, ...range(b.fn.line, b.fn.end)];
@@ -1049,12 +1090,10 @@
       return `v:${V}`;
     },
 
-    // A behaviour's parameters changed: only its function's body is written again.
+    // A behaviour's parameters changed: only the lines of its function that change are written again.
     setBehaviour(P, b, params) {
       const pl = plan(P);
-      const p = { ...b.p, ...params };
-      for (const l of range(b.fn.line + 1, b.fn.end)) pl.ed.remove(l);
-      pl.ed.insertAfter(b.fn.line, bodyLines(b.type, p).join('\n'));
+      rewriteBody(pl, b.fn, BEH[b.type].body({ ...b.p, ...params }));
       pl.done();
       return b.node.key;
     },
@@ -2715,7 +2754,8 @@ func play_again():
       noteFor: (about) => noteFor(about),
       parsed: () => S.parsed,
       // Edits work on this model (a Monaco model, or a stand-in with the same methods) without the tab showing.
-      useModel: (model, file) => { S.model = model; if (file) S.file = file; },
+      // Gives the model and file it replaced, to put back with useModel(...was).
+      useModel: (model, file) => { const was = [S.model, S.file]; S.model = model; if (file) S.file = file; return was; },
     },
   };
 })();

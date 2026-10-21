@@ -558,6 +558,26 @@ export default async (t, ctx) => {
   const fx = await ev(`['coin_dash', 'island_walk'].every((id) => { const c = window.TuffEngine.templates().find((t) => t.id === id).code.split('\\n'); return window.TuffEngine.fixups(c).join('\\n') === c.join('\\n'); })`);
   check(fx, "fixups leaves the templates as they are (they're already right)", null);
 
+  // ================================================================ what the kid wrote stays, and the kid's pace
+  // Edits made on a scratch model with Tuff Engine's own Edits (what the Inspector and the tiles call), checked line
+  // for line. The tab keeps showing kid.tuf.
+  const edit = (src, fn) => ev(`(() => {
+    const E = window.TuffEngine;
+    const m = window.monaco.editor.createModel(${JSON.stringify(src)});
+    m.setEOL(0);
+    const was = E.test.useModel(m, ${JSON.stringify(path.join(ctx.root, 'scratch.tuf'))});
+    try { (${fn})(E.parse(m.getValue()), E.test.edits, m); return m.getValue(); } finally { E.test.useModel(...was); m.dispose(); }
+  })()`);
+  const tplCode = (id) => ev(`window.TuffEngine.templates().find((x) => x.id === ${JSON.stringify(id)}).code`);
+  // A behaviour's settings change only its own lines: the kid's comments in its function stay (spec §8.2).
+  const commented = coinDash.replace('func player_arrows(dt):\n    if game:held("left"):\n        player:move(-300 * dt, 0)\n',
+    'func player_arrows(dt):\n    # TODO: make it faster when I get a power-up\n    if game:held("left"):\n        player:move(-300 * dt, 0)   # left\n\n');
+  const faster = await edit(commented, `(P, E) => E.setBehaviour(P, P.behaviours.find((b) => b.type === 'arrows'), { S: 400 })`);
+  check(changedLines(commented, faster)?.length === 4 && faster.includes('    # TODO: make it faster when I get a power-up\n    if game:held("left"):\n        player:move(-400 * dt, 0)   # left\n\n'),
+    "Speed 300 → 400 in a commented player_arrows changes its four numbers; the kid's comment line, '# left' and the blank line stay", changedLines(commented, faster));
+  const updown = await edit(commented, `(P, E) => E.setBehaviour(P, P.behaviours.find((b) => b.type === 'arrows'), { dirs: 'updown' })`);
+  check(updown.includes('    # TODO: make it faster when I get a power-up\n\n    if game:held("up"):') && !/held\("(left|right)"\)/.test(updown), 'Up/down takes away just the left and right lines', updown.split('\n').slice(19, 27));
+
   // ================================================================ full size, leaving and closing
   await ev(`document.querySelector('#en-stage').focus()`);
   await key('F11', 'F11', 122);
