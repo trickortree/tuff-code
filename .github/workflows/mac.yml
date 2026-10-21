@@ -138,10 +138,13 @@ jobs:
             console.log(arm.join("\n"));
           '
 
+      # Only the .dmg files and latest-mac.yml. The Mac app can't replace itself (it isn't signed), so its update
+      # check only reads latest-mac.yml's version and opens the release page: the .zip files and Mac blockmaps
+      # would never be used.
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ github.event.release.tag_name || inputs.tag }}" \
-            dist/mac-*/*.dmg dist/mac-*/*.zip dist/mac-*/*.blockmap dist/latest-mac.yml \
+            dist/mac-*/*.dmg dist/latest-mac.yml \
             --clobber --repo "${{ github.repository }}"

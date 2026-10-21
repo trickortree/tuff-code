@@ -2735,7 +2735,11 @@ class Autopilot:
             random.seed(plan["seed"])
 
     def tick(self, now):
-        """Run the steps that are due. Their times count from the game's first frame."""
+        """Run the steps that are due. Their times count from the game's first frame.
+
+        One moment of the plan per frame: steps with the same time run together, and a later one waits for the next
+        frame even when it's due too. On a slow machine several can be due at once, and the game needs a frame to
+        react to one (a collision, a key) before the next step looks at it."""
         g = self.game
         if self.t0 is None:
             self.t0 = now
@@ -2744,8 +2748,10 @@ class Autopilot:
             print(f"[autopilot] timed out after {self.timeout} s", flush=True)
             g.close()
             return
-        while self.steps and self.steps[0].get("at", 0) <= t:
+        at = None
+        while self.steps and self.steps[0].get("at", 0) <= t and (at is None or self.steps[0].get("at", 0) == at):
             step = self.steps.pop(0)
+            at = step.get("at", 0)
             try:
                 self.run(step, t)
             except Exception as exc:  # a test step must never stop the game

@@ -56,6 +56,9 @@ export default async (t, ctx) => {
   const visible = () => ev(`!document.querySelector('#engine').classList.contains('hidden')`);
   // The scene is up to date: it was made from the code as it is now, and the preview has drawn it.
   const settle = (ms = 20000) => waitFor(`(() => { const d = window.TuffEngine.debug(); return d.dumpCurrent && !d.busy && d.loadSeq > 0 && d.loadedSeq === d.loadSeq; })()`, ms);
+  // After an undo, settle on a scene loaded since (seq is loadSeq from before it). An undo brings back the code's
+  // version number, so an older scene can look current while the Inspector's redraw for the undo is still to come.
+  const settleSince = async (seq) => { await waitFor(`window.TuffEngine.debug().loadSeq > ${seq}`); await settle(); };
   // (scrolled into the middle first: the Inspector and the tiles scroll, and toasts sit at the bottom)
   const rect = (sel) => ev(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); el?.scrollIntoView({ block: 'center' }); const r = el?.getBoundingClientRect(); return r && r.width ? [r.left, r.top, r.width, r.height] : null; })()`);
   const clickSel = async (sel) => {
@@ -647,11 +650,12 @@ export default async (t, ctx) => {
     seen.push((await code()).match(/enemy:forward\((\d+) \* dt\)/)?.[1]);
   }
   check(seen.join() === '2,25,250', `typed slowly (450 ms a key) in Chases → speed, the code follows the field: ${seen.join(', ')}`, seen);
+  const undoSeq = (await dbg()).loadSeq;
   await ev(`document.querySelector('#en-stage').focus()`);
   await t.key('z', CTRL);
   await waitFor(`window.__code() === ${JSON.stringify(slowBefore)}`, 4000);
   check(await code() === slowBefore, 'and one Ctrl+Z takes the whole 250 back to 120', firstDiff(await code(), slowBefore));
-  await settle();
+  await settleSince(undoSeq);
   // The game's Width: no error for the 1 and the 10 of 1000 while typing, and one step.
   const widthField = `(() => { const i = [...document.querySelectorAll('#en-inspector .en-num')].find((l) => l.textContent.trim().startsWith('Width')).querySelector('input'); i.id = 'en-test-width'; return 1; })()`;
   await ev(`window.TuffEngine.test.select('root')`);
@@ -664,11 +668,12 @@ export default async (t, ctx) => {
   await waitFor(`window.__code().includes('tgame.window("My Game", 1000, 600)')`, 3000);
   const typedToasts = (await toasts()).slice(nToasts);
   check(/tgame\.window\("My Game", 1000, 600\)/.test(await code()) && !typedToasts.length, 'typing 1000 slowly in Width writes 1000, with no error for the 1 and the 10 on the way', { toasts: typedToasts, line: (await code()).split('\n')[2] });
+  const undoSeq2 = (await dbg()).loadSeq;
   await ev(`document.querySelector('#en-stage').focus()`);
   await t.key('z', CTRL);
   await waitFor(`window.__code() === ${JSON.stringify(slowBefore)}`, 4000);
   check(await code() === slowBefore, 'one Ctrl+Z puts 800 back', firstDiff(await code(), slowBefore));
-  await settle();
+  await settleSince(undoSeq2);
   await ev(widthField);
   await t.click(...(await rect('#en-test-width')).slice(0, 2).map((v, j) => v + (j ? 10 : 20)));
   await t.key('a', CTRL);
