@@ -28,7 +28,7 @@ const user = `Here's who answered each of your earlier messages:
 2. Tuff AI (Qwen3.5-2B) answered the next two ("Hi" and "What ai are you?").
 3. Antigravity (me!) answered your last message ("yo anti wsg").`;
 let h = md(user);
-check('the user\'s message: two file links, no raw [..](..)', (h.match(/class="ta-link file"/g) || []).length === 2 && !/\]\(file:/.test(h), h);
+check('the user\'s message: two file links, no raw [..](..)', (h.match(/class="ta-a file"/g) || []).length === 2 && !/\]\(file:/.test(h), h);
 check('file:/// link → a Windows path', h.includes('data-file="C:\\Users\\jacks\\OneDrive\\Documents\\TuffProjects\\HelloTuff\\GameDude.tuf"'), h);
 check('the numbered list stays a list of 3 with `tgame` as code', /<ol><li>/.test(h) && (h.match(/<li>/g) || []).length === 3 && h.includes('<code>tgame</code>'), h);
 
@@ -41,7 +41,7 @@ check('code spans are not styled inside', h.includes('<code>a*b*c</code>') && h.
 h = md('See https://example.com/page?x=1&y=2. And <https://tuff.dev>.');
 check('bare web addresses become links, without the full stop', h.includes('data-url="https://example.com/page?x=1&amp;y=2"') && h.includes('data-url="https://tuff.dev"'), h);
 h = md('[bad](javascript:alert(1)) and [data](data:text/html,hi) and [mail](mailto:a@b.c)');
-check('javascript:, data: and mailto: are plain text, never links', !h.includes('ta-link') && h.includes('bad') && !h.includes('javascript'), h);
+check('javascript:, data: and mailto: are plain text, never links', !h.includes('<a ') && h.includes('bad') && !h.includes('javascript'), h);
 check('main.tuf:12 → the file and line 12', JSON.stringify(linkTarget('main.tuf:12')) === JSON.stringify({ file: 'C:\\Users\\jacks\\OneDrive\\Documents\\TuffProjects\\HelloTuff\\main.tuf', line: 12 }), JSON.stringify(linkTarget('main.tuf:12')));
 check('file:///…#L7 → line 7', linkTarget('file:///C:/a/b.tuf#L7').line === 7 && linkTarget('file:///C:/a/b.tuf#L7').file === 'C:\\a\\b.tuf', JSON.stringify(linkTarget('file:///C:/a/b.tuf#L7')));
 check('%20 in a file link is a space', linkTarget('file:///C:/My%20Docs/a.tuf').file === 'C:\\My Docs\\a.tuf', JSON.stringify(linkTarget('file:///C:/My%20Docs/a.tuf')));
@@ -56,7 +56,7 @@ check('#####, snake_case kept, _italic_, \\*escapes\\*', h.includes('<h4>Small h
 h = md('<script>alert(1)</script> and [<b>x</b>](https://a.b)');
 check('HTML is escaped, in text and link labels', !h.includes('<script>') && h.includes('&lt;script&gt;') && h.includes('&lt;b&gt;x&lt;/b&gt;'), h);
 h = md('```tuff\nsay "[x](file:///C:/a.tuf)"\n```');
-check('links inside a code block stay code', !h.includes('ta-link'), h);
+check('links inside a code block stay code', !h.includes('<a '), h);
 h = md('[a "quote"](https://x.y/"onmouseover=alert(1))');
 check('quotes in a URL can\'t break out of the attribute', !/data-url="[^"]*"onmouseover/.test(h), h);
 console.log(fails ? `${fails} failed` : 'all passed');

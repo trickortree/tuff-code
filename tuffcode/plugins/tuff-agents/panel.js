@@ -1007,7 +1007,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (act === 'do-edit') { send('Yes please, make that change for me.', { mode: 'edit' }); return; }
     const s = e.target.closest('[data-s]');
     if (s) { send(SUGGEST[+s.dataset.s][1]); return; }
-    const a = e.target.closest('.ta-link');
+    const a = e.target.closest('.ta-a');
     if (a) {
       e.preventDefault();
       if (a.dataset.file) t.openFile(a.dataset.file, +a.dataset.line || 0);
@@ -1076,8 +1076,8 @@ TuffPlugins.register('tuff-agents', (t) => {
     const to = linkTarget(href);
     const label = esc(text);
     if (!to) return label;
-    if (to.url) return `<a class="ta-link web" data-url="${esc(to.url)}" title="${esc(to.url)}">${label}</a>`;
-    return `<a class="ta-link file" data-file="${esc(to.file)}"${to.line ? ` data-line="${to.line}"` : ''} title="Open ${esc(short(to.file))}${to.line ? `, line ${to.line}` : ''}">${label}</a>`;
+    if (to.url) return `<a class="ta-a web" data-url="${esc(to.url)}" title="${esc(to.url)}">${label}</a>`;
+    return `<a class="ta-a file" data-file="${esc(to.file)}"${to.line ? ` data-line="${to.line}"` : ''} title="Open ${esc(short(to.file))}${to.line ? `, line ${to.line}` : ''}">${label}</a>`;
   }
 
   function linkTarget(href) {
