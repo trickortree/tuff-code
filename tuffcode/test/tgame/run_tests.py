@@ -788,6 +788,20 @@ def t_scene(c):
     code, out, err, d, secs = scene(src)
     c.check(d.get("stopped") == "too-big" and d.get("batch") == [] and d.get("things") == [] and secs < 5,
             f"a setup that makes too much stops early as too-big ({secs:.1f} s)", (d.get("stopped"), len(d.get("batch") or []), secs))
+    # Memory, not only time: the preview runs by itself whenever the code changes, so a setup that would build
+    # something huge (a range of 100 million numbers is 4.6 GB, text doubled 40 times far more) stops early as
+    # "too-much", showing what was made before it. A long loop that fits in the time is still fine.
+    for name, setup in [("range", "for i in range(1, 100000000):\n    x = i\n"), ("text", 's = "a" * 1000000000\n'),
+                        ("doubled", 's = "ab"\nfor i in range(1, 40):\n    s = s + s\n'), ("list", "l = [1, 2]\nfor i in range(1, 40):\n    l = l + l\n")]:
+        src = scene_source(f"scene_huge_{name}.tuf", f'mention tgame\ngame = tgame.window("Huge", 400, 300)\nfirst = game:box(10, 10)\n{setup}last = game:box(50, 50)\n')
+        code, out, err, d, secs = scene(src)
+        c.check(code == 0 and d.get("stopped") == "too-much" and [t.get("var") for t in d.get("things", [])] == ["first"] and secs < 4,
+                f"a huge {name} in the setup stops the preview as too-much in {secs:.1f} s, with what was made before it", (d.get("stopped"), d.get("error"), secs))
+    src = scene_source("scene_huge_first.tuf", 'mention tgame\nr = range(1, 100000000)\ngame = tgame.window("Huge", 400, 300)\n')
+    c.check(scene(src)[3].get("stopped") == "too-much", "too-much even before the game's window is made", None)
+    src = scene_source("scene_long_loop.tuf", 'mention tgame\ngame = tgame.window("Long", 400, 300)\nfor i in range(1, 1000000):\n    x = i\nb = game:box(10, 10)\n')
+    code, out, err, d, secs = scene(src)
+    c.check(d.get("stopped") == "end" and [t.get("var") for t in d.get("things", [])] == ["b"], f"a loop over a million numbers still previews ({secs:.1f} s)", (d.get("stopped"), secs))
     p = subprocess.run(tuff_cmd() + ["--scene", game("snake.tuf")], capture_output=True, text=True, encoding="utf-8", timeout=60)
     c.check(p.returncode == 2 and "--scene needs" in p.stderr, "--scene without its three files says what it needs", p.stderr[:200])
     code, out, err, d, secs = scene(game("coin_dash.tuf"), env={"TUFF_IDE": "1"})

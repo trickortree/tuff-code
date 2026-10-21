@@ -2765,11 +2765,56 @@ class SceneConsole(Console):
 
 class SceneInterpreter(Interpreter):
     """Keeps the stack of lines being run (lines[0] is the top-level line), so tgame can tell which line made
-    each thing. wait() returns at once."""
+    each thing. wait() returns at once.
+
+    The preview runs by itself whenever the code changes, so it keeps its memory small as well as its time (main.js
+    stops it after 5 seconds), the same way on every system: the only things in Tuff that grow faster than a loop
+    can fill a list (under 100 MB in those 5 seconds) are range(), text * a number, and + on two texts or two lists.
+    Each of those is sized before it's made, and one over ONE bytes, or more than ALL of them together, stops the
+    preview as "too-much" (Tuff Engine says so, and shows what was made before it)."""
+    ONE = 100_000_000
+    ALL = 400_000_000
+
     def __init__(self, src, base_dir):
         super().__init__(src, base_dir)
         self.console = SceneConsole()
         self.lines = []
+        self.big = 0  # bytes of the big ranges, texts and lists made so far
+
+    def room(self, size):
+        if size < 1_000_000:
+            return
+        self.big += size
+        if size > self.ONE or self.big > self.ALL:
+            import tuff_tgame
+            tuff_tgame.SCENE.stop("too-much")
+
+    def b_range(self, a, b=None, step=1):
+        try:
+            lo, hi = (1, a) if b is None else (a, b)
+            st = int(step)
+            if st:
+                try:
+                    n = len(range(int(lo), int(hi) + (1 if st > 0 else -1), st))
+                except OverflowError:  # more numbers than a list can hold
+                    n = self.ONE
+                self.room(40 * n)  # a list of numbers: about 40 bytes each
+        except (TypeError, ValueError):
+            pass  # not numbers: Interpreter.b_range says what's wrong
+        return super().b_range(a, b, step)
+
+    def binop(self, op, a, b):
+        x, y = plain(a), plain(b)
+        whole = lambda v: isinstance(v, int) and not isinstance(v, bool)
+        if op == "*" and isinstance(x, str) and whole(y):
+            self.room(sys.getsizeof(x) * max(y, 0))
+        elif op == "*" and isinstance(y, str) and whole(x):
+            self.room(sys.getsizeof(y) * max(x, 0))
+        elif op == "+" and isinstance(x, str) and isinstance(y, str):
+            self.room(sys.getsizeof(x) + sys.getsizeof(y))
+        elif op == "+" and isinstance(x, list) and isinstance(y, list):
+            self.room(8 * (len(x) + len(y)))
+        return super().binop(op, a, b)
 
     def run(self, s, env):
         self.lines.append(s.line)
@@ -2827,10 +2872,14 @@ def scene_file(game_path, source_path, out_path):
             error = {"line": sig.line, "col": sig.col, "message": f"'{word}' can't be used here."}
         except RecursionError:
             error = {"line": None, "col": None, "message": "A function called itself too many times."}
+        except MemoryError:  # the system ran out before SceneInterpreter's own limits did
+            scene.stopped = scene.stopped or "too-much"
         except Exception as exc:  # a bug in scene mode must never hang the editor
             error = {"line": None, "col": None, "message": f"Tuff Engine's preview had a problem: {exc}"}
         try:
             data.update(scene.dump(error))
+            if scene.stopped == "too-much" and not error:
+                data["stopped"] = "too-much"  # even before the game's window was made
         except Exception as exc:
             data.update(stopped="error", batch=[], things=[],
                         error={"line": None, "col": None, "message": f"Tuff Engine's preview had a problem: {exc}"})

@@ -1934,6 +1934,7 @@ func play_again():
       } else if (d.stopped === 'timeout') html = 'Your code took more than 5 seconds before the game started, so Tuff Engine stopped it. Press Play to run it.';
       else if (d.stopped === 'other-window') { html = 'Tuff Engine shows tgame games. This file also opens a tgui, mtgui or atgui window.'; studio = true; }
       else if (d.stopped === 'too-big') html = 'This game makes too many things to show them all here. Press Play to see it.';
+      else if (d.stopped === 'too-much') html = 'Your code makes something too big for the preview before the game starts (like a very long range), so Tuff Engine stopped there. Press Play to run it.';
       else if (d.stopped === 'crashed') html = `The preview couldn't run: ${esc(d.message || 'something went wrong')}`;
       else if (S.webgl === false && d.mode === '3d') html = "This computer can't show 3D worlds: its 3D graphics (WebGL) aren't working. 2D games still work.";
       else if (S.hostErr) html = `The preview couldn't draw something: ${esc(S.hostErr)}`;
