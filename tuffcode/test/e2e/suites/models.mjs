@@ -128,9 +128,12 @@ export default async (t, ctx) => {
   check('While it is answering, the other agents and both dropdowns are locked', locked.codex && !locked.claude && locked.model && locked.effort, locked);
   await ev(`${dd('model')}.querySelector('.ta-dd-btn').click()`);
   check('A locked dropdown does not open', await ev(`${dd('model')}.querySelector('.ta-dd-menu').classList.contains('hidden')`), null);
+  const labelRunning = await ev(`document.querySelector('.ta-send').getAttribute('aria-label')`);
   await ev(`document.querySelector('.ta-send').click()`);
   await waitFor(`!document.querySelector('.ta-send').classList.contains('stop')`, 5000);
   check('After Stop everything unlocks', await ev(`!${dd('model')}.querySelector('.ta-dd-btn').disabled && !document.querySelector('.ta-agents button[data-id="codex"]').disabled`), null);
+  const labelIdle = await ev(`document.querySelector('.ta-send').getAttribute('aria-label')`);
+  check('A screen reader hears "Stop" while it answers and "Send" after', labelRunning === 'Stop' && labelIdle === 'Send', { labelRunning, labelIdle });
 
   await tab('codex');
   await waitFor(`${dd('model')}.querySelector('.ta-dd-v').textContent !== 'Loading…'`);
@@ -184,7 +187,9 @@ export default async (t, ctx) => {
   const am = await opts('model');
   check('Tuff AI: the model chip lists Pumice 1, and only it (no "Default")', JSON.stringify(am) === JSON.stringify(['qwen3.5-2b=Pumice 1']), am);
   const credit = await ev(`(() => { ${dd('model')}.querySelector('.ta-dd-btn').click(); const s = ${dd('model')}.querySelector('.ta-dd-opt small')?.textContent; document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); return s; })()`);
-  check('... with the credit in small text: based on Qwen3.5-2B (Apache 2.0)', /Based on Qwen3\.5-2B \(Apache 2\.0\)/.test(credit || ''), credit);
+  check('... with a line of small text that never names the base model', /TuffCode's own AI/.test(credit || '') && !/qwen|apache/i.test(credit || ''), credit);
+  const panelWords = await ev(`(() => { const p = document.querySelector('.ta'); return [p.innerText, ...[...p.querySelectorAll('[title], [aria-label]')].map((e) => (e.title || '') + ' ' + (e.getAttribute('aria-label') || ''))].join(' | '); })()`);
+  check('Nothing in the Tuff AI panel says Qwen, in its text or its tooltips', !/qwen/i.test(panelWords), panelWords.match(/.{0,60}qwen.{0,60}/i)?.[0]);
   const ae = await opts('effort');
   check('Tuff AI: thinking levels Off, Low, Medium and High, with the default marked', JSON.stringify(ae) === JSON.stringify(['off=Off', 'low=Low (default)', 'medium=Medium', 'high=High']), ae);
   check('Tuff AI: the chips show Pumice 1 and the default level', (await shown('model')) === 'Pumice 1' && (await shown('effort')) === 'Low', [await shown('model'), await shown('effort')]);

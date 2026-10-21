@@ -50,7 +50,7 @@ app.whenReady().then(async () => {
   });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  // Who it says it is: Pumice 1, based on Qwen3.5-2B, never ChatGPT, Qwen's own assistant or "Tuff AI".
+  // Who it says it is: Pumice 1, never ChatGPT, Qwen or "Tuff AI", and it doesn't bring up the base model.
   const answer = async (q, effort, id) => {
     const got = await events(q, id, () => {}, { effort, ai: { question: q } });
     return { text: got.filter((e) => e.kind === 'delta').map((e) => e.text).join('').trim(), got };
@@ -59,7 +59,7 @@ app.whenReady().then(async () => {
   for (const [q, lv] of [['Who are you?', 'off'], ['What model are you?', 'low'], ['Are you ChatGPT?', 'off'], ['Are you Qwen?', 'off'], ['Are you Tuff AI?', 'low']]) {
     const a = await answer(q, lv, `who-${q}`);
     console.log(`[${lv}] ${q}\n      ${a.text.replace(/\s+/g, ' ').slice(0, 300)}`);
-    check(`"${q}" (${lv}): it says it's Pumice 1, and claims to be nothing else`, /Pumice 1/.test(a.text) && !falseClaim.test(a.text), a.text);
+    check(`"${q}" (${lv}): it says it's Pumice 1, and claims to be nothing else`, /Pumice 1/.test(a.text) && !falseClaim.test(a.text) && (/qwen/i.test(q) || !/qwen|alibaba/i.test(a.text)), a.text);
   }
   // ... and only when it's asked. With the sentence to say in the system prompt, it began 58 of 60 Tuff Bench
   // answers with it. These are at the default level, with a file open for the first one, like the panel.
@@ -122,6 +122,9 @@ app.whenReady().then(async () => {
   const r6 = await events('Say hi.', 'r6');
   Object.assign(m, real);
   check('A model that fails to load: the next question starts Tuff AI again', !r5[r5.length - 1].ok && r6.some((e) => e.kind === 'note' && /Starting/.test(e.text)) && !r6[r6.length - 1].ok, { r5, r6 });
+  const loadError = r5[r5.length - 1].error || '';
+  console.log(`      load error: ${loadError.slice(0, 300)}`);
+  check("... and its error is in Pumice 1's name, with no file path or file name", /^Pumice 1 couldn't start/.test(loadError) && !/\.gguf|qwen|[\\/]/i.test(loadError), loadError);
 
   ai.quit();
   // Electron keeps files open in its own userData folder, so on Windows it can't all go yet.

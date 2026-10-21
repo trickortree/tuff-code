@@ -157,7 +157,6 @@
 .ta-fold-b ul { padding-left: 16px; }
 .ta-fold-b code { padding: 0 4px; border-radius: 4px; background: var(--bg-active); font: 11.5px var(--font-code); color: var(--text-dim); }
 .ta-fold-h { margin: 6px 0 2px; font: 600 11px var(--font-ui); color: var(--text-dim); }
-.ta-credit { color: var(--text-muted); }
 .ta-small { font-size: 12px; color: var(--text-muted); }
 .ta-note-l { display: flex; align-items: flex-start; gap: 6px; line-height: 1.45; }
 .ta-note-l .ta-ic { width: 13px; height: 13px; margin-top: 1px; color: var(--text-muted); }
@@ -186,13 +185,15 @@
 .ta-mode button[data-m="plan"].on { background: color-mix(in srgb, var(--accent) 30%, var(--bg-active)); color: var(--text); }
 .ta-mode button:disabled { opacity: .4; cursor: not-allowed; }
 .ta-hint { display: none; }
-/* Send is a round icon button, as tall as the chips beside it; its text (Send / Stop) stays for screen
-   readers and tests. */
-.ta-send { flex: none; margin-left: auto; display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border-radius: 50%; background: var(--accent); color: #fff; font-size: 0; transition: filter .12s; }
-.ta-send::before { content: ''; width: 12px; height: 12px; background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 13V3M3.5 7.5 8 3l4.5 4.5'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 13V3M3.5 7.5 8 3l4.5 4.5'/%3E%3C/svg%3E") center / contain no-repeat; }
+/* Send is a rounded-square icon button, as tall as Plan/Ask/Edit beside it, its corner following the box's.
+   Its text (Send / Stop) stays for screen readers and tests; the icon is centred apart from it (as a grid
+   item the hidden text took a row and pushed the icon up). Stop is the same shape in a soft red. */
+.ta-send { flex: none; margin-left: auto; position: relative; width: 28px; height: 28px; padding: 0; border-radius: 8px; background: var(--accent); color: #fff; font-size: 0; transition: filter .12s, background-color .12s; }
+.ta-send::before { content: ''; position: absolute; inset: 0; margin: auto; width: 14px; height: 14px; background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 13V3.5M3.8 7.6 8 3.4l4.2 4.2'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 13V3.5M3.8 7.6 8 3.4l4.2 4.2'/%3E%3C/svg%3E") center / contain no-repeat; }
 .ta-send:hover { filter: brightness(1.1); }
-.ta-send.stop { background: var(--red); }
-.ta-send.stop::before { -webkit-mask: none; mask: none; width: 9px; height: 9px; border-radius: 2px; }
+.ta-send.stop { background: color-mix(in srgb, var(--red) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 45%, transparent); color: var(--red); }
+.ta-send.stop:hover { background: color-mix(in srgb, var(--red) 26%, transparent); filter: none; }
+.ta-send.stop::before { -webkit-mask: none; mask: none; width: 10px; height: 10px; border-radius: 2.5px; }
 /* The chips in the message box: no "Model" / "Thinking" label (it's in the tooltip), shorter. */
 .ta-row .ta-dd-k { display: none; }
 .ta-row .ta-dd-btn { height: 26px; max-width: 132px; padding: 0 6px 0 8px; gap: 4px; border-color: transparent; background: transparent; color: var(--text-dim); }

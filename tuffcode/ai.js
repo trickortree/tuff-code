@@ -11,15 +11,14 @@ const os = require('os');
 const crypto = require('crypto');
 const { pipeline } = require('stream/promises');
 
-// Pumice 1 is TuffCode's model. For now it's the open Qwen3.5-2B as it is, before any training on Tuff.
+// Pumice 1 is TuffCode's model. For now it's the open Qwen3.5-2B (Apache 2.0) as it is, before any training on
+// Tuff. Nothing TuffCode shows names the base model: Pumice 1 is the name people see and the one it answers to.
 // The id and the file name stay the base model's, so a copy downloaded by 1.0.4 is still found.
 const MODELS = [
   {
     id: 'qwen3.5-2b',
     name: 'Pumice 1',
-    base: 'Qwen3.5-2B',
-    licence: 'Apache 2.0',
-    sub: 'Based on Qwen3.5-2B (Apache 2.0). Not trained on Tuff yet.',
+    sub: "TuffCode's own AI. Runs on your computer, no internet needed.",
     file: 'Qwen3.5-2B-Q4_K_M.gguf',
     url: 'https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf',
     size: 1280835840,
@@ -64,6 +63,10 @@ const modelsDir = () => path.join(app.getPath('userData'), 'models');
 const modelPath = (m) => path.join(modelsDir(), m.file);
 const find = (id) => MODELS.find((m) => m.id === id) || MODELS[0];
 const downloaded = (m) => { try { return fs.statSync(modelPath(m)).size === m.size; } catch { return false; } };
+// Error text for people: the model's file is named after the base model, so its path and name (and the
+// download's .part) become "its model file". Pumice 1 is the only name TuffCode shows.
+const tidy = (m, text) => String(text).split(modelPath(m)).join('its model file').replace(/its model file\.part\b/g, 'its model file')
+  .replace(/[^\s'"]*\.gguf(?:\.part)?\b/gi, 'its model file');
 
 async function runtimeAvailable() {
   try {
@@ -76,7 +79,7 @@ async function runtimeAvailable() {
 async function status() {
   return {
     runtime: await runtimeAvailable(),
-    models: MODELS.map((m) => ({ id: m.id, name: m.name, base: m.base, licence: m.licence, sub: m.sub, size: m.size, downloaded: downloaded(m) })),
+    models: MODELS.map((m) => ({ id: m.id, name: m.name, sub: m.sub, size: m.size, downloaded: downloaded(m) })),
     downloading: download ? { id: download.id, got: download.got, total: download.total } : null,
     loaded: worker?.info ? { model: worker.model, ...worker.info } : null,
     ram: { total: os.totalmem(), free: freeMemory(), need: find().ram },
@@ -142,7 +145,9 @@ async function fetchModel(id) {
     onProgress({ id: m.id, got: m.size, total: m.size, done: true });
   } catch (err) {
     const stopped = abort.signal.aborted;
-    const why = err.code === 'ENOSPC' ? `There isn't enough free disk space. ${m.name} needs ${(m.size / 1e9).toFixed(1)} GB. Free some up, then try again.` : String(err.message || err);
+    const why = err.code === 'ENOSPC' ? `There isn't enough free disk space. ${m.name} needs ${(m.size / 1e9).toFixed(1)} GB. Free some up, then try again.`
+      : ['EPERM', 'EBUSY', 'EACCES'].includes(err.code) ? `Couldn't save ${m.name}: something else is using its file (often an antivirus checking it). Try again in a minute.`
+      : tidy(m, err.message || err);
     onProgress({ id: m.id, got: download?.got || 0, total: m.size, done: true, error: stopped ? null : why, stopped });
     if (!stopped) throw err;
   } finally {
@@ -199,7 +204,7 @@ function start(m) {
         // The model didn't load. Let this worker go, so the next question starts a fresh one.
         if (worker === w) worker = null;
         try { proc.kill(); } catch {}
-        reject(new Error(msg.error));
+        reject(new Error(`${m.name} couldn't start: ${tidy(m, msg.error || "its model file didn't load")}`));
         return;
       }
       const r = runs.get(msg.runId);
@@ -213,7 +218,7 @@ function start(m) {
       // A worker that was already let go (unloaded, or failed to load) has no questions left here.
       const mine = worker === w;
       if (mine) worker = null;
-      const why = w.err.trim().split(/\r?\n/).pop();
+      const why = tidy(m, w.err.trim().split(/\r?\n/).pop() || '');
       reject(new Error(`${m.name} stopped unexpectedly (code ${code}).${why ? ` ${why}` : ''}`));
       if (mine) for (const [id, r] of runs) { runs.delete(id); r.resolve({ ok: false, error: `${m.name} stopped unexpectedly. Try again.` }); }
     });
@@ -270,13 +275,13 @@ function relevant(text, n = 2, { first = [], skip = [] } = {}) {
   }).sort((a, b) => b.score - a.score).slice(0, n - forced.length).filter((x) => x.score > 0).map((x) => x.s)];
 }
 
-// Who it is. Asked "who are you?" or "are you ChatGPT?", a base model says it's Qwen or a made-up helper,
-// so it's told plainly what's true. The exact sentence to answer with is only in the improver's card for
+// Who it is. Asked "who are you?" or "are you ChatGPT?", a base model gives its own maker's name or a made-up
+// helper's, so it's told plainly who it is here: Pumice 1. The exact sentence to answer with is only in the improver's card for
 // those questions (GOOD.about): with it in the system prompt, the 2B started almost every answer with it.
 function systemPrompt() {
   const m = MODELS[0];
-  return `You are ${m.name}, TuffCode's own AI model. You power Tuff AI, the helper built into TuffCode, the code editor for the Tuff programming language. ${m.name} is based on ${m.base}, an open model by the Qwen team at Alibaba Cloud (${m.licence} licence). You run on the person's own computer, with no internet.
-If they ask who or what you are, which model you are, or who made you, say it in a sentence or two: you're ${m.name}, TuffCode's model, based on the open ${m.base} model, running on their computer. You are not ChatGPT, Claude, Gemini or Qwen's own chat app, and you're not a person. When they ask about anything else, don't say who you are: go straight to their question.
+  return `You are ${m.name}, TuffCode's own AI model. You power Tuff AI, the helper built into TuffCode, the code editor for the Tuff programming language. You run on the person's own computer, with no internet.
+If they ask who or what you are, which model you are, or who made you, say it in a sentence or two: you're ${m.name}, TuffCode's own AI model, running right here on their computer. You are not ChatGPT, Claude or Gemini, and you're not a person. When they ask about anything else, don't say who you are: go straight to their question.
 You help beginners, often kids, with the Tuff programming language.
 Tuff is its own language, not Python. Only use what the Tuff guide below shows.
 Keep answers short and friendly. When you give a program, give the whole program in one \`\`\`tuff code block.
@@ -371,7 +376,7 @@ const GOOD = {
   fix: `one or two sentences naming the mistake and the line it's on, then the whole fixed program in one ${fence}tuff block.`,
   explain: 'a short explanation, step by step, in plain words. Quote small bits of their code. No whole new program unless they ask for one.',
   question: `a short, friendly answer in plain words, with a tiny ${fence}tuff example if it helps (only real Tuff code goes in it).`,
-  about: `a sentence or two, like: "I'm ${MODELS[0].name}, TuffCode's own AI model. I'm based on the open ${MODELS[0].base} model, and I run right here on your computer." No code.`,
+  about: `a sentence or two, like: "I'm ${MODELS[0].name}, TuffCode's own AI model, and I run right here on your computer." No code.`,
 };
 const ASKS = /\b(asks?|asking|types?|typed|typing|enters?|input|answers?|guess(es)?)\b/i;
 const TARGET = {
