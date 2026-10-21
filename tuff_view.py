@@ -29,6 +29,8 @@ import urllib.parse
 WEB_DIR = os.path.join(getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__)), "tuff_view_web")
 DEFAULT_ICON = os.path.join(WEB_DIR, "icon.png")
 OPEN_TIMEOUT = 30
+# How long a closing window waits for the program's close handlers before it goes (see View._on_closing).
+CLOSE_GRACE = 2.0
 WEBVIEW2_URL = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
 WEBVIEW2_MISSING = ("This program shows its window with Microsoft Edge WebView2, which isn't installed on this PC. "
                     f"Install the WebView2 Runtime from {WEBVIEW2_URL} and run it again.")
@@ -397,7 +399,9 @@ class View:
         self._cond = threading.Condition()
         self._ready = threading.Event()
         self._closed = False
-        self._close_done = False  # the close handlers have run (they run once)
+        self._close_done = False      # the close handlers have started (they run once)
+        self._close_finished = False  # ...and finished
+        self._in_call = 0             # calls into pywebview's window in progress (see _window_call)
         self._failure = None
         self._win = None
         self._ids = itertools.count(1)
@@ -469,6 +473,8 @@ class View:
             self._win = webview.create_window(self.title, self._base + "index.html", js_api=_Api(self), **self._window_args)
             self._win.events.initialized += self._on_initialized
             self._win.events.before_show += self._on_before_show
+            if not self._window_args.get("confirm_close"):  # with a "Quit?" question, closing can still be cancelled
+                self._win.events.closing += self._on_closing
             self._win.events.closed += self._on_closed
             webview.start(private_mode=True, debug=self._debug,
                           storage_path=_profile_dir() if sys.platform == "win32" else None)
@@ -517,6 +523,26 @@ class View:
                         self._inbox.append(e)
                 self._next_in += 1
             self._cond.notify_all()
+
+    def _on_closing(self):
+        """The GUI thread, as the window starts to close (its X, Alt+F4, the taskbar, Cmd+Q, logging off...).
+
+        The close is noted now, not when the window is gone, and the window waits (at most CLOSE_GRACE s) for the
+        program's close handlers to run. Quitting a Mac app with Cmd+Q, or logging off Windows, can end the process
+        as soon as its window has gone, before a handler that only started then had a chance to finish.
+        """
+        self._on_closed()
+        if not self._handlers.get(None, NO_HANDLERS).get("close"):
+            return None
+        deadline = time.monotonic() + CLOSE_GRACE
+        with self._cond:
+            # Not while the program is calling the window (on Windows that call waits for this very thread).
+            while not self._close_finished and not self._in_call and self._thread.is_alive():
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                self._cond.wait(left)
+        return None  # False would cancel the close
 
     def _on_closed(self):
         with self._cond:
@@ -763,6 +789,13 @@ class View:
             if self._close_done:
                 return
             self._close_done = True
+            try:
+                self._handle(e, t)
+            finally:
+                with self._cond:
+                    self._close_finished = True
+                    self._cond.notify_all()
+            return
         self._handle(e, t)
 
     def _closing(self):
@@ -911,35 +944,49 @@ class View:
         """The page's own numbers: frames drawn per second, frame gaps, time spent applying and drawing."""
         return self.ask(0, "stats", bool(reset))
 
+    def _window_call(self, method, *args):
+        """Call a method of pywebview's window, unless the window has closed (or started to).
+
+        On Windows such a call waits for the window's own thread, so a closing window, which waits on that thread
+        for the close handlers, doesn't wait while one is in progress (see _on_closing). An error from a window
+        that closed meanwhile is dropped: there's nothing left to change.
+        """
+        with self._cond:
+            if self._closed or self._win is None:
+                return
+            self._in_call += 1
+        try:
+            getattr(self._win, method)(*args)
+        except Exception:
+            if not self._closed:
+                raise
+        finally:
+            with self._cond:
+                self._in_call -= 1
+                self._cond.notify_all()
+
     def set_title(self, title):
         self.title = str(title)
-        if not self._closed:
-            self._win.set_title(self.title)
+        self._window_call("set_title", self.title)
 
     def resize(self, width, height):
-        if not self._closed:
-            self._win.resize(int(width), int(height))
+        self._window_call("resize", int(width), int(height))
 
     def move(self, x, y):
-        if not self._closed:
-            self._win.move(int(x), int(y))
+        self._window_call("move", int(x), int(y))
 
     def minimize(self):
-        if not self._closed:
-            self._win.minimize()
+        self._window_call("minimize")
 
     def maximize(self):
-        if not self._closed:
-            self._win.maximize()
+        self._window_call("maximize")
 
     def restore(self):
-        if not self._closed:
-            self._win.restore()
+        self._window_call("restore")
 
     def fullscreen(self):
         """Switch full screen on or off."""
-        if not self._closed:
-            self._win.toggle_fullscreen()
+        self._window_call("toggle_fullscreen")
 
     def close(self):
         """Close the window. The next frame() raises ViewClosed; loop() returns."""
@@ -947,7 +994,7 @@ class View:
             return
         if self._win is not None:
             try:
-                self._win.destroy()
+                self._window_call("destroy")
             except Exception:
                 pass
             with self._cond:
