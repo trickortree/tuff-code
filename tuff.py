@@ -49,11 +49,20 @@ class Tok:
 ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"', "'": "'"}
 
 
+def source_lines(src):
+    """The program's lines, numbered as the editor numbers them. Only a newline ends a line: splitlines() would
+    also break at U+2028, U+0085, a form feed and others, cutting a text that holds one in two."""
+    lines = src.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if lines[-1] == "":  # a newline at the very end doesn't start another line
+        lines.pop()
+    return lines
+
+
 def tokenize(src):
     toks = []
     indents = [0]
     depth = 0
-    lines = src.splitlines()
+    lines = source_lines(src)
     for ln, raw in enumerate(lines, 1):
         stripped = raw.lstrip(" \t")
         if depth == 0:
@@ -125,6 +134,9 @@ def tokenize(src):
                     depth = max(0, depth - 1)
                 toks.append(Tok("OP", c, ln, col))
                 i += 1
+            elif not c.isprintable():  # U+2028, a form feed, a no-break space: nothing to see between the quotes
+                raise TuffError(f"There's a hidden character here (U+{ord(c):04X}) that Tuff doesn't understand. "
+                                "Delete it, or type this line again.", ln, col)
             else:
                 raise TuffError(f"I don't understand the character '{c}'.", ln, col)
         if depth == 0:
@@ -2756,7 +2768,7 @@ def scene_file(game_path, source_path, out_path):
 # ---------------------------------------------------------------- entry point
 
 def report(err, src):
-    lines = src.splitlines()
+    lines = source_lines(src)
     out = [f"Tuff error on line {err.line}: {err.msg}" if err.line else f"Tuff error: {err.msg}"]
     if err.line and 0 < err.line <= len(lines):
         code = lines[err.line - 1]
