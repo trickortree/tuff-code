@@ -188,7 +188,7 @@ export default async (t, ctx) => {
   await send('Make a program that says Hi');
   await idle();
   const high = lastAnswer();
-  check('High: the model thinks with its 1024-token budget, after the improver and a plan', high.thoughts === 'auto' && high.budget === 1024 && prompts().some((p) => p.plan) && prompts().some((p) => p.improved), prompts());
+  check('High: the model thinks with its 512-token budget, after the improver and a plan', high.thoughts === 'auto' && high.budget === 512 && prompts().some((p) => p.plan) && prompts().some((p) => p.improved), prompts());
   check('High: the reply says Tuff AI · Pumice 1 · High', /Tuff AI · Pumice 1 · High/.test(await who()), await who());
   const folds = await ev(`(() => { const m = [...document.querySelectorAll('.ta-msg.agent')].pop(); return [...m.querySelectorAll('details.ta-fold')].map(d => ({ cls: d.className, open: d.open, summary: d.querySelector('summary').textContent.trim(), body: d.querySelector('.ta-fold-b').textContent })); })()`);
   check('The reply has the improved request, folded, with its plan', folds[0]?.cls.includes('ta-improved') && !folds[0].open && folds[0].summary === 'Made your request clearer' && /They want: a Tuff program/.test(folds[0].body) && /rewrote it as/.test(folds[0].body) && /Task: show Hi/.test(folds[0].body), folds[0]);
