@@ -398,7 +398,8 @@
     {
       id: 'atgui-keys',
       title: 'Keyboard shortcuts',
-      body: `<p><code>app:key("ctrl+s", save)</code> runs a function when keys are pressed, anywhere in the window. Try <code>"escape"</code>, <code>"f5"</code>, <code>"space"</code> or <code>"ctrl+shift+n"</code>.</p>
+      body: `<p><code>app:key("ctrl+s", save)</code> runs a function when keys are pressed. Try <code>"escape"</code>, <code>"f5"</code>, <code>"space"</code> or <code>"ctrl+shift+n"</code>.</p>
+             <p>Keys with Ctrl or Alt, the F keys and Escape work anywhere in the window, even while someone is typing in a text box. Other keys, like <code>"space"</code>, don't run while someone is typing, so a space typed in a box stays a space.</p>
              <p>Tell people about the shortcut with a tooltip: <code>btn:tooltip "Ctrl+S"</code> shows when the mouse rests on the button.</p>`,
       example: 'mention atgui\n\napp = atgui.window("Shortcuts", 520, 360)\napp:heading "Press Ctrl+S"\nnotes = app:textarea "Write something"\n\nfunc save():\n    app:toast("Saved!", "success")\n\nbtn = app:button("Save", save)\nbtn:tooltip "Ctrl+S"\napp:key("ctrl+s", save)',
       task: 'Make a key (like <kbd>Space</kbd> or <kbd>Ctrl+S</kbd>) run a function that pops up a toast.',
@@ -563,7 +564,7 @@
     {
       id: 'tgame-window',
       title: 'Your first game',
-      body: `<p><code>tgame</code> makes games, a bit like pygame. <code>game = tgame.window("Title", 600, 400)</code> opens a game window 600 wide and 400 tall.</p>
+      body: `<p><code>tgame</code> makes games you can play: shapes that move, keys to steer them, scores and sounds. <code>game = tgame.window("Title", 600, 400)</code> opens a game window 600 wide and 400 tall.</p>
              <p>Shapes are called <b>sprites</b>: <code>game:box(x, y, width, height, color)</code> and <code>game:circle(x, y, radius, color)</code>. x and y are the middle of the sprite. (0, 0) is the top-left corner, and y goes <b>down</b>.</p>
              <p>A game runs in a loop. <code>while game:open():</code> keeps going until the window closes, and <code>game:frame()</code> draws each frame.</p>`,
       example: 'mention tgame\n\ngame = tgame.window("My Game", 600, 400)\ngame:background "navy"\nsun = game:circle(500, 80, 40, "gold")\nground = game:box(300, 380, 600, 40, "grass")\ngame:text("Hello, game!", 300, 200, 32, "white")\n\nwhile game:open():\n    game:frame()',
@@ -663,7 +664,7 @@
     {
       id: 'tgame-coins',
       title: 'Collect the coins',
-      body: `<p>Things in a 3D world can be clicked. <code>coin:clicked grab</code> runs <code>grab</code>, and it gets the thing that was clicked.</p>
+      body: `<p>Things in a 3D world can be clicked. <code>coin:clicked grab</code> runs <code>grab</code>, and it gets the thing that was clicked. Once you've clicked the game to look around, the mouse pointer is hidden, so a click picks whatever is under the dot in the middle of the view.</p>
              <p><code>coin:distance(player)</code> says how far away something is, so people have to walk up to it first. <code>game:hud()</code> is a flat layer on top of the world, for things like the score.</p>`,
       example: 'mention tgame\n\ngame = tgame.world("Lumberjack")\ngame:island(60)\nplayer = game:player("first person")\naxe = player:hold("axe")\nlogs = 0\nlabel = game:hud():text("Logs: 0", 90, 30)\n\nfunc chop(tree):\n    axe:swing()\n    if tree:distance(player) < 4 and not tree:fallen():\n        tree:fall()\n        tree:regrow(5)\n        logs += 1\n        label:set "Logs: " + logs\n\nfor i in range(1, 15):\n    tree = game:spawn("tree")\n    tree:clicked chop\n\nwhile game:open():\n    game:frame()',
       task: 'Spawn 10 coins. Clicking a coin that\'s close removes it, adds 1 to a coin counter on the HUD and plays the coin sound.',
