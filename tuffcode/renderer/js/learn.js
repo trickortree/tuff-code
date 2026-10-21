@@ -259,7 +259,7 @@
              <p>You can write <code>mention mtgui</code> or <code>import mtgui</code>. They do the same thing.</p>`,
       example: 'mention mtgui\n\napp = mtgui.window("Modern App")\napp:heading "So shiny"\napp:small "Hover the button to see the shine"\n\nfunc hi():\n    app:alert "Hey!"\n\napp:button("Say hi", hi)\napp:button("Secondary", hi, "outline")',
       task: 'Make an mtgui window with a heading and a button. Hover the button to see it shine.',
-      starter: '# Section 2.2, Lesson 1: Going modern\n# Make an mtgui window with a heading and a button.\n\nmention mtgui\n\n',
+      starter: '# Section 2.1, Lesson 1: Going modern\n# Make an mtgui window with a heading and a button.\n\nmention mtgui\n\n',
       check: (src) => {
         if (!/^\s*(import|mention)\s+mtgui\b/m.test(src)) return 'Start with: mention mtgui';
         if (!/mtgui\.window\s*\(/.test(src)) return 'Make a window with: app = mtgui.window("My App")';
@@ -273,7 +273,7 @@
              <p>Make your own with <code>app:gradient("#00c6ff", "#7b2ff7")</code>. <code>app:theme "light"</code> switches to the light look.</p>`,
       example: 'mention mtgui\n\napp = mtgui.window("Gradients")\napp:heading "Pick a vibe"\nbar = app:progress(70)\n\nfunc sunset():\n    app:accent "orange"\n\nfunc ocean():\n    app:gradient("#00c6ff", "#7b2ff7")\n\nrow = app:row\nrow:button("Sunset", sunset)\nrow:button("Ocean", ocean)',
       task: 'Make buttons that change the accent gradient while the app is running.',
-      starter: '# Section 2.2, Lesson 2: Gradients and themes\n# Make buttons that change the accent gradient while the app is running.\n\nmention mtgui\n\napp = mtgui.window("Gradients")\n\n',
+      starter: '# Section 2.1, Lesson 2: Gradients and themes\n# Make buttons that change the accent gradient while the app is running.\n\nmention mtgui\n\napp = mtgui.window("Gradients")\n\n',
       check: (src) => (/:(accent|gradient)\b/.test(src) && /:button\b/.test(src) ? true : 'Use app:accent or app:gradient inside a function a button runs.'),
     },
     {
@@ -283,7 +283,7 @@
              <p>Change any animation with <code>:speed</code>. Buttons have it too: it controls how fast the shine sweeps across.</p>`,
       example: 'mention mtgui\n\napp = mtgui.window("Motion", 460, 560)\nclock = app:clock("analog", 140)\nclock:speed 30\n\nspin = app:spinner("Syncing...")\nspin:speed 2\n\nbar = app:progress(40)\nbar:speed 0.5\n\nfunc fill():\n    bar:set 100\n\napp:button("Fill it", fill)',
       task: 'Use <code>:speed</code> on at least two different animated widgets.',
-      starter: '# Section 2.2, Lesson 3: Motion and speed\n# Use :speed on at least two different animated widgets.\n\nmention mtgui\n\napp = mtgui.window("Motion")\n\n',
+      starter: '# Section 2.1, Lesson 3: Motion and speed\n# Use :speed on at least two different animated widgets.\n\nmention mtgui\n\napp = mtgui.window("Motion")\n\n',
       check: (src) => ((src.match(/:speed\b/g) || []).length >= 2 ? true : 'Use :speed on two things, like clock:speed 10 and spin:speed 2'),
     },
     {
@@ -294,7 +294,7 @@
              <p>Add things from the left, click anything in the preview to change it on the right, and move or delete it. Every change is written into your code, so you can switch back any time. <kbd>Ctrl+Z</kbd> undoes it.</p>`,
       example: '# 1. Start the lesson, then click "Open Design Studio"\n# 2. Add a Card, then (with the card selected) a Heading and a Button\n# 3. Pick a gradient in the Window settings\n# 4. Click Run app',
       task: 'Use Design Studio to add a card with a heading and a button inside it, then run your app.',
-      starter: '# Section 2.2, Lesson 4: Design Studio\n# Use Design Studio to add a card with a heading and a button, then run it.\n\nmention mtgui\n\napp = mtgui.window("Studio App")\n',
+      starter: '# Section 2.1, Lesson 4: Design Studio\n# Use Design Studio to add a card with a heading and a button, then run it.\n\nmention mtgui\n\napp = mtgui.window("Studio App")\n',
       check: (src) => {
         if (!/:card\b/.test(src)) return 'Add a card in Design Studio.';
         return /\w+:heading\b/.test(src) && /\w+:button\b/.test(src) ? true : 'Put a heading and a button in your card.';
@@ -308,7 +308,7 @@
   const SECTIONS = [
     { id: 'basics', title: 'Basics', lessons: BASICS, prefix: '' },
     { id: 'tgui', title: 'Section 2 · Build apps', optional: true, lessons: TGUI, prefix: 'tgui-' },
-    { id: 'mtgui', title: 'Section 2.2 · Modern apps', optional: true, lessons: MTGUI, prefix: 'mtgui-' },
+    { id: 'mtgui', title: 'Section 2.1 · Modern apps', optional: true, lessons: MTGUI, prefix: 'mtgui-' },
   ];
   const LESSONS = [...BASICS, ...TGUI, ...MTGUI];
 
