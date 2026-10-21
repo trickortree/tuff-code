@@ -789,3 +789,110 @@ body.enter #statusbar { animation: upin .55s .3s cubic-bezier(.2,.9,.25,1) both;
 #app.studio-on.studio-full #toolstrip, #app.studio-on.studio-full #sidebar, #app.studio-on.studio-full #sidebar-resizer,
 #app.studio-on.studio-full #tabs, #app.studio-on.studio-full #breadcrumbs, #app.studio-on.studio-full #bottom-panel,
 #app.studio-on.studio-full #bottom-resizer, #app.studio-on.studio-full #statusbar { display: none !important; }
+
+/* ---------- Tuff Engine (tuff-engine.js): a second Studio-style tab, so .sd-*, .pf-* and .in-* are shared ---------- */
+#engine { position: absolute; inset: 0; z-index: 5; background: var(--bg-editor); overflow: hidden; container-type: inline-size; container-name: studio; }
+#app.engine-on.studio-full #toolstrip, #app.engine-on.studio-full #sidebar, #app.engine-on.studio-full #sidebar-resizer,
+#app.engine-on.studio-full #tabs, #app.engine-on.studio-full #breadcrumbs, #app.engine-on.studio-full #bottom-panel,
+#app.engine-on.studio-full #bottom-resizer, #app.engine-on.studio-full #statusbar { display: none !important; }
+.tab.engine-tab .st-ic { color: var(--accent); display: inline-flex; }
+.tab.engine-tab .st-ic svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+#run-output .explain-err[data-label]::after { content: attr(data-label); }
+.en .sd-title svg { width: 20px; height: 20px; }
+#en-file { max-width: 200px; height: 30px; padding: 0 8px; border-radius: 7px; border: 1px solid #4e5157; background: var(--bg-editor); color: var(--text); font: 12.5px var(--font-ui); }
+.en-kind { height: 24px; display: inline-flex; align-items: center; padding: 0 9px; border-radius: 6px; border: 1px solid #43454a; color: var(--text-dim); font: 600 12px var(--font-ui); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.en-kind:empty { display: none; }
+#en-full.on { background: var(--accent-soft); color: var(--text); }
+/* Play and Stop are the same width, so nothing in the bar moves when a game starts or stops. */
+#en-play { min-width: 74px; justify-content: center; }
+#en-play svg { width: 11px; height: 11px; }
+#en-play.stop { background: var(--red); border-color: var(--red); }
+/* The left tabs look like the Studio's .sd-tabs but have their own names: studio.js finds .sd-tabs and .sd-pane anywhere on the page. */
+.en-tabs { display: flex; gap: 4px; padding: 10px 10px 6px; position: sticky; top: 0; background: var(--bg-panel); z-index: 1; }
+.en-tabs button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 4px; border-radius: 7px; font-weight: 600; font-size: 12.5px; color: var(--text-dim); }
+.en-tabs button svg { width: 13px; height: 13px; }
+.en-tabs button:hover { background: var(--bg-hover); color: var(--text); }
+.en-tabs button.on { background: var(--bg-active); color: var(--text); }
+.en-pane { padding: 0 10px 14px; }
+.en-tile:disabled { opacity: .45; cursor: default; }
+.en-tile:disabled:hover { border-color: #393b40; background: var(--bg-editor); }
+.en-tile .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.sd-layer.en-dim { opacity: .55; }
+.sd-layer.en-group .lb { color: var(--text-dim); }
+.sd-layer.en-group .ic { background: var(--bg-active); color: var(--text-dim); }
+.en-stage { flex: 1; min-width: 0; position: relative; outline: none; overflow: hidden; background: radial-gradient(circle at 1px 1px, #2f3136 1px, transparent 0) 0 0 / 20px 20px, var(--bg-editor); }
+.en-scroll { position: absolute; inset: 0; overflow: auto; display: flex; padding: 44px 24px 40px; }
+#en-frame { margin: auto; flex: none; display: block; border: 0; border-radius: 3px; background: transparent; box-shadow: 0 24px 60px rgba(0,0,0,.5), 0 0 0 1px #393b40; }
+.en-stage.start .en-scroll, .en-stage.start .en-hint, .en-stage.switching #en-frame { visibility: hidden; }
+.en-banner { position: absolute; z-index: 3; top: 10px; left: 50%; transform: translateX(-50%); width: max-content; max-width: min(660px, calc(100% - 32px)); display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 12px; border-radius: 9px; background: #3d3320; border: 1px solid #6e5a2e; color: #f2dfb8; font-size: 12.5px; line-height: 1.45; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.en-banner > svg { width: 16px; height: 16px; flex: none; color: var(--yellow); }
+.en-banner code { font: 12px var(--font-code); }
+.en-banner .btn { flex: none; }
+.en-pill { position: absolute; z-index: 3; top: 12px; right: 12px; padding: 3px 10px; border-radius: 999px; background: var(--bg-panel); border: 1px solid #43454a; color: var(--text-dim); font-size: 12px; }
+.en-hint { position: absolute; left: 0; right: 0; bottom: 12px; padding: 0 16px; text-align: center; color: var(--text-dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.en-start { position: absolute; inset: 0; z-index: 2; display: grid; place-items: center; padding: 24px; overflow: auto; }
+.en-card { max-width: 500px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; color: var(--text-dim); line-height: 1.5; }
+.en-card > svg { width: 46px; height: 46px; color: var(--accent); }
+.en-card b { color: var(--text); font-size: 16px; }
+.en-btns { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.en-card .en-btns:first-of-type { margin-top: 8px; }
+.en-card .btn, .en-btns .btn { display: inline-flex; align-items: center; gap: 7px; }
+.en-card .btn svg, .en-btns .btn svg { width: 15px; height: 15px; }
+.en-pickfile { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12.5px; }
+.en-pickfile select { max-width: 220px; height: 28px; padding: 0 8px; border-radius: 7px; border: 1px solid #4e5157; background: var(--bg-editor); color: var(--text); font: 12.5px var(--font-ui); }
+/* the Inspector */
+.in-tip.en-note { color: var(--yellow); }
+.en-nums { display: grid; grid-template-columns: repeat(auto-fit, minmax(62px, 1fr)); gap: 8px; }
+.en-num { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 12px; font-weight: 600; color: var(--text-dim); }
+.en-num span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.en-num input:disabled { opacity: .5; }
+.en-colors { display: flex; flex-direction: column; gap: 8px; }
+.pf-chips.en-swatches { gap: 4px; }
+.en-swatches .pf-chip { width: 26px; height: 26px; padding: 0; justify-content: center; }
+.en-swatches .sw-dot { width: 14px; height: 14px; }
+.sw-dot.en-none { background: linear-gradient(135deg, transparent 44%, #9da0a8 45%, #9da0a8 55%, transparent 56%); box-shadow: inset 0 0 0 1px #9da0a8; }
+.en-beh { display: flex; flex-direction: column; gap: 10px; padding: 10px 10px 12px; border-radius: 9px; border: 1px solid #43454a; background: var(--bg-editor); }
+.en-beh .pf-chips.seg { background: var(--bg-panel); }
+.en-beh-h { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; }
+.en-beh-h span { flex: 1; min-width: 0; line-height: 1.4; }
+.en-beh-h i { font-style: normal; font-weight: 400; color: var(--text-dim); }
+.en-beh.en-yours { border-style: dashed; }
+.en-addbeh { width: 100%; height: 32px; padding: 0 9px; border-radius: 7px; border: 1px dashed #5a5d63; background: transparent; color: var(--text); font: 13px var(--font-ui); color-scheme: dark; }
+.en-ev { display: flex; flex-direction: column; gap: 6px; }
+.en-ev-l { font-size: 12px; font-weight: 600; color: var(--text-dim); }
+.en-evrow { display: flex; align-items: flex-end; gap: 6px; }
+.en-evrow > select { width: 84px; flex: none; height: 32px; padding: 0 6px; border-radius: 7px; border: 1px solid #4e5157; background: var(--bg-editor); color: var(--text); font: 13px var(--font-ui); color-scheme: dark; }
+.en-evrow .en-nums { width: 84px; flex: none; }
+.en-evrow .pf-fn { flex: 1; min-width: 0; }
+.en-evrow .pf-fn select { min-width: 0; width: 100%; height: 32px; padding: 0 6px; border-radius: 7px; border: 1px solid #4e5157; background: var(--bg-editor); color: var(--text); font: 13px var(--font-ui); color-scheme: dark; }
+.en .pf-sec > .en-btns { justify-content: flex-start; }
+/* Assets */
+.en-assets { display: flex; flex-direction: column; gap: 4px; }
+.en-asset { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 4px 4px 4px; border-radius: 7px; }
+.en-asset:hover { background: rgba(255,255,255,.045); }
+.en-asset .ic { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border-radius: 7px; background: var(--bg-active); color: var(--text-dim); }
+.en-thumb { width: 32px; height: 32px; flex: none; object-fit: contain; image-rendering: pixelated; border-radius: 5px; background: repeating-conic-gradient(#3a3c41 0 25%, #2f3136 0 50%) 0 0 / 10px 10px; }
+.en-asset-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.en-empty { padding: 2px 4px 6px; font-size: 12px; line-height: 1.45; color: var(--text-dim); }
+.en-assets-foot { justify-content: flex-start; padding: 14px 2px 4px; }
+/* the templates gallery and Ask an agent */
+.en-tthumb { height: 120px; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--accent); background: radial-gradient(circle at 1px 1px, #2f3136 1px, transparent 0) 0 0 / 16px 16px; }
+.en-tthumb svg { width: 52px; height: 52px; stroke-width: 1.2; }
+.en-tthumb span { font: 700 13px var(--font-ui); color: var(--text-dim); border: 1px solid #43454a; border-radius: 6px; padding: 2px 7px; }
+.en-askbox { width: min(600px, calc(100% - 48px)); }
+.en-ask { display: flex; flex-direction: column; gap: 10px; padding: 8px 22px 20px; }
+.en-ask textarea { width: 100%; resize: vertical; min-height: 92px; padding: 9px 11px; border-radius: 8px; border: 1px solid #4e5157; background: var(--bg-editor); color: var(--text); font: 13.5px/1.5 var(--font-ui); outline: none; }
+.en-ask textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.en-ask .modal-choices { margin-top: 0; }
+.en-ask-btns { display: flex; align-items: center; gap: 8px; }
+.en-ask-btns span { flex: 1; font-size: 12px; color: var(--text-dim); }
+@container studio (max-width: 1080px) {
+  #en-play { min-width: 34px; }
+  #en-file { max-width: 140px; }
+}
+@container studio (max-width: 900px) {
+  .en-kind { display: none; }
+  .sd-left:not(.layers) .en-pane { padding: 0 8px 12px; }
+  .sd-left:not(.layers) .en-tabs { flex-direction: column; padding: 8px; }
+  .sd-left:not(.layers) .en-tabs .lbl { display: none; }
+}
