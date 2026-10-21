@@ -131,16 +131,36 @@
     while (queue.length && window.__tv) handle(queue.shift());
   });
 
+  let heldLoad = null; // the newest scene that came while the mouse was held
+  let heldTimer = null;
+  function startLoad(m) {
+    load(m).catch((err) => post('error', { message: String(err && err.message || err), where: 'loading the scene' }));
+  }
+  function loadHeld() {
+    clearTimeout(heldTimer);
+    const m = heldLoad;
+    heldLoad = null;
+    if (m) startLoad(m);
+  }
+
   function handle(m) {
     try {
       switch (m.tuffHost) {
         case 'hello': post('ready', { webgl: webgl ?? !!document.createElement('canvas').getContext('webgl2') }); break;
-        case 'load': load(m).catch((err) => post('error', { message: String(err && err.message || err), where: 'loading the scene' })); break;
+        // A new scene while the mouse is held waits until it's let go: loading would drop the drag (a refresh
+        // after the last change can land just as the kid presses on something).
+        case 'load':
+          if (!press) { startLoad(m); break; }
+          heldLoad = m;
+          // A release this page never sees can't keep the scene old for long.
+          clearTimeout(heldTimer);
+          heldTimer = setTimeout(() => { if (heldLoad) { finish(null, true); loadHeld(); } }, 4000);
+          break;
         case 'select': select(Array.isArray(m.is) ? m.is : []); break;
         case 'view': setCamMode(m.cam === 'game' ? 'game' : 'editor'); break;
         case 'camera': if (m.cam && L && L.mode === '3d') { cam = { ...cam, ...m.cam }; applyCam(); postCam(true); } break;
         case 'ask': ask(m); break;
-        case 'cancel': if (press && press.started) finish(null, true); else press = null; break;
+        case 'cancel': if (press && press.started) finish(null, true); else press = null; loadHeld(); break;
         default: break;
       }
     } catch (err) {
@@ -325,6 +345,7 @@
     camMode = mode;
     press = null;
     applyView();
+    loadHeld();
   }
 
   let camTimer = null;
@@ -586,7 +607,7 @@
     try {
       onDown(e);
       if (press) press.button = e.button;
-    } catch (err) { press = null; post('error', { message: String(err.message || err), where: 'picking' }); }
+    } catch (err) { press = null; post('error', { message: String(err.message || err), where: 'picking' }); loadHeld(); }
   });
 
   function onDown(e) {
@@ -692,8 +713,8 @@
   }
 
   // (A second button pressed during a drag comes as a pointermove, and pointerup only when all are up.)
-  addEventListener('pointerup', (e) => { finish(e, false); post('focus'); });
-  addEventListener('pointercancel', () => { finish(null, true); post('focus'); });
+  addEventListener('pointerup', (e) => { finish(e, false); post('focus'); loadHeld(); });
+  addEventListener('pointercancel', () => { finish(null, true); post('focus'); loadHeld(); });
 
   addEventListener('dblclick', (e) => {
     if (!L || L.mode !== '3d' || camMode !== 'editor' || !cam) return;

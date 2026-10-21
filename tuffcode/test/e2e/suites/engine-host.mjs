@@ -182,6 +182,23 @@ export default async (t, ctx) => {
   const drag = (await msgs(`m.tuffHost === 'drag'`))[0];
   check(drag && drag.i === coin.i && drag.dx === 100 && drag.dy === 50 && drag.alt === false, 'drag end: the coin, dx 100, dy 50 (game units)', drag);
 
+  // A new scene that comes while the mouse is held waits until it's let go, so the drag isn't lost (a refresh after
+  // the last change can land just as the kid presses on something).
+  const [qx, qy] = await screen(coin.i);
+  await clear();
+  await t.move(FX + qx, FY + qy);
+  await press(FX + qx, FY + qy);
+  await t.sleep(100);
+  await ev(`window.__eh.post({ ...${JSON.stringify(forLoad(d2))}, tuffHost: 'load', seq: 50, gameDirRel: '', assetEpoch: 1 })`);
+  await t.sleep(300);
+  const midLoad = (await msgs(`m.tuffHost === 'loaded' && m.seq === 50`)).length;
+  await moveTo(FX + qx, FY + qy, FX + qx + 40, FY + qy + 20);
+  await release(FX + qx + 40, FY + qy + 20);
+  const heldDrag = await waitMsg(`m.tuffHost === 'drag' && m.phase === 'end'`);
+  const loadedAfter = await waitMsg(`m.tuffHost === 'loaded' && m.seq === 50`, 20000);
+  const order = (await msgs(`m.tuffHost === 'drag' || m.tuffHost === 'loaded'`)).map((m) => m.tuffHost);
+  check(heldDrag && loadedAfter && midLoad === 0 && order[0] === 'drag', 'a new scene that comes while the mouse is held waits until it is let go, and the drag still counts', { midLoad, order });
+
   // Escape during a drag puts it back.
   const [px, py] = await screen(player.i);
   await clear();
@@ -234,7 +251,7 @@ export default async (t, ctx) => {
   check(await load(d3, 2, { cam: null }), 'the 3D dump loads (loaded)', await msgs(`m.tuffHost === 'error'`));
   await t.sleep(700);
   stats = (await ask('stats')).value;
-  check(stats.mode === '3d' && stats.sceneBg === '#bfe2ff' && stats.marker === true && stats.cameraNodesVisible === false && stats.b === 2e6,
+  check(stats.mode === '3d' && stats.sceneBg === '#bfe2ff' && stats.marker === true && stats.cameraNodesVisible === false && stats.b === 3e6, // the 3rd load (the held-load check loads the 2D game again)
     "the 3D world is in the engine: the day sky, the player's start marker, the held axe hidden from the editor camera", stats);
   const fitted = (await msgs(`m.tuffHost === 'cam'`)).pop();
   check(fitted && Math.abs(fitted.tx - -2) < 0.01 && Math.abs(fitted.tz - -10) < 0.01 && fitted.el === 35 && fitted.dist > 12,
@@ -323,7 +340,7 @@ export default async (t, ctx) => {
   check(await load(d3, 3), 'loading the world again works', await msgs(`m.tuffHost === 'error'`));
   const again = (await ask('stats')).value;
   const kept = (await msgs(`m.tuffHost === 'cam'`)).pop();
-  check(again.scene === before.scene && again.b === 3e6 && Math.abs(again.objs - before.objs) <= 4,
+  check(again.scene === before.scene && again.b === 4e6 && Math.abs(again.objs - before.objs) <= 4,
     'the 3D scene node is kept from one 3D load to the next (one WebGL context), with new ids for the rest', { before, again });
   check(kept && Math.abs(kept.dist - zoom.dist) < 0.01 && Math.abs(kept.az - zoom.az) < 0.01, 'and the camera stays where it was', { kept, zoom });
 

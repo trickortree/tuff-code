@@ -49,7 +49,9 @@ const changedLines = (a, b) => {
 export default async (t, ctx) => {
   const ev = (js) => t.eval(js);
   const check = (ok, label, got) => t.check(label, ok, got);
-  const waitFor = (js, ms = 15000) => t.waitFor(js, ms, 100);
+  // GitHub's Intel Mac runner is several times slower than a PC (and has no WebGL): every wait gets longer there.
+  const SLOW = ctx.ci && process.platform === 'darwin' && process.arch === 'x64' ? 4 : 1;
+  const waitFor = (js, ms = 15000) => t.waitFor(js, ms * SLOW, 100);
   const dbg = () => ev('window.TuffEngine.debug()');
   const visible = () => ev(`!document.querySelector('#engine').classList.contains('hidden')`);
   // The scene is up to date: it was made from the code as it is now, and the preview has drawn it.
@@ -82,7 +84,13 @@ export default async (t, ctx) => {
   const drag = async (x0, y0, x1, y1, steps = 10) => {
     await t.move(x0, y0);
     await t.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: x0, y: y0, button: 'left', buttons: 1, clickCount: 1 });
-    for (let s = 1; s <= steps; s++) await t.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x0 + ((x1 - x0) * s) / steps, y: y0 + ((y1 - y0) * s) / steps, button: 'left', buttons: 1 });
+    // Short pauses, like a hand: a slow machine's preview otherwise sees the press, the moves and the release at once.
+    await t.sleep(80);
+    for (let s = 1; s <= steps; s++) {
+      await t.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x0 + ((x1 - x0) * s) / steps, y: y0 + ((y1 - y0) * s) / steps, button: 'left', buttons: 1 });
+      await t.sleep(25);
+    }
+    await t.sleep(80);
     await t.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x1, y: y1, button: 'left', buttons: 0, clickCount: 1 });
     await t.sleep(150);
   };
@@ -162,7 +170,7 @@ export default async (t, ctx) => {
   const k = fr[2] / 800; // frame px per game unit
   const before = await code();
   await drag(cx, cy, cx + 100 * k, cy + 50 * k);
-  await waitFor(`window.__code() !== ${JSON.stringify(before)}`, 5000);
+  await waitFor(`window.__code() !== ${JSON.stringify(before)}`, 10000);
   const dragged = changedLines(before, await code());
   check(dragged && dragged.length === 2 && dragged[0][2] === 'coin = game:circle(300, 250, 14, "gold")' && dragged[1][2] === '    coin:move_to(300, 250)',
     "dragging the coin 100 right and 50 down changes only its line (and play_again's coin line, so Space puts it back there)", dragged);
