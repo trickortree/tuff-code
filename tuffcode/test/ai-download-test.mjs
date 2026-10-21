@@ -364,7 +364,14 @@ try {
   check('The model is called Pumice 1, with its base model and licence for the credit line', m.name === 'Pumice 1' && m.base === 'Qwen3.5-2B' && m.licence === 'Apache 2.0' && /Qwen3\.5-2B/.test(m.sub), m);
   check('... and keeps the id and file name 1.0.4 used, so a downloaded model is still found', m.id === 'qwen3.5-2b' && m.file === 'Qwen3.5-2B-Q4_K_M.gguf', m);
   const sys = ai.systemPrompt();
-  check('The system prompt says it is Pumice 1, based on Qwen3.5-2B, on this computer, and not another assistant', /^You are Pumice 1\b/.test(sys) && /based on Qwen3\.5-2B/.test(sys) && /run on the person's own computer/.test(sys) && /Answer like this: "I'm Pumice 1, TuffCode's own AI model\. I'm based on the open Qwen3\.5-2B model, and I run right here on your computer\."/.test(sys) && /not ChatGPT, Claude, Gemini or Qwen's own chat app/.test(sys) && !/You are Tuff AI/.test(sys), sys.slice(0, 600));
+  check('The system prompt says it is Pumice 1, based on Qwen3.5-2B, on this computer, and not another assistant', /^You are Pumice 1\b/.test(sys) && /based on Qwen3\.5-2B/.test(sys) && /run on the person's own computer/.test(sys) && /not ChatGPT, Claude, Gemini or Qwen's own chat app/.test(sys) && !/You are Tuff AI/.test(sys), sys.slice(0, 600));
+  // With the sentence to say in the system prompt, the 2B began almost every answer with it (58 of 60 in
+  // Tuff Bench), so only the card for "who are you?" has it.
+  const intro = "I'm Pumice 1, TuffCode's own AI model. I'm based on the open Qwen3.5-2B model, and I run right here on your computer.";
+  check('... without a sentence to say word for word, and told not to say who it is unless they ask', !/I'm Pumice|Answer like this/.test(sys) && /When they ask about anything else, don't say who you are/.test(sys), sys.slice(0, 900));
+  const whoCard = ai.improve({ question: 'Who are you?' }).text;
+  const sayCard = ai.improve({ question: 'What does say do?', file: 'main.tuf', code: 'say "Hello"\n' }).text;
+  check('The card for "Who are you?" has the sentence to answer with; the card for another question does not', whoCard.includes(intro) && !/Pumice/.test(sayCard) && !/Pumice/.test(ai.improve({ question: 'Make a program that counts from 1 to 10.' }).text), { whoCard, sayCard });
   const now = await ai.status();
   check('status() names Pumice 1 for the download card', now.models[0].name === 'Pumice 1' && now.models[0].base === 'Qwen3.5-2B', now.models[0]);
 

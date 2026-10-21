@@ -271,11 +271,12 @@ function relevant(text, n = 2, { first = [], skip = [] } = {}) {
 }
 
 // Who it is. Asked "who are you?" or "are you ChatGPT?", a base model says it's Qwen or a made-up helper,
-// so it's told plainly what's true.
+// so it's told plainly what's true. The exact sentence to answer with is only in the improver's card for
+// those questions (GOOD.about): with it in the system prompt, the 2B started almost every answer with it.
 function systemPrompt() {
   const m = MODELS[0];
   return `You are ${m.name}, TuffCode's own AI model. You power Tuff AI, the helper built into TuffCode, the code editor for the Tuff programming language. ${m.name} is based on ${m.base}, an open model by the Qwen team at Alibaba Cloud (${m.licence} licence). You run on the person's own computer, with no internet.
-If they ask who or what you are, which model you are, or who made you, say it in a sentence or two: you're ${m.name}, TuffCode's model, based on the open ${m.base} model, running on their computer. Answer like this: "I'm ${m.name}, TuffCode's own AI model. I'm based on the open ${m.base} model, and I run right here on your computer." You are not ChatGPT, Claude, Gemini or Qwen's own chat app, and you're not a person.
+If they ask who or what you are, which model you are, or who made you, say it in a sentence or two: you're ${m.name}, TuffCode's model, based on the open ${m.base} model, running on their computer. You are not ChatGPT, Claude, Gemini or Qwen's own chat app, and you're not a person. When they ask about anything else, don't say who you are: go straight to their question.
 You help beginners, often kids, with the Tuff programming language.
 Tuff is its own language, not Python. Only use what the Tuff guide below shows.
 Keep answers short and friendly. When you give a program, give the whole program in one \`\`\`tuff code block.
@@ -347,7 +348,7 @@ const GOOD = {
   fix: `one or two sentences naming the mistake and the line it's on, then the whole fixed program in one ${fence}tuff block.`,
   explain: 'a short explanation, step by step, in plain words. Quote small bits of their code. No whole new program unless they ask for one.',
   question: `a short, friendly answer in plain words, with a tiny ${fence}tuff example if it helps (only real Tuff code goes in it).`,
-  about: 'one or two true sentences about who you are (see the start of these instructions), and no code.',
+  about: `a sentence or two, like: "I'm ${MODELS[0].name}, TuffCode's own AI model. I'm based on the open ${MODELS[0].base} model, and I run right here on your computer." No code.`,
 };
 const ASKS = /\b(asks?|asking|types?|typed|typing|enters?|input|answers?|guess(es)?)\b/i;
 const TARGET = {
