@@ -1050,31 +1050,45 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
 
   // One line of text: `code`, [links](…), <web addresses>, **bold**, *italics*, ~~struck~~ and \escapes.
-  // Code spans, links and escapes become placeholders first, so their insides aren't styled again.
+  // Escapes and code spans are read first, left to right as Markdown does: \` is a backtick, and a
+  // backslash inside `code` is just a backslash. Then links, then styles. Each becomes a placeholder
+  // (NUL n NUL, or SOH n SOH for an escape), so its inside isn't read again. A link's text is styled on its
+  // own, so `code` and **bold** work there too, and its address is read as it was written.
   function inline(s) {
     const keep = [];
-    const hold = (html) => `\u0000${keep.push(html) - 1}\u0000`;
-    const x = String(s)
-      .replace(/\\([\\`*_[\]()#+\-.!~|>])/g, (_, c) => hold(esc(c)))
-      .replace(/`([^`]+)`/g, (_, c) => hold(`<code>${esc(c)}</code>`))
-      .replace(/!?\[([^\]]+)\]\(\s*(?:<([^>]+)>|([^)\s]+))(?:\s+"[^"]*")?\s*\)/g, (_, text, inAngles, href) => hold(link(text, inAngles || href)))
-      .replace(/<((?:https?|file):\/\/[^>\s]+)>/gi, (_, href) => hold(link(href, href)))
-      .replace(/\bhttps?:\/\/[^\s<>()"'`]*[^\s<>()"'`.,;:!?]/gi, (href) => hold(link(href, href)));
-    return esc(x)
-      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-      .replace(/(^|[^\w])__([^_]+)__(?=$|[^\w])/g, '$1<b>$2</b>')
-      .replace(/~~([^~]+)~~/g, '<s>$1</s>')
-      .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>')
-      .replace(/(^|[\s(])_([^_\s][^_]*)_(?=$|[\s).,;:!?])/g, '$1<i>$2</i>')
-      .replace(/\u0000(\d+)\u0000/g, (_, i) => keep[+i]);
+    const raw = [];
+    const hold = (html, src = '', mark = '\u0000') => { raw.push(src); return `${mark}${keep.push(html) - 1}${mark}`; };
+    // A link's address as written. In a web address \_ means _ (a URL has no backslashes), but in a file
+    // path a backslash is a folder separator (C:\Users\_drafts), so it stays.
+    const address = (h) => {
+      const web = /^\s*https?:/i.test(h);
+      return h.replace(/([\u0000\u0001])(\d+)\1/g, (_, mark, i) => (web && mark === '\u0001' ? raw[+i].slice(1) : raw[+i]));
+    };
+    const style = (x, links) => {
+      if (links) x = x
+        .replace(/!?\[([^\]]+)\]\(\s*(?:<([^>]+)>|([^)\s]+))(?:\s+"[^"]*")?\s*\)/g, (_, text, inAngles, href) => hold(link(style(text, false), address(inAngles || href))))
+        .replace(/<((?:https?|file):\/\/[^>\s\u0000]+)>/gi, (_, href) => { const to = address(href); return hold(link(esc(to), to)); })
+        .replace(/\bhttps?:\/\/[^\s<>()"'`\u0000]*[^\s<>()"'`\u0000.,;:!?]/gi, (href) => { const to = address(href); return hold(link(esc(to), to)); });
+      return esc(x)
+        .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+        .replace(/(^|[^\w])__([^_]+)__(?=$|[^\w])/g, '$1<b>$2</b>')
+        .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+        .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>')
+        .replace(/(^|[\s(])_([^_\s][^_]*)_(?=$|[\s).,;:!?])/g, '$1<i>$2</i>');
+    };
+    let out = style(String(s).replace(/[\u0000\u0001]/g, '')
+      .replace(/\\([\\`*_[\]()#+\-.!~|>])|`([^`]+)`/g, (m, c, code) => (c ? hold(esc(c), m, '\u0001') : hold(`<code>${esc(code)}</code>`, m))), true);
+    // A link holds its text, which can hold code: put them back until none are left.
+    while (/([\u0000\u0001])\d+\1/.test(out)) out = out.replace(/([\u0000\u0001])(\d+)\1/g, (_, mark, i) => keep[+i]);
+    return out;
   }
 
-  // A link in a reply. Files (file:///…, a path, "main.tuf:12") open in the editor, at the line if one is
-  // given. Web pages (http and https only) ask first, because they open in the browser. Anything else
-  // (javascript:, data:…) is shown as plain text.
-  function link(text, href) {
+  // A link in a reply, around label (HTML, already styled). Files (file:///…, a path, "main.tuf:12") open
+  // in the editor, at the line if one is given; ones outside the project ask first (fileQuestion). Web
+  // pages (http and https only) ask first, because they open in the browser. Anything else (javascript:,
+  // data:…) is shown as plain text.
+  function link(label, href) {
     const to = linkTarget(href);
-    const label = esc(text);
     if (!to) return label;
     if (to.url) return `<a class="ta-a web" data-url="${esc(to.url)}" title="${esc(to.url)}">${label}</a>`;
     return `<a class="ta-a file" data-file="${esc(to.file)}"${to.line ? ` data-line="${to.line}"` : ''} title="Open ${esc(short(to.file))}${to.line ? `, line ${to.line}` : ''}">${label}</a>`;
