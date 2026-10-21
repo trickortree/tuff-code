@@ -1847,6 +1847,9 @@
     },
     show,
     onKey,
+    // Edit > Undo and Redo while the Studio shows (ide.js): the Studio's file, not the hidden code editor's.
+    undo: () => undoRedo('undo'),
+    redo: () => undoRedo('redo'),
     closeCustomizer,
     parse,
     templates: () => TEMPLATES.map((t) => ({ ...t })),

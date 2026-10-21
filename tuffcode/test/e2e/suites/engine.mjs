@@ -683,6 +683,38 @@ export default async (t, ctx) => {
   check(chrome.run === 'kid.tuf' && /kid\.tuf$/.test(chrome.path) && /– kid\.tuf –/.test(chrome.title) && /Run 'kid\.tuf'/.test(runItem),
     "with main.tuf's tab open and Tuff Engine on kid.tuf: the title bar's Run, its menu, the status bar and the window title all say kid.tuf", { chrome, runItem });
 
+  // Edit > Undo while Tuff Engine shows undoes the game's last change, not the hidden code tab's typing.
+  const notes = path.join(ctx.root, 'notes.tuf');
+  await ev(`window.TuffIDE.openFile(${JSON.stringify(notes)}).then(() => 1)`);
+  await waitFor(`document.querySelector('#engine').classList.contains('hidden')`, 3000);
+  await ev(`(() => { const e = window.TuffIDE.editor(); const m = e.getModel(); e.setPosition({ lineNumber: m.getLineCount(), column: m.getLineMaxColumn(m.getLineCount()) }); e.focus(); return 1; })()`);
+  await t.type('\nsay "my work"', 30);
+  await t.sleep(300);
+  const notesModel = `(async () => (await window.TuffIDE.getModel(${JSON.stringify(notes)})).getValue().replace(/\\r\\n/g, '\\n'))()`;
+  const notesTyped = await ev(notesModel);
+  await clickSel('.tab.engine-tab');
+  await waitFor(`!document.querySelector('#engine').classList.contains('hidden')`, 3000);
+  const preBox = await code();
+  await clickSel('.en-tile[data-tile="box"]');
+  await waitFor(`window.__code() !== ${JSON.stringify(preBox)}`, 4000);
+  const menuItem = async (label) => {
+    await ev(`[...document.querySelectorAll('.menu-root > button')].find((b) => b.textContent === 'Edit').click()`);
+    await t.sleep(150);
+    const r = await ev(`(() => { const m = [...document.querySelectorAll('.menu-root.open .mi')].find((x) => x.querySelector('span').textContent === ${JSON.stringify(label)}); const b = m?.getBoundingClientRect(); return b ? [b.left + b.width / 2, b.top + b.height / 2] : null; })()`);
+    await t.click(r[0], r[1]);
+    await t.sleep(300);
+  };
+  await menuItem('Undo');
+  await waitFor(`window.__code() === ${JSON.stringify(preBox)}`, 3000);
+  check(await code() === preBox && await ev(notesModel) === notesTyped && await visible(), 'Edit > Undo takes away the Box in the game, and leaves the typing in notes.tuf (the hidden code tab)', { game: firstDiff(await code(), preBox), notes: await ev(notesModel) });
+  await menuItem('Delete Line');
+  check(await ev(notesModel) === notesTyped && await code() === preBox && await visible(), "Edit > Delete Line while Tuff Engine shows deletes nothing (there's no line on screen)", await ev(notesModel));
+  await menuItem('Find…');
+  await waitFor(`document.querySelector('#engine').classList.contains('hidden') && !!document.querySelector('.find-widget.visible')`, 3000);
+  check(await ev(`document.querySelector('#engine').classList.contains('hidden') && window.TuffIDE.editor().getModel().uri.fsPath.toLowerCase() === ${JSON.stringify(kid.toLowerCase())} && !!document.querySelector('.find-widget.visible')`),
+    "Edit > Find… opens the game's code (kid.tuf), with the find box", await ev(`window.TuffIDE.editor().getModel().uri.fsPath`));
+  await key('Escape', 'Escape', 27);
+
   // The game's file tab closed while Tuff Engine shows it: the next click still does what it says.
   await ev(`window.TuffIDE.openFile(${JSON.stringify(notes)}).then(() => 1)`); // another tab is the active one, so Tuff Engine stays open
   await ev(`window.TuffIDE.openEngine(${JSON.stringify(kid)})`);

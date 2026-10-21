@@ -2859,6 +2859,9 @@ func play_again():
     show,
     hide,
     onKey,
+    // Edit > Undo and Redo while Tuff Engine shows (ide.js): the game's file, not the hidden code editor's.
+    undo: () => undoRedo('undo'),
+    redo: () => undoRedo('redo'),
     parse,
     lineFor: (node, args, name) => lineFor(node, args, name),
     fixups,

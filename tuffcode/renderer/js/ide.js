@@ -1550,7 +1550,20 @@
   }, () => saveSettings({ bottomH: rootStyle.getPropertyValue('--bottom-h') }));
 
   // ---------- commands ----------
-  const ed = (id) => () => { if (!editor || !activeTab()) return; editor.focus(); editor.trigger('menu', id, null); };
+  // The Edit menu's commands work on the code on screen. While Tuff Engine or Design Studio shows, the code editor is
+  // hidden (and may hold another file): Undo and Redo are the view's own, Find and Replace open the view's file in
+  // the editor first, and the line commands do nothing, so nothing changes where you can't see it.
+  const ed = (id) => () => {
+    const view = engine.visible ? { file: engine.file, api: window.TuffEngine } : studio.visible ? { file: studio.file, api: window.TuffStudio } : null;
+    if (view) {
+      if (id === 'undo' || id === 'redo') { view.api?.[id]?.(); return; }
+      if ((id !== 'actions.find' && id !== 'editor.action.startFindReplaceAction') || !view.file) return;
+      return openFile(view.file).then((t) => { if (t) { editor.focus(); editor.trigger('menu', id, null); } });
+    }
+    if (!editor || !activeTab()) return;
+    editor.focus();
+    editor.trigger('menu', id, null);
+  };
   const zoom = (d) => () => {
     state.fontSize = d === 0 ? 14 : Math.max(9, Math.min(32, state.fontSize + d));
     editor?.updateOptions({ fontSize: state.fontSize, lineHeight: Math.round(state.fontSize * 1.6) });
