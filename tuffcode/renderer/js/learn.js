@@ -678,7 +678,23 @@
         return /\+=|\b(\w+)\s*=\s*\1\s*\+/.test(src) ? true : 'Count the coins with: coins += 1';
       },
     },
-    // Tuff Engine's lesson goes here, before "Make your own game", which stays the last lesson.
+    {
+      id: 'tgame-engine',
+      title: 'Tuff Engine',
+      engine: true,
+      body: `<p><b>Tuff Engine</b> is a tab where you build a game by clicking and dragging. Everything you do there is written into your file as normal Tuff code, and code you type shows up in Tuff Engine too.</p>
+             <p>Open it with the gamepad button on the left or <kbd>Ctrl+Shift+G</kbd>. Click something in <b>Add</b> to put it in your game, drag it where you want it, and change it on the right. <kbd>Ctrl+Z</kbd> undoes. <b>Play</b> runs the real game.</p>`,
+      example: '# 1. Start the lesson, then click "Open Tuff Engine"\n# 2. In Add, click Player, then Coin, then Enemy\n# 3. Drag the coin somewhere new\n# 4. Click Play, collect the coin, then close the game window',
+      task: 'In Tuff Engine, add a <b>Player</b>, a <b>Coin</b> and an <b>Enemy</b>, then press <b>Play</b>. Collect the coin, then close the game window.',
+      starter: '# Section 4, Lesson 8: Tuff Engine\n# Open Tuff Engine, add a Player, a Coin and an Enemy, then press Play.\n\nmention tgame\n\ngame = tgame.window("Coin Dash", 800, 600)\ngame:background "navy"\n',
+      solution: "mention tgame\n\ngame = tgame.window(\"Coin Dash\", 800, 600)\ngame:background \"navy\"\nscore = 0\nscore_label = game:text(\"Score: 0\", 400, 30, 24, \"white\")\nplayer = game:box(400, 520, 50, 50, \"lime\")\nplayer:on_edge \"stop\"\ncoin = game:circle(200, 200, 14, \"gold\")\nenemy = game:box(100, 80, 40, 40, \"red\")\nball = game:circle(600, 300, 12, \"white\")\nball:speed(200, 150)\nball:on_edge \"bounce\"\n\ngame:every_frame player_arrows\ngame:every_frame coin_collect\ngame:every_frame enemy_chase\ngame:every_frame enemy_hurts\n\n# Tuff Engine: player moves with the arrow keys\nfunc player_arrows(dt):\n    if game:held(\"left\"):\n        player:move(-300 * dt, 0)\n    if game:held(\"right\"):\n        player:move(300 * dt, 0)\n    if game:held(\"up\"):\n        player:move(0, -300 * dt)\n    if game:held(\"down\"):\n        player:move(0, 300 * dt)\n\n# Tuff Engine: player collects coin\nfunc coin_collect(dt):\n    if coin:touches(player):\n        score += 1\n        score_label:set \"Score: \" + score\n        game:sound \"coin\"\n        coin:move_to(game:random_spot())\n\n# Tuff Engine: enemy chases player\nfunc enemy_chase(dt):\n    enemy:point_at(player)\n    enemy:forward(120 * dt)\n\n# Tuff Engine: game over when enemy touches player\nfunc enemy_hurts(dt):\n    if enemy:touches(player) and not game:paused():\n        game:sound \"lose\"\n        game:game_over(\"Score: \" + score, play_again)\n\n# Tuff Engine: play again after a game over\nfunc play_again():\n    score = 0\n    score_label:set \"Score: 0\"\n    player:move_to(400, 520)\n    coin:move_to(200, 200)\n    enemy:move_to(100, 80)\n",
+      check: (src) => {
+        if (!/:held\b/.test(src)) return 'Add a Player from the Add list in Tuff Engine: it moves with the arrow keys.';
+        if (!/:touches\b/.test(src)) return 'Add a Coin: it comes with "Collect it".';
+        if (!/:game_over\b/.test(src)) return 'Add an Enemy too: it chases the player.';
+        return /\bwait\s*\(/.test(src) ? 'Take out wait(): it freezes a game.' : true;
+      },
+    },
     {
       id: 'tgame-own',
       title: 'Make your own game',
@@ -686,7 +702,7 @@
              <p>Build it one step at a time, and run it after each one. First something you can move, then something to catch or dodge, then a score, and last a <code>game_over</code> so people can play again. Here's a whole game made that way.</p>`,
       example: 'mention tgame\n\ngame = tgame.window("Star catcher", 600, 400)\ngame:background "#14213d"\nbasket = game:box(300, 370, 90, 20, "gold")\nbasket:on_edge "stop"\nstar = game:circle(300, 0, 12, "yellow")\nscore = 0\nlives = 3\nlabel = game:text("Score: 0   Lives: 3", 300, 24, 22, "white")\n\nfunc show():\n    label:set "Score: " + score + "   Lives: " + lives\n\nfunc start():\n    score = 0\n    lives = 3\n    star:move_to(300, 0)\n    show()\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        basket:move(-450 * dt, 0)\n    if game:held("right"):\n        basket:move(450 * dt, 0)\n    star:move(0, (200 + score * 20) * dt)\n    if star:touches(basket):\n        score += 1\n        game:sound "coin"\n        star:move_to(random(20, 580), 0)\n        show()\n    elif star:y() > 400:\n        lives -= 1\n        game:sound "hit"\n        star:move_to(random(20, 580), 0)\n        show()\n        if lives is 0:\n            game:game_over("Stars caught: " + score, start)',
       task: 'Make your own game. It needs something the player controls, something to catch or dodge, a score, and a game over that lets you play again.',
-      starter: '# Section 4, Lesson 8: Make your own game\n# Your game needs:\n#   1. something the player controls (game:held or :clicked)\n#   2. something to catch or dodge (:touches)\n#   3. a score (score += 1)\n#   4. a game over that lets you play again (game:game_over)\n\nmention tgame\n\ngame = tgame.window("My Game", 600, 400)\n\nwhile game:open():\n    dt = game:frame()\n',
+      starter: '# Section 4, Lesson 9: Make your own game\n# Your game needs:\n#   1. something the player controls (game:held or :clicked)\n#   2. something to catch or dodge (:touches)\n#   3. a score (score += 1)\n#   4. a game over that lets you play again (game:game_over)\n\nmention tgame\n\ngame = tgame.window("My Game", 600, 400)\n\nwhile game:open():\n    dt = game:frame()\n',
       solution: 'mention tgame\n\ngame = tgame.window("Coin dash", 600, 400)\ngame:background "#1b1b2f"\nplayer = game:box(300, 200, 30, 30, "lime")\nplayer:on_edge "stop"\ncoin = game:circle(100, 100, 12, "gold")\nbomb = game:circle(500, 300, 18, "red")\nbomb:speed(180, 140)\nbomb:on_edge "bounce"\nscore = 0\nlabel = game:text("Coins: 0", 300, 24, 22, "white")\n\nfunc start():\n    score = 0\n    label:set "Coins: 0"\n    player:move_to(300, 200)\n    bomb:move_to(500, 300)\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        player:move(-300 * dt, 0)\n    if game:held("right"):\n        player:move(300 * dt, 0)\n    if game:held("up"):\n        player:move(0, -300 * dt)\n    if game:held("down"):\n        player:move(0, 300 * dt)\n    if player:touches(coin):\n        score += 1\n        label:set "Coins: " + score\n        game:sound "coin"\n        coin:move_to(game:random_spot())\n        while coin:touches(player):\n            coin:move_to(game:random_spot())\n    if player:touches(bomb) and not game:paused():\n        game:sound "boom"\n        game:game_over("Coins collected: " + score, start)\n',
       check: (src) => {
         if (!/tgame\.(window|world)\s*\(/.test(src)) return 'Start with a window: game = tgame.window("My Game", 600, 400)';
@@ -818,6 +834,7 @@
         ? '<button class="btn sm primary" data-act="build">Open the Build window</button>'
         : `<button class="btn sm primary" data-act="open">${done.has(l.id) ? 'Open lesson file' : 'Start lesson'}</button>
            ${l.studio ? '<button class="btn sm" data-act="studio">Open Design Studio</button>' : ''}
+           ${l.engine ? '<button class="btn sm" data-act="engine">Open Tuff Engine</button>' : ''}
            <button class="btn sm run" data-act="run"><svg viewBox="0 0 16 16"><path d="M5 3.6c0-.8.9-1.3 1.6-.85l6.2 4.1c.6.4.6 1.3 0 1.7l-6.2 4.1C5.9 13.1 5 12.6 5 11.8z"/></svg>Run</button>`;
       const nextSection = SECTIONS[SECTIONS.indexOf(sec) + 1];
       const next = done.has(l.id) && nextLesson ? '<button class="btn sm" data-act="next">Next lesson</button>'
@@ -836,6 +853,7 @@
       c.querySelector('[data-act="next"]')?.addEventListener('click', () => goTo(nextLesson));
       c.querySelector('[data-act="nextsection"]')?.addEventListener('click', () => goTo(nextSection.lessons[0]));
       c.querySelector('[data-act="studio"]')?.addEventListener('click', async () => ide.openStudio(await ensureLessonFile(l)));
+      c.querySelector('[data-act="engine"]')?.addEventListener('click', async () => ide.openEngine(await ensureLessonFile(l)));
       wrap.appendChild(c);
       colorize(c.querySelector('.lx-code'), l.example);
     }

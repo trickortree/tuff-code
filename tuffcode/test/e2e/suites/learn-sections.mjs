@@ -60,7 +60,7 @@ export default async (t, ctx) => {
   const tags = await ev(`[...document.querySelectorAll('#learn-body .learn-section')].map((h) => !!h.querySelector('.ls-tag'))`);
   check('Every section but Basics is marked Optional', JSON.stringify(tags) === JSON.stringify([false, true, true, true, true, true]), tags);
   const fresh = secs.filter((s) => NEW.includes(s.id));
-  check('Advanced apps, The internet and Games each have 5 to 8 lessons', fresh.length === 3 && fresh.every((s) => s.lessons.length >= 5 && s.lessons.length <= 8), fresh.map((s) => [s.id, s.lessons.length]));
+  check('Advanced apps, The internet and Games each have 5 to 9 lessons', fresh.length === 3 && fresh.every((s) => s.lessons.length >= 5 && s.lessons.length <= 9), fresh.map((s) => [s.id, s.lessons.length]));
   const games = fresh.find((s) => s.id === 'tgame');
   check('The last Games lesson is "Make your own game"', games && games.lessons.at(-1).title === 'Make your own game', games && games.lessons.map((l) => l.title));
   const files = secs.flatMap((s) => s.lessons.map((l) => l.file));

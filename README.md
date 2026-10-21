@@ -48,7 +48,7 @@ You only do this once. On a Mac, TuffCode tells you when there's a new version a
   - Section 2.1, modern apps with mtgui: 4 lessons.
   - Section 2.2, advanced apps with atgui: 8 lessons.
   - Section 3, the internet with tap: 7 lessons.
-  - Section 4, games with tgame: 8 lessons.
+  - Section 4, games with tgame: 9 lessons, including Tuff Engine.
 - **tgui and mtgui:** real desktop windows with buttons, text boxes, switches, checkboxes, dropdowns, sliders, progress bars, spinners, clocks, cards and rows. mtgui adds gradients, gloss, shine and glow. Anything animated has `:speed`.
 - **atgui:** modern app windows made of real HTML and CSS, the kind of apps Claude or Codex are: sidebars, lists, chat bubbles, tables, charts, markdown, menus, pop-ups, toasts, key shortcuts, animations, glass and gradients, a custom title bar. Everything from mtgui works too.
 - **tgame:** games, like pygame. 2D sprites, keys, the mouse, collisions and sounds, or 3D worlds with a sky, an island, trees, rocks and houses, `.glb` models and a first- or third-person player. Write a `while game:open():` loop or use events. Build them visually in Tuff Engine.
