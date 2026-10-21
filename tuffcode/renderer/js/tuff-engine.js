@@ -1378,10 +1378,14 @@ func play_again():
     file: null, model: null, sub: null, parsed: null, dump: null, dumpParsed: null, dumpVer: null, join: null, sceneVer: 0,
     sel: 'root', selfEdit: false, version: 0, ready: false, webgl: null, cams: new Map(), assetEpoch: 0, tables: null, busy: false,
     loadSeq: 0, loadedSeq: 0, hostFile: null, hostErr: null, camMode: 'editor', zoom: 'fit', tab: 'add', picSize: new Map(),
-    files: [], log: [], asks: new Map(), askNo: 0, timer: null, frameRO: null,
+    files: [], log: [], asks: new Map(), askNo: 0, timer: null, frameRO: null, typing: null, openStep: null,
   };
   const host = () => $('#engine');
   const is3d = () => S.parsed?.game?.mode === '3d';
+  // The code and its version as they are now: '' and -1 once the file's tab was closed (act() opens it again).
+  const live = () => !!S.model && !S.model.isDisposed();
+  const codeNow = () => (live() ? S.model.getValue() : '');
+  const verNow = () => (live() ? S.model.getAlternativeVersionId() : -1);
 
   const KIND_LABEL = (n) => {
     if (n.kind === 'spawn') { const m = typeof n.args[0] === 'string' ? n.args[0] : ''; return /\.glb$/i.test(m) ? 'Model' : cap(m || 'Model'); }
@@ -1544,8 +1548,12 @@ func play_again():
     if (m.phase !== 'end' || !S.join || !S.model) return;
     const key = m.i === 'player' ? S.join.playerKey : S.join.iToKey.get(m.i);
     if (!key || key === 'root' || key.startsWith('g:')) return;
-    // Lines may have moved since this scene was made: a name still finds its thing, a line number may not.
-    if (key.startsWith('l:') && S.dumpVer !== S.model.getAlternativeVersionId()) { requestScene(); return; }
+    // Lines may have moved since this scene was made: a name still finds its thing, a line number may not. (When the
+    // file's tab was closed, act() opens it again and draws a new scene.)
+    if (key.startsWith('l:') && (S.model.isDisposed() || S.dumpVer !== S.model.getAlternativeVersionId())) {
+      if (S.model.isDisposed()) act(() => null); else requestScene();
+      return;
+    }
     act((P) => {
       const node = find(P, key);
       if (!node) return null;
@@ -1578,8 +1586,13 @@ func play_again():
   // focus while the scene, Objects and the preview catch up); otherwise everything is drawn again.
   function act(fn, { form = false } = {}) {
     if (!S.model) return;
-    if (S.model.isDisposed()) { if (ide.engineVisible()) show(S.file); return; } // its tab was closed: open it again
-    S.parsed = parse(S.model.getValue());
+    if (S.model.isDisposed()) {
+      // Its tab was closed while Tuff Engine showed it: open the file again, then do what the kid asked.
+      const gone = S.model;
+      if (ide.engineVisible()) show(S.file).then(() => { if (S.model && S.model !== gone && !S.model.isDisposed()) act(fn, { form }); });
+      return;
+    }
+    S.parsed = parse(codeNow());
     const before = S.model.getAlternativeVersionId();
     S.selfEdit = form;
     let key;
@@ -1796,8 +1809,8 @@ func play_again():
 
   // ---------------------------------------------------------------- drawing the tab
   function render(withForm = true) {
-    if (!S.model || S.model.isDisposed()) return;
-    S.parsed = parse(S.model.getValue());
+    if (S.model && S.model.isDisposed()) return;
+    S.parsed = parse(codeNow());
     const P = S.parsed;
     const kind = $('#en-kind');
     const g = P.game;
@@ -1806,8 +1819,8 @@ func play_again():
     $('#en-zoom').classList.toggle('hidden', !g || g.mode === '3d');
     $('#en-cam').classList.toggle('hidden', !g || g.mode !== '3d');
     $$('#en-cam button').forEach((b) => b.classList.toggle('on', b.dataset.cam === S.camMode));
-    $('#en-undo').disabled = !S.model.canUndo();
-    $('#en-redo').disabled = !S.model.canRedo();
+    $('#en-undo').disabled = !S.model?.canUndo();
+    $('#en-redo').disabled = !S.model?.canRedo();
     renderPlay();
     const start = !g || P.other;
     $('#en-stage').classList.toggle('start', !!start);
@@ -2378,9 +2391,11 @@ func play_again():
       if (!v) return back('Code needs a name to talk to this, so it keeps its old one.', 'info');
       if (!NAME_RE.test(v)) return back("Names use letters, numbers and _ and can't start with a number.");
       if (KEYWORDS().includes(v) || BUILTINS.includes(v) || LIBS.includes(v)) return back(`'${v}' is part of Tuff. Pick another name.`);
-      const fresh = parse(S.model.getValue());
-      if (K.takenNames(fresh, S.model.getValue()).has(v)) return back(`'${v}' is already used. Pick another name.`);
-      act((Q) => { const n = find(Q, key); return n ? Edits.rename(Q, n, v) : null; });
+      act((Q) => {
+        if (K.takenNames(Q, Q.lines.join('\n')).has(v)) { back(`'${v}' is already used. Pick another name.`); return null; }
+        const n = find(Q, key);
+        return n ? Edits.rename(Q, n, v) : null;
+      });
     };
     name.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); name.blur(); } if (e.key === 'Escape') { name.value = node.var || ''; name.blur(); } };
     name.onblur = commitName;
@@ -2392,7 +2407,7 @@ func play_again():
     const notes = [];
     if (node.kind === 'spawn' && q.form === 'none') notes.push('Random spot (changes every run). Drag it to give it a spot.');
     if (q.form === 'code') notes.push('This spot comes from code.');
-    else if (t && S.dumpVer === S.model.getAlternativeVersionId() && ['xy', 'spot', 'line'].includes(q.form)) {
+    else if (t && S.dumpVer === verNow() && ['xy', 'spot', 'line'].includes(q.form)) {
       const far = Math.abs((t.x ?? 0) - q.x) > 0.5 || Math.abs((t.y ?? 0) - (q.y ?? 0)) > 0.5 || (is3 && Math.abs((t.z ?? 0) - (q.z ?? 0)) > 0.5);
       if (far && node.kind !== 'line') notes.push('Your code moves this when the game starts.');
     }
@@ -2410,7 +2425,7 @@ func play_again():
     if (node.kind === 'player') {
       const [sx, sz] = playerStart(P);
       const mt = (x, z) => { const old = node.props.move_to?.args; const y = isNum(old?.[1]) && !Array.isArray(old?.[0]) ? old[1] : 0; setP('move_to', [v3(x), y, v3(z)]); };
-      form.append(sec('Start spot', [numbers([['X', sx, (v) => mt(v, playerStart(parse(S.model.getValue()))[1])], ['Z', sz, (v) => mt(playerStart(parse(S.model.getValue()))[0], v)]])]));
+      form.append(sec('Start spot', [numbers([['X', sx, (v) => mt(v, playerStart(parse(codeNow()))[1])], ['Z', sz, (v) => mt(playerStart(parse(codeNow()))[0], v)]])]));
       const mode = typeof node.args[0] === 'string' ? node.args[0] : 'first person';
       const look = [
         fieldEl('Camera', selectEl(tbl('players', ['first person', 'third person']).map((x) => [x, cap(x)]), mode, (v) => setA({ mode: v }))),
@@ -2426,12 +2441,12 @@ func play_again():
       form.append(sec('Where', [numbers([['X1', q.x1, (v) => setA({ x1: v2(v) })], ['Y1', q.y1, (v) => setA({ y1: v2(v) })], ['X2', q.x2, (v) => setA({ x2: v2(v) })], ['Y2', q.y2, (v) => setA({ y2: v2(v) })]])]));
     } else if (is3) {
       const disabled = !posOK;
-      const cur = () => { const n = find(parse(S.model.getValue()), key); return n ? n.pos : q; };
+      const cur = () => { const n = find(parse(codeNow()), key); return n ? n.pos : q; };
       const put3 = (k, v) => { const c = cur(); setA({ x: c.x ?? t?.x ?? 0, y: c.y ?? t?.y ?? 0, z: c.z ?? t?.z ?? 0, [k]: v3(v) }); };
       form.append(sec('Where', [numbers([['X', q.x ?? t?.x, (v) => put3('x', v), { step: 0.5, disabled }], ['Y (bottom)', q.y ?? t?.y, (v) => put3('y', v), { step: 0.5, disabled }], ['Z', q.z ?? t?.z, (v) => put3('z', v), { step: 0.5, disabled }]])]));
     } else {
       const disabled = !posOK;
-      const cur = () => { const n = find(parse(S.model.getValue()), key); return n ? n.pos : q; };
+      const cur = () => { const n = find(parse(codeNow()), key); return n ? n.pos : q; };
       const put2 = (k, v) => { const c = cur(); setA({ x: c.x ?? t?.x ?? 0, y: c.y ?? t?.y ?? 0, [k]: v2(v) }); };
       form.append(sec('Where', [numbers([['X', q.x ?? t?.x, (v) => put2('x', v), { disabled }], ['Y', q.y ?? t?.y, (v) => put2('y', v), { disabled }]])]));
     }
@@ -2490,7 +2505,7 @@ func play_again():
       const list = Array.isArray(size);
       const dims = k === 'box' ? ['Width', 'Height', 'Depth'] : k === 'plane' ? ['Width', 'Depth'] : k === 'sphere' ? null : ['Width', 'Height'];
       // The list as it is now (another of its fields may have just changed it).
-      const curSize = () => { const n = find(parse(S.model.getValue()), node.key); const s = n && fieldOf(n, 'size'); return (Array.isArray(s) ? s : size).slice(); };
+      const curSize = () => { const n = find(parse(codeNow()), node.key); const s = n && fieldOf(n, 'size'); return (Array.isArray(s) ? s : size).slice(); };
       if (list && dims) kids.push(numbers(dims.map((lab, j) => [lab, size[j], (v) => { if (!(v > 0)) return; const s = curSize(); s[j] = v3(v); setA({ size: s }); }, { step: 0.5, min: 0.1 }])));
       else kids.push(numbers([['Size', isNum(size) ? size : '', (v) => v > 0 && setA({ size: v3(v) }), { step: 0.5, min: 0.1, disabled: !isNum(size) && size !== undefined }]]));
       if (dims) {
@@ -2528,7 +2543,7 @@ func play_again():
     const sp = node.props.speed?.args || [];
     const n0 = (i) => (isNum(sp[i]) ? sp[i] : 0);
     const kids = [];
-    const cur = () => { const n = find(parse(S.model.getValue()), node.key); const a = n?.props.speed?.args || []; return [0, 1, 2].map((i) => (isNum(a[i]) ? a[i] : 0)); };
+    const cur = () => { const n = find(parse(codeNow()), node.key); const a = n?.props.speed?.args || []; return [0, 1, 2].map((i) => (isNum(a[i]) ? a[i] : 0)); };
     const speed = (j, v) => { const s = cur().slice(0, is3 ? 3 : 2); s[j] = is3 ? +num(v) : Math.round(v); setP('speed', s); };
     kids.push(fieldEl('Moves by itself', numbers(is3
       ? [['vx', n0(0), (v) => speed(0, v)], ['vy', n0(1), (v) => speed(1, v)], ['vz', n0(2), (v) => speed(2, v)]]
@@ -2625,7 +2640,9 @@ func play_again():
   }
 
   async function templateHere(t) {
-    if (S.model.getValue().trim()) {
+    if (S.model && !live()) await show(S.file); // its tab was closed: open it again first, so it asks before replacing
+    if (!live()) return;
+    if (codeNow().trim()) {
       const ok = await ide.ask({ title: `Replace the code in ${ide.basename(S.file)} with the ${t.name} template? (Ctrl+Z undoes it.)`, confirm: true, okLabel: 'Replace' });
       if (!ok) return;
     }
@@ -2798,7 +2815,7 @@ func play_again():
       mode: S.parsed?.game?.mode || null, stopped: S.dump?.stopped ?? null, error: S.dump?.error ?? null, ms: S.dump?.ms ?? null,
       things: S.dump?.things?.length ?? 0, keys: S.parsed?.nodes.map((n) => n.key) || [], groups: S.join?.groups.map((g) => ({ key: g.key, why: g.why, n: S.join.byKey.get(g.key)?.is.length })) || [],
       behaviours: S.parsed?.behaviours.map((b) => ({ id: b.id, type: b.type, V: b.V, p: b.p })) || [], banner: $('#en-banner')?.classList.contains('hidden') ? '' : $('#en-banner')?.textContent || '',
-      zoom: S.zoom, camMode: S.camMode, cam: S.cams.get(S.file) || null, selIs: selIs(), lastAsk: S.lastAsk || null, dumpCurrent: !!S.model && S.dumpVer === S.model.getAlternativeVersionId(),
+      zoom: S.zoom, camMode: S.camMode, cam: S.cams.get(S.file) || null, selIs: selIs(), lastAsk: S.lastAsk || null, dumpCurrent: live() && S.dumpVer === verNow(),
     }),
     // For the e2e suite: drive the frame and read what happened.
     test: {

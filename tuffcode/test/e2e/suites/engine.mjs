@@ -622,6 +622,26 @@ export default async (t, ctx) => {
   await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(kid)}`, 5000);
   await settle();
 
+  // The game's file tab closed while Tuff Engine shows it: the next click still does what it says.
+  await ev(`window.TuffIDE.openFile(${JSON.stringify(notes)}).then(() => 1)`); // another tab is the active one, so Tuff Engine stays open
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(kid)})`);
+  await waitFor(`!document.querySelector('#engine').classList.contains('hidden')`, 3000);
+  await settle();
+  const preClose = await code();
+  await ev(`(() => { [...document.querySelectorAll('#tabs .tab')].find((x) => x.title === ${JSON.stringify(kid)}).querySelector('.x').click(); return 1; })()`);
+  await t.sleep(400);
+  check(await visible() && !(await ev(`[...document.querySelectorAll('#tabs .tab')].some((x) => x.title === ${JSON.stringify(kid)})`)), "kid.tuf's tab is closed and Tuff Engine still shows the game", null);
+  await clickSel('.en-tile[data-tile="circle"]');
+  await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kid)})).getValue().includes('circle = game:circle(400, 300, 20, "teal")'))()`, 5000);
+  const afterClose = await ev(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kid)})).getValue().replace(/\\r\\n/g, '\\n'))()`);
+  check(afterClose.includes('circle = game:circle(400, 300, 20, "teal")\n') && afterClose.replace('circle = game:circle(400, 300, 20, "teal")\n', '') === preClose,
+    'one click on Circle opens the file again and adds the circle (the click is not lost)', firstDiff(preClose, afterClose));
+  await ev(`(async () => { window.__kid = await window.TuffIDE.getModel(${JSON.stringify(kid)}); return 1; })()`);
+  await ev(`document.querySelector('#en-stage').focus()`);
+  await t.key('z', CTRL);
+  await waitFor(`window.__code() === ${JSON.stringify(preClose)}`, 4000);
+  await settle();
+
   // ================================================================ full size, leaving and closing
   await ev(`document.querySelector('#en-stage').focus()`);
   await key('F11', 'F11', 122);
