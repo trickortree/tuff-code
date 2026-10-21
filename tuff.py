@@ -528,9 +528,9 @@ LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame")
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
 VIEW_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:" + "|".join(VIEW_LIBRARIES) + r")\b", re.M)
-# The first line a tgame program shows, in yellow, before anything it prints. Change "is coming soon" to
-# "is available" here once Tuff Engine ships.
-TGAME_NOTICE = "Tuff Engine is coming soon: a visual way to make games with TuffCode."
+# The first line a tgame program shows, in yellow, before anything it prints. In TuffCode the line gets an
+# "Open Tuff Engine" button (ide.js handleOsc). --check, --scene and --windowed apps never show it.
+TGAME_NOTICE = "Tuff Engine is here: open this game in TuffCode's Tuff Engine tab (Ctrl+Shift+G) to build it visually."
 TGAME_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+tgame\b", re.M)
 BUILTIN_NAMES = {"print", "number", "num", "text", "str", "int", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
                  "floor", "ceil", "min", "max", "sum", "average"}

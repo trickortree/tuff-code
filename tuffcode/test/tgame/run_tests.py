@@ -23,7 +23,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 GAMES = os.path.join(HERE, "games")
 TUFF = os.path.join(REPO, "tuff.py")
-NOTICE = "Tuff Engine is coming soon: a visual way to make games with TuffCode."
+NOTICE = "Tuff Engine is here: open this game in TuffCode's Tuff Engine tab (Ctrl+Shift+G) to build it visually."
 sys.path.insert(0, REPO)
 
 
