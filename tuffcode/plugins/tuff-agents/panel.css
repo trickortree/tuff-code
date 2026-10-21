@@ -108,6 +108,18 @@
 .ta-md li { margin: 3px 0; }
 .ta-md li::marker { color: var(--text-muted); }
 .ta-md code { padding: 1px 5px; border-radius: 4px; background: var(--bg-active); color: var(--text); font: 12px var(--font-code); }
+.ta-md li > ul, .ta-md li > ol { margin: 2px 0 0; }
+.ta-md s { color: var(--text-muted); }
+.ta-md hr { margin: 10px 0; border: 0; border-top: 1px solid var(--ta-line); }
+.ta-md blockquote { margin: 0 0 8px; padding: 2px 0 2px 10px; border-left: 2px solid var(--bg-active); color: var(--text-dim); }
+.ta-md .ta-table { margin: 0 0 8px; overflow-x: auto; }
+.ta-md table { border-collapse: collapse; font-size: 12.5px; }
+.ta-md th, .ta-md td { padding: 4px 8px; border: 1px solid var(--ta-line); text-align: left; vertical-align: top; }
+.ta-md th { color: var(--text); background: var(--bg-panel); font-weight: 600; }
+/* Links: files open in the editor, web pages ask first. Their own class: .ta-link is the setup button. */
+.ta-md .ta-a { color: var(--accent); text-decoration: none; cursor: pointer; border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+.ta-md .ta-a:hover { border-bottom-color: var(--accent); }
+.ta-md .ta-a.file::before { content: ''; display: inline-block; width: 10px; height: 12px; margin-right: 3px; vertical-align: -1px; background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 14' fill='none' stroke='%23000' stroke-width='1.4' stroke-linejoin='round'%3E%3Cpath d='M1.5 1h5.5l3.5 3.5V13h-9z'/%3E%3Cpath d='M7 1v3.5h3.5'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 14' fill='none' stroke='%23000' stroke-width='1.4' stroke-linejoin='round'%3E%3Cpath d='M1.5 1h5.5l3.5 3.5V13h-9z'/%3E%3Cpath d='M7 1v3.5h3.5'/%3E%3C/svg%3E") center / contain no-repeat; }
 .ta-code { margin: 6px 0 10px; border-radius: 9px; overflow: hidden; border: 1px solid var(--ta-line); background: var(--bg-editor); }
 .ta-code-h { display: flex; align-items: center; gap: 2px; padding: 4px 5px 4px 10px; background: var(--ta-raise); border-bottom: 1px solid var(--ta-line); font: 11.5px var(--font-ui); color: var(--text-muted); }
 .ta-lang { flex: 1; display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
@@ -129,6 +141,23 @@
 .ta-typing span { margin-left: 5px; font: 600 12px var(--font-ui); background: linear-gradient(90deg, var(--text-muted) 0%, var(--text-muted) 35%, var(--text) 50%, var(--text-muted) 65%, var(--text-muted) 100%); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: ta-shimmer 1.8s linear infinite; }
 @keyframes ta-shimmer { from { background-position: 125% 0; } to { background-position: -125% 0; } }
 @keyframes ta-hop { 0%, 60%, 100% { transform: none; opacity: .5; } 30% { transform: translateY(-3px); opacity: 1; } }
+/* Tuff AI's folds: the request the improver made clearer, and the thinking ("Thought for 4 s"). */
+.ta-fold { min-width: 0; font-size: 12px; color: var(--text-muted); }
+.ta-fold > summary { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 6px 2px 2px; margin-left: -2px; border-radius: 6px; cursor: pointer; list-style: none; font: 600 12px var(--font-ui); color: var(--text-dim); transition: background .12s, color .12s; }
+.ta-fold > summary::-webkit-details-marker { display: none; }
+.ta-fold > summary::after { content: ''; flex: none; width: 5px; height: 5px; margin-left: 2px; border: solid currentColor; border-width: 0 1.4px 1.4px 0; transform: rotate(-45deg); opacity: .7; transition: transform .15s; }
+.ta-fold[open] > summary::after { transform: translateY(-2px) rotate(45deg); }
+.ta-fold > summary:hover { background: var(--bg-hover); color: var(--text); }
+.ta-fold > summary:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.ta-fold > summary .ta-ic { width: 13px; height: 13px; color: var(--text-muted); }
+.ta-fold > summary .ta-typing { padding: 0; }
+.ta-fold-b { margin: 4px 0 2px; padding: 2px 0 2px 10px; border-left: 2px solid var(--ta-line); line-height: 1.5; overflow-wrap: anywhere; }
+.ta-thought .ta-fold-b { max-height: 220px; overflow-y: auto; white-space: pre-wrap; scrollbar-width: thin; }
+.ta-fold-b p, .ta-fold-b ul { margin: 0 0 4px; }
+.ta-fold-b ul { padding-left: 16px; }
+.ta-fold-b code { padding: 0 4px; border-radius: 4px; background: var(--bg-active); font: 11.5px var(--font-code); color: var(--text-dim); }
+.ta-fold-h { margin: 6px 0 2px; font: 600 11px var(--font-ui); color: var(--text-dim); }
+.ta-credit { color: var(--text-muted); }
 .ta-small { font-size: 12px; color: var(--text-muted); }
 .ta-note-l { display: flex; align-items: flex-start; gap: 6px; line-height: 1.45; }
 .ta-note-l .ta-ic { width: 13px; height: 13px; margin-top: 1px; color: var(--text-muted); }
@@ -146,7 +175,7 @@
 .ta-ctx button.on { color: var(--text-dim); border-style: solid; border-color: transparent; background: var(--bg-active); text-decoration: none; }
 .ta-compose textarea { width: 100%; box-sizing: border-box; min-height: 52px; max-height: 220px; padding: 2px 2px; resize: none; border: 0; outline: 0; background: transparent; color: var(--text); font: 13px/1.5 var(--font-ui); }
 .ta-compose textarea::placeholder { color: var(--text-muted); }
-/* One row: Ask / Plan / Edit, the model and thinking chips, then Send. It wraps only when very narrow. */
+/* One row: Plan / Ask / Edit, the model and thinking chips, then Send. */
 .ta-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .ta-opts { display: flex; gap: 6px; min-width: 0; flex: 0 1 auto; }
 .ta-opts.hidden { display: none; }
@@ -157,17 +186,19 @@
 .ta-mode button[data-m="plan"].on { background: color-mix(in srgb, var(--accent) 30%, var(--bg-active)); color: var(--text); }
 .ta-mode button:disabled { opacity: .4; cursor: not-allowed; }
 .ta-hint { display: none; }
-/* Send is a round icon button; its text (Send / Stop) stays for screen readers and tests. */
-.ta-send { flex: none; margin-left: auto; display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 50%; background: var(--accent); color: #fff; font-size: 0; transition: filter .12s; }
-.ta-send::before { content: ''; width: 13px; height: 13px; background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 13V3M3.5 7.5 8 3l4.5 4.5'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 13V3M3.5 7.5 8 3l4.5 4.5'/%3E%3C/svg%3E") center / contain no-repeat; }
+/* Send is a round icon button, as tall as the chips beside it; its text (Send / Stop) stays for screen
+   readers and tests. */
+.ta-send { flex: none; margin-left: auto; display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border-radius: 50%; background: var(--accent); color: #fff; font-size: 0; transition: filter .12s; }
+.ta-send::before { content: ''; width: 12px; height: 12px; background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 13V3M3.5 7.5 8 3l4.5 4.5'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 13V3M3.5 7.5 8 3l4.5 4.5'/%3E%3C/svg%3E") center / contain no-repeat; }
 .ta-send:hover { filter: brightness(1.1); }
 .ta-send.stop { background: var(--red); }
-.ta-send.stop::before { -webkit-mask: none; mask: none; width: 10px; height: 10px; border-radius: 2px; }
+.ta-send.stop::before { -webkit-mask: none; mask: none; width: 9px; height: 9px; border-radius: 2px; }
 /* The chips in the message box: no "Model" / "Thinking" label (it's in the tooltip), shorter. */
 .ta-row .ta-dd-k { display: none; }
 .ta-row .ta-dd-btn { height: 26px; max-width: 132px; padding: 0 6px 0 8px; gap: 4px; border-color: transparent; background: transparent; color: var(--text-dim); }
 .ta-row .ta-dd-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: transparent; color: var(--text); }
-.ta-row .ta-dd[data-o="effort"] .ta-dd-btn { max-width: 104px; }
+/* min(…, 100%): in a narrow panel the chip shrinks with its box instead of running under Send. */
+.ta-row .ta-dd[data-o="effort"] .ta-dd-btn { max-width: min(104px, 100%); }
 .ta-row .ta-dd-v { font-weight: 600; }
 
 /* Model and Thinking: TuffCode's own dropdowns, opening upwards from the message box. */

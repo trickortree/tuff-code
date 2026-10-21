@@ -1,7 +1,8 @@
-// Tuff AI: the offline helper. The model runs in ai-worker.mjs (a utility process). This side downloads
-// the model, checks there's enough memory, keeps the worker alive while it's being used, and checks
-// every Tuff program the model writes with tuff.py --check. A program that fails gets one more try with
-// the checker's error, the way Tuff Bench scores it (tuff-ai/bakeoff/run.mjs).
+// Tuff AI: the offline helper. Its model, Pumice 1, runs in ai-worker.mjs (a utility process). This side
+// downloads the model, checks there's enough memory, keeps the worker alive while it's being used, turns
+// the question into a clearer task (the improver), and checks every Tuff program the model writes with
+// tuff.py --check. A program that fails gets one more try with the checker's error, the way Tuff Bench
+// scores it (tuff-ai/bakeoff/run.mjs runs this file to measure it).
 const { app, utilityProcess, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -10,12 +11,15 @@ const os = require('os');
 const crypto = require('crypto');
 const { pipeline } = require('stream/promises');
 
-// Until Pumice (the trained model) is ready, the preview uses its base model as it is.
+// Pumice 1 is TuffCode's model. For now it's the open Qwen3.5-2B as it is, before any training on Tuff.
+// The id and the file name stay the base model's, so a copy downloaded by 1.0.4 is still found.
 const MODELS = [
   {
     id: 'qwen3.5-2b',
-    name: 'Qwen3.5-2B',
-    sub: 'Untrained preview. Pumice, trained on Tuff, replaces it later.',
+    name: 'Pumice 1',
+    base: 'Qwen3.5-2B',
+    licence: 'Apache 2.0',
+    sub: 'Based on Qwen3.5-2B (Apache 2.0). Not trained on Tuff yet.',
     file: 'Qwen3.5-2B-Q4_K_M.gguf',
     url: 'https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf',
     size: 1280835840,
@@ -23,8 +27,22 @@ const MODELS = [
     ram: 1.8e9, // measured peak in Phase 1 was ~1.6 GB, plus room for the answer
   },
 ];
+// Thinking levels. budget: how many tokens it may think for before it must answer (node-llama-cpp
+// enforces it, so a thinking loop can't run on). plan: before answering, the model rewrites the request
+// as a clear task in one short pass. Off is exactly what 1.0.4 did. The budgets and the default come from
+// Tuff Bench (tuff-ai/bakeoff/RESULTS.md, "Thinking levels").
+const LEVELS = [
+  { id: 'off', name: 'Off', sub: 'Answers straight away', budget: 0, plan: false, temperature: 0.2 },
+  { id: 'low', name: 'Low', sub: 'Thinks for a moment first', budget: 128, plan: false, temperature: 0.2 },
+  { id: 'medium', name: 'Medium', sub: 'Rewrites your request, then thinks', budget: 256, plan: true, temperature: 0.2 },
+  { id: 'high', name: 'High', sub: 'Plans and thinks longest. Slower, and not always better', budget: 512, plan: true, temperature: 0.2 },
+];
+const DEFAULT_LEVEL = 'low';
+const level = (id) => LEVELS.find((l) => l.id === id) || LEVELS.find((l) => l.id === DEFAULT_LEVEL);
+const sampling = (lv) => ({ temperature: lv.temperature, ...(lv.topK ? { topK: lv.topK } : {}), ...(lv.topP ? { topP: lv.topP } : {}) });
 const IDLE_MS = 5 * 60 * 1000;
 const MAX_TOKENS = 700;
+const PLAN_TOKENS = 160;
 
 let checkSource = async () => ({ ok: true, unknown: true });
 let readSettings = () => ({});
@@ -58,7 +76,7 @@ async function runtimeAvailable() {
 async function status() {
   return {
     runtime: await runtimeAvailable(),
-    models: MODELS.map((m) => ({ id: m.id, name: m.name, sub: m.sub, size: m.size, downloaded: downloaded(m) })),
+    models: MODELS.map((m) => ({ id: m.id, name: m.name, base: m.base, licence: m.licence, sub: m.sub, size: m.size, downloaded: downloaded(m) })),
     downloading: download ? { id: download.id, got: download.got, total: download.total } : null,
     loaded: worker?.info ? { model: worker.model, ...worker.info } : null,
     ram: { total: os.totalmem(), free: freeMemory(), need: find().ram },
@@ -124,7 +142,7 @@ async function fetchModel(id) {
     onProgress({ id: m.id, got: m.size, total: m.size, done: true });
   } catch (err) {
     const stopped = abort.signal.aborted;
-    const why = err.code === 'ENOSPC' ? `There isn't enough free disk space. Tuff AI needs ${(m.size / 1e9).toFixed(1)} GB. Free some up, then try again.` : String(err.message || err);
+    const why = err.code === 'ENOSPC' ? `There isn't enough free disk space. ${m.name} needs ${(m.size / 1e9).toFixed(1)} GB. Free some up, then try again.` : String(err.message || err);
     onProgress({ id: m.id, got: download?.got || 0, total: m.size, done: true, error: stopped ? null : why, stopped });
     if (!stopped) throw err;
   } finally {
@@ -156,7 +174,7 @@ function unload() {
   worker = null;
   try { w.proc.kill(); } catch {}
   // Each question being answered then finishes with this, and sends its own done.
-  for (const [, r] of runs) r.resolve({ ok: false, error: 'Tuff AI stopped.' });
+  for (const [, r] of runs) r.resolve({ ok: false, error: `${find(w.model).name} stopped.` });
   runs.clear();
 }
 
@@ -187,6 +205,8 @@ function start(m) {
       const r = runs.get(msg.runId);
       if (!r) return;
       if (msg.type === 'delta') r.emit({ kind: 'delta', text: msg.text });
+      else if (msg.type === 'thinking') r.emit({ kind: 'thinking', text: msg.text });
+      else if (msg.type === 'thought') r.emit({ kind: 'thought', ms: msg.ms, tokens: msg.tokens, cut: msg.cut });
       else if (msg.type === 'done') { runs.delete(msg.runId); r.resolve(msg); }
     });
     proc.on('exit', (code) => {
@@ -194,19 +214,21 @@ function start(m) {
       const mine = worker === w;
       if (mine) worker = null;
       const why = w.err.trim().split(/\r?\n/).pop();
-      reject(new Error(`Tuff AI's model stopped unexpectedly (code ${code}).${why ? ` ${why}` : ''}`));
-      if (mine) for (const [id, r] of runs) { runs.delete(id); r.resolve({ ok: false, error: 'Tuff AI stopped unexpectedly. Try again.' }); }
+      reject(new Error(`${m.name} stopped unexpectedly (code ${code}).${why ? ` ${why}` : ''}`));
+      if (mine) for (const [id, r] of runs) { runs.delete(id); r.resolve({ ok: false, error: `${m.name} stopped unexpectedly. Try again.` }); }
     });
   });
   w.ready.catch(() => {});
   const s = readSettings();
-  proc.postMessage({ type: 'load', modelPath: modelPath(m), gpu: s.aiGpu === 'cpu' ? 'cpu' : 'auto', contextSize: 8192 });
+  // aiThreads is only for measuring (the bake-off's CPU check); the app lets node-llama-cpp pick.
+  const threads = Number.isInteger(s.aiThreads) && s.aiThreads > 0 ? s.aiThreads : undefined;
+  proc.postMessage({ type: 'load', modelPath: modelPath(m), gpu: s.aiGpu === 'cpu' ? 'cpu' : 'auto', contextSize: 8192, threads });
   worker = w;
   return w.ready;
 }
 
 function ask(runId, type, payload, emit) {
-  if (!worker) return Promise.resolve({ ok: false, error: 'Tuff AI stopped unexpectedly. Try again.' });
+  if (!worker) return Promise.resolve({ ok: false, error: `${find().name} stopped unexpectedly. Try again.` });
   return new Promise((resolve) => {
     runs.set(runId, { emit, resolve });
     worker.proc.postMessage({ type, runId, maxTokens: MAX_TOKENS, ...payload });
@@ -234,19 +256,28 @@ function guideSections() {
   return guide;
 }
 
-function relevant(text, n = 2) {
+// The n sections that share the most (rare) words with the text. first: sections that go in whatever the
+// text says; skip: sections to leave out.
+function relevant(text, n = 2, { first = [], skip = [] } = {}) {
   const g = guideSections();
   const q = new Set(g.words(text));
-  return g.rest.map((s) => {
+  const forced = g.rest.filter((s) => first.includes(s.title)).slice(0, n);
+  return [...forced, ...g.rest.filter((s) => !first.includes(s.title) && !skip.includes(s.title)).map((s) => {
     const have = new Set(g.words(`${s.title} ${s.text}`));
     let score = 0;
     for (const w of q) if (have.has(w)) score += Math.log(1 + g.rest.length / (g.df.get(w) || 1));
     return { s, score };
-  }).sort((a, b) => b.score - a.score).slice(0, n).filter((x) => x.score > 0).map((x) => x.s);
+  }).sort((a, b) => b.score - a.score).slice(0, n - forced.length).filter((x) => x.score > 0).map((x) => x.s)];
 }
 
+// Who it is. Asked "who are you?" or "are you ChatGPT?", a base model says it's Qwen or a made-up helper,
+// so it's told plainly what's true. The exact sentence to answer with is only in the improver's card for
+// those questions (GOOD.about): with it in the system prompt, the 2B started almost every answer with it.
 function systemPrompt() {
-  return `You are Tuff AI, the helper built into TuffCode. You run on this computer, with no internet. You help beginners with the Tuff programming language.
+  const m = MODELS[0];
+  return `You are ${m.name}, TuffCode's own AI model. You power Tuff AI, the helper built into TuffCode, the code editor for the Tuff programming language. ${m.name} is based on ${m.base}, an open model by the Qwen team at Alibaba Cloud (${m.licence} licence). You run on the person's own computer, with no internet.
+If they ask who or what you are, which model you are, or who made you, say it in a sentence or two: you're ${m.name}, TuffCode's model, based on the open ${m.base} model, running on their computer. You are not ChatGPT, Claude, Gemini or Qwen's own chat app, and you're not a person. When they ask about anything else, don't say who you are: go straight to their question.
+You help beginners, often kids, with the Tuff programming language.
 Tuff is its own language, not Python. Only use what the Tuff guide below shows.
 Keep answers short and friendly. When you give a program, give the whole program in one \`\`\`tuff code block.
 
@@ -254,6 +285,188 @@ Keep answers short and friendly. When you give a program, give the whole program
 
 ${guideSections().core.map((s) => s.text).join('\n\n')}`;
 }
+
+// ---------------------------------------------------------------- the improver
+// Before the model answers, the question is turned into a clearer task, the same way every time: what kind
+// of request it is, the part of the open file that matters, the error from the last run, and what a good
+// answer looks like. That card goes at the end of the message (small models follow what they read last)
+// and is shown in the reply, collapsed. At Medium and High the model then rewrites it in its own words
+// (the plan) before it answers.
+// What the panel sends (all but the question may be missing):
+//   { question, file, code, selection: { from, to, text }, history: ['Them: …', 'You: …'], runError }
+const FILE_LIMIT = 6000;
+const fence = '```';
+const trim = (s, n) => (s.length > n ? `${s.slice(0, n)}\n… (cut off, ${s.length - n} more characters)` : s);
+const baseName = (p) => String(p || '').split(/[\\/]/).pop();
+const errLineOf = (s) => +((/Tuff error on line (\d+)/.exec(s || '') || [])[1] || 0);
+
+const MAKE = '(make|write|create|build|code|program|add|change|turn|give me|show me)';
+// With their program open, "my player doesn't move", "it never stops" or "the ball should bounce" say what
+// it does wrong: a not, never or should, then (a few words on) something a program does. Without that,
+// "I don't get what dt means", "Why don't we use def?" and "What should I add next?" are questions.
+const DOES = "(work|run|ran|show|say|said|print|move|happen|stop|start|appear|change|count|jump|load|go|went|end|close|open|play|draw|display|fall|fell|bounce|turn|hit|touch|update|ask|wait|respond|react|spawn|collide|do (anything|what|it|that))(s|es|ed|d|ing|ning|ped|ping|n)?\\b";
+// ("I don't get why it moves" is about them, not the program.)
+const NOT_DOES = new RegExp(`\\b(doesn'?t|does not|don'?t|do not|didn'?t|did not|won'?t|will not|isn'?t|is not|aren'?t|are not|wasn'?t|was not|can'?t|cannot|can not|couldn'?t|could not|never|nothing)\\s+(?!(get|understand|know|see|think|remember|mind)\\b)(?:[\\w']+\\s+){0,3}?${DOES}|\\b(can'?t|cannot) see\\b|\\b(keeps|kept) \\w+ing\\b`);
+// "Should" says what it should do, but not in "should I…?" or "Where should the score go?".
+const SHOULD_DOES = new RegExp(`\\bshould(n'?t| not)?\\s+(?!(i|we|you)\\b)(?:[\\w']+\\s+){0,3}?${DOES}`);
+const ASKING = /^\s*(what|why|how|where|when|which|who|should|can|could|would|will|is|are|do|does)\b/;
+const saysWhatsWrong = (s) => NOT_DOES.test(s) || s.split(/[.?!\n]+/).some((part) => !ASKING.test(part) && SHOULD_DOES.test(part));
+function kindOf(question, hasCode) {
+  const s = question.toLowerCase();
+  if (/\b(fix|bugs?|broken|errors?|wrong|crash(es|ed|ing)?|stuck|mistakes?|instead|not working|does not work)\b|n'?t (work|run)/.test(s)) return 'fix';
+  // "Make a program that asks "What is your name?"" is a request, not a question, and so is "Make it so the
+  // player can't go off the screen".
+  const making = new RegExp(`^(please |ok,? |now )?((can|could|will|would) you (please )?|i want (you to |a |an )?|i'd like (you to |a |an )?|let's )?${MAKE}\\b`).test(s);
+  if (hasCode && !making && saysWhatsWrong(s)) return 'fix';
+  // "I don't get what dt means", "I don't understand this": explain their code. ("I don't know how to add a
+  // score" goes on to the rules below: a request.)
+  if (hasCode && /\bi (don'?t|do not|didn'?t|did not) (get|understand|know|see)\b/.test(s) && /\b(mean(s|ing|t)?|this|that|it|(my|the|this) (code|program)|line \d+)\b/.test(s)) return 'explain';
+  if (/\b(explain|walk me through|step by step|what do(es)? (this|it|that|my|the code|the program)|how does (this|it|that|my)|what is this|what's this|mean)\b/.test(s)) return 'explain';
+  if (making) return 'write';
+  // "Who are you?", "Are you ChatGPT?", "Which model is this?"
+  if (s.length < 120 && /\b(who|what) (are|r) (you|u)\b|\bare (you|u) (an? )?(chat ?gpt|gpt|claude|gemini|qwen|llama|copilot|tuff ai|pumice|ai|robot|bot|person|human|real)\b|\b(which|what) (ai |language )?model\b|\bwho (made|built|created|trained) (you|u|this)\b|\bwhat('s| is) your name\b/.test(s)) return 'about';
+  if (/\b(suggest|ideas?|tips?|ways to|teach|how (do|can|could|should) i|(what|which|where|when) (should|can|could|do) (i|we)|should (i|we)|what (is|are)|why|can i|is there)\b/.test(s)) return 'question';
+  if (new RegExp(`\\b${MAKE}\\b`).test(s)) return 'write';
+  return 'question';
+}
+
+// "Make a game where you catch apples" is a tgame game. A guessing game, a quiz or a game score in a variable
+// is a console program (Tuff Bench has those), and an mtgui game is a window.
+const PLAYS = /\b(catch(es|ing)?|jump(s|ing)?|dodg(e|es|ing)|chas(e|es|ing)|shoot(s|ing|er)?|collect(s|ing)?|fall(s|ing)?|enem(y|ies)|players?|paddles?|balls?|maze|rac(e|es|ing)|racer|pong|snake|flappy|clicker|asteroids?|breakout|invaders|aliens?|space ?ships?|ships?|coins?|obstacles?|rocks?|bricks?|fly(ing)?|runner|3d|world)\b/;
+const NOT_PLAYED = /\b(guess(es|ing)?|quiz|trivia|hangman|riddles?|text|adventure|words?|dice|tic.?tac.?toe|in a variable|m?tgui|atgui)\b/;
+const isGame = (s) => /\bgames?\b/.test(s) && PLAYS.test(s) && !NOT_PLAYED.test(s);
+
+// Console, window, game or web: from the words, or else from the library the open file mentions.
+function targetOf(question, code) {
+  const s = question.toLowerCase();
+  if (/\btgame\b|\bsprites?\b|arrow keys|\bplatformer\b/.test(s) || isGame(s)) return 'game';
+  if (/\btap\b|\bweb ?(page|site)s?\b|\bwebsite\b|\bapi\b|\burl\b|\binternet\b/.test(s)) return 'web';
+  if (/\b(m?tgui|atgui|windows?|buttons?|sliders?|labels?|gui|clicks?|clicked|text ?box|checkbox|dropdown|toggle|headings?)\b/.test(s)) return 'window';
+  const lib = /^\s*(?:mention|import)\s+(\w+)/m.exec(code || '');
+  if (lib) return { tgui: 'window', mtgui: 'window', atgui: 'window', tgame: 'game', tap: 'web' }[lib[1]] || 'console';
+  return 'console';
+}
+
+// Sections of the guide about windows, games and the web. A console program doesn't need them, and with
+// them in the message the model answers "ask my name" with a window (37 of Qwen's 105 failed write tasks
+// in Phase 1 did).
+const WINDOW_SECTIONS = ['App windows (tgui / mtgui)', 'Events: what the function gets', 'Timers', 'Pages (several screens in one window)', 'Layout and size', 'Looking good', 'atgui'];
+// The guide splits at every heading, so tgame's "Games Tuff Engine can edit" is a section of its own.
+const GAME_SECTIONS = ['tgame', 'Games Tuff Engine can edit'];
+const SECTIONS = {
+  console: { skip: [...WINDOW_SECTIONS, 'Libraries', ...GAME_SECTIONS, 'tap'] },
+  window: { first: ['App windows (tgui / mtgui)'], skip: [...GAME_SECTIONS, 'tap', 'Live lines and clearing (console programs)'] },
+  game: { first: ['tgame'], skip: [...WINDOW_SECTIONS, 'tap'] },
+  web: { first: ['tap'], skip: [...WINDOW_SECTIONS, ...GAME_SECTIONS] },
+};
+const WANT = {
+  write: 'a Tuff program that does what they describe',
+  fix: 'their program fixed, and to know what was wrong',
+  explain: 'an explanation of their code in simple words',
+  question: 'an answer to their question about Tuff',
+  about: 'to know who you are',
+};
+const GOOD = {
+  write: `the whole program in one ${fence}tuff block, then one sentence on how it works. It must show exactly the text they asked for.`,
+  fix: `one or two sentences naming the mistake and the line it's on, then the whole fixed program in one ${fence}tuff block.`,
+  explain: 'a short explanation, step by step, in plain words. Quote small bits of their code. No whole new program unless they ask for one.',
+  question: `a short, friendly answer in plain words, with a tiny ${fence}tuff example if it helps (only real Tuff code goes in it).`,
+  about: `a sentence or two, like: "I'm ${MODELS[0].name}, TuffCode's own AI model. I'm based on the open ${MODELS[0].base} model, and I run right here on your computer." No code.`,
+};
+const ASKS = /\b(asks?|asking|types?|typed|typing|enters?|input|answers?|guess(es)?)\b/i;
+const TARGET = {
+  console: 'It\'s a console program, not a window: show text with say. Don\'t use mtgui or tgui.',
+  consoleAsks: 'It\'s a console program, not a window: show text with say, and ask each question with input on a line of its own (a name, =, input, then the question in quotes). Don\'t use mtgui or tgui.',
+  window: 'It\'s an app window: start with mention mtgui (or mention tgui for the plain look), then app = mtgui.window("Title", 400, 300). No input or wait in a window app.',
+  game: 'It\'s a tgame game: start with mention tgame, then game = tgame.window("Title", 800, 600).',
+  web: 'It uses the web: start with mention tap, then res = tap.get(url).',
+};
+const NOT_PYTHON = 'Tuff, not Python: func (not def), true, false and nil, x is y, items:add(x) (not .append), "Hi " + name (no f-strings), and range(1, 3) gives 1, 2, 3.';
+
+// The lines of a long file that matter: around the selection, the error's line, or the lines that share
+// the most words with the question.
+function focusOf(code, { line, selection, question }) {
+  const lines = code.split('\n');
+  if (code.length <= FILE_LIMIT) return { text: code, from: 1, to: lines.length, whole: true };
+  let center = selection ? Math.round((selection.from + selection.to) / 2) : line;
+  if (!center) {
+    const want = new Set((question.toLowerCase().match(/[a-z_]{4,}/g) || []));
+    let best = 0;
+    lines.forEach((l, i) => {
+      const n = (l.toLowerCase().match(/[a-z_]{4,}/g) || []).filter((w) => want.has(w)).length;
+      if (n > best) { best = n; center = i + 1; }
+    });
+  }
+  center = Math.min(Math.max(1, center || 1), lines.length);
+  let from = center, to = center, size = lines[center - 1].length + 1;
+  for (let grew = true; grew;) {
+    grew = false;
+    if (to < lines.length && size + lines[to].length + 1 <= FILE_LIMIT) { size += lines[to].length + 1; to++; grew = true; }
+    if (from > 1 && size + lines[from - 2].length + 1 <= FILE_LIMIT) { from--; size += lines[from - 1].length + 1; grew = true; }
+  }
+  return { text: lines.slice(from - 1, to).join('\n'), from, to, whole: false };
+}
+
+const hasFile = (input) => !!input.file && typeof input.code === 'string';
+
+function improve(input) {
+  const question = String(input.question || '').trim();
+  const code = hasFile(input) ? input.code : '';
+  const kind = kindOf(question, !!code.trim());
+  const target = targetOf(question, code);
+  const lines = [`They want: ${WANT[kind]}.`];
+  let focus = null;
+  if (hasFile(input)) {
+    focus = focusOf(code, { line: errLineOf(input.runError || question), selection: input.selection, question });
+    const n = code.replace(/\n$/, '').split('\n').length;
+    const size = code.trim() ? `${n} line${n === 1 ? '' : 's'}` : 'empty';
+    const which = focus.whole ? '' : `, and the part that matters is above (lines ${focus.from} to ${focus.to})`;
+    lines.push(kind === 'write'
+      ? `Their open file is ${baseName(input.file)} (${size})${which}. Change it if the request is about it; otherwise write a new program.`
+      : `Their program is ${baseName(input.file)} (${size})${which}.`);
+  }
+  const err = input.runError || (/Tuff error on line \d+[^\n]*/.exec(question) || [])[0] || '';
+  const errLine = errLineOf(err);
+  if (err && kind !== 'write') {
+    const src = errLine && code ? code.split('\n')[errLine - 1] : '';
+    lines.push(`When they last ran it, it stopped${errLine ? ` at line ${errLine}` : ''}${src?.trim() ? ` (${src.trim()})` : ''}: ${err.split('\n')[0].trim()}`);
+  }
+  if (kind === 'write' || (kind === 'fix' && target !== 'console')) lines.push(TARGET[target === 'console' && ASKS.test(question) ? 'consoleAsks' : target]);
+  lines.push(`A good answer: ${GOOD[kind]}`);
+  if (kind === 'write' || kind === 'fix') lines.push(NOT_PYTHON);
+  return { kind, target, focus, text: lines.map((l) => `- ${l}`).join('\n') };
+}
+
+// The message the model reads. Without a card it's exactly what 1.0.4 sent. plan: the model's own rewrite
+// of the request (Medium and High), added to the card.
+function buildMessage(input, card, plan = '') {
+  const question = String(input.question || '').trim();
+  const parts = [];
+  if (hasFile(input)) {
+    const name = baseName(input.file);
+    const lang = /\.tuf$/i.test(name) ? 'tuff' : '';
+    if (!card) parts.push(`Their open file, ${name}:\n${fence}${lang}\n${trim(input.code, FILE_LIMIT)}\n${fence}`);
+    else if (card.focus.whole) parts.push(`Their open file, ${name}:\n${fence}${lang}\n${card.focus.text}\n${fence}`);
+    else parts.push(`Their open file, ${name}, lines ${card.focus.from} to ${card.focus.to}:\n${fence}${lang}\n${card.focus.text}\n${fence}`);
+  }
+  const sel = input.selection;
+  if (sel?.text) parts.push(`They selected lines ${sel.from} to ${sel.to}:\n${fence}\n${trim(sel.text, 3000)}\n${fence}`);
+  if (card && input.runError && !question.includes(input.runError.split('\n')[0])) parts.push(`When they last ran it, it stopped with this error:\n${fence}\n${trim(input.runError, 1500)}\n${fence}`);
+  if (input.history?.length) parts.push(`Earlier in this chat (already answered):\n${input.history.join('\n')}`);
+  parts.push(`Their question:\n${question}`);
+  if (card) parts.push(`What TuffCode worked out from their question:\n${card.text}${plan ? `\n- The task, as you rewrote it: ${plan.replace(/\s*\n\s*/g, ' ')}` : ''}`);
+  const body = parts.join('\n\n');
+  const extra = card ? relevant(`${question}\n${card.focus?.text || ''}\n${input.runError || ''}`, 2, SECTIONS[card.target]) : relevant(body);
+  return `${extra.length ? `More of the Tuff guide that may help:\n\n${extra.map((s) => s.text).join('\n\n')}\n\n---\n\n` : ''}${body}`;
+}
+
+// The plan pass. A 2B model asked to plan tends to answer straight away, so the plan stops at the first
+// code block, and only the task it wrote is kept.
+const PLAN_ASK = '\n\nDon\'t answer yet. First rewrite their request as a clear task for yourself, in 2 to 4 short lines starting with "Task:": what to make or fix, the exact text it must show, and what your answer will include. No code.';
+const PLAN_STOP = ['```', '**Answer', 'Answer:'];
+const cleanPlan = (text) => String(text || '').replace(/(```|\*\*Answer|Answer:)[\s\S]*$/, '').replace(/^\s*\**Task:?\**:?\s*/i, '').trim();
+// Thinking levels also say how to think: the 2B otherwise spends its whole budget restating the request.
+const THINK_HINT = '\n\n(Think in a few short lines: what the answer needs, then check it against the Tuff rules. Don\'t repeat yourself.)';
 
 // Only a ```tuff block is a program to check. Other blocks are an error message, what a program prints,
 // or another language, and the checker would wrongly say they're broken.
@@ -276,44 +489,96 @@ async function run(params, emit) {
   }
 }
 
-async function answerRun({ runId, prompt, model }, emit) {
+// params.ai: the question's parts (see the improver); without them, prompt is the whole question.
+// params.effort: the thinking level ('' for the default). params.improve: false leaves the question as it
+// is (Tuff Bench measures both).
+async function answerRun({ runId, prompt, model, effort, ai: parts, improve: improving = true }, emit) {
   const send = (e) => emit({ runId, ...e });
   const m = find(model);
-  // Stop can come at any point: while the model loads, while the checker runs, or between the two answers.
+  const lv = level(effort);
+  const t0 = Date.now();
+  // What happened, for Tuff Bench (the panel doesn't need it).
+  const stats = { level: lv.id, improved: false, plan: '', planMs: 0, thinkMs: 0, thinkTokens: 0, cut: 0, answers: [] };
+  const finish = (e) => send({ kind: 'done', ...e, stats: { ...stats, ms: Date.now() - t0 } });
+  // Stop can come at any point: while the model loads, while it plans, while the checker runs, or between
+  // the two answers.
   const halted = () => stoppedRuns.has(runId);
-  if (!(await runtimeAvailable())) { send({ kind: 'done', ok: false, error: "Tuff AI's engine isn't in this copy of TuffCode." }); return; }
-  if (!downloaded(m)) { send({ kind: 'done', ok: false, error: 'Download Tuff AI first (the card at the top).' }); return; }
+  if (!(await runtimeAvailable())) { finish({ ok: false, error: "Tuff AI's engine isn't in this copy of TuffCode." }); return; }
+  if (!downloaded(m)) { finish({ ok: false, error: `Download ${m.name} first (the card at the top).` }); return; }
   if (!worker || worker.model !== m.id) {
     const free = freeMemory();
     if (free < m.ram) {
-      send({ kind: 'done', ok: false, error: `Tuff AI needs about ${(m.ram / 1e9).toFixed(1)} GB of free memory, and ${(free / 1e9).toFixed(1)} GB is free right now. Close some apps or browser tabs, then try again.` });
+      finish({ ok: false, error: `${m.name} needs about ${(m.ram / 1e9).toFixed(1)} GB of free memory, and ${(free / 1e9).toFixed(1)} GB is free right now. Close some apps or browser tabs, then try again.` });
       return;
     }
-    send({ kind: 'note', text: 'Starting Tuff AI on this computer…' });
+    send({ kind: 'note', text: `Starting ${m.name} on this computer…` });
   }
   send({ kind: 'model', id: m.id, name: m.name });
+  // What it's doing, for the panel's "Thinking…" label: sent only when it changes.
+  let now = '';
+  const stage = (text) => { if (text !== now) { now = text; send({ kind: 'stage', text }); } };
+  stage('Reading your question');
+  const input = parts && typeof parts === 'object' ? { ...parts, question: parts.question ?? prompt } : { question: prompt };
+  const card = improving ? improve(input) : null;
+  if (card) { stats.improved = true; stats.kind = card.kind; stats.target = card.target; send({ kind: 'improved', text: card.text }); }
   try {
     await start(m);
   } catch (err) {
-    send({ kind: 'done', ok: false, error: String(err.message || err) });
+    finish({ ok: false, error: String(err.message || err) });
     return;
   }
-  if (halted()) { send({ kind: 'done', ok: true, error: null }); return; }
-  const extra = relevant(prompt);
-  const message = `${extra.length ? `More of the Tuff guide that may help:\n\n${extra.map((s) => s.text).join('\n\n')}\n\n---\n\n` : ''}${prompt}`;
-  let r = await ask(runId, 'chat', { system: systemPrompt(), prompt: message }, send);
+  if (halted()) { finish({ ok: true, error: null }); return; }
+  const message = buildMessage(input, card);
+  // Each answer's events, with the stage the panel shows ("Thinking", then "Writing").
+  const relay = () => {
+    let thinking = false, writing = false;
+    return (e) => {
+      if (e.kind === 'thinking' && !thinking) { thinking = true; stage('Thinking'); }
+      if (e.kind === 'delta' && !writing) { writing = true; stage('Writing'); }
+      if (e.kind === 'thought') { stats.thinkMs += e.ms; stats.thinkTokens += e.tokens; if (e.cut) stats.cut++; }
+      send(e);
+    };
+  };
+  const thinks = lv.budget > 0;
+  let r;
+  let task = message;
+  if (card && lv.plan) {
+    // The plan: in one short pass (no thinking), the model rewrites the request as a task in its own words.
+    // It goes in the card, and the answer is a fresh chat: asked to answer in a second turn of the same chat,
+    // the 2B repeated its plan and lost track of the code (Tuff Bench, RESULTS.md).
+    stage('Planning');
+    const p0 = Date.now();
+    const p = await ask(runId, 'chat', { system: systemPrompt(), prompt: message + PLAN_ASK, maxTokens: PLAN_TOKENS, thinking: false, budget: 0, stop: PLAN_STOP, ...sampling(lv) }, (e) => {
+      if (e.kind === 'delta') send({ kind: 'plan', text: e.text });
+    });
+    stats.planMs = Date.now() - p0;
+    stats.plan = cleanPlan(p.text);
+    if (!p.ok || p.stopped || halted()) {
+      const ok = !!p.ok || !!p.stopped || halted();
+      finish({ ok, error: ok ? null : p.error });
+      return;
+    }
+    if (stats.plan) task = buildMessage(input, card, stats.plan);
+    stage(thinks ? 'Thinking' : 'Writing');
+  }
+  r = await ask(runId, 'chat', { system: systemPrompt(), prompt: task + (thinks ? THINK_HINT : ''), thinking: thinks, budget: lv.budget, ...sampling(lv) }, relay());
+  stats.answers.push(r.text || '');
   if (r.ok && !r.stopped && !halted()) {
     const code = codeOf(r.text || '');
     if (code) {
+      stage('Checking the code');
       send({ kind: 'tool', name: 'mcp__tuffcode__tuff_check', input: { code } });
       const c = await checkSource(code);
       send({ kind: 'tool_result', ok: c.ok });
       if (!c.ok && !c.unknown && !halted()) {
-        send({ kind: 'note', text: "The checker found a mistake, so Tuff AI is fixing it." });
+        send({ kind: 'note', text: `The checker found a mistake, so ${m.name} is fixing it.` });
         send({ kind: 'break' });
-        r = await ask(runId, 'followup', { prompt: `That program doesn't pass Tuff's checker:\n${c.message}\n\nFix it and give the whole program again.` }, send);
+        stage('Fixing it');
+        r = await ask(runId, 'followup', { prompt: `That program doesn't pass Tuff's checker:\n${c.message}\n\nFix it and give the whole program again.`, budget: lv.retryBudget ?? lv.budget, ...sampling(lv) }, relay());
+        stats.answers.push(r.text || '');
         const again = codeOf(r.text || '');
         if (r.ok && again && !halted()) {
+          stage('Checking the code');
           send({ kind: 'tool', name: 'mcp__tuffcode__tuff_check', input: { code: again } });
           const c2 = await checkSource(again);
           send({ kind: 'tool_result', ok: c2.ok });
@@ -323,7 +588,7 @@ async function answerRun({ runId, prompt, model }, emit) {
     }
   }
   const ok = !!r.ok || !!r.stopped || halted();
-  send({ kind: 'done', ok, error: ok ? null : r.error });
+  finish({ ok, error: ok ? null : r.error });
 }
 
 function stop(runId) {
@@ -338,4 +603,4 @@ function quit() {
   unload();
 }
 
-module.exports = { MODELS, setup, status, fetchModel, cancelDownload, removeModel, run, stop, quit, codeOf };
+module.exports = { MODELS, LEVELS, DEFAULT_LEVEL, setup, status, fetchModel, cancelDownload, removeModel, run, stop, quit, codeOf, improve, buildMessage, systemPrompt };

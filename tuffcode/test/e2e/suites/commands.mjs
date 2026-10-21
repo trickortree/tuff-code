@@ -21,7 +21,17 @@ export default async (t, ctx) => {
 
   // One row: mode, model, thinking, send.
   const row = await ev(`(() => { const r = document.querySelector('.ta-row'); const ys = ['.ta-mode', '.ta-dd[data-o="model"]', '.ta-send'].map(s => Math.round(r.querySelector(s).getBoundingClientRect().top)); return { modes: [...r.querySelectorAll('.ta-mode button')].map(b => b.dataset.m), ys }; })()`);
-  check('Ask, Plan and Edit sit in one row with the model chip and Send', row.modes.join() === 'ask,plan,edit' && Math.max(...row.ys) - Math.min(...row.ys) < 12, row);
+  check('Plan, Ask and Edit sit in one row with the model chip and Send', row.modes.join() === 'plan,ask,edit' && Math.max(...row.ys) - Math.min(...row.ys) < 12, row);
+  // In a narrow panel the chips shrink instead of running under Send, and Send/Stop is no taller than them.
+  const fit = async () => ev(`(() => { const r = document.querySelector('.ta-row'), s = r.querySelector('.ta-send').getBoundingClientRect(); const chips = [...r.querySelectorAll('.ta-dd-btn, .ta-mode')].map(e => e.getBoundingClientRect()); return { clear: chips.every(c => c.right <= s.left + 0.5), sendH: Math.round(s.height), tallest: Math.round(Math.max(...chips.map(c => c.height))), inside: s.right <= r.getBoundingClientRect().right + 0.5 }; })()`);
+  await ev(`document.documentElement.style.setProperty('--rightbar-w', '360px'); 1`);
+  await t.sleep(300);
+  const narrow = await fit();
+  await ev(`document.querySelector('.ta-send').classList.add('stop'); 1`);
+  const narrowStop = await fit();
+  await ev(`document.querySelector('.ta-send').classList.remove('stop'); document.documentElement.style.removeProperty('--rightbar-w'); 1`);
+  await t.sleep(300);
+  check('In a 360 px panel the chips stay clear of Send/Stop, which is no taller than they are', narrow.clear && narrowStop.clear && narrow.inside && narrow.sendH <= narrow.tallest && narrowStop.sendH <= narrowStop.tallest, { narrow, narrowStop });
 
   // Typing "/" lists commands; /help writes them into the chat.
   await ev(`(() => { const ta = document.querySelector('.ta textarea'); ta.focus(); ta.value = '/c'; ta.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
@@ -95,6 +105,13 @@ export default async (t, ctx) => {
   // Tuff AI only answers: Plan and Edit are off on its tab.
   await ev(`document.querySelector('.ta-agents button[data-id="tuffai"]').click()`);
   check('On the Tuff AI tab, Plan and Edit are switched off', await ev(`(() => { const b = [...document.querySelectorAll('.ta-mode button')]; return b.find(x => x.dataset.m === 'plan').disabled && b.find(x => x.dataset.m === 'edit').disabled && b.find(x => x.dataset.m === 'ask').classList.contains('on'); })()`), null);
+  // Without its model: the download card names Pumice 1 (with the credit to Qwen3.5-2B), and the Model and
+  // Thinking chips wait until it's downloaded.
+  await waitFor(`!!document.querySelector('.ta-status .ta-card, .ta-status .ta-note:not(:empty)') && !/Checking Tuff AI/.test(document.querySelector('.ta-status').textContent)`, 10000);
+  const card = await ev(`({ text: document.querySelector('.ta-status')?.textContent || '', get: document.querySelector('.ta-status [data-a="ai-get"]')?.textContent || '', chips: document.querySelector('.ta-opts').classList.contains('hidden') })`);
+  if (card.get) {
+    check('The Tuff AI card offers to download Pumice 1, credits Qwen3.5-2B, and hides the chips until then', /^Download Pumice 1 \(1\.3 GB\)$/.test(card.get) && /Its model is Pumice 1/.test(card.text) && /Pumice 1 · based on Qwen3\.5-2B \(Apache 2\.0\)/.test(card.text) && card.chips, card);
+  } else t.skip('The Tuff AI download card', `this copy has no node-llama-cpp: ${card.text.slice(0, 80)}`);
   // Tuff AI only reads the last few messages, so it can't sum up the chat for everyone.
   const summaries = () => ev(`document.querySelectorAll('.ta-msg.agent.summary').length`);
   const sumBefore = await summaries();

@@ -249,6 +249,8 @@ class Lib:
         return f"Couldn't connect to {host}: {reason}."
 
     def request(self, method, url, headers, body=None):
+        if os.environ.get("TUFF_SCENE") == "1":
+            raise self.rt.error("Tuff Engine's preview doesn't go on the internet. Press Play to run the real game.")
         label = f"tap.{method.lower()}"
         url = self.check_url(label, url)
         data, kind = self.encode_body(label, body)

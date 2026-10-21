@@ -49,11 +49,20 @@ class Tok:
 ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"', "'": "'"}
 
 
+def source_lines(src):
+    """The program's lines, numbered as the editor numbers them. Only a newline ends a line: splitlines() would
+    also break at U+2028, U+0085, a form feed and others, cutting a text that holds one in two."""
+    lines = src.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if lines[-1] == "":  # a newline at the very end doesn't start another line
+        lines.pop()
+    return lines
+
+
 def tokenize(src):
     toks = []
     indents = [0]
     depth = 0
-    lines = src.splitlines()
+    lines = source_lines(src)
     for ln, raw in enumerate(lines, 1):
         stripped = raw.lstrip(" \t")
         if depth == 0:
@@ -125,6 +134,9 @@ def tokenize(src):
                     depth = max(0, depth - 1)
                 toks.append(Tok("OP", c, ln, col))
                 i += 1
+            elif not c.isprintable():  # U+2028, a form feed, a no-break space: nothing to see between the quotes
+                raise TuffError(f"There's a hidden character here (U+{ord(c):04X}) that Tuff doesn't understand. "
+                                "Delete it, or type this line again.", ln, col)
             else:
                 raise TuffError(f"I don't understand the character '{c}'.", ln, col)
         if depth == 0:
@@ -528,9 +540,9 @@ LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame")
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
 VIEW_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:" + "|".join(VIEW_LIBRARIES) + r")\b", re.M)
-# The first line a tgame program shows, in yellow, before anything it prints. Change "is coming soon" to
-# "is available" here once Tuff Engine ships.
-TGAME_NOTICE = "Tuff Engine is coming soon: a visual way to make games with TuffCode."
+# The first line a tgame program shows, in yellow, before anything it prints. In TuffCode the line gets an
+# "Open Tuff Engine" button (ide.js handleOsc). --check, --scene and --windowed apps never show it.
+TGAME_NOTICE = "Tuff Engine is here: open this game in TuffCode's Tuff Engine tab (Ctrl+Shift+G) to build it visually."
 TGAME_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+tgame\b", re.M)
 BUILTIN_NAMES = {"print", "number", "num", "text", "str", "int", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
                  "floor", "ceil", "min", "max", "sum", "average"}
@@ -1031,7 +1043,10 @@ class Interpreter:
         else:
             obj = plain(self.eval(s.target.obj, env))
             if not isinstance(obj, list):
-                raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.")
+                owner = node_text(s.target.obj) or "thing"
+                tip = f" Use :set instead, like {owner}:set({key_example(s.target.index)}, value)." \
+                    if isinstance(obj, Native) and "keys" in obj.methods and "set" in obj.methods else ""
+                raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.{tip}")
             obj[self.list_index(obj, self.eval(s.target.index, env))] = value
         return value
 
@@ -1136,8 +1151,8 @@ class Interpreter:
         if k == "index":
             obj = plain(self.eval(e.obj, env))
             if not isinstance(obj, (list, str)):
-                owner = e.obj.name if e.obj.kind == "var" else "thing"
-                tip = f" Use :get instead, like {owner}:get(\"name\")." if isinstance(obj, Native) and "keys" in obj.methods else ""
+                owner = node_text(e.obj) or "thing"
+                tip = f" Use :get instead, like {owner}:get({key_example(e.index)})." if isinstance(obj, Native) and "keys" in obj.methods else ""
                 raise TuffError(f"Can't use [ ] on {type_name(obj)}.{tip}")
             return obj[self.list_index(obj, self.eval(e.index, env))]
         if k == "call":
@@ -1358,6 +1373,43 @@ def dot_help(what, obj_node, name, kind=None):
     alt = PY_METHODS.get(kind, {}).get(name.lower(), name)
     owner = obj_node.name if getattr(obj_node, "kind", None) == "var" else "thing"
     return f"Only libraries use '.', and this is {what}. For methods use ':', like {owner}:{alt}"
+
+
+def node_text(e):
+    """Short code as it was written, for messages: user, "name", 3, user:get("address"), users[0]. None if it's longer."""
+    if e.kind == "var":
+        return e.name
+    if e.kind == "const" and isinstance(e.value, str):
+        return f'"{e.value}"' if e.value.isprintable() and '"' not in e.value and len(e.value) <= 30 else None
+    if e.kind == "const" and isinstance(e.value, int) and not isinstance(e.value, bool):
+        return str(e.value)
+    if e.kind in ("method", "index"):
+        obj = node_text(e.obj)
+        parts = [node_text(a) for a in (e.args if e.kind == "method" else [e.index])]
+        if obj is None or None in parts:
+            return None
+        return f"{obj}:{e.name}({', '.join(parts)})" if e.kind == "method" else f"{obj}[{parts[0]}]"
+    return None
+
+
+def key_example(index):
+    """What a [ ] input looks like given to :get or :set, for messages: user["name"] gives "name", user[k] gives k."""
+    text = node_text(index) if index.kind in ("const", "var") else None
+    return text if text and not text[0].isdigit() else '"name"'
+
+
+def leaves_folder(path, folder):
+    """Does this file path point outside the folder ("../cat.png", or a full path somewhere else)? A relative path
+    is judged on its own; a full path only when the folder is known."""
+    if not os.path.isabs(path):
+        return os.path.normpath(path).replace("\\", "/").split("/")[0] == ".."
+    if not folder:
+        return False
+    folder = os.path.normcase(os.path.abspath(folder))
+    try:
+        return os.path.commonpath([os.path.normcase(os.path.abspath(path)), folder]) != folder
+    except ValueError:  # on another drive
+        return True
 
 
 def accepts(fn, count):
@@ -1794,8 +1846,15 @@ class Checker:
             elif s.target.kind == "index":
                 self.expr(s.target.obj, scope)
                 self.expr(s.target.index, scope)
-                if self.kind(s.target.obj) == "$text":
+                obj, who = self.kind(s.target.obj), node_text(s.target.obj)
+                if obj == "$text":
                     self.problem(s, "You can only set items in a list, not in text. Build new text with + instead.")
+                elif obj == "data object":
+                    self.problem(s, f"You can only set items in a list, not in a data object. Use :set instead, like "
+                                    f"{who or 'thing'}:set({key_example(s.target.index)}, value).")
+                elif self.kind(s.target.index) == "$text" and self.json_like(s.target.obj):
+                    self.problem(s, f"List positions must be whole numbers, not text. If {who + ' is' if who else 'it is'} a data object "
+                                    f"(from :json), use :set instead, like {who or 'thing'}:set({key_example(s.target.index)}, value).")
             if s.op == "=" and target in self.func_count and target not in self.params and target not in self.loop_vars \
                     and self.kind(s.value) not in ("$func", "$builtin"):
                 self.problem(s, f"{target} is a function, and giving it a value replaces it, so {target}() won't work afterwards. Use another name for the value.")
@@ -2080,9 +2139,29 @@ class Checker:
             if self.is_decimal(n):
                 self.problem(n, "This is a decimal (it comes from /), even if it looks whole, so it can't repeat text. Use floor(...) around the division.")
 
+    def json_like(self, e, seen=frozenset()):
+        """Could this be one of tap's data objects: one made with tap.data(), a response's :json (an object, unless
+        the server sent a list), or what :get or [ ] gave back from one of those?"""
+        if self.kind(e) == "data object":
+            return True
+        if e.kind == "method":
+            return (e.name == "json" and not e.args) or (e.name == "get" and self.json_like(e.obj, seen))
+        if e.kind == "index":
+            return self.json_like(e.obj, seen)
+        if e.kind == "var" and e.name not in seen and e.name not in self.params and e.name not in self.loop_vars:
+            sets = self.assigned.get(e.name, [])
+            return bool(sets) and all(s.op == "=" and self.json_like(s.value, seen | {e.name}) for s in sets)
+        return False
+
     def check_index(self, e):
         idx = self.kind(e.index)
-        if idx == "$text":
+        who = node_text(e.obj)
+        if self.kind(e.obj) == "data object":  # what the run says: [ ] doesn't work on a data object at all
+            self.problem(e, f"Can't use [ ] on a data object. Use :get instead, like {who or 'thing'}:get({key_example(e.index)}).")
+        elif idx == "$text" and self.json_like(e.obj):
+            self.problem(e, f"List positions must be whole numbers, not text. If {who + ' is' if who else 'it is'} a data object "
+                            f"(from :json), use :get instead, like {who or 'thing'}:get({key_example(e.index)}).")
+        elif idx == "$text":
             who = self.describe(e.index)
             self.problem(e, "List positions must be whole numbers, not text." + (f" Use number({who})." if who and self.typed(e.index) else ""))
         elif self.is_decimal(e.index):
@@ -2622,7 +2701,14 @@ class Checker:
                          else f"'{path}' isn't a picture. Use a .png, .jpg, .gif, .webp or .svg file.")
             return
         base = self.base_dir
-        if base and not os.path.isabs(path) and not os.path.abspath(base).lower().startswith(os.path.abspath(tempfile.gettempdir()).lower()):
+        if base and os.path.abspath(base).lower().startswith(os.path.abspath(tempfile.gettempdir()).lower()):
+            base = None  # a snippet in a temporary folder: its files aren't next to it
+        # atgui's window shows pictures from the .tuf's folder and the folders inside it (a window icon can be anywhere).
+        if not icon and leaves_folder(path, base):
+            self.problem(arg, f"'{path}' is outside the folder your .tuf file is in, so atgui can't show it. "
+                              "Put the picture next to your .tuf file, or in a folder inside it.")
+            return
+        if base and not os.path.isabs(path):
             if not os.path.isfile(os.path.join(base, path)):
                 what = "icon" if icon else "image"
                 self.problem(arg, f"Couldn't find the {what} '{path}'. Put the picture in your project folder (next to your .tuf file).")
@@ -2667,10 +2753,145 @@ class Checker:
 Checker.HANDLER_POS = {**Checker.HANDLER_POS, "clicked": 0, "hover": 0, "focus": 0, "key": 1, "closed": 0, "item": 1}
 
 
+# ---------------------------------------------------------------- Tuff Engine's preview (tuff.py --scene)
+class SceneConsole(Console):
+    """Prints nothing and answers input() with "", so a preview never shows output or waits."""
+    def write(self, text):
+        pass
+
+    def input(self, prompt):
+        return ""
+
+
+class SceneInterpreter(Interpreter):
+    """Keeps the stack of lines being run (lines[0] is the top-level line), so tgame can tell which line made
+    each thing. wait() returns at once.
+
+    The preview runs by itself whenever the code changes, so it keeps its memory small as well as its time (main.js
+    stops it after 5 seconds), the same way on every system: the only things in Tuff that grow faster than a loop
+    can fill a list (under 100 MB in those 5 seconds) are range(), text * a number, and + on two texts or two lists.
+    Each of those is sized before it's made, and one over ONE bytes, or more than ALL of them together, stops the
+    preview as "too-much" (Tuff Engine says so, and shows what was made before it)."""
+    ONE = 100_000_000
+    ALL = 400_000_000
+
+    def __init__(self, src, base_dir):
+        super().__init__(src, base_dir)
+        self.console = SceneConsole()
+        self.lines = []
+        self.big = 0  # bytes of the big ranges, texts and lists made so far
+
+    def room(self, size):
+        if size < 1_000_000:
+            return
+        self.big += size
+        if size > self.ONE or self.big > self.ALL:
+            import tuff_tgame
+            tuff_tgame.SCENE.stop("too-much")
+
+    def b_range(self, a, b=None, step=1):
+        try:
+            lo, hi = (1, a) if b is None else (a, b)
+            st = int(step)
+            if st:
+                try:
+                    n = len(range(int(lo), int(hi) + (1 if st > 0 else -1), st))
+                except OverflowError:  # more numbers than a list can hold
+                    n = self.ONE
+                self.room(40 * n)  # a list of numbers: about 40 bytes each
+        except (TypeError, ValueError):
+            pass  # not numbers: Interpreter.b_range says what's wrong
+        return super().b_range(a, b, step)
+
+    def binop(self, op, a, b):
+        x, y = plain(a), plain(b)
+        whole = lambda v: isinstance(v, int) and not isinstance(v, bool)
+        if op == "*" and isinstance(x, str) and whole(y):
+            self.room(sys.getsizeof(x) * max(y, 0))
+        elif op == "*" and isinstance(y, str) and whole(x):
+            self.room(sys.getsizeof(y) * max(x, 0))
+        elif op == "+" and isinstance(x, str) and isinstance(y, str):
+            self.room(sys.getsizeof(x) + sys.getsizeof(y))
+        elif op == "+" and isinstance(x, list) and isinstance(y, list):
+            self.room(8 * (len(x) + len(y)))
+        return super().binop(op, a, b)
+
+    def run(self, s, env):
+        self.lines.append(s.line)
+        try:
+            return super().run(s, env)
+        finally:
+            self.lines.pop()
+
+    def b_wait(self, seconds):
+        return None
+
+    def lib_anims(self):
+        """anims' lines show at once (they would sleep): a preview never waits."""
+        names = list(super().lib_anims())
+        console = self.console
+        return {name: Builtin(f"anims.{name}", lambda *_a: console.say("")) for name in names}
+
+
+OTHER_WINDOW = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|atgui)\b", re.M)
+
+
+def scene_file(game_path, source_path, out_path):
+    """Runs a tgame program's setup with no window and writes what it made as JSON. Always exits 0."""
+    import json
+    import tuff_tgame
+    data = {"v": 1, "mode": None, "batch": [], "things": [], "player": None, "error": None,
+            "tables": tuff_tgame.editor_tables()}
+    src = read_source(source_path)
+    if src is None:
+        data["stopped"] = "unreadable"
+    elif not TGAME_IMPORT.search(src):
+        data["stopped"] = "nogame"
+    elif OTHER_WINDOW.search(src):
+        data["stopped"] = "other-window"   # runs nothing: those libraries open real windows
+    else:
+        os.environ["TUFF_SCENE"] = "1"
+        random.seed(0)
+        interp = SceneInterpreter(src, os.path.dirname(os.path.abspath(game_path)))
+        scene = tuff_tgame.start_scene(interp)
+        error = None
+        try:
+            program = Parser(tokenize(src)).program()
+            for stmt in program:
+                if stmt.kind == "func":
+                    interp.run(stmt, interp.globals)
+            interp.run_block(program, interp.globals)
+            for hook in interp.rt.finish_hooks:
+                hook()
+        except tuff_tgame.SceneDone:
+            pass
+        except TuffError as err:
+            error = {"line": err.line, "col": err.col, "message": err.msg}
+        except (ReturnSignal, BreakSignal, ContinueSignal) as sig:
+            word = {"ReturnSignal": "return", "BreakSignal": "break", "ContinueSignal": "continue"}[type(sig).__name__]
+            error = {"line": sig.line, "col": sig.col, "message": f"'{word}' can't be used here."}
+        except RecursionError:
+            error = {"line": None, "col": None, "message": "A function called itself too many times."}
+        except MemoryError:  # the system ran out before SceneInterpreter's own limits did
+            scene.stopped = scene.stopped or "too-much"
+        except Exception as exc:  # a bug in scene mode must never hang the editor
+            error = {"line": None, "col": None, "message": f"Tuff Engine's preview had a problem: {exc}"}
+        try:
+            data.update(scene.dump(error))
+            if scene.stopped == "too-much" and not error:
+                data["stopped"] = "too-much"  # even before the game's window was made
+        except Exception as exc:
+            data.update(stopped="error", batch=[], things=[],
+                        error={"line": None, "col": None, "message": f"Tuff Engine's preview had a problem: {exc}"})
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, separators=(",", ":"), default=list)
+    return 0
+
+
 # ---------------------------------------------------------------- entry point
 
 def report(err, src):
-    lines = src.splitlines()
+    lines = source_lines(src)
     out = [f"Tuff error on line {err.line}: {err.msg}" if err.line else f"Tuff error: {err.msg}"]
     if err.line and 0 < err.line <= len(lines):
         code = lines[err.line - 1]
@@ -2837,6 +3058,11 @@ def main():
             sys.stderr.write("--check needs a file to check.\n" + usage() + "\n")
             return 2
         return check_file(args[1])
+    if args[0] == "--scene":
+        if len(args) < 4:
+            sys.stderr.write("--scene needs the game file, the source file and the output file.\n")
+            return 2
+        return scene_file(args[1], args[2], args[3])
     if args[0].startswith("--") and not os.path.exists(args[0]):
         sys.stderr.write(f"Unknown option '{args[0]}'.\n" + usage() + "\n")
         return 2

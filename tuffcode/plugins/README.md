@@ -25,11 +25,14 @@ my-plugin/
   "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"2\"><circle cx=\"12\" cy=\"12\" r=\"8\"/></svg>",
   "main": "panel.js",
   "style": "panel.css",
-  "panels": [{ "id": "main", "title": "My Plugin" }]
+  "panels": [{ "id": "main", "title": "My Plugin" }],
+  "permissions": ["files"]
 }
 ```
 
 The icon is an SVG. Only its shape is used: TuffCode colors it to match the theme.
+
+`permissions` (optional) asks for the parts of `t` that only some plugins need: `"files"` (`t.project.write`), `"net"` (`t.net`) and `"agents"` (`t.agents`). They decide what `t` has, and nothing more: they are not a sandbox. A plugin runs in TuffCode's own page, with everything the page can reach, so whatever it asks for, its code can do anything TuffCode can. That's why the marketplace only lists plugins someone has read, and why you should only install ones you trust.
 
 `panel.js`:
 
@@ -54,9 +57,11 @@ TuffPlugins.register('my-plugin', (t) => {
 | --- | --- |
 | `t.panel(id, { title, icon, mount })` | A panel in the right sidebar. `mount(el)` runs the first time it opens. Returns `{ open, close, toggle, isOpen, element }`. |
 | `t.command(id, label, run, shortcut)` | A command for Search Everywhere (type `/`) with an optional shortcut. |
-| `t.editor` | `code()`, `selection()`, `selectionLines()`, `file()`, `insert(text)`, `insertSnippet(text)` (supports `${1:placeholder}`). |
-| `t.project` | `root()`, `files()`, `read(path)`, `rel(path)`. With `"permissions": ["files"]`, also `write(path, data, { encoding })`: saves text, or base64 data such as a PNG or WAV (`encoding: "base64"`), at a path inside the open project, and refreshes the project tree. |
-| `t.openFile(path)`, `t.run(path)` | Open a file in a tab, or run a Tuff file. |
+| `t.editor` | `code()`, `selection()`, `selectionLines()`, `file()`, `insert(text)`, `insertSnippet(text)` (supports `${1:placeholder}`), `replaceAll(text)` (one step Ctrl+Z undoes). |
+| `t.project` | `root()`, `files()`, `read(path)` (the file's text: UTF-8, UTF-16 with a BOM and Windows-1252 files all come back as the right text; it's for text, so a picture's bytes don't survive it), `rel(path)`. |
+| `t.project.write(path, data, { encoding })` | Only for plugins with `"permissions": ["files"]`. Saves text (`encoding: "utf8"`, the default, saved as UTF-8) or base64 data such as a PNG or WAV (`encoding: "base64"`) inside the open project: `path` is relative to the project folder (or a full path inside it), and any folders on the way are made. Anywhere outside the open project is refused (the promise rejects). Gives back the full path it saved, and reloads open tabs and the project tree. |
+| `t.openFile(path, line)`, `t.run(path)` | Open a file in a tab (with `line`, the cursor goes to that line, like a `main.tuf:12` link), or run a Tuff file. |
+| `t.openWeb(url)` | Open an `http://` or `https://` page in the web browser. It leaves TuffCode, so only do it when the user clicked a link, and ask first. Gives back `false` for anything else. |
 | `t.toast(message, kind)`, `t.ask({ title, value, confirm })` | Little messages and questions. |
 | `t.reloadChanged()` | Reload open files that changed on disk. |
 | `t.storage.get(key, fallback)`, `t.storage.set(key, value)` | Remember things between sessions. |
@@ -66,7 +71,14 @@ TuffPlugins.register('my-plugin', (t) => {
 
 ## Getting it into the marketplace
 
-The marketplace list is [`registry.json`](registry.json) in this folder. TuffCode downloads the newest copy from the `main` branch on GitHub. To list a plugin that lives in its own GitHub repo, add an entry like this:
+The marketplace list is [`registry.json`](registry.json) in this folder. TuffCode shows the copy it comes with straight away, and starts the plugins you installed, without waiting for the network. It also asks for the newest copy from the `main` branch on GitHub, and adds what's new there to the marketplace when it comes (the refresh button in the Plugins view asks again).
+
+`registry.json` has two lists:
+
+- `plugins`: plugins that work in every TuffCode.
+- `newer`: plugins that need a newer TuffCode, each with `"needs"`: the first version that has everything it uses, like `"needs": "1.0.4"`. TuffCode 1.0.3 and older read only `plugins`, also from the `main` branch, and offer to download any entry there they didn't come with, so a plugin that uses something new must go in `newer`, never in `plugins`. TuffCode 1.0.4 and newer read both lists and leave out the entries that need a newer version than themselves.
+
+To list a plugin that lives in its own GitHub repo, add an entry like this:
 
 ```json
 {

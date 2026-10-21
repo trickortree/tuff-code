@@ -38,6 +38,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     chip: '<rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6 1.5V4M10 1.5V4M6 12v2.5M10 12v2.5M1.5 6H4M1.5 10H4M12 6h2.5M12 10h2.5"/>',
     offline: '<path d="M2.5 8a8 8 0 0 1 11 0M4.5 10a5 5 0 0 1 7 0M8 12.5h.01"/><path d="M2.5 2.5l11 11"/>',
     info: '<circle cx="8" cy="8" r="5.5"/><path d="M8 7.5v3.5M8 5h.01"/>',
+    bulb: '<path d="M6.2 12.5h3.6M6.7 14.5h2.6"/><path d="M8 1.5a4.5 4.5 0 0 0-2.6 8.2c.5.4.8.9.8 1.5v.3h3.6v-.3c0-.6.3-1.1.8-1.5A4.5 4.5 0 0 0 8 1.5z"/>',
     warn: '<path d="M8 2.5 14 13H2z"/><path d="M8 6.5v3M8 11.5h.01"/>',
   };
   const icon = (n, cls = 'ta-ic') => `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[n] || ''}</svg>`;
@@ -127,21 +128,28 @@ TuffPlugins.register('tuff-agents', (t) => {
     S.aiProg = p;
     if (p.done) {
       if (p.error) t.toast(p.error, 'error', 7000);
-      else if (!p.stopped) t.toast('Tuff AI is ready. Ask it anything about Tuff.', 'ok', 5000);
+      else if (!p.stopped) t.toast(`${S.ai?.models[0]?.name || 'The model'} is downloaded, so Tuff AI is ready. Ask it anything about Tuff.`, 'ok', 5000);
       refreshAgents();
     } else if (S.agent === 'tuffai') renderStatus();
   });
   // The Run panel's Explain button on a Tuff error.
   window.tuffExplainError = (error) => quick(`I ran my program and got this error. Explain in simple words what's wrong and how to fix it:\n\`\`\`\n${error.trim()}\n\`\`\``);
+  // Tuff Engine's "Ask an agent": opts.mode ('plan' | 'ask' | 'edit') and opts.note (added to the prompt, not shown in the chat).
+  window.tuffAskAgent = (text, opts = {}) => quick(text, opts);
 
-  async function quick(text) {
+  async function quick(text, opts = {}) {
     panel.open();
     // The first time the panel opens, it's still looking for agents. Wait for that, or send() thinks
     // the agent isn't installed.
     if (!S.agents) await looking;
     if (S.view === 'setup') showSetup(false);
-    if (S.run) { t.toast('Wait for the reply to finish, or press Stop, then try again.'); return; }
-    send(text);
+    if (S.run) { t.toast('Wait for the reply to finish, or press Stop, then try again.'); return false; }
+    // true once the question is on its way (send sets S.run before it waits for the reply), false if it
+    // stopped early (not installed, not signed in): Tuff Engine's Ask box stays open with the text then.
+    const sending = send(text, opts);
+    if (S.run) return true;
+    await sending;
+    return false;
   }
 
   // ---------------------------------------------------------------- layout
@@ -163,8 +171,8 @@ TuffPlugins.register('tuff-agents', (t) => {
           <textarea rows="3" spellcheck="true" placeholder="Ask about your code…"></textarea>
           <div class="ta-row">
             <div class="ta-mode" role="radiogroup" aria-label="What the agent may do">
-              <button data-m="ask" title="Ask: explains and suggests, and asks before changing anything. Won't change your files.">Ask</button>
               <button data-m="plan" title="Plan: makes a step-by-step plan first. Nothing changes until you click Go ahead.">Plan</button>
+              <button data-m="ask" title="Ask: explains and suggests, and asks before changing anything. Won't change your files.">Ask</button>
               <button data-m="edit" title="Edit: can change files in this project to do what you ask.">Edit</button>
             </div>
             <div class="ta-opts">
@@ -213,6 +221,12 @@ TuffPlugins.register('tuff-agents', (t) => {
     }, true);
     root.addEventListener('mousedown', (e) => { if (!e.target.closest('.ta-menu, [data-a="menu"]')) $('.ta-menu', root).classList.add('hidden'); });
     $('.ta-msgs', root).addEventListener('click', onMsgClick);
+    // A reply is drawn again on every event, so remember which of its folds are open.
+    $('.ta-msgs', root).addEventListener('toggle', (e) => {
+      const d = e.target.closest?.('details[data-fold]');
+      const m = d && S.msgs[+d.closest('.ta-msg')?.dataset.i];
+      if (m) m.open = { ...(m.open || {}), [d.dataset.fold]: d.open };
+    }, true);
     renderAgents();
     renderMode();
     renderMsgs();
@@ -220,6 +234,7 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
 
   const current = () => S.agents?.find((a) => a.id === S.agent);
+  const isLocal = (id) => id === 'tuffai';
 
   let looking = Promise.resolve(); // settles once the latest look for agents has filled in S.agents
   async function refreshAgents() {
@@ -263,9 +278,15 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
 
   // The model the agent will use (null = its default) and the thinking levels on offer for it.
+  // Tuff AI has one model, Pumice 1, and always a level: the one picked, or its default.
   function picked(id = S.agent) {
     const list = S.models[id] || {};
     const p = S.pick[id] || {};
+    if (isLocal(id)) {
+      const model = (list.models || []).find((m) => m.id === p.model) || (list.models || [])[0] || null;
+      const efforts = model?.efforts || [];
+      return { list, model, efforts, effort: efforts.find((e) => e.id === p.effort) || efforts.find((e) => e.id === model?.defaultEffort) || null };
+    }
     const model = (list.models || []).find((m) => m.id === p.model) || null;
     let efforts = model ? model.efforts : list.efforts || [];
     if (!model && !efforts.length) { // default model: offer every level the agent knows
@@ -352,7 +373,7 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
 
   const MODEL_ICON = '<svg class="ta-dd-ic" viewBox="0 0 16 16"><path d="M8 1.5l1.7 4.8L14.5 8l-4.8 1.7L8 14.5l-1.7-4.8L1.5 8l4.8-1.7z"/></svg>';
-  const LEVEL_BARS = { minimal: 1, low: 1, medium: 2, high: 3, xhigh: 4, max: 5, ultra: 5 };
+  const LEVEL_BARS = { off: 0, minimal: 1, low: 1, medium: 2, high: 3, xhigh: 4, max: 5, ultra: 5 };
   const LEVEL_SUB = { minimal: 'Fastest', low: 'Quick answers', medium: 'Balanced', high: 'Thinks it through', xhigh: 'Thinks longer', max: 'Most thorough', ultra: 'Deepest and slowest' };
   const levelIcon = (id) => `<span class="ta-dd-lv" aria-hidden="true">${[1, 2, 3, 4, 5].map((n) => `<i class="${n <= (LEVEL_BARS[id] || 0) ? 'on' : ''}" style="height:${4 + n * 2}px"></i>`).join('')}</span>`;
 
@@ -368,6 +389,24 @@ TuffPlugins.register('tuff-agents', (t) => {
       return;
     }
     const wait = S.run ? 'Wait for the reply to finish (or press Stop) to change this.' : '';
+    if (isLocal(S.agent)) {
+      // Pumice 1 and its own levels: Off, Low, Medium, High, with no "Default" entry (a level is always on).
+      dd.model.set({
+        list: (list.models || []).map((m) => ({ id: m.id, name: m.name, sub: m.sub || '', icon: MODEL_ICON })),
+        val: model?.id || '',
+        text: model?.name || 'Pumice 1',
+        disabled: !!S.run || !!list.error,
+        tip: list.error ? `Couldn't get the model list: ${list.error}` : wait || `${model?.name || 'Pumice 1'}: ${model?.sub || ''}`,
+      });
+      dd.effort.set({
+        list: efforts.map((e) => ({ id: e.id, name: e.id === model?.defaultEffort ? `${e.name} (default)` : e.name, sub: e.sub || '', icon: levelIcon(e.id) })),
+        val: effort?.id || '',
+        text: effort?.name || 'Off',
+        disabled: !!S.run || !efforts.length,
+        tip: wait || `How hard ${model?.name || 'Pumice 1'} thinks before it answers. Higher is slower but more careful.`,
+      });
+      return;
+    }
     const used = S.used[S.agent];
     dd.model.set({
       list: [
@@ -662,7 +701,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     const p = S.aiProg && !S.aiProg.done ? S.aiProg : null;
     if (p) {
       const pct = p.total ? Math.floor((100 * p.got) / p.total) : 0;
-      return `<div class="ta-card ta-ai"><b class="ta-card-h">Downloading Tuff AI… ${pct}%</b>
+      return `<div class="ta-card ta-ai"><b class="ta-card-h">Downloading ${esc(m.name)}… ${pct}%</b>
         <div class="ta-prog"><i style="width:${pct}%"></i></div>
         <p>${GB(p.got)} of ${GB(p.total)}. You can keep coding. If it stops, it carries on from here next time.</p>
         <div class="ta-btns"><button class="btn sm" data-a="ai-cancel">Stop</button></div></div>`;
@@ -670,14 +709,15 @@ TuffPlugins.register('tuff-agents', (t) => {
     const low = s.ram.free < s.ram.need;
     return `<div class="ta-card ta-ai">
       <b class="ta-card-h">Tuff AI <span class="ta-tag">preview</span></b>
-      <p>Runs on this computer: no account, and no internet once it's downloaded. This preview uses ${esc(m.name)} before it's trained on Tuff, so expect mistakes. TuffCode checks every program it writes.</p>
+      <p>Runs on this computer: no account, and no internet once it's downloaded. Its model is ${esc(m.name)}, TuffCode's own. It isn't trained on Tuff yet, so expect mistakes. TuffCode checks every program it writes.</p>
       <div class="ta-chips">
         <span>${icon('cloud')}Download: ${GB(m.size)}</span>
         <span class="${low ? 'ta-warn' : ''}">${icon('chip')}Needs ${GB(s.ram.need)} free memory</span>
         <span>${icon('offline')}Works offline</span>
       </div>
       <p class="${low ? 'ta-warn' : 'tas-small'}">It needs about ${GB(s.ram.need)} of free memory while it answers (${GB(s.ram.free)} free right now${low ? '. Close some apps first' : ''}).</p>
-      <div class="ta-btns"><button class="btn sm primary" data-a="ai-get">Download (${GB(m.size)})</button><button class="btn sm" data-a="recheck">Check again</button></div>
+      ${m.base ? `<p class="tas-small ta-credit">${esc(m.name)} · based on ${esc(m.base)}${m.licence ? ` (${esc(m.licence)})` : ''}</p>` : ''}
+      <div class="ta-btns"><button class="btn sm primary" data-a="ai-get">Download ${esc(m.name)} (${GB(m.size)})</button><button class="btn sm" data-a="recheck">Check again</button></div>
     </div>`;
   }
 
@@ -698,7 +738,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     const m = $('.ta-menu', root);
     const a = current();
     const items = [['new', 'New chat'], ['setup', 'Agent tools: set up and check']];
-    if (a?.local && a.installed) items.push(['ai-remove', `Delete Tuff AI's model (${GB(S.ai?.models[0]?.size || 0)})`]);
+    if (a?.local && a.installed) items.push(['ai-remove', `Delete ${S.ai?.models[0]?.name || "Tuff AI's model"} (${GB(S.ai?.models[0]?.size || 0)})`]);
     else if (a?.installed) items.push(S.conn[a.id] ? ['disconnect', `Remove TuffCode tools from ${a.name}`] : ['connect', `Add TuffCode tools to ${a.name}${a.id === 'claude' ? ' everywhere' : ''}`]);
     items.push(['recheck', 'Look for agents again']);
     m.innerHTML = items.map(([id, label]) => `<button data-m="${id}">${esc(label)}</button>`).join('');
@@ -711,7 +751,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       if (id === 'connect') connect(true);
       if (id === 'disconnect') connect(false);
       if (id === 'recheck') refreshAgents();
-      if (id === 'ai-remove') t.ask({ title: "Delete Tuff AI's model? You can download it again later.", confirm: true, okLabel: 'Delete' }).then((ok) => ok && t.agents.ai.remove(S.ai?.models[0]?.id).then(refreshAgents));
+      if (id === 'ai-remove') t.ask({ title: `Delete ${S.ai?.models[0]?.name || 'the model'}, Tuff AI's model? You can download it again later.`, confirm: true, okLabel: 'Delete' }).then((ok) => ok && t.agents.ai.remove(S.ai?.models[0]?.id).then(refreshAgents));
     };
   }
 
@@ -911,14 +951,35 @@ TuffPlugins.register('tuff-agents', (t) => {
       return `<div class="ta-msg user${old}" data-i="${i}"><div class="ta-bubble">${esc(m.text).replace(/\n/g, '<br>')}</div>${m.ctx ? `<div class="ta-with">${esc(m.ctx)}</div>` : ''}</div>`;
     }
     const tools = m.tools.map((x) => `<div class="ta-tool ${x.ok === false ? 'bad' : x.ok ? 'ok' : 'run'}">${toolIcon(x.text)}<span>${esc(x.text)}</span><i></i></div>`).join('');
-    const status = m.status === 'running' ? `<div class="ta-typing"><i></i><i></i><i></i><span>${m.text ? 'Writing' : m.tools.length ? 'Working' : 'Thinking'}</span></div>`
+    const typing = (label, tag = 'div') => `<${tag} class="ta-typing"><i></i><i></i><i></i><span>${esc(label)}</span></${tag}>`;
+    // While it thinks, the thinking's own fold carries the "Thinking…" label instead.
+    const thinking = m.status === 'running' && !!m.thinkFrom;
+    const status = m.status === 'running' ? (thinking ? '' : typing(m.stage || (m.text ? 'Writing' : m.tools.length ? 'Working' : 'Thinking')))
       : m.status === 'stopped' ? '<div class="ta-small ta-stopped">Stopped.</div>'
         : m.status === 'error' ? `<div class="ta-err">${icon('warn')}<span>${esc(m.error)}</span></div>` : '';
     const notes = (m.notes || []).map((n) => `<div class="ta-small ta-note-l">${icon('info')}<span>${esc(n)}</span></div>`).join('');
     return `<div class="ta-msg agent${m.status === 'running' ? ' live' : ''}${m.summary ? ' summary' : ''}${old}" data-i="${i}">
       <div class="ta-head"><div class="ta-who">${m.summary ? '<span class="ta-who-s">Chat summary · </span>' : ''}<span class="ta-who-n">${esc(SHORT[m.agent])}</span>${m.model ? `<span class="ta-who-m"> · ${esc(m.model)}</span>` : ''}${m.mode === 'edit' ? '<span class="ta-who-e"> · Edit</span>' : m.mode === 'plan' ? '<span class="ta-who-p"> · Plan</span>' : ''}</div></div>
-      <div class="ta-body">${tools ? `<div class="ta-tools">${tools}</div>` : ''}
+      <div class="ta-body">${foldsHtml(m, thinking, typing)}${tools ? `<div class="ta-tools">${tools}</div>` : ''}
       <div class="ta-md">${md(m.text)}</div>${notes}${status}${followUp(m, i)}</div></div>`;
+  }
+
+  // Tuff AI's request as the improver rewrote it (with its own plan at Medium and High), and its thinking.
+  // Both start folded; the reply remembers which ones you opened.
+  function foldsHtml(m, thinking, typing) {
+    const fold = (key, cls, summary, body) => `<details class="ta-fold ${cls}" data-fold="${key}"${m.open?.[key] ? ' open' : ''}><summary>${summary}</summary><div class="ta-fold-b">${body}</div></details>`;
+    const out = [];
+    if (m.improved) {
+      const plan = String(m.plan || '').replace(/(```|\*\*Answer|Answer:)[\s\S]*$/, '').trim();
+      // The model reads "```tuff block"; people read "Tuff code block".
+      out.push(fold('improved', 'ta-improved', `${icon('spark')}<span>Made your request clearer</span>`,
+        `${prose(m.improved.replace(/```tuff (block|example)/g, 'Tuff code $1'))}${plan ?`<div class="ta-fold-h">${esc(m.name || 'Pumice 1')} rewrote it as</div>${prose(plan)}` : ''}`));
+    }
+    if (m.thought) {
+      const secs = Math.max(1, Math.round((m.thinkMs || 0) / 1000));
+      out.push(fold('thought', 'ta-thought', thinking ? typing('Thinking…', 'span') : `${icon('bulb')}<span>Thought for ${secs} s</span>`, esc(m.thought.trim())));
+    }
+    return out.join('');
   }
 
   // Under the latest reply: Plan answers get "Go ahead", and an Ask answer that offers a change (code, or
@@ -951,6 +1012,22 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (act === 'do-edit') { send('Yes please, make that change for me.', { mode: 'edit' }); return; }
     const s = e.target.closest('[data-s]');
     if (s) { send(SUGGEST[+s.dataset.s][1]); return; }
+    const a = e.target.closest('.ta-a');
+    if (a) {
+      e.preventDefault();
+      const file = a.dataset.file;
+      if (file) {
+        const open = () => t.openFile(file, +a.dataset.line || 0);
+        const q = fileQuestion(file);
+        if (q) t.ask({ title: q, confirm: true, okLabel: 'Open' }).then((ok) => ok && open());
+        else open();
+      } else if (a.dataset.url) {
+        const url = a.dataset.url;
+        const q = webQuestion(url);
+        if (q) t.ask({ title: q, confirm: true, okLabel: 'Open' }).then((ok) => ok && t.openWeb(url));
+      }
+      return;
+    }
     const b = e.target.closest('[data-code]');
     if (!b) return;
     const code = decodeURIComponent(b.closest('.ta-code').dataset.src || '');
@@ -963,7 +1040,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     }
   }
 
-  // Small markdown: code blocks (with Copy / Insert), headings, lists, `code`, **bold** and *italics*.
+  // Small markdown: code blocks (with Copy / Insert), and prose() for everything between them.
   function md(src) {
     if (!src) return '';
     const parts = [];
@@ -983,36 +1060,218 @@ TuffPlugins.register('tuff-agents', (t) => {
     return parts.join('');
   }
 
+  // One line of text: `code`, [links](…), <web addresses>, **bold**, *italics*, ~~struck~~ and \escapes.
+  // Escapes and code spans are read first, left to right as Markdown does: \` is a backtick, and a
+  // backslash inside `code` is just a backslash. Then links, then styles. Each becomes a placeholder
+  // (NUL n NUL, or SOH n SOH for an escape), so its inside isn't read again. A link's text is styled on its
+  // own, so `code` and **bold** work there too, and its address is read as it was written.
   function inline(s) {
-    return esc(s)
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-      .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>');
+    const keep = [];
+    const raw = [];
+    const hold = (html, src = '', mark = '\u0000') => { raw.push(src); return `${mark}${keep.push(html) - 1}${mark}`; };
+    // A link's address as written. In a web address \_ means _ (a URL has no backslashes), but in a file
+    // path a backslash is a folder separator (C:\Users\_drafts), so it stays.
+    const address = (h) => {
+      const web = /^\s*https?:/i.test(h);
+      return h.replace(/([\u0000\u0001])(\d+)\1/g, (_, mark, i) => (web && mark === '\u0001' ? raw[+i].slice(1) : raw[+i]));
+    };
+    const style = (x, links) => {
+      // Addresses can hold (balanced) brackets, like https://en.wikipedia.org/wiki/Tuff_(rock), but a bare
+      // one ends before a lone ")" (see https://x.com), a full stop, or the ** of **https://x.com**.
+      if (links) x = x
+        .replace(/!?\[([^\]]+)\]\(\s*(?:<([^>]+)>|((?:[^()\s]|\([^()\s]*\))+))(?:\s+"[^"]*")?\s*\)/g, (_, text, inAngles, href) => hold(link(style(text, false), address(inAngles || href))))
+        .replace(/<((?:https?|file):\/\/[^>\s\u0000]+)>/gi, (_, href) => { const to = address(href); return hold(link(esc(to), to)); })
+        .replace(/(?<![a-z\d])https?:\/\/(?:[^\s<>()"'`\u0000]|\([^\s<>()"'`\u0000]*\))*(?:[^\s<>()"'`\u0000.,;:!?*~]|\([^\s<>()"'`\u0000]*\))/gi, (m, at, all) => {
+          // _https://x.com_ and __https://x.com__: the closing underscores are style, not address.
+          const u = m.match(/_+$/)?.[0] || '';
+          const tail = u && all.slice(0, at).endsWith(u) ? u : '';
+          const to = address(m.slice(0, m.length - tail.length));
+          return hold(link(esc(to), to)) + tail;
+        });
+      return esc(x)
+        .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+        .replace(/(^|[^\w])__([^_]+)__(?=$|[^\w])/g, '$1<b>$2</b>')
+        .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+        .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>')
+        .replace(/(^|[\s(])_([^_\s][^_]*)_(?=$|[\s).,;:!?])/g, '$1<i>$2</i>');
+    };
+    let out = style(String(s).replace(/[\u0000\u0001]/g, '')
+      .replace(/\\([\\`*_[\]()#+\-.!~|>])|`([^`]+)`/g, (m, c, code) => (c ? hold(esc(c), m, '\u0001') : hold(`<code>${esc(code)}</code>`, m))), true);
+    // A link holds its text, which can hold code: put them back until none are left.
+    while (/([\u0000\u0001])\d+\1/.test(out)) out = out.replace(/([\u0000\u0001])(\d+)\1/g, (_, mark, i) => keep[+i]);
+    return out;
   }
 
+  // A link in a reply, around label (HTML, already styled). Files (file:///…, a path, "main.tuf:12") open
+  // in the editor, at the line if one is given; ones outside the project ask first (fileQuestion). Web
+  // pages (http and https only) ask first, because they open in the browser. Anything else (javascript:,
+  // data:…) is shown as plain text.
+  function link(label, href) {
+    const to = linkTarget(href);
+    if (!to) return label;
+    if (to.url) return `<a class="ta-a web" data-url="${esc(to.url)}" title="${esc(to.url)}">${label}</a>`;
+    const name = fileQuestion(to.file) ? to.file : short(to.file); // the whole path when it's outside the project
+    return `<a class="ta-a file" data-file="${esc(to.file)}"${to.line ? ` data-line="${to.line}"` : ''} title="Open ${esc(name)}${to.line ? `, line ${to.line}` : ''}">${label}</a>`;
+  }
+
+  function linkTarget(href) {
+    let h = String(href || '').trim();
+    if (/^https?:\/\/[^/\s]/i.test(h)) {
+      // A name before the site (https://tuffcode.dev@other.example/) only hides where the link goes: it's
+      // dropped. An address the browser couldn't open stays text.
+      let u;
+      try { u = new URL(h); } catch { return null; }
+      if (u.username || u.password) { u.username = ''; u.password = ''; h = u.href; }
+      return { url: h };
+    }
+    let line = 0;
+    const hash = h.match(/#L?(\d+)(?:[-:]L?\d+)?$/i);
+    if (hash) { line = +hash[1]; h = h.slice(0, hash.index); }
+    const lc = !line && h.match(/^(.*\.\w+):(\d+)(?::\d+)?$/); // main.tuf:12 or main.tuf:12:5
+    if (lc) { h = lc[1]; line = +lc[2]; }
+    const fu = h.match(/^file:\/\/([^/\\]*)(.*)$/i);
+    if (fu) {
+      // file:///C:/a.tuf and file://localhost/… are on this computer, file://server/share/… is not (and
+      // file://C:/a.tuf is a drive, written with one slash too few).
+      const host = fu[1].toLowerCase() === 'localhost' ? '' : fu[1];
+      h = !host ? fu[2] : /^[a-z]:$/i.test(host) ? host + fu[2] : `//${host}${fu[2]}`;
+      try { h = decodeURIComponent(h); } catch { return null; }
+      if (/^\/[a-z]:[\\/]/i.test(h)) h = h.slice(1); // file:///C:/… → C:/…
+    } else if (/^[a-z][\w+.-]*:/i.test(h) && !/^[a-z]:[\\/]/i.test(h)) return null; // another scheme, not a drive
+    else if (/%[\da-f]{2}/i.test(h)) { try { h = decodeURIComponent(h); } catch { /* not encoded after all: as written */ } } // my%20game.tuf
+    if (!h || h.startsWith('#')) return null;
+    if (/^[\\/]{2}[?.](?:[\\/]|$)/.test(h)) return null; // \\?\… and \\.\… (devices, pipes): never a link
+    const root = t.project.root();
+    const abs = /^([a-z]:[\\/]|[\\/])/i.test(h);
+    if (!abs && !root) return null;
+    const file = abs ? h : `${root.replace(/[\\/]+$/, '')}/${h}`;
+    // One kind of slash, the one the project uses, so an open tab is found again instead of opened twice,
+    // and no . or .. left, so the question before opening one outside the project shows where it really is.
+    return { file: tidy(file, /^([a-z]:|\\\\)/i.test(file) || (root || '').includes('\\') ? '\\' : '/'), line };
+  }
+
+  // A path with one kind of slash (sep) and no "." or ".." in it: C:/a/./b/../c.tuf → C:\a\c.tuf. Its start
+  // (C:\, \\server\share or /) stays, and ".." can't climb above it.
+  function tidy(p, sep) {
+    const head = (p.match(/^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+(?:[\\/][^\\/]+)?|[\\/])/i) || [''])[0];
+    const parts = [];
+    for (const s of p.slice(head.length).split(/[\\/]+/)) {
+      if (s === '..') parts.pop();
+      else if (s && s !== '.') parts.push(s);
+    }
+    const start = head.replace(/[\\/]/g, sep);
+    return start + (parts.length && start && !start.endsWith(sep) ? sep : '') + parts.join(sep);
+  }
+
+  // Is this file in the open project? Without case on Windows; on a Mac /private/var is /var (the agent can
+  // write one and the IDE the other).
+  function inProject(file) {
+    const root = t.project.root();
+    if (!root) return false;
+    const sep = /^[a-z]:|\\/i.test(root) ? '\\' : '/';
+    const key = (p) => { const k = tidy(p, sep).replace(/^\/private(?=\/(?:var|tmp|etc)(?:\/|$))/, ''); return sep === '\\' ? k.toLowerCase() : k; };
+    const f = key(file);
+    const r = key(root).replace(/[\\/]+$/, '');
+    return f === r || f.startsWith(r + sep);
+  }
+
+  // What to ask before a file link opens, or '' to open it straight away (a file in the project). A file on
+  // another computer (\\server\share\…: Windows would connect and sign in to it) or anywhere else on this
+  // one asks first, like a web link, and shows the whole path.
+  function fileQuestion(file) {
+    const where = clip(file, (file.match(/^(?:[a-z]:[\\/]|[\\/]{2}[^\\/]+(?:[\\/][^\\/]+)?[\\/]?)/i) || [''])[0].length);
+    if (/^[\\/]{2}/.test(file)) return `Open ${where} from another computer?`;
+    return inProject(file) ? '' : `Open ${where} from outside your project?`;
+  }
+
+  // What to ask before a web link opens. The whole site always shows (as the browser will see it, so a
+  // look-alike name shows as xn--…); only the middle of a long path after it is shortened.
+  function webQuestion(url) {
+    let u;
+    try { u = new URL(url); } catch { return ''; }
+    const site = `${u.protocol}//${u.host}`;
+    const rest = (u.pathname === '/' && !url.endsWith('/') ? '' : u.pathname) + u.search + u.hash;
+    return `Open ${clip(site + rest, site.length + 1)} in your web browser?`;
+  }
+
+  // A long path or address made shorter in the middle. The first keep characters (the drive, computer or
+  // web site) and the end (the file's name) always show.
+  function clip(s, keep = 0, max = 90) {
+    const room = Math.max(max - keep - 1, 24);
+    if (s.length <= Math.max(max, keep + room + 1)) return s;
+    const tail = Math.floor(room / 2);
+    return `${s.slice(0, keep + room - tail)}…${s.slice(s.length - tail)}`;
+  }
+
+  // Lines of text between code blocks: headings, lists (numbered ones keep their numbers, indented items
+  // are a list inside the item above), tables, > quotes, --- lines and paragraphs.
   function prose(text) {
     const out = [];
-    let list = null;
+    // The list being read: lists[0] is the outer one, the last is the one the next item may join. An
+    // indented item starts a list inside the item above it, so the outer numbers still count 1, 2, 3.
+    let lists = [];
     let para = [];
+    let quote = [];
     const flushPara = () => { if (para.length) out.push(`<p>${para.map(inline).join('<br>')}</p>`); para = []; };
-    const flushList = () => { if (list) out.push(`<${list.tag}>${list.items.map((x) => `<li>${inline(x)}</li>`).join('')}</${list.tag}>`); list = null; };
-    for (const raw of text.split('\n')) {
-      const line = raw.trimEnd();
+    const flushQuote = () => { if (quote.length) out.push(`<blockquote>${quote.map(inline).join('<br>')}</blockquote>`); quote = []; };
+    const listHtml = (l) => `<${l.tag}${l.start > 1 ? ` start="${l.start}"` : ''}>${l.items.map((x) => `<li>${x.lines.map(inline).join('<br>')}${x.kids.map(listHtml).join('')}</li>`).join('')}</${l.tag}>`;
+    const flushList = () => {
+      if (lists.length) out.push(listHtml(lists[0]));
+      lists = [];
+    };
+    const flush = () => { flushPara(); flushQuote(); flushList(); };
+    const cells = (row) => row.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim());
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trimEnd();
       let m;
-      if (!line.trim()) { flushPara(); flushList(); continue; }
-      if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { flushPara(); flushList(); out.push(`<h4>${inline(m[2])}</h4>`); continue; }
-      if ((m = line.match(/^\s*(?:[-*•]|(\d+)[.)])\s+(.*)$/))) {
-        flushPara();
-        const tag = m[1] ? 'ol' : 'ul';
-        if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
-        list.items.push(m[2]);
+      if (!line.trim()) { flush(); continue; }
+      // A table: a row of | cells, then a |---|---| line.
+      if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1] || '')) {
+        flush();
+        const head = cells(line);
+        const rows = [];
+        for (i += 2; i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i]); i++) rows.push(cells(lines[i]));
+        i--;
+        out.push(`<div class="ta-table"><table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${head.map((_, k) => `<td>${inline(r[k] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
         continue;
       }
+      if ((m = line.match(/^(#{1,6})\s+(.*)$/))) { flush(); out.push(`<h4>${inline(m[2].replace(/\s#+$/, ''))}</h4>`); continue; }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { flush(); out.push('<hr>'); continue; }
+      if ((m = line.match(/^\s*>\s?(.*)$/))) { flushPara(); flushList(); quote.push(m[1]); continue; }
+      flushQuote();
+      if ((m = line.match(/^(\s*)(?:[-*+•]|(\d+)[.)])\s+(.*)$/))) {
+        flushPara();
+        const indent = m[1].length;
+        const tag = m[2] ? 'ol' : 'ul';
+        const fresh = () => ({ tag, start: m[2] ? +m[2] : 1, indent, items: [] });
+        // Out of the inner lists this item is left of ("2. Step two" after its indented bullets).
+        while (lists.length > 1 && indent < lists[lists.length - 1].indent - 1) lists.pop();
+        let l = lists[lists.length - 1];
+        if (l && indent >= l.indent + 2) {
+          // Indented under the item above: a list inside that item, numbered or not as its own items are.
+          const inner = fresh();
+          l.items[l.items.length - 1].kids.push(inner);
+          lists.push((l = inner));
+        } else if (l && l.tag !== tag) {
+          if (lists.length === 1) { flushList(); l = null; } else {
+            // Bullets after numbers (or the other way) inside an item: a new list next to the first.
+            const inner = fresh();
+            const above = lists[lists.length - 2];
+            above.items[above.items.length - 1].kids.push(inner);
+            lists[lists.length - 1] = l = inner;
+          }
+        }
+        if (!l) lists = [(l = fresh())];
+        l.items.push({ lines: [m[3]], kids: [] });
+        continue;
+      }
+      // An indented line under a list item belongs to that item (the innermost one).
+      if (lists.length && /^\s{2,}\S/.test(line)) { const l = lists[lists.length - 1]; l.items[l.items.length - 1].lines.push(line.trim()); continue; }
       flushList();
       para.push(line);
     }
-    flushPara();
-    flushList();
+    flush();
     return out.join('');
   }
 
@@ -1040,15 +1299,17 @@ TuffPlugins.register('tuff-agents', (t) => {
     return { text: map[n] || n.replace(/^mcp__\w+?__/, ''), changes: /^(Edit|MultiEdit|Write|NotebookEdit)$/.test(n) };
   }
 
-  // Tuff AI is a small model that reads slowly on a laptop CPU, so it gets a short prompt. ai.js adds the
-  // Tuff guide's basics and the sections that match the question.
-  function aiPrompt(text) {
+  // Tuff AI is a small model that reads slowly on a laptop CPU, so it gets a short prompt. The panel sends
+  // the question's parts, and ai.js turns them into a clearer task (the improver), with the Tuff guide's
+  // basics and the sections that match.
+  function aiParts(text) {
+    const parts = { question: text };
     const file = t.editor.file();
-    const fence = '```';
-    const parts = [];
-    if (file && S.useFile) parts.push(`Their open file, ${short(file)}:\n${fence}${/\.tuf$/i.test(file) ? 'tuff' : ''}\n${trim(t.editor.code(), 6000)}\n${fence}`);
+    if (file && S.useFile) Object.assign(parts, { file: short(file), code: String(t.editor.code() ?? '').slice(0, 60000) });
     const lines = t.editor.selectionLines();
-    if (S.useSel && lines) parts.push(`They selected lines ${lines[0]} to ${lines[1]}:\n${fence}\n${trim(t.editor.selection(), 3000)}\n${fence}`);
+    if (S.useSel && lines) parts.selection = { from: lines[0], to: lines[1], text: t.editor.selection() };
+    const err = file && S.useFile ? lastRunError(parts.code) : '';
+    if (err) parts.runError = err;
     const earlier = chatSoFar().slice(-6);
     const said = [];
     let used = 0;
@@ -1059,15 +1320,28 @@ TuffPlugins.register('tuff-agents', (t) => {
       said.unshift(l);
       used += l.length;
     }
-    if (said.length) parts.push(`Earlier in this chat (already answered):\n${said.join('\n')}`);
-    parts.push(`Their question:\n${text}`);
-    return parts.join('\n\n');
+    if (said.length) parts.history = said;
+    return parts;
+  }
+
+  // The Tuff error from the last run in the Run panel, if it's about the open file as it is now: the line
+  // the error quotes ("  3 | for n in range(1, 3)") must still be that line of the file.
+  function lastRunError(code) {
+    const errs = [...document.querySelectorAll('#run-output .err')];
+    let at = errs.length - 1;
+    while (at >= 0 && !/Tuff error on line \d+/.test(errs[at].textContent)) at--;
+    if (at < 0) return '';
+    // The error can come in more than one piece; leave out the Explain button's text.
+    const text = errs.slice(at).map((s) => [...s.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('')).join('').replace(/\r\n/g, '\n').trim();
+    const m = /Tuff error on line (\d+)[^\n]*\n\s*\1 \| ([^\n]*)/.exec(text);
+    const line = m ? String(code || '').split(/\r?\n/)[+m[1] - 1] : null;
+    return m && line != null && line.trim() === m[2].trim() ? text : '';
   }
 
   // bare: just the message (no open file, selection or chat history), for the tools test.
   // full: the whole chat since the last summary (for /compact), not just what's new to this agent.
-  function buildPrompt(text, { mode = S.mode, bare = false, full = false } = {}) {
-    if (S.agent === 'tuffai' && !bare) return aiPrompt(text);
+  function buildPrompt(text, { mode = S.mode, bare = false, full = false, note = '' } = {}) {
+    if (isLocal(S.agent)) return text; // its parts go separately (aiParts)
     const file = t.editor.file();
     const parts = [
       "You're helping someone inside TuffCode, the code editor for the Tuff programming language (.tuf files). They may be a beginner, so explain things simply and keep code short and readable. Write Tuff unless they ask for another language.",
@@ -1126,6 +1400,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     const dropped = pool.length - kept.length;
     const said = (dropped ? `(${dropped} earlier message${dropped > 1 ? 's' : ''} left out)\n` : '') + kept.join('\n');
     if (kept.length) parts.push(`${resumes ? 'Since you last answered, this happened in the chat' : 'Earlier in this chat'} (for context only: all of it has been answered already):\n<chat>\n${said}\n</chat>`);
+    if (note && !bare) parts.push(note);
     parts.push(`Their new message. This is what to answer now:\n<message>\n${text}\n</message>`);
     return parts.join('\n\n');
   }
@@ -1148,10 +1423,13 @@ TuffPlugins.register('tuff-agents', (t) => {
     const ctx = test || compacting ? '' : [file && S.useFile ? short(file) : '', lines && S.useSel ? `lines ${lines[0]}–${lines[1]}` : ''].filter(Boolean).join(', ');
     if (compacting) S.msgs.push({ role: 'note', text: `${a.name} is summing up the chat (/compact)…` });
     else S.msgs.push({ role: 'user', text: test ? `Test ${a.name}'s TuffCode tools` : text, ctx: ctx ? `with ${ctx}` : '', test });
-    const prompt = buildPrompt(text, { mode, bare: test, full: compacting });
+    const prompt = buildPrompt(text, { mode, bare: test, full: compacting, note: opts.note });
+    const parts = a.local ? aiParts(text) : null;
     const { model, effort } = picked();
+    // Pumice 1 with thinking off is just "Pumice 1".
+    const level = a.local && effort?.id === 'off' ? null : effort;
     // model: what the reply header shows ('Opus 5.5 · High'); name: just the model, for other agents.
-    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running', model: [model?.name, effort?.name].filter(Boolean).join(' · '), name: model?.name || '', picked: !!model, effort: effort?.name || '', test, compacting };
+    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running', model: [model?.name, level?.name].filter(Boolean).join(' · '), name: model?.name || '', picked: !!model, effort: level?.name || '', test, compacting };
     S.msgs.push(msg);
     const runId = `run-${Date.now()}`;
     S.run = { id: runId, msg, changed: false, test, mcp: new Set() };
@@ -1163,7 +1441,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     renderMsgs();
     updateSend();
     try {
-      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode, session: !test && !compacting && ['claude', 'antigravity'].includes(S.agent) ? S.sessions[S.agent] : null, model: model?.id || '', effort: effort?.id || '' });
+      await t.agents.run({ runId, agent: S.agent, prompt, root: t.project.root(), mode, session: !test && !compacting && ['claude', 'antigravity'].includes(S.agent) ? S.sessions[S.agent] : null, model: model?.id || '', effort: effort?.id || '', ...(parts ? { ai: parts } : {}) });
     } catch (err) {
       onEvent({ runId, kind: 'done', ok: false, error: err.message });
     }
@@ -1198,7 +1476,18 @@ TuffPlugins.register('tuff-agents', (t) => {
       }
       case 'note': m.notes = [...(m.notes || []), ev.text]; break;
       case 'error': m.error = ev.text; break;
+      // Tuff AI: what it's doing now, its thinking, and the request as the improver rewrote it.
+      case 'stage': m.stage = ev.text; break;
+      case 'thinking':
+        if (!m.thinkFrom) m.thinkFrom = Date.now();
+        m.thought = (m.thought || '') + (m.thinkGap ? '\n\n' : '') + ev.text;
+        m.thinkGap = false;
+        break;
+      case 'thought': m.thinkMs = (m.thinkMs || 0) + (ev.ms || 0); m.thinkFrom = 0; m.thinkGap = true; break;
+      case 'improved': m.improved = ev.text; break;
+      case 'plan': m.plan = (m.plan || '') + ev.text; break;
       case 'done':
+        endThinking(m);
         m.status = ev.ok ? 'done' : 'error';
         if (!ev.ok) m.error = m.error || ev.error || 'Something went wrong.';
         if (ev.session && !S.run.test && !m.compacting) { S.sessions[m.agent] = ev.session; m.inSession = true; }
@@ -1236,11 +1525,18 @@ TuffPlugins.register('tuff-agents', (t) => {
     }
   }
 
+  // A reply that ends (or is stopped) while it's still thinking: the time so far counts.
+  function endThinking(m) {
+    if (m.thinkFrom) m.thinkMs = (m.thinkMs || 0) + Date.now() - m.thinkFrom;
+    m.thinkFrom = 0;
+  }
+
   function stop() {
     if (!S.run) return;
     t.agents.stop(S.run.id);
     S.run.msg.status = 'stopped';
     const m = S.run.msg;
+    endThinking(m);
     finish();
     rerender(m);
   }
@@ -1257,6 +1553,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     off?.();
     offAi?.();
     delete window.tuffExplainError;
+    delete window.tuffAskAgent;
     clearInterval(ctxTimer);
     if (S.run) t.agents.stop(S.run.id);
   };

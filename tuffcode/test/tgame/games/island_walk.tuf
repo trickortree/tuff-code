@@ -1,0 +1,56 @@
+mention tgame
+
+game = tgame.world("Island Walk", 960, 600)
+game:sky "day"
+game:island(80)
+hud = game:hud()
+score = 0
+score_label = hud:text("Score: 0", 90, 30, 26, "white")
+player = game:player("first person")
+coin = game:spawn("coin", 4, 0, -8)
+coin:spin 90
+tree = game:spawn("tree", -5, 0, -10)
+tree:clicked tree_chop
+hut = game:spawn("hut", 8, 0, -16)
+enemy = game:box(-12, 0, -20, 1, "red")
+enemy:solid false
+
+game:every_frame coin_collect
+game:every_frame enemy_chase
+game:every_frame enemy_hurts
+
+# Tuff Engine: player collects coin
+func coin_collect(dt):
+    if coin:touches(player):
+        score += 1
+        score_label:set "Score: " + score
+        game:sound "coin"
+        coin:move_to(game:random_spot())
+        while coin:touches(player):
+            coin:move_to(game:random_spot())
+
+# Tuff Engine: tree falls over when clicked
+func tree_chop(thing):
+    if not thing:fallen():
+        thing:shake()
+        thing:fall()
+        thing:regrow(5)
+
+# Tuff Engine: enemy chases player
+func enemy_chase(dt):
+    enemy:look_at(player)
+    enemy:forward(2 * dt)
+
+# Tuff Engine: game over when enemy touches player
+func enemy_hurts(dt):
+    if enemy:touches(player) and not game:paused():
+        game:sound "lose"
+        game:game_over("Score: " + score, play_again)
+
+# Tuff Engine: play again after a game over
+func play_again():
+    score = 0
+    score_label:set "Score: 0"
+    player:move_to(0, 0, 0)
+    coin:move_to(4, 0, -8)
+    enemy:move_to(-12, 0, -20)

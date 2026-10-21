@@ -1,7 +1,9 @@
 // Tuff AI's backend (ai.js) without the 1.3 GB model, in plain Node, with a stand-in for Electron:
 //   - the model download, against a local server that answers byte ranges the way Hugging Face does;
 //   - the worker's life (loading, Stop, the idle timer), with the real ai-worker.mjs running on a stand-in
-//     for node-llama-cpp that answers with canned text.
+//     for node-llama-cpp that answers with canned text;
+//   - Pumice 1's name and identity, the thinking levels and their budgets, the plan, the improver, and
+//     Stop while it thinks or plans.
 // Usage: node test/ai-download-test.mjs        Exits 1 if any check fails.
 import Module, { createRequire } from 'node:module';
 import http from 'node:http';
@@ -32,11 +34,13 @@ const lib = path.join(runtime, 'node_modules', 'node-llama-cpp', 'dist');
 fs.mkdirSync(lib, { recursive: true });
 const cfgFile = path.join(tmp, 'llama.json');
 const logFile = `${cfgFile}.log`;
-const setLlama = (c) => fs.writeFileSync(cfgFile, JSON.stringify({ loadMs: 0, prefixMs: 0, tokenMs: 1, reply: 'Hello there.', fixed: '```tuff\nsay 1\n```', failLoads: 0, ...c }));
+const setLlama = (c) => fs.writeFileSync(cfgFile, JSON.stringify({ loadMs: 0, prefixMs: 0, tokenMs: 1, reply: 'Hello there.', fixed: '```tuff\nsay 1\n```', plan: 'Task: say hi.', thought: 'Hmm, let me think about that. '.repeat(40), failLoads: 0, ...c }));
 const llamaLog = () => { try { return fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean); } catch { return []; } };
 setLlama({});
 // The stand-in model: loads after loadMs (or fails), reads the system prompt in prefixMs, and writes its
-// reply 8 characters at a time, tokenMs apart. Everything it does goes in the log.
+// reply 8 characters at a time, tokenMs apart. A chat that may think (thoughts: 'auto' and a budget) first
+// thinks, one token per 8 characters, until its thought runs out or the budget does, like node-llama-cpp.
+// Everything it does goes in the log.
 fs.writeFileSync(path.join(lib, 'index.js'), `
 import fs from 'node:fs';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -45,6 +49,7 @@ const log = (s) => fs.appendFileSync(process.env.FAKE_LLAMA + '.log', s + '\\n')
 const sequence = {
   nextTokenIndex: 0,
   needsCheckpoints: true,
+  tokenMeter: { usedInputTokens: 0, usedOutputTokens: 0 },
   async eraseContextTokenRanges() { this.nextTokenIndex = 0; },
   async evaluateWithoutGeneratingNewTokens(t) { log('prefix'); await sleep(cfg().prefixMs); this.nextTokenIndex = t.length; },
   async takeCheckpoint() {},
@@ -64,22 +69,39 @@ export async function getLlama() {
   };
 }
 export class QwenChatWrapper {
+  constructor(o = {}) { this.thoughts = o.thoughts || 'auto'; }
   generateContextState({ chatHistory }) { const u = chatHistory.find((x) => x.type === 'user').text; return { contextText: { tokenize: () => [1, 2, 3, u.charCodeAt(0)] } }; }
 }
 export class LlamaChatSession {
-  constructor({ chatWrapper }) { this.chatWrapper = chatWrapper || new QwenChatWrapper(); }
+  constructor({ chatWrapper, systemPrompt }) { this.chatWrapper = chatWrapper || new QwenChatWrapper(); log('session ' + this.chatWrapper.thoughts); if (cfg().logPrompts) log('system ' + JSON.stringify(systemPrompt)); }
   dispose() {}
   resetChatHistory() {}
-  async prompt(text, { signal, onTextChunk }) {
+  async prompt(text, { signal, onTextChunk, onResponseChunk, budgets, maxTokens, customStopTriggers }) {
     const c = cfg();
-    const which = /^That program doesn't pass/.test(text) ? 'followup' : (text.match(/\\bQ\\d+\\b/) || ['?'])[0];
+    const which = /^That program doesn't pass/.test(text) ? 'followup' : /Don't answer yet/.test(text) ? 'plan' : /^Now answer their request/.test(text) ? 'go' : (text.match(/\\bQ\\d+\\b/) || ['?'])[0];
     log('prompt ' + which);
+    const budget = budgets?.thoughtTokens ?? 'none';
+    log('opts ' + which + ' thoughts=' + this.chatWrapper.thoughts + ' budget=' + budget + ' max=' + maxTokens + (customStopTriggers ? ' stop=' + customStopTriggers.join('|') : ''));
+    if (c.logPrompts) log('text ' + which + ' ' + JSON.stringify(text));
+    if (this.chatWrapper.thoughts === 'auto' && budget > 0) {
+      let n = 0;
+      for (const piece of c.thought.match(/[\\s\\S]{1,8}/g)) {
+        if (signal?.aborted) { log('aborted thinking ' + which); return ''; }
+        if (n >= budget) { log('cut ' + which + ' at ' + n); break; }
+        await sleep(c.tokenMs);
+        n++;
+        onResponseChunk?.({ type: 'segment', segmentType: 'thought', text: piece, tokens: [7] });
+      }
+    }
+    let reply = which === 'followup' ? c.fixed : which === 'plan' ? c.plan : c.reply;
+    for (const s of customStopTriggers || []) if (reply.includes(s)) reply = reply.slice(0, reply.indexOf(s));
     let out = '';
-    for (const piece of (which === 'followup' ? c.fixed : c.reply).match(/[\\s\\S]{1,8}/g)) {
+    for (const piece of reply.match(/[\\s\\S]{1,8}/g) || []) {
       if (signal?.aborted) { log('aborted ' + which); return out; }
       await sleep(c.tokenMs);
       out += piece;
       onTextChunk?.(piece);
+      onResponseChunk?.({ type: undefined, segmentType: undefined, text: piece, tokens: [8] });
     }
     log('answered ' + which);
     return out;
@@ -235,13 +257,14 @@ try {
 
   // ---------------------------------------------------------------- the worker
   // The model file is in place now (ai.js only checks its size).
+  // These checks are about the worker's life, so they ask with thinking off. The thinking levels are below.
   let n = 0;
-  const ask = (q) => {
+  const ask = (q, opts = {}) => {
     const runId = `r${++n}`;
     const events = [];
     let done;
     const ended = new Promise((res) => (done = res));
-    const finished = ai.run({ runId, prompt: q, model: m.id }, (e) => { events.push(e); if (e.kind === 'done') done(e); });
+    const finished = ai.run({ runId, prompt: q, model: m.id, effort: 'off', ...opts }, (e) => { events.push(e); if (e.kind === 'done') done(e); });
     return { runId, events, ended, finished };
   };
   const since = (k) => llamaLog().slice(k);
@@ -335,7 +358,197 @@ try {
   await until(() => a.events.some((x) => x.kind === 'delta'));
   ai.quit();
   const fin = await within(a.finished, 3000);
-  check('Unloading in the middle of an answer still finishes the question, with a message (#13)', !fin.timeout && !fin.e && a.events.filter((x) => x.kind === 'done').length === 1 && /Tuff AI stopped/.test(a.events.find((x) => x.kind === 'done')?.error || ''), { fin, done: a.events.filter((x) => x.kind === 'done') });
+  check('Unloading in the middle of an answer still finishes the question, with a message (#13)', !fin.timeout && !fin.e && a.events.filter((x) => x.kind === 'done').length === 1 && /Pumice 1 stopped/.test(a.events.find((x) => x.kind === 'done')?.error || ''), { fin, done: a.events.filter((x) => x.kind === 'done') });
+
+  // ---------------------------------------------------------------- Pumice 1: name, identity, levels, improver
+  check('The model is called Pumice 1, with its base model and licence for the credit line', m.name === 'Pumice 1' && m.base === 'Qwen3.5-2B' && m.licence === 'Apache 2.0' && /Qwen3\.5-2B/.test(m.sub), m);
+  check('... and keeps the id and file name 1.0.4 used, so a downloaded model is still found', m.id === 'qwen3.5-2b' && m.file === 'Qwen3.5-2B-Q4_K_M.gguf', m);
+  const sys = ai.systemPrompt();
+  check('The system prompt says it is Pumice 1, based on Qwen3.5-2B, on this computer, and not another assistant', /^You are Pumice 1\b/.test(sys) && /based on Qwen3\.5-2B/.test(sys) && /run on the person's own computer/.test(sys) && /not ChatGPT, Claude, Gemini or Qwen's own chat app/.test(sys) && !/You are Tuff AI/.test(sys), sys.slice(0, 600));
+  // With the sentence to say in the system prompt, the 2B began almost every answer with it (58 of 60 in
+  // Tuff Bench), so only the card for "who are you?" has it.
+  const intro = "I'm Pumice 1, TuffCode's own AI model. I'm based on the open Qwen3.5-2B model, and I run right here on your computer.";
+  check('... without a sentence to say word for word, and told not to say who it is unless they ask', !/I'm Pumice|Answer like this/.test(sys) && /When they ask about anything else, don't say who you are/.test(sys), sys.slice(0, 900));
+  const whoCard = ai.improve({ question: 'Who are you?' }).text;
+  const sayCard = ai.improve({ question: 'What does say do?', file: 'main.tuf', code: 'say "Hello"\n' }).text;
+  check('The card for "Who are you?" has the sentence to answer with; the card for another question does not', whoCard.includes(intro) && !/Pumice/.test(sayCard) && !/Pumice/.test(ai.improve({ question: 'Make a program that counts from 1 to 10.' }).text), { whoCard, sayCard });
+  const now = await ai.status();
+  check('status() names Pumice 1 for the download card', now.models[0].name === 'Pumice 1' && now.models[0].base === 'Qwen3.5-2B', now.models[0]);
+
+  const L = Object.fromEntries(ai.LEVELS.map((l) => [l.id, l]));
+  check('Four thinking levels: Off, Low, Medium, High', ai.LEVELS.map((l) => l.name).join() === 'Off,Low,Medium,High', ai.LEVELS);
+  check('Off has no budget; each level up has a bigger budget, and Medium and High plan', L.off.budget === 0 && L.low.budget > 0 && L.medium.budget > L.low.budget && L.high.budget > L.medium.budget && !L.off.plan && !L.low.plan && L.medium.plan && L.high.plan, ai.LEVELS);
+  check('The default level is one of them', !!L[ai.DEFAULT_LEVEL], ai.DEFAULT_LEVEL);
+
+  // Off is exactly 1.0.4: no thinking, budget 0, 700 tokens, the "discourage" chat.
+  setLlama({ reply: 'Hi!' });
+  k = llamaLog().length;
+  a = ask('Q20 say hi', { effort: 'off' });
+  e1 = await within(a.ended, 5000);
+  check('Off: the worker gets thoughts "discourage", a budget of 0 and 700 tokens, and nothing thinks', e1.v?.ok && since(k).includes('opts Q20 thoughts=discourage budget=0 max=700') && !a.events.some((x) => x.kind === 'thinking'), { log: since(k) });
+  const stages = (ev) => ev.filter((x) => x.kind === 'stage').map((x) => x.text);
+  check('Off: the stages are "Reading your question", then "Writing"', stages(a.events).join(' > ') === 'Reading your question > Writing', stages(a.events));
+  check('Every answer says it is Pumice 1', a.events.some((x) => x.kind === 'model' && x.name === 'Pumice 1'), a.events.filter((x) => x.kind === 'model'));
+
+  // Low: it thinks, up to its budget. The stand-in's thought is longer than the budget, so the budget ends it.
+  setLlama({ reply: 'Hi!', thought: 'Let me think. '.repeat(400) });
+  k = llamaLog().length;
+  a = ask('Q21 say hi', { effort: 'low' });
+  e1 = await within(a.ended, 10000);
+  const th = a.events.find((x) => x.kind === 'thought');
+  check(`Low: thoughts "auto" with a budget of ${L.low.budget}, on top of the 700 for the answer`, e1.v?.ok && since(k).includes(`opts Q21 thoughts=auto budget=${L.low.budget} max=${700 + L.low.budget}`), since(k));
+  check('Low: a thought that would run on is cut at the budget, and the answer still comes', since(k).includes(`cut Q21 at ${L.low.budget}`) && th?.cut === true && th.tokens === L.low.budget && a.events.some((x) => x.kind === 'delta'), { th, log: since(k) });
+  check('Low: the thinking streams to the panel, then the stages go Thinking, then Writing', a.events.filter((x) => x.kind === 'thinking').length > 3 && stages(a.events).join(' > ') === 'Reading your question > Thinking > Writing', stages(a.events));
+  check('Low: the thinking is counted for Tuff Bench (time, tokens, cut)', e1.v?.stats?.thinkTokens === L.low.budget && e1.v.stats.cut === 1 && e1.v.stats.thinkMs >= 0, e1.v?.stats);
+
+  // A thought that ends by itself isn't "cut".
+  setLlama({ reply: 'Hi!', thought: 'Short thought.' });
+  a = ask('Q22 say hi', { effort: 'low' });
+  e1 = await within(a.ended, 5000);
+  check('A short thought ends by itself and is not counted as cut', e1.v?.ok && a.events.find((x) => x.kind === 'thought')?.cut === false, a.events.find((x) => x.kind === 'thought'));
+
+  // Medium: the plan first (a chat that doesn't think, stopping at a code block), then a fresh chat that
+  // thinks and answers, with the plan in the card.
+  setLlama({ reply: 'Here:\n```tuff\nsay "hi"\n```', plan: 'Task: show hi.\n```tuff\nsay "hi"\n```', thought: 'Think. '.repeat(30), logPrompts: true });
+  k = llamaLog().length;
+  a = ask('Q23 make a program that says hi', { effort: 'medium' });
+  e1 = await within(a.ended, 10000);
+  const plan = a.events.filter((x) => x.kind === 'plan').map((x) => x.text).join('');
+  check('Medium: it plans first, without thinking, stopping at a code block', since(k).some((l) => /^opts plan thoughts=discourage budget=0 max=\d+ stop=```/.test(l)), since(k).filter((l) => l.startsWith('opts')));
+  check(`... then answers in a fresh chat that thinks, with a budget of ${L.medium.budget}`, since(k).includes(`opts Q23 thoughts=auto budget=${L.medium.budget} max=${700 + L.medium.budget}`) && since(k).filter((l) => l.startsWith('prompt')).join() === 'prompt plan,prompt Q23', since(k).filter((l) => /^(prompt|opts)/.test(l)));
+  const answerText = since(k).find((l) => l.startsWith('text Q23 '));
+  check('... and its plan is in the card it answers from', !!answerText && JSON.parse(answerText.slice('text Q23 '.length)).includes('- The task, as you rewrote it: show hi.'), answerText?.slice(-300));
+  check('Medium: the plan streams to the panel without its code', /^Task: show hi\./.test(plan) && !/```/.test(plan) && e1.v?.stats?.plan === 'show hi.', { plan, stats: e1.v?.stats });
+  setLlama({});
+  check('Medium: the stages go Reading your question, Planning, Thinking, Writing, Checking the code', stages(a.events).join(' > ') === 'Reading your question > Planning > Thinking > Writing > Checking the code', stages(a.events));
+  setLlama({ reply: 'Hi!', thought: 'x' });
+  k = llamaLog().length;
+  a = ask('Q24 make a program', { effort: 'medium', improve: false });
+  e1 = await within(a.ended, 5000);
+  check('Without the improver, Medium only thinks (no plan, nothing "improved")', e1.v?.ok && !since(k).includes('prompt plan') && !a.events.some((x) => x.kind === 'improved'), since(k));
+
+  // High: the biggest budget; the checker retry thinks too.
+  setLlama({ reply: '```tuff\nBROKEN\n```', fixed: '```tuff\nsay 1\n```', thought: 'y' });
+  k = llamaLog().length;
+  a = ask('Q25 make a program', { effort: 'high' });
+  e1 = await within(a.ended, 10000);
+  check(`High: a budget of ${L.high.budget}, and the checker's retry thinks too`, e1.v?.ok && since(k).includes(`opts Q25 thoughts=auto budget=${L.high.budget} max=${700 + L.high.budget}`) && since(k).some((l) => l.startsWith('opts followup thoughts=auto budget=')) && stages(a.events).includes('Fixing it'), { log: since(k), stages: stages(a.events) });
+  setLlama({ reply: 'Hi!', thought: 'x' });
+  k = llamaLog().length;
+  a = ask('Q29 hi', { effort: 'bogus' });
+  e1 = await within(a.ended, 5000);
+  const def = L[ai.DEFAULT_LEVEL];
+  check(`A level it doesn't know (or none) means the default, ${def.name}`, e1.v?.ok && e1.v.stats.level === def.id && since(k).some((l) => l.startsWith(`opts Q29 thoughts=${def.budget ? 'auto' : 'discourage'} budget=${def.budget} `)), since(k).filter((l) => l.startsWith('opts')));
+
+  // Stop while it thinks: no answer, and the next question isn't stuck behind it.
+  setLlama({ reply: 'Answer.', thought: 'Thinking hard. '.repeat(200), tokenMs: 15 });
+  k = llamaLog().length;
+  a = ask('Q26 think a lot', { effort: 'high' });
+  await until(() => a.events.filter((x) => x.kind === 'thinking').length > 3, 8000);
+  ai.stop(a.runId);
+  e1 = await within(a.ended, 5000);
+  await sleep(200);
+  check('Stop while it thinks: it stops at once, with no answer', e1.v?.ok && since(k).includes('aborted thinking Q26') && !a.events.some((x) => x.kind === 'delta') && !since(k).includes('answered Q26'), { e1, log: since(k) });
+  setLlama({ reply: 'Next one.', thought: 'z', tokenMs: 1 });
+  b = ask('Q27 next', { effort: 'low' });
+  e2 = await within(b.ended, 5000);
+  check('... and the next question gets its answer', e2.v?.ok && b.events.some((x) => x.kind === 'delta'), { e2, kinds: b.events.map((x) => x.kind) });
+
+  // Stop while it plans: no answer turn at all.
+  setLlama({ reply: 'Answer.', plan: 'Task: '.padEnd(400, 'x'), tokenMs: 15 });
+  k = llamaLog().length;
+  a = ask('Q28 make it', { effort: 'medium' });
+  await until(() => a.events.some((x) => x.kind === 'plan'), 8000);
+  ai.stop(a.runId);
+  e1 = await within(a.ended, 5000);
+  await sleep(200);
+  check('Stop while it plans: it never answers', e1.v?.ok && !since(k).includes('prompt Q28') && !a.events.some((x) => x.kind === 'delta'), { e1, log: since(k) });
+  setLlama({ tokenMs: 1 });
+
+  // The improver.
+  const kinds = {
+    'Make a program that asks "What is your name? " and greets them.': 'write',
+    'Write me a guessing game': 'write',
+    'Can you make a timer app with a button?': 'write',
+    "My program doesn't work, it says Tuff error on line 3": 'fix',
+    'Look for bugs or mistakes in this code and explain how to fix them.': 'fix',
+    'Explain what this file does, step by step, in simple words.': 'explain',
+    'How do I make a list?': 'question',
+    'Who are you?': 'about',
+    'Are you ChatGPT?': 'about',
+    'What model are you?': 'about',
+    'What does round(2.5) give?': 'question',
+    'Suggest ways to make this app look and feel nicer.': 'question',
+  };
+  const gotKinds = Object.fromEntries(Object.keys(kinds).map((q) => [q, ai.improve({ question: q }).kind]));
+  check('The improver tells writing, fixing, explaining and questions apart', Object.entries(kinds).every(([q, k2]) => gotKinds[q] === k2), gotKinds);
+  // The panel sends the open file by default. A not, never or should is a "fix" only when it says what the
+  // program does wrong: the card for a fix says the program is broken and asks for a whole fixed program.
+  const game = 'mention tgame\ngame = tgame.window("Catch", 600, 400)\nwhile game:open():\n    dt = game:frame()\n';
+  const kindsWithFile = {
+    "I don't get what dt means": 'explain',
+    "I don't understand how it works": 'explain',
+    'What should I add next to my game?': 'question',
+    'Should I use a while loop or every_frame?': 'question',
+    "Why don't we use def in Tuff?": 'question',
+    'How should I make the player jump?': 'question',
+    'Where should the score go?': 'question',
+    "Can't I just use a for loop?": 'question',
+    "Make it so the player can't go off the screen": 'write',
+    "My player doesn't move": 'fix',
+    "Why doesn't my player move?": 'fix',
+    'The player should jump when I press space': 'fix',
+    "It shouldn't print twice": 'fix',
+    'The apple never falls': 'fix',
+    "I can't see the ball": 'fix',
+    'Nothing happens when I press space': 'fix',
+    "My game doesn't work, it says Tuff error on line 3": 'fix',
+  };
+  const gotWithFile = Object.fromEntries(Object.keys(kindsWithFile).map((q) => [q, ai.improve({ question: q, file: 'catch.tuf', code: game }).kind]));
+  check('... with their file open too: "I don\'t get…", "should I…?" and "why don\'t we…?" are not "fix my program"', Object.entries(kindsWithFile).every(([q, k2]) => gotWithFile[q] === k2), Object.fromEntries(Object.entries(gotWithFile).filter(([q, k2]) => kindsWithFile[q] !== k2)));
+  check('"Asks for your name" is a console program; buttons and mtgui mean a window', ai.improve({ question: 'Make a program that asks for your name' }).target === 'console' && ai.improve({ question: 'Make an mtgui window with a button' }).target === 'window' && ai.improve({ question: 'add a score', file: 'a.tuf', code: 'mention tgui\n' }).target === 'window', null);
+  const targets = {
+    'Make a game where you catch apples': 'game',
+    'Can you make a snake game?': 'game',
+    'Make a game where you dodge falling blocks': 'game',
+    'make a pong game': 'game',
+    'Make a guessing game where the secret number is 42.': 'console',
+    'Make a program that keeps a game score in a variable.': 'console',
+    'Make an mtgui number guessing game with a Guess button': 'window',
+  };
+  const gotTargets = Object.fromEntries(Object.keys(targets).map((q) => [q, ai.improve({ question: q, file: 'main.tuf', code: 'say "Hello"\n' }).target]));
+  check('"Make a game where you catch apples" is a tgame game, even with a console program open; a guessing game or a score in a variable is still a console program', Object.entries(targets).every(([q, t]) => gotTargets[q] === t), gotTargets);
+  const apples = { question: 'Make a game where you catch apples' };
+  const applesMsg = ai.buildMessage(apples, ai.improve(apples));
+  check('... and its message has the tgame section and the tgame line in the card', /^### tgame/m.test(applesMsg) && /It's a tgame game/.test(applesMsg) && !/It's a console program/.test(applesMsg), applesMsg.slice(-600));
+  // The guide splits at every heading, so "Games Tuff Engine can edit" (under tgame) is its own section. It
+  // went into a quarter of Tuff Bench's console messages.
+  const consoleMsgs = ['Make a program that shows these three lines:\nGood morning, campers!\nBreakfast is at 8', 'Make a program that adds up the numbers in a list and shows the total.', 'Make a guessing game where the secret number is 42.'].map((q) => ai.buildMessage({ question: q }, ai.improve({ question: q })));
+  const windowMsg = ai.buildMessage({ question: 'Make an mtgui window with a heading and a button' }, ai.improve({ question: 'Make an mtgui window with a heading and a button' }));
+  check('A console or window request never gets the guide\'s tgame sections', [...consoleMsgs, windowMsg].every((t) => !/^#+ (tgame|Games Tuff Engine can edit)/m.test(t)), [...consoleMsgs, windowMsg].map((t) => t.match(/^#+ .*/gm)));
+  const fixIn = { question: 'It should count to 3. Can you fix it?', file: 'C:\\p\\count.tuf', code: 'say "Counting"\nfor n in range(1, 3)\n    say n\n', runError: 'Tuff error on line 2: expected ":"\n  2 | for n in range(1, 3)\n                       ^' };
+  const card = ai.improve(fixIn);
+  check('A fix: the card names the file, the error\'s line and what it says, and what a good answer has', card.kind === 'fix' && /count\.tuf \(3 lines\)/.test(card.text) && /stopped at line 2 \(for n in range\(1, 3\)\): Tuff error on line 2: expected ":"/.test(card.text) && /naming the mistake and the line/.test(card.text), card.text);
+  const msg = ai.buildMessage(fixIn, card);
+  check('... and the message has the file, the error and the card, last', /Their open file, count\.tuf:\n```tuff\nsay "Counting"/.test(msg) && /When they last ran it, it stopped with this error/.test(msg) && /What TuffCode worked out from their question:\n- They want: their program fixed/.test(msg) && msg.trim().endsWith('range(1, 3) gives 1, 2, 3.'), msg.slice(-900));
+  const legacy = ai.buildMessage(fixIn, null);
+  check('Without the improver, the message is what 1.0.4 sent (no card, no error block)', !/What TuffCode worked out/.test(legacy) && !/When they last ran it/.test(legacy) && /Their question:\nIt should count to 3\. Can you fix it\?$/.test(legacy), legacy.slice(-300));
+  const ask1 = { question: 'Make a program that asks "What is your name? " and then says Hello and the name.' };
+  check('A console request leaves the guide\'s app-window sections out (1.0.4 put them in)', !/## App windows/.test(ai.buildMessage(ask1, ai.improve(ask1))) && /## App windows/.test(ai.buildMessage(ask1, null)), null);
+  check('A window request always gets the app-window section', /## App windows/.test(ai.buildMessage({ question: 'Make an mtgui window with a heading' }, ai.improve({ question: 'Make an mtgui window with a heading' }))), null);
+  const big = Array.from({ length: 400 }, (_, i) => `say "line ${i + 1}, a fairly long line of text to fill the file"`).join('\n');
+  const bigCard = ai.improve({ question: 'fix it', file: 'big.tuf', code: big, runError: 'Tuff error on line 300: oops' });
+  check('A long file: only the part around the error goes in, and the card says which lines', !bigCard.focus.whole && bigCard.focus.from <= 300 && bigCard.focus.to >= 300 && bigCard.focus.text.length <= 6000 && /lines \d+ to \d+/.test(bigCard.text), { from: bigCard.focus.from, to: bigCard.focus.to });
+
+  // The improved request goes to the panel, and the model reads it.
+  setLlama({ reply: 'Fixed.', logPrompts: true });
+  k = llamaLog().length;
+  a = ask('fix it', { effort: 'off', ai: fixIn });
+  e1 = await within(a.ended, 5000);
+  const imp = a.events.find((x) => x.kind === 'improved');
+  const sent = since(k).find((l) => l.startsWith('text '));
+  check('The panel gets the improved request, and the model gets it at the end of the message', e1.v?.ok && imp?.text === card.text && sent && JSON.parse(sent.slice(sent.indexOf(' ', 5) + 1)).includes('What TuffCode worked out from their question'), { imp, sent: sent?.slice(-300) });
+  setLlama({});
 
   check('Nothing threw without being caught', !uncaught.length, uncaught);
 } catch (err) {

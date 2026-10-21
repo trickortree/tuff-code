@@ -627,6 +627,7 @@
     }
     if (background) {
       renderTabs();
+      updateChrome(); // Tuff Engine's game may be the file on screen
       return t;
     }
     activate(t, focus);
@@ -637,6 +638,7 @@
   const studio = { open: false, visible: false, file: null, el: null };
 
   function showStudio(file) {
+    hideEngine();
     studio.open = true;
     studio.visible = true;
     $('#app').classList.add('studio-on');
@@ -675,8 +677,74 @@
     showStudio(target);
   }
 
+  // ---------- tuff engine view ----------
+  // The second centre pseudo-tab, built like the Studio's: Tuff Engine (tuff-engine.js) edits a tgame game.
+  const engine = { open: false, visible: false, file: null, el: null };
+  const PAD_ICON = '<svg viewBox="0 0 20 20"><path d="M6 6.5h8a4 4 0 014 4v.6a2.9 2.9 0 01-5.1 1.9L11.6 12H8.4l-1.3 1A2.9 2.9 0 012 11.1v-.6a4 4 0 014-4z"/><path d="M6.2 8.6v3M4.7 10.1h3"/><circle cx="13" cy="9.4" r=".7"/><circle cx="14.6" cy="11" r=".7"/></svg>';
+
+  function showEngine(file) {
+    hideStudio();
+    engine.open = true;
+    engine.visible = true;
+    $('#app').classList.add('engine-on');
+    if (file) engine.file = file;
+    $('#engine').classList.remove('hidden');
+    $('#monaco').classList.add('hidden');
+    $('#breadcrumbs').classList.add('hidden');
+    if (!state.running) showBottom(false);
+    window.TuffStudio?.closeCustomizer();
+    renderTabs();
+    updateChrome();
+    window.TuffEngine.show(engine.file);
+  }
+
+  function hideEngine() {
+    if (!engine.visible) return;
+    engine.visible = false;
+    $('#app').classList.remove('engine-on');
+    $('#engine').classList.add('hidden');
+    $('#monaco').classList.remove('hidden');
+    $('#breadcrumbs').classList.remove('hidden');
+    window.TuffEngine?.hide();
+  }
+
+  function closeEngine() {
+    hideEngine();
+    engine.open = false;
+    renderTabs();
+    updateChrome();
+  }
+
+  // Which game to show: the first of these that is there (so a deleted game Tuff Engine showed last never hides the
+  // tab that's open now): the file asked for, the last game it showed and the file run last (in this folder), the
+  // open .tuf tab, main.tuf. Then the project's first game, or its first .tuf. A folder with no .tuf at all gets an
+  // empty main.tuf, so Tuff Engine opens on its start card ("Make a 2D game here") instead of an empty tab.
+  async function openEngine(file) {
+    hideMenus();
+    const t = activeTab();
+    const here = (p) => (p && state.root && isUnder(p, state.root) ? p : null);
+    const want = [file, here(engine.file), t && ext(t.path) === 'tuf' ? t.path : null, here(state.lastRunFile), state.root && join(state.root, 'main.tuf')];
+    let target = null;
+    for (const p of want) if (p && (await api.fs.exists(p))) { target = p; break; }
+    if (!target && state.root) {
+      const tufs = (await api.fs.listAll(state.root)).filter((f) => f.name.endsWith('.tuf') && !/^(dist|build)[\\/]/.test(f.rel)).sort((a, b) => a.rel.localeCompare(b.rel));
+      for (const f of tufs.slice(0, 80)) {
+        try { if (/^[ \t]*(?:import|mention)[ \t]+tgame\b/m.test(await api.fs.readFile(f.path))) { target = f.path; break; } } catch { /* unreadable */ }
+      }
+      target = target || tufs[0]?.path || null;
+      if (!target) {
+        target = join(state.root, 'main.tuf');
+        try { await api.fs.createFile(target); } catch { /* made meanwhile */ }
+        await refreshTree();
+      }
+    }
+    if (!target) { toast('Open a folder first.'); return; }
+    showEngine(target);
+  }
+
   function activate(t, focus = true) {
     hideStudio();
+    hideEngine();
     const cur = activeTab();
     if (cur && cur !== t) cur.view = editor.saveViewState();
     state.active = t.path;
@@ -759,8 +827,19 @@
       tab.querySelector('.x').onclick = (e) => { e.stopPropagation(); closeStudio(); };
       el.appendChild(tab);
     } else studio.el = null;
+    if (engine.open) {
+      const tab = engine.el = tabEl(engine.el, 'tab engine-tab' + (engine.visible ? ' active' : ''));
+      tab.title = 'Tuff Engine';
+      tab.innerHTML = `<span class="st-ic">${PAD_ICON}</span><span>Tuff Engine</span><button class="x" title="Close"><svg viewBox="0 0 10 10"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>`;
+      tab.onmousedown = (e) => {
+        if (e.button === 1) { e.preventDefault(); closeEngine(); }
+        else if (e.button === 0 && !e.target.closest('.x')) showEngine();
+      };
+      tab.querySelector('.x').onclick = (e) => { e.stopPropagation(); closeEngine(); };
+      el.appendChild(tab);
+    } else engine.el = null;
     for (const t of state.tabs) {
-      const tab = t.el = tabEl(t.el, 'tab' + (t.path === state.active && !studio.visible ? ' active' : '') + (isDirty(t) ? ' dirty' : ''));
+      const tab = t.el = tabEl(t.el, 'tab' + (t.path === state.active && !studio.visible && !engine.visible ? ' active' : '') + (isDirty(t) ? ' dirty' : ''));
       tab.title = t.path;
       tab.innerHTML = `${fileIcon(basename(t.path))}<span>${esc(basename(t.path))}</span><button class="x" title="Close (Ctrl+F4)"><svg viewBox="0 0 10 10"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>`;
       tab.onmousedown = (e) => {
@@ -795,17 +874,28 @@
     return parts.map((x) => `<span>${esc(x)}</span>`).join('<span class="sep">›</span>');
   }
 
+  // While Tuff Engine shows, its game is the file on screen: the title bar's Run runs it, and the status bar and the
+  // window title name it (TuffIDE.activeFile() says the same). Otherwise it's the code tab's file.
+  function runTarget() {
+    const t = activeTab();
+    return (engine.visible && engine.file) || (t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile);
+  }
+  function shownTab() {
+    return (engine.visible && engine.file && state.tabs.find((x) => x.path === engine.file)) || activeTab();
+  }
+
   function updateChrome() {
     const t = activeTab();
+    const s = shownTab();
     updateProblems();
-    $('#empty-state').classList.toggle('hidden', !!t || studio.visible);
+    $('#empty-state').classList.toggle('hidden', !!t || studio.visible || engine.visible);
     $('#breadcrumbs').innerHTML = t ? crumbs(t.path) : '';
-    $('#sb-path').innerHTML = t ? crumbs(t.path) : state.root ? `<span>${esc(basename(state.root))}</span>` : '';
-    $('#sb-lang').textContent = t ? LANG_NAMES[langFor(t.path)] : 'Tuff';
-    $('#sb-eol').textContent = t && t.model.getEOL() === '\n' ? 'LF' : 'CRLF';
-    const runFile = t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile;
+    $('#sb-path').innerHTML = s ? crumbs(s.path) : state.root ? `<span>${esc(basename(state.root))}</span>` : '';
+    $('#sb-lang').textContent = s ? LANG_NAMES[langFor(s.path)] : 'Tuff';
+    $('#sb-eol').textContent = s && s.model.getEOL() === '\n' ? 'LF' : 'CRLF';
+    const runFile = runTarget();
     $('#runconfig-name').textContent = runFile ? basename(runFile) : 'Current File';
-    document.title = t ? `${basename(state.root)} – ${basename(t.path)} – TuffCode` : `${basename(state.root || '')} – TuffCode`;
+    document.title = s ? `${basename(state.root)} – ${basename(s.path)} – TuffCode` : `${basename(state.root || '')} – TuffCode`;
   }
 
   // ---------- live checking ----------
@@ -847,7 +937,7 @@
   function updateProblems() {
     const el = $('#sb-problems');
     const t = activeTab();
-    if (!t || studio.visible || ext(t.path) !== 'tuf' || state.settings.liveCheck === false) { el.className = 'hidden'; return; }
+    if (!t || studio.visible || engine.visible || ext(t.path) !== 'tuf' || state.settings.liveCheck === false) { el.className = 'hidden'; return; }
     const p = live.problems.get(t.path);
     el.className = p ? 'bad' : 'ok';
     el.textContent = p ? `Line ${p.line}: ${p.message}` : 'No mistakes';
@@ -1013,6 +1103,16 @@
       // say;<id>;<b64>[;<style>]: "notice" is the yellow line a tgame program starts with.
       const span = appendOut(decode64(args[1] || ''), args[2] === 'notice' ? 'tline notice' : 'tline');
       runLines.set(args[0], span);
+      // tgame's notice gets a button that opens the game in Tuff Engine.
+      if (args[2] === 'notice' && /^Tuff Engine/.test(span.textContent)) {
+        const file = state.lastRunFile;
+        const b = document.createElement('button');
+        b.className = 'explain-err open-engine';
+        b.dataset.label = 'Open Tuff Engine'; // drawn by CSS, so runOutputText() (Learn checks) never sees it
+        b.title = 'Open this game in Tuff Engine';
+        b.onclick = (e) => { e.stopPropagation(); openEngine(file); };
+        span.append(b);
+      }
     } else if (kind === 'rewrite') {
       const span = runLines.get(args[0]);
       if (!span) return;
@@ -1166,8 +1266,7 @@
   }
 
   async function runCurrent() {
-    const t = activeTab();
-    const file = t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile;
+    const file = runTarget();
     if (!file) return toast('Open a .tuf file to run it.');
     if (state.settings.sortOnRun) {
       const tab = state.tabs.find((x) => x.path === file);
@@ -1451,7 +1550,20 @@
   }, () => saveSettings({ bottomH: rootStyle.getPropertyValue('--bottom-h') }));
 
   // ---------- commands ----------
-  const ed = (id) => () => { if (!editor || !activeTab()) return; editor.focus(); editor.trigger('menu', id, null); };
+  // The Edit menu's commands work on the code on screen. While Tuff Engine or Design Studio shows, the code editor is
+  // hidden (and may hold another file): Undo and Redo are the view's own, Find and Replace open the view's file in
+  // the editor first, and the line commands do nothing, so nothing changes where you can't see it.
+  const ed = (id) => () => {
+    const view = engine.visible ? { file: engine.file, api: window.TuffEngine } : studio.visible ? { file: studio.file, api: window.TuffStudio } : null;
+    if (view) {
+      if (id === 'undo' || id === 'redo') { view.api?.[id]?.(); return; }
+      if ((id !== 'actions.find' && id !== 'editor.action.startFindReplaceAction') || !view.file) return;
+      return openFile(view.file).then((t) => { if (t) { editor.focus(); editor.trigger('menu', id, null); } });
+    }
+    if (!editor || !activeTab()) return;
+    editor.focus();
+    editor.trigger('menu', id, null);
+  };
   const zoom = (d) => () => {
     state.fontSize = d === 0 ? 14 : Math.max(9, Math.min(32, state.fontSize + d));
     editor?.updateOptions({ fontSize: state.fontSize, lineHeight: Math.round(state.fontSize * 1.6) });
@@ -1479,6 +1591,7 @@
     learn: { label: 'Learn Tuff', sc: 'Alt+2', run: () => showSideView('learn') },
     plugins: { label: 'Plugins', sc: 'Alt+3', run: () => showSideView('plugins') },
     studio: { label: 'Design Studio', sc: 'Ctrl+Shift+D', run: () => openStudio() },
+    engine: { label: 'Tuff Engine', sc: 'Ctrl+Shift+G', run: () => openEngine() },
     searchEverywhere: { label: 'Search Everywhere', sc: 'Double Shift', run: () => openSearch('all') },
     goToFile: { label: 'Go to File…', sc: 'Ctrl+Shift+N', run: () => openSearch('files') },
     findInFiles: { label: 'Find in Files…', sc: 'Ctrl+Shift+F', run: openFind },
@@ -1508,7 +1621,7 @@
 
   const keymap = {
     'Ctrl+Alt+S': 'settings', 'Ctrl+Alt+L': 'autoSort', 'Ctrl+S': 'saveAll', 'Ctrl+O': 'openFolder', 'Ctrl+Alt+N': 'newFile', 'Ctrl+F4': 'closeTab', 'Ctrl+W': 'closeTab',
-    'Ctrl+Shift+N': 'goToFile', 'Ctrl+E': 'goToFile', 'Alt+1': 'toggleProject', 'Alt+2': 'learn', 'Alt+3': 'plugins', 'Alt+4': 'toggleRun', 'Ctrl+Shift+D': 'studio',
+    'Ctrl+Shift+N': 'goToFile', 'Ctrl+E': 'goToFile', 'Alt+1': 'toggleProject', 'Alt+2': 'learn', 'Alt+3': 'plugins', 'Alt+4': 'toggleRun', 'Ctrl+Shift+D': 'studio', 'Ctrl+Shift+G': 'engine',
     'Shift+F10': 'run', 'Ctrl+Shift+F10': 'run', 'Ctrl+F5': 'rerun', 'Ctrl+F2': 'stop', 'Ctrl+F9': 'build',
     'Ctrl+Tab': 'nextTab', 'Ctrl+Shift+Tab': 'prevTab', 'Ctrl+Shift+I': 'devtools', 'F12': 'goToDefinition',
     'Ctrl+Shift+F': 'findInFiles', 'Ctrl+Shift+T': 'reopenTab', 'Ctrl+Alt+Z': 'zen',
@@ -1519,7 +1632,7 @@
   const menus = [
     ['File', ['newFile', 'newFolder', 'openFolder', 'sep', 'saveAll', 'closeTab', 'sep', 'settings', 'sep', 'exit']],
     ['Edit', ['undo', 'redo', 'sep', 'find', 'replace', 'findInFiles', 'sep', 'renameSymbol', 'autoSort', 'comment', 'dupLine', 'deleteLine', 'selectAll']],
-    ['View', ['toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'sep', 'zen', 'zoomIn', 'zoomOut', 'zoomReset', 'sep', 'settings', 'devtools']],
+    ['View', ['toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'engine', 'sep', 'zen', 'zoomIn', 'zoomOut', 'zoomReset', 'sep', 'settings', 'devtools']],
     ['Go', ['searchEverywhere', 'goToFile', 'goToSymbol', 'sep', 'goToDefinition', 'findUses', 'sep', 'reopenTab', 'nextTab', 'prevTab']],
     ['Run', ['run', 'rerun', 'stop', 'sep', 'build', 'sep', 'liveCheck']],
     ['Help', ['learn', 'replayIntro', 'sep', 'checkUpdates', 'about']],
@@ -1827,6 +1940,24 @@
   let shiftClean = false;
   let lastShift = 0;
 
+  // A box you type in that isn't the code editor: Tuff Agents' message box, a plugin's field, the Run
+  // window's input, a name in Design Studio. (Monaco's own text area and its find box are the editor.)
+  const inTextBox = (el) => !!el?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])') && !el.closest('.monaco-editor');
+  // The shortcuts that still work while you type in one of those boxes: ones for the whole app. The others
+  // work on the code (Ctrl+Y deletes a line, Ctrl+D copies one, Ctrl+Shift+Z redoes, Ctrl+R, Ctrl+Alt+L, F12)
+  // and moved you into the editor, so a Ctrl+Z after them undid code too. In a box they stay the box's own.
+  // Ctrl+Alt ones (Settings, New File, Zen) stay out too: on Windows Ctrl+Alt is AltGr, which types ł, ż, ś.
+  const APP_WIDE = new Set(['saveAll', 'openFolder', 'closeTab', 'goToFile', 'findInFiles', 'reopenTab', 'nextTab', 'prevTab',
+    'toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'engine', 'run', 'rerun', 'stop', 'build', 'devtools', 'zoomIn', 'zoomOut', 'zoomReset']);
+  function worksInTextBox(id, combo, e) {
+    // On a Mac, Ctrl+letter in a text box is the box's editing (Ctrl+A, Ctrl+E, Ctrl+K, Ctrl+Y...); shortcuts are Cmd.
+    if (api.platform === 'darwin' && e.ctrlKey && !e.metaKey && /^Key/.test(e.code)) return false;
+    if (e.altKey && /^Numpad/.test(e.code)) return false; // Alt with the number pad types a character (Alt+0233 is é)
+    if (APP_WIDE.has(id)) return true;
+    // A plugin's own shortcut (Ctrl+Shift+A opens Tuff Agents) works too, unless it's a box's own key.
+    return id.startsWith('plugin.') && !/^Ctrl\+Alt\+|^Ctrl\+[ACVXYZ]$|^Ctrl\+Shift\+Z$/.test(combo);
+  }
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Shift') { if (!e.repeat) shiftClean = true; return; }
     shiftClean = false;
@@ -1837,6 +1968,7 @@
       e.stopPropagation();
       return;
     }
+    if (engine.visible && window.TuffEngine?.onKey(e)) { e.preventDefault(); e.stopPropagation(); return; }
     // On a Mac, Option turns keys into characters (Option+S is ß, Option+3 is # on a UK keyboard).
     // With Cmd or Ctrl held nothing gets typed, so there the physical key names the shortcut; a bare
     // Option+key is left alone so people can type those characters.
@@ -1844,7 +1976,7 @@
     const key = (api.platform === 'darwin' && e.altKey && (e.metaKey || e.ctrlKey) && phys) || (e.key.length === 1 ? e.key.toUpperCase() : e.key);
     const combo = [(e.ctrlKey || e.metaKey) && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', key].filter(Boolean).join('+');
     const id = keymap[combo];
-    if (id) {
+    if (id && (!inTextBox(e.target) || worksInTextBox(id, combo, e))) {
       e.preventDefault();
       e.stopPropagation();
       commands[id].run();
@@ -1887,7 +2019,7 @@
   $('#tree-refresh').onclick = refreshTree;
   $('#tree-collapse').onclick = () => { tree.expanded = new Set([state.root]); renderTree(); };
   document.querySelectorAll('.ts-btn').forEach((b) => {
-    b.onclick = () => ({ project: () => toggleSidebar(), learn: () => showSideView('learn'), studio: () => openStudio(), plugins: () => showSideView('plugins'), run: toggleBottom })[b.dataset.tool]();
+    b.onclick = () => ({ project: () => toggleSidebar(), learn: () => showSideView('learn'), studio: () => openStudio(), engine: () => openEngine(), plugins: () => showSideView('plugins'), run: toggleBottom })[b.dataset.tool]();
   });
   $('#learn-hide').onclick = () => showSideView('learn', false);
   $('#pl-hide').onclick = () => showSideView('plugins', false);
@@ -1915,8 +2047,7 @@
   };
   $('#runconfig-widget').onclick = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
-    const t = activeTab();
-    const cur = t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile;
+    const cur = runTarget();
     showMenu(r.left, r.bottom + 4, [
       state.running
         ? { label: 'Stop', sc: 'Ctrl+F2', run: () => api.run.stop() }
@@ -1944,6 +2075,9 @@
     editor?.focus();
   }
 
+  // While Tuff Engine shows, the file it edits counts as the open file (for plugins and agents).
+  const engineTab = () => (engine.visible && engine.file ? state.tabs.find((x) => x.path === engine.file) || null : null);
+
   window.TuffIDE = {
     root: () => state.root,
     join,
@@ -1951,7 +2085,12 @@
     saveSettings,
     toast,
     refreshTree,
-    openFile: (p) => openFile(p),
+    // With a line, the cursor goes there (a link like "main.tuf:12" in an agent's reply).
+    openFile: async (p, line) => {
+      const tab = await openFile(p);
+      if (tab && line > 0) { editor.revealLineInCenter(line); editor.setPosition({ lineNumber: line, column: 1 }); editor.focus(); }
+      return tab;
+    },
     runFile: async (p) => { await saveAll(); startRun(p); },
     openBuild: (p) => openBuildDialog(p),
     editor: () => editor,
@@ -1970,17 +2109,17 @@
       saveSettings({ studioFull: on });
       editor?.layout();
     },
-    activeCode: () => activeTab()?.model.getValue() ?? '',
-    selectionText: () => (editor && activeTab() ? editor.getModel().getValueInRange(editor.getSelection()) : ''),
+    activeCode: () => (engineTab() || activeTab())?.model.getValue() ?? '',
+    selectionText: () => (engineTab() ? '' : editor && activeTab() ? editor.getModel().getValueInRange(editor.getSelection()) : ''),
     selectionLines: () => {
-      if (!editor || !activeTab()) return null;
+      if (engineTab() || !editor || !activeTab()) return null;
       const s = editor.getSelection();
       return s.isEmpty() ? null : [s.startLineNumber, s.endLineNumber];
     },
     insertText: async (text, { snippet = false } = {}) => {
-      const t = activeTab();
+      const t = engineTab() || activeTab();
       if (!editor || !t) { toast('Open a file first.'); return false; }
-      if (studio.visible) activate(t);
+      if (studio.visible || engine.visible) activate(t);
       editor.focus();
       if (snippet) editor.getContribution('snippetController2').insert(text);
       else editor.executeEdits('plugin', [{ range: editor.getSelection(), text, forceMoveMarkers: true }]);
@@ -1989,9 +2128,9 @@
     },
     // Replaces the whole open file, as one step Ctrl+Z undoes.
     replaceAllText: async (text) => {
-      const t = activeTab();
+      const t = engineTab() || activeTab();
       if (!editor || !t) { toast('Open a file first.'); return false; }
-      if (studio.visible) activate(t);
+      if (studio.visible || engine.visible) activate(t);
       editor.focus();
       editor.pushUndoStop();
       editor.executeEdits('plugin', [{ range: t.model.getFullModelRange(), text, forceMoveMarkers: true }]);
@@ -2006,9 +2145,18 @@
     addCommand: (id, def) => { commands[id] = def; if (def.sc) keymap[def.sc] = id; },
     removeCommand: (id) => { const sc = commands[id]?.sc; if (sc && keymap[sc] === id) delete keymap[sc]; delete commands[id]; },
     openExternal: (url) => api.openRepo(url),
+    openWeb: (url) => api.openWeb(url),
     studioVisible: () => studio.visible,
-    activeFile: () => activeTab()?.path || null,
+    activeFile: () => engineTab()?.path || activeTab()?.path || null,
     monacoReady: () => monacoReady,
+    // Tuff Engine
+    openEngine,
+    engineVisible: () => engine.visible,
+    scene: (file, source) => api.engine.scene(file, source),
+    stopRun: () => api.run.stop(),
+    isRunning: () => !!state.running,
+    runCommand: (id) => commands[id]?.run(),
+    hasCommand: (id) => !!commands[id],
   };
 
   // ---------- boot ----------
@@ -2037,6 +2185,7 @@
     const updated = !firstRun && s.introVersion !== state.version;
 
     window.TuffStudio.init(window.TuffIDE);
+    window.TuffEngine?.init(window.TuffIDE);
     if (firstRun) {
       const introDone = playIntro();
       await openFolder(root);

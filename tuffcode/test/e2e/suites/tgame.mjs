@@ -8,7 +8,7 @@ import { python } from '../launch.mjs';
 
 export const meta = { title: 'tgame: the Tuff Engine notice, from the Run button', timeout: 120000 };
 
-const NOTICE = 'Tuff Engine is coming soon: a visual way to make games with TuffCode.';
+const NOTICE = "Tuff Engine is here: open this game in TuffCode's Tuff Engine tab (Ctrl+Shift+G) to build it visually.";
 const GAME = `mention tgame
 
 game = tgame.window("E2E game", 420, 300)

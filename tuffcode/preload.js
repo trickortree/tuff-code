@@ -75,7 +75,9 @@ contextBridge.exposeInMainWorld('tuff', {
   },
   version: invoke('app:version'),
   checkSource: invoke('tuff:check'),
+  engine: { scene: invoke('engine:scene') },
   openRepo: (url) => ipcRenderer.invoke('shell:openExternal', url),
+  openWeb: (url) => ipcRenderer.invoke('shell:openWeb', url),
   win: {
     minimize: invoke('window:minimize'),
     toggleMaximize: invoke('window:toggleMaximize'),

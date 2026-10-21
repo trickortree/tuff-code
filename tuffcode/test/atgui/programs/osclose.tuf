@@ -1,6 +1,9 @@
 mention atgui
 
-# Closed by the system (run_all.py sends WM_CLOSE, what the window's X button sends), with a timer running.
+# Closed by the system: run_all.py sends WM_CLOSE (what the window's X sends) at different moments, from the
+# instant the window appears (before its page is ready) to while the timer runs. app:closed runs every time.
+# bye takes a moment on purpose: it has to finish before the window is gone, because Cmd+Q on a Mac, or
+# logging off Windows, ends the process right then.
 app = atgui.window("atgui close test", 420, 300)
 ticks = 0
 app:heading "Close me"
@@ -9,6 +12,11 @@ app:closed bye
 
 func tick():
     ticks += 1
+    if ticks == 1:
+        say "running"
 
 func bye():
+    total = 0
+    for i in range(1, 50000):
+        total += i
     say "closed by the system"

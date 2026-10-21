@@ -357,20 +357,25 @@ class Game:
         self.blurs = 0
         self.sound_count = 0
         self.base = getattr(getattr(self.rt, "interp", None), "base_dir", None) or os.getcwd()
-        self.autopilot = Autopilot.load(self)
-        # Sound may start without a click first (games often beep before anyone clicks).
-        os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-                              "--disable-features=ElasticOverscroll --autoplay-policy=no-user-gesture-required")
-        options = {"on_top": True} if self.autopilot and self.autopilot.on_top else {}
-        try:
-            self.view = tuff_view.View(title, width, height, assets=self.base, on_error=self.engine_error,
-                                       background=self.BACKGROUND, **options)
-        except tuff_view.ViewError as exc:
-            raise self.rt.error(str(exc))
-        # The window's size includes its title bar and borders: grow it so the game itself gets the size asked for.
-        iw, ih = self.view.size
-        if iw and ih and (abs(iw - width) > 1 or abs(ih - height) > 1):
-            self.view.resize(width + (width - iw), height + (height - ih))
+        if SCENE is not None:
+            self.autopilot = None
+            self.view = tuff_view.Recorder(title, width, height, assets=self.base, on_create=SCENE.created)
+            SCENE.game = self
+        else:
+            self.autopilot = Autopilot.load(self)
+            # Sound may start without a click first (games often beep before anyone clicks).
+            os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                                  "--disable-features=ElasticOverscroll --autoplay-policy=no-user-gesture-required")
+            options = {"on_top": True} if self.autopilot and self.autopilot.on_top else {}
+            try:
+                self.view = tuff_view.View(title, width, height, assets=self.base, on_error=self.engine_error,
+                                           background=self.BACKGROUND, **options)
+            except tuff_view.ViewError as exc:
+                raise self.rt.error(str(exc))
+            # The window's size includes its title bar and borders: grow it so the game itself gets the size asked for.
+            iw, ih = self.view.size
+            if iw and ih and (abs(iw - width) > 1 or abs(ih - height) > 1):
+                self.view.resize(width + (width - iw), height + (height - ih))
         self.native = self.rt.native(self.KIND, methods(self, self.KIND, self.NAMES, self.rt),
                                      lambda nested=False: f"<{self.KIND} {self.W}x{self.H}>")
         self.native.tg = self
@@ -379,8 +384,25 @@ class Game:
 
     # ---- helpers
     def engine_error(self, exc, where):
-        sys.stderr.write(f"Tuff error: the game window had a problem ({where}): {exc}\n")
-        sys.stderr.flush()
+        """Problems the game window finds: a picture, sound or model that won't load, or a bug in the page or in tgame.
+        They go through tuff.py's report() like any Tuff error: the Run window shows them, and so does a built app's
+        error box (build.js's launcher wraps report()), which is all a game with no console has."""
+        import re
+        import urllib.parse
+        err_type = type(self.rt.error(""))
+        if not isinstance(exc, err_type):
+            where = re.sub(r"^the window \((.*)\)$", r"\1", where)
+            # The page names files by their address (http://127.0.0.1:port/token/assets/broken.png): use the file's name.
+            detail, files = re.subn(r"\S*/assets/([^\s?#]+)\S*", lambda m: "'" + urllib.parse.unquote(m.group(1)) + "'", str(exc))
+            hint = " Check that the file opens on its own, or save it again." if files else ""
+            exc = self.rt.error(f"The game window had a problem ({where}): {detail.rstrip('.')}.{hint}")
+        tuff = sys.modules.get(type(self.rt).__module__)  # tuff.py (__main__ when it's run directly)
+        report = getattr(tuff, "report", None)
+        if report is not None:
+            report(exc, self.rt.interp.src)
+        else:
+            sys.stderr.write(f"Tuff error: {exc}\n")
+            sys.stderr.flush()
 
     def num(self, v, what):
         return self.rt.number(v, what)
@@ -403,8 +425,8 @@ class Game:
             raise self.rt.error(f"Couldn't find the {what} '{rel}'. Put it in your project folder, next to your .tuf file.")
         try:
             return self.view.url(full), full
-        except self.tv.ViewError:
-            raise self.rt.error(f"The {what} '{rel}' has to be inside your project folder.")
+        except self.tv.ViewError:  # the window only serves files in the .tuf's folder and the folders inside it
+            raise self.rt.error(f"The {what} '{rel}' has to be next to your .tuf file, or in a folder inside it.")
 
     def fire(self, fn, *args):
         return self.rt.call(fn, *args)[0]
@@ -415,11 +437,13 @@ class Game:
 
     # ---- the loop
     def is_open(self):
+        if SCENE is not None: SCENE.stop("loop")
         if not self.view.is_open:  # closed with its X, even in a loop that never calls game:frame()
             self.closed = True
         return not self.closed
 
     def frame(self):
+        if SCENE is not None: SCENE.stop("loop")
         if self.closed:
             if self.close_seen:
                 raise self.tv.ViewClosed()
@@ -471,6 +495,7 @@ class Game:
 
     def mainloop(self):
         """After the program's last line: keep the game running until its window closes."""
+        if SCENE is not None: SCENE.stopped = SCENE.stopped or "end"; return
         try:
             while not self.closed:
                 self.step()
@@ -1579,6 +1604,7 @@ class World3D(Game):
         if self.the_player is not None:
             raise self.rt.error("This world already has a player.")
         self.the_player = Player(self, m)
+        if SCENE is not None: SCENE.player_made = list(SCENE.interp.lines)
         self.cam_mode = "player"
         self.view.set(self.scene, clicklock=True)
         return self.the_player.native
@@ -2351,8 +2377,10 @@ class Player:
         world.hint = hud.make("text", world.W / 2, world.H - 26, {"text": "Click the game to look around with the mouse (Esc lets go)",
                                                                   "size": 15, "bold": False, "color": "#ffffff", "alpha": 0.8,
                                                                   "ax": 0.5, "ay": 0.5, "z": 5e5}, own=False)
-        if world.autopilot:
+        if world.autopilot or SCENE is not None:
             world.hint.hide()
+        if SCENE is not None and world.crosshair is not None:
+            world.crosshair.hide()
         self.place_camera(1)
 
     def height(self):
@@ -2419,6 +2447,7 @@ class Player:
             self.held = Thing(w, name, 0.38, 0.75, -0.1, (0.3, 0.8, 0.1), held_parts(name), parent=self.body.node, pick=False)
         self.held.solid_ = False
         self.held.push_rotation()
+        if SCENE is not None: SCENE.held_made = list(SCENE.interp.lines)
         return self.held.native
 
     def looking_at(self, reach=None):
@@ -2574,6 +2603,99 @@ class Player:
             w.cam = list(self.cam_pos)
             w.aim(self.x, self.y + 1.3, self.z)
         w.push_camera()
+
+
+# ---------------------------------------------------------------- Tuff Engine's preview (tuff.py --scene)
+SCENE = None  # a Scene while tuff.py --scene runs a program's setup; None in every normal run
+
+
+class SceneDone(BaseException):
+    """Ends a preview where the game would start running: its loop, or the end of the program."""
+
+
+class Scene:
+    """What a program's setup made, for Tuff Engine (TuffCode's game editor). tuff.py --scene runs the setup with a
+    tuff_view.Recorder for a window, and dump() gives the commands it sent plus every thing it made, each with the
+    stack of lines that were running when it was made."""
+    MAX_THINGS, MAX_CMDS = 3000, 60000
+    MAX_NODES = 20000  # stop early: a setup that makes this much is shown as "too big" anyway
+
+    def __init__(self, interp):
+        self.interp, self.game, self.stopped = interp, None, None
+        self.made = {}  # node id -> the lines being run when it was made (made[0]: the top-level line)
+        self.player_made = self.held_made = None
+
+    def created(self, node_id):
+        self.made[node_id] = list(self.interp.lines)
+        if len(self.made) > self.MAX_NODES or (self.game is not None and len(self.game.things) > self.MAX_THINGS):
+            self.stop("too-big")
+
+    def stop(self, why):
+        self.stopped = self.stopped or why
+        raise SceneDone()
+
+    def dump(self, error):
+        g = self.game
+        if g is None:
+            return {"stopped": "error" if error else "nowindow", "error": error}
+        if g.three_d:
+            try:
+                g.push_camera()  # the starting camera, as the first frame would send it
+            except Exception:
+                pass
+        batch = g.view.record()
+        names = {id(v.tg): name for name, v in self.interp.globals.vars.items() if getattr(v, "tg", None) is not None}
+        parts = {}  # id(thing) -> its node ids (an object's group, then its parts)
+        for node_id, t in g.by_node.items():
+            parts.setdefault(id(t), []).append(int(node_id))
+
+        def ids_of(t):
+            return sorted(parts.get(id(t), [int(t.node)]))
+
+        things = []
+        for t in list(g.things):
+            if isinstance(t, Sprite):
+                item = {"kind": {"rect": "box"}.get(t.shape, t.shape), "layer": "hud" if t.layer is g.hud_layer else "game",
+                        "ids": [int(t.node)], "x": tidy(t.x), "y": tidy(t.y), "z": 0, "dims": None, "k": None,
+                        "heading": tidy(t.rot), "drag": "xy"}
+            else:
+                item = {"kind": t.kind, "layer": "world", "ids": ids_of(t), "x": tidy(t.x), "y": tidy(t.y), "z": tidy(t.z),
+                        "dims": [tidy(v) for v in t.dims], "k": [tidy(v) for v in t.k], "heading": tidy(t.heading),
+                        "drag": None if getattr(t, "floor", False) else "xz"}
+            item.update(i=len(things), hidden=bool(t.hidden), made=self.made.get(int(t.node), []), var=names.get(id(t)))
+            things.append(item)
+        out = {"mode": "3d" if g.three_d else "2d", "title": g.view.title, "size": [g.W, g.H],
+               "stopped": "error" if error else (self.stopped or "end"), "error": error, "batch": batch,
+               "roots": {"view": int(g.scene) if g.three_d else int(g.node),
+                         "hud": int(g.hud_layer.node) if g.hud_layer is not None else None},
+               "canvas": None if g.three_d else {"cx": tidy(g.cx), "cy": tidy(g.cy)},
+               "things": things, "player": None, "camera": None}
+        if g.three_d:
+            p = g.the_player
+            if p is not None:
+                held = None
+                if p.held is not None:
+                    held = {"name": p.held.kind, "ids": ids_of(p.held), "made": self.held_made or []}
+                out["player"] = {"mode": p.mode, "x": tidy(p.x), "y": tidy(p.y), "z": tidy(p.z), "heading": tidy(p.heading),
+                                 "made": self.player_made or [], "ids": ids_of(p.body) if p.body is not None else [],
+                                 "held": held}
+            out["camera"] = {"cx": tidy(g.cam[0]), "cy": tidy(g.cam[1]), "cz": tidy(g.cam[2]), "yaw": tidy(-g.cam_yaw),
+                             "pitch": tidy(g.cam_pitch)}
+        if self.stopped == "too-big" or len(things) > self.MAX_THINGS or len(batch) > self.MAX_CMDS:
+            out.update(stopped="too-big", batch=[], things=[], player=None)
+        return out
+
+
+def start_scene(interp):
+    global SCENE
+    SCENE = Scene(interp)
+    return SCENE
+
+
+def editor_tables():
+    """The names Tuff Engine offers in its menus, from the same tables a run uses."""
+    return {"colors": COLORS, "skies": list(SKIES), "kit": list(KIT), "hold": list(HOLDABLE), "sounds": list(SOUNDS),
+            "edges": list(EDGE_MODES), "players": list(PLAYER_MODES)}
 
 
 # ---------------------------------------------------------------- the autopilot (tests)
@@ -2806,6 +2928,18 @@ def check_value(kind, method, index, value, base_dir=None):
     def file_problem(exts, word):
         if not low.endswith(exts):
             return f"'{value}' isn't a {word} file tgame can use. Use {', '.join(exts[:-1])} or {exts[-1]}."
+        # The game window only loads files from the .tuf's folder and the folders inside it (Game.file_url).
+        path = value.strip()
+        if not os.path.isabs(path):
+            outside = os.path.normpath(path).replace("\\", "/").split("/")[0] == ".."
+        else:
+            try:
+                folder = os.path.normcase(os.path.abspath(base_dir)) if base_dir else None
+                outside = folder is not None and os.path.commonpath([os.path.normcase(os.path.abspath(path)), folder]) != folder
+            except ValueError:  # another drive
+                outside = True
+        if outside:
+            return f"The {word} '{path}' has to be next to your .tuf file, or in a folder inside it."
         if base_dir and not os.path.isabs(value) and not os.path.isfile(os.path.join(base_dir, value)):
             return f"Couldn't find the {word} '{value}'. Put it in your project folder, next to your .tuf file."
         return None

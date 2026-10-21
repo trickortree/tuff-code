@@ -36,6 +36,23 @@ async function programFiles(dir, src, wanted) {
   await walk(dir, '', false);
   return found;
 }
+// Files the code names outside the program's folder ("../cat.png", "../sprites/"), which mtgui and tgui can load.
+// They're never packed: the built app holds only its own folder, where they'd be missing.
+function outsideFiles(dir, src, wanted) {
+  const found = new Set();
+  for (const m of src.matchAll(/"([^"\n]*)"|'([^'\n]*)'/g)) {
+    const name = (m[1] ?? m[2]).trim();
+    if (!/^(\.\/)?\.\.[\\/]/.test(name)) continue;
+    const full = path.resolve(dir, name);
+    const up = (rel) => rel === '..' || rel.startsWith(`..${path.sep}`);
+    const back = path.relative(full, dir);
+    if (!up(path.relative(dir, full)) || (back && !up(back))) continue; // inside the folder after all, or a folder it's in
+    let st = null;
+    try { st = fs.statSync(full); } catch {}
+    if (st && (st.isDirectory() || (st.isFile() && wanted(path.extname(full).toLowerCase())))) found.add(name);
+  }
+  return [...found];
+}
 const PY = process.platform === 'win32' ? { cmd: 'py', args: ['-3'] } : { cmd: 'python3', args: [] };
 // What the build makes: an .exe on Windows, an app elsewhere.
 const WIN = process.platform === 'win32';
@@ -222,6 +239,16 @@ async function build(opts, emit) {
   }
 
   step('pack', 'running', 'Packing your program');
+  const wantedFile = (ext) => ASSET_EXTS.has(ext) || (viewLibs.length > 0 && VIEW_ASSET_EXTS.has(ext));
+  // tgame and atgui can't use those files at all (--check says so); an mtgui or tgui app can, but not once it's built.
+  const outside = outsideFiles(path.dirname(program), programSrc, wantedFile);
+  if (outside.length) {
+    const names = outside.slice(0, 3).join(', ') + (outside.length > 3 ? '…' : '');
+    return fail('pack', 'Packing your program', `Your code uses ${names}, from outside the folder your .tuf file is in. A built app `
+      + 'only takes the files next to your .tuf file, or in a folder inside it, so it couldn\'t find '
+      + `${outside.length > 1 ? 'them' : 'it'}.\nMove ${outside.length > 1 ? 'them' : 'it'} there, change the code to match `
+      + '(like "star.png" instead of "../star.png"), then build again.');
+  }
   const work = path.join(app.getPath('temp'), 'tuffcode-build', `${name.replace(/\s/g, '_')}-${Date.now()}`);
   await fsp.mkdir(work, { recursive: true });
   for (const f of RUNTIME_FILES) await fsp.copyFile(path.join(RUNTIME_DIR, f), path.join(work, f));
@@ -259,7 +286,7 @@ async function build(opts, emit) {
       '    _report(err, src)',
       '    if not tuff.WINDOWED:',
       '        return',
-      '    lines = src.splitlines()',
+      '    lines = tuff.source_lines(src)  # numbered as the error\'s line is: only a newline ends a line',
       '    text = f"Tuff error on line {err.line}: {err.msg}" if err.line else f"Tuff error: {err.msg}"',
       '    if err.line and 0 < err.line <= len(lines):',
       '        text += f"\\n  {err.line} | {lines[err.line - 1]}"',
@@ -298,7 +325,7 @@ async function build(opts, emit) {
   if (fs.existsSync(iconPng)) addData.push(`${iconPng}${sep}_tuffcode`);
   if (viewLibs.length) addData.push(`${path.join(work, 'tuff_view_web')}${sep}tuff_view_web`);
   // Each file keeps its folder inside the app, so "sprites/hero.png" works there as it does here.
-  const assets = await programFiles(path.dirname(program), programSrc, (ext) => ASSET_EXTS.has(ext) || (viewLibs.length > 0 && VIEW_ASSET_EXTS.has(ext)));
+  const assets = await programFiles(path.dirname(program), programSrc, wantedFile);
   for (const rel of assets) addData.push(`${path.join(path.dirname(program), rel)}${sep}${path.posix.dirname(rel)}`);
   // On a Mac the app's icon has to be .icns; macOS's own sips tool makes one from the PNG.
   let macIcon = null;

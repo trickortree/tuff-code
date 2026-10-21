@@ -310,7 +310,8 @@
     }
   }
 
-  // Rename identifiers in one line of code, skipping strings, comments, .members and :methods.
+  // Rename identifiers in one line of code, skipping strings, comments, .members and :methods. A name is read whole the
+  // way Tuff reads it (letters in any language, digits, _), so renaming pi leaves pièce alone.
   function renameIdents(line, map) {
     let out = '';
     let quote = null;
@@ -325,7 +326,7 @@
       }
       if (c === '"' || c === "'") { quote = c; out += c; i++; continue; }
       if (c === '#') { out += line.slice(i); break; }
-      const m = /^[A-Za-z_]\w*/.exec(line.slice(i));
+      const m = /^[\p{L}_][\p{L}\p{N}_]*/u.exec(line.slice(i));
       if (m) {
         const prev = line[i - 1];
         const own = Object.prototype.hasOwnProperty.call(map, m[0]);
@@ -381,7 +382,10 @@
         return id;
       },
       remove(ln) { del.add(ln); },
-      commit() {
+      // finish(lines) -> lines: a last pass over the whole new text, inside the same undo step (Tuff Engine's fixups).
+      // open / close: start a new undo step before the edit, and end it after. Tuff Engine leaves the step open while
+      // a number field is typed in, so 2, 25 and 250 are one Ctrl+Z, and ends it when the field is left.
+      commit(finish, { open = true, close = true } = {}) {
         const out = [];
         const at = {};
         let count = 0;
@@ -393,7 +397,8 @@
           if (!del.has(ln)) push(rep.has(ln) ? rep.get(ln) : text);
           flush(ln);
         });
-        const next = out.join(eol).split(/\r?\n/);
+        let next = out.join(eol).split(/\r?\n/);
+        if (finish) next = finish(next);
         let a = 0;
         while (a < old.length && a < next.length && old[a] === next[a]) a++;
         let b = 0;
@@ -417,9 +422,9 @@
         }
         const s = model.getPositionAt(start);
         const e = model.getPositionAt(end);
-        model.pushStackElement();
+        if (open) model.pushStackElement();
         model.pushEditOperations([], [{ range: new window.monaco.Range(s.lineNumber, s.column, e.lineNumber, e.column), text, forceMoveMarkers: true }], () => null);
-        model.pushStackElement();
+        if (close) model.pushStackElement();
         return at;
       },
     };
@@ -1138,8 +1143,11 @@
     $('#sd-libseg').classList.toggle('off', !p.win);
     updateUndo();
     if (!p.win) {
-      stage.innerHTML = `<div class="sd-none">${ICONS.window}<b>This file doesn't have an app window yet</b><span>Start from a template, or add an empty window and drag widgets onto it.</span>
-        <div><button class="btn primary" data-a="tpl">Pick a template</button><button class="btn" data-lib="mtgui">Empty modern window</button><button class="btn" data-lib="tgui">Empty classic window</button></div></div>`;
+      // A tgame file is a game: Tuff Engine is where it's built visually.
+      const game = /^[ \t]*(?:import|mention)[ \t]+tgame\b/m.test(S.model.getValue());
+      stage.innerHTML = `<div class="sd-none">${ICONS.window}<b>${game ? 'This is a game' : "This file doesn't have an app window yet"}</b><span>${game ? 'Games are built in Tuff Engine. Or start an app from a template, or add an empty window and drag widgets onto it.' : 'Start from a template, or add an empty window and drag widgets onto it.'}</span>
+        <div>${game ? '<button class="btn primary" data-a="engine">Open in Tuff Engine</button>' : ''}<button class="btn${game ? '' : ' primary'}" data-a="tpl">Pick a template</button><button class="btn" data-lib="mtgui">Empty modern window</button><button class="btn" data-lib="tgui">Empty classic window</button></div></div>`;
+      $('[data-a="engine"]', stage)?.addEventListener('click', () => ide.openEngine(S.file));
       $('[data-a="tpl"]', stage).onclick = openTemplates;
       $$('[data-lib]', stage).forEach((b) => (b.onclick = () => edit(() => Edits.addWindow(S.model, b.dataset.lib))));
       $('#sd-layers').innerHTML = '';
@@ -1839,8 +1847,13 @@
     },
     show,
     onKey,
+    // Edit > Undo and Redo while the Studio shows (ide.js): the Studio's file, not the hidden code editor's.
+    undo: () => undoRedo('undo'),
+    redo: () => undoRedo('redo'),
     closeCustomizer,
     parse,
     templates: () => TEMPLATES.map((t) => ({ ...t })),
+    // Shared with Tuff Engine (tuff-engine.js), which reads and writes tgame code the same way.
+    kit: { $, $$, esc, debounce, UI, stripComment, splitTop, closesAtEnd, parseValue, parseArgs, makeEditor, takenNames, freeName, uniqueVar, renameIdents, field, chips, control },
   };
 })();

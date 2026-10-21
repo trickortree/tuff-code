@@ -38,9 +38,11 @@
   };
 
   // ---------------------------------------------------------------- loading
-  async function refresh(force) {
+  // online: wait for the newest list from GitHub (the refresh button). Without it the list is what TuffCode
+  // knows already, at once: the one it comes with, and the online entries once they have come.
+  async function refresh(online) {
     try {
-      H.list = await api.plugins.list(force);
+      H.list = await api.plugins.list(online);
     } catch (err) {
       H.ide.toast(`Couldn't load plugins: ${err.message}`, 'error');
     }
@@ -154,12 +156,14 @@
           return saved;
         } : undefined,
       },
-      openFile: (path) => ide.openFile(path),
+      openFile: (path, line) => ide.openFile(path, line),
       run: (path) => ide.runFile(path),
       toast: (msg, kind, ms) => ide.toast(msg, kind, ms),
       ask: (opts) => ide.ask(opts),
       reloadChanged: () => ide.reloadChanged(),
       openExternal: (url) => ide.openExternal(url),
+      // Any http(s) page, for links the user clicked (ask them first: it leaves TuffCode).
+      openWeb: (url) => ide.openWeb(url),
       storage: {
         get: (k, d) => ((ide.settings().pluginData || {})[p.id] || {})[k] ?? d,
         set: (k, v) => {
@@ -339,7 +343,11 @@
       H.ide = ide;
       setupResizer();
       $('#pl-refresh').onclick = () => refresh(true);
+      // The marketplace cards and the installed plugins (Tuff Agents) don't wait for GitHub, which takes up
+      // to 6 s when it's slow or offline. The online entries are added when they come: asked for again then,
+      // so an install or a switch meanwhile isn't undone by an older answer.
       await refresh(false);
+      api.plugins.list(true).then(() => refresh(false), () => {});
     },
     showMarket: () => renderMarket(),
     openPanel,

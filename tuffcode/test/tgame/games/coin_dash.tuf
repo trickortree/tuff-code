@@ -1,0 +1,58 @@
+mention tgame
+
+game = tgame.window("Coin Dash", 800, 600)
+game:background "navy"
+score = 0
+score_label = game:text("Score: 0", 400, 30, 24, "white")
+player = game:box(400, 520, 50, 50, "lime")
+player:on_edge "stop"
+coin = game:circle(200, 200, 14, "gold")
+enemy = game:box(100, 80, 40, 40, "red")
+ball = game:circle(600, 300, 12, "white")
+ball:speed(200, 150)
+ball:on_edge "bounce"
+
+game:every_frame player_arrows
+game:every_frame coin_collect
+game:every_frame enemy_chase
+game:every_frame enemy_hurts
+
+# Tuff Engine: player moves with the arrow keys
+func player_arrows(dt):
+    if game:held("left"):
+        player:move(-300 * dt, 0)
+    if game:held("right"):
+        player:move(300 * dt, 0)
+    if game:held("up"):
+        player:move(0, -300 * dt)
+    if game:held("down"):
+        player:move(0, 300 * dt)
+
+# Tuff Engine: player collects coin
+func coin_collect(dt):
+    if coin:touches(player):
+        score += 1
+        score_label:set "Score: " + score
+        game:sound "coin"
+        coin:move_to(game:random_spot())
+        while coin:touches(player):
+            coin:move_to(game:random_spot())
+
+# Tuff Engine: enemy chases player
+func enemy_chase(dt):
+    enemy:point_at(player)
+    enemy:forward(120 * dt)
+
+# Tuff Engine: game over when enemy touches player
+func enemy_hurts(dt):
+    if enemy:touches(player) and not game:paused():
+        game:sound "lose"
+        game:game_over("Score: " + score, play_again)
+
+# Tuff Engine: play again after a game over
+func play_again():
+    score = 0
+    score_label:set "Score: 0"
+    player:move_to(400, 520)
+    coin:move_to(200, 200)
+    enemy:move_to(100, 80)

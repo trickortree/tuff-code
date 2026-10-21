@@ -324,7 +324,7 @@ while game:open():                            # until the window is closed
         star:move_to(random(20, 580), 0)
 ```
 - **Where things are:** x and y are the middle of a sprite. (0, 0) is the top-left corner, and y goes down. A spot like `[100, 50]` works anywhere x and y do: `food:move_to(game:random_spot())`.
-- **Sprites:** `game:box(x, y, width, height, color)`, `game:circle(x, y, radius, color)`, `game:line(x1, y1, x2, y2, color)`, `game:text(words, x, y, size, color)` and `game:image("ship.png", x, y, width)` (a .png, .jpg, .gif or .webp next to your .tuf file).
+- **Sprites:** `game:box(x, y, width, height, color)`, `game:circle(x, y, radius, color)`, `game:line(x1, y1, x2, y2, color)`, `game:text(words, x, y, size, color)` and `game:image("ship.png", x, y, width)` (a .png, .jpg, .gif or .webp next to your .tuf file, or in a folder inside it like `"art/ship.png"`; not `"../ship.png"`).
 - **Moving:** `:move(dx, dy)`, `:move_to(x, y)`, `:glide(x, y, seconds)`, `:turn(degrees)` (more than 0 turns right), `:turn_to`, `:point_at(x, y)`, `:forward(distance)` (the way it points), `:spin(degrees_per_second)`, and `:speed(vx, vy)`, which keeps it moving by itself. `:on_edge "bounce"` (or `"wrap"` or `"stop"`) says what it does at the screen's edge. Read where it is with `:x()`, `:y()`, `:spot()` and `:angle()`.
 - **Looks:** `:color`, `:size`, `:scale 2`, `:layer 2` (higher layers are on top), `:flip()`, `:hide`, `:show` and `:remove` (a removed sprite is gone for good: changing it does nothing). Text changes with `label:set "Hi"`, and `label:align "left"` makes x its left edge.
 - **Collisions:** `a:touches(b)` is true or false. Given a list or a group, it gives back the one it touches, or nil: `hit = ball:touches(bricks)`. Also `:distance(other)` and `:on_screen()`.
@@ -404,6 +404,12 @@ while game:open():
 - **The player:** `"first person"` or `"third person"`. Solid things block the way and can be stood on. `player:walk_speed 6`, `:jump_height 2`, `:hold "sword"` (axe, pickaxe, sword, torch or hammer), and `game:looking_at()` is the object in the middle of the view, or nil.
 - **Without a player:** `game:camera_at(x, y, z)` with `game:look_at(thing)`, or `game:follow(thing)` (behind it), or `game:orbit(thing)` (drag to turn around it).
 - **Testing a game:** add `game:after(2, selftest)`, call your functions in `func selftest():`, `say` what you find, and end it with `game:close()`.
+
+#### Games Tuff Engine can edit
+TuffCode's Tuff Engine tab (`Ctrl+Shift+G`) builds tgame games by clicking and dragging, and writes everything as normal Tuff code. It can only show and edit simple top-level lines, so when you change a game someone is building in it:
+- Make each new thing with **one top-level line and plain numbers**, like `coin = game:circle(200, 200, 14, "gold")` or `tree = game:spawn("tree", -5, 0, -10)`. Things made in a loop, a function or a chained line (`game:spawn("sign"):label "Hi"`) still work, but show as "Made by your code" and can't be dragged.
+- Put new lines **above** any `while game:open():` loop.
+- Add behaviour as a **func registered with one line**, like `game:every_frame coin_spin` or `coin:clicked coin_clicked`. Functions under a `# Tuff Engine:` comment were written by Tuff Engine, and it keeps that comment and `play_again` up to date as the game changes. Changing one is fine: Tuff Engine then shows it as the person's own code.
 
 ## App windows (tgui / mtgui)
 ```tuff
