@@ -394,8 +394,11 @@ export default async (t, ctx) => {
   await ev(`document.querySelector('.ta-agents button[data-id="claude"]').click()`);
   check(await ev(`typeof window.tuffAskAgent === 'function'`), 'Tuff Agents gives Tuff Engine its window.tuffAskAgent hook', null);
   const main = path.join(ctx.root, 'main.tuf');
+  // Plugins (opened above) closes again: on a small screen, with Tuff Agents on the right as well, it left the
+  // start card no room. Then wait for its button to be really there, with a size.
+  await ev(`window.TuffIDE.showSideView('plugins', false); 1`);
   await ev(`window.TuffIDE.openEngine(${JSON.stringify(main)})`);
-  await waitFor(`!!document.querySelector('#en-start [data-a="2d"]')`, 5000);
+  await waitFor(`(() => { const b = document.querySelector('#en-start [data-a="2d"]'); return !!b && b.getBoundingClientRect().width > 0; })()`, 15000);
   await clickSel('#en-start [data-a="2d"]');
   await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(main)})).getValue().replace(/\\r\\n/g, '\\n').includes('tgame.window'))()`, 4000);
   await settle();

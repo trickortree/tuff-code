@@ -247,8 +247,18 @@ export default async (t, ctx) => {
   check(near(cols3[0], '#bfe2ff', 60) && woody(cols3[1]), 'the engine drew it: the light sky at the top, the wooden crate where it is', cols3);
   await t.shot('engine_host_3d.png', { x: FX, y: FY, width: 800, height: 500 });
 
+  // Where the crate is now: the camera can still be gliding into place on a slow machine, so wait until two
+  // readings agree, and click there.
+  let at = await screen(crate.i);
+  for (let k = 0; k < 25; k++) {
+    await t.sleep(200);
+    const again = await screen(crate.i);
+    const still = Math.abs(again[0] - at[0]) < 0.5 && Math.abs(again[1] - at[1]) < 0.5;
+    at = again;
+    if (still) break;
+  }
   await clear();
-  await t.click(FX + sx, FY + sy);
+  await t.click(FX + at[0], FY + at[1]);
   const pick3 = (await waitMsg(`m.tuffHost === 'pick' && m.i === ${crate.i}`)) && (await msgs(`m.tuffHost === 'pick'`))[0];
   check(pick3 && Array.isArray(pick3.point) && pick3.point.length === 3, 'a real click on the crate picks it, with the point it hit', await msgs('true'));
   const hudText = thing(d3, 'score_label');

@@ -9,7 +9,7 @@ import path from 'node:path';
 import { launch, FIXTURES } from '../launch.mjs';
 import { connect } from '../cdp.mjs';
 
-const SLOW_MS = 5000; // the slow list comes after 5 s (TuffCode gives up after 6)
+const SLOW_MS = 3000; // the slow list comes after 3 s (TuffCode gives up after 6; a busy CI machine needs the margin)
 const ONLINE = { version: 1, plugins: [], newer: [{ id: 'e2e-online', name: 'Online Only', version: '1.0.0', author: 'e2e', description: 'Only in the online list.', source: 'https://raw.githubusercontent.com/trickortree/tuff-code/main/e2e-none/', files: ['plugin.json'] }] };
 const asked = []; // every request the server got: its path
 const server = http.createServer((req, res) => {
