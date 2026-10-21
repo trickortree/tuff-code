@@ -301,16 +301,31 @@ const baseName = (p) => String(p || '').split(/[\\/]/).pop();
 const errLineOf = (s) => +((/Tuff error on line (\d+)/.exec(s || '') || [])[1] || 0);
 
 const MAKE = '(make|write|create|build|code|program|add|change|turn|give me|show me)';
+// With their program open, "my player doesn't move", "it never stops" or "the ball should bounce" say what
+// it does wrong: a not, never or should, then (a few words on) something a program does. Without that,
+// "I don't get what dt means", "Why don't we use def?" and "What should I add next?" are questions.
+const DOES = "(work|run|ran|show|say|said|print|move|happen|stop|start|appear|change|count|jump|load|go|went|end|close|open|play|draw|display|fall|fell|bounce|turn|hit|touch|update|ask|wait|respond|react|spawn|collide|do (anything|what|it|that))(s|es|ed|d|ing|ning|ped|ping|n)?\\b";
+// ("I don't get why it moves" is about them, not the program.)
+const NOT_DOES = new RegExp(`\\b(doesn'?t|does not|don'?t|do not|didn'?t|did not|won'?t|will not|isn'?t|is not|aren'?t|are not|wasn'?t|was not|can'?t|cannot|can not|couldn'?t|could not|never|nothing)\\s+(?!(get|understand|know|see|think|remember|mind)\\b)(?:[\\w']+\\s+){0,3}?${DOES}|\\b(can'?t|cannot) see\\b|\\b(keeps|kept) \\w+ing\\b`);
+// "Should" says what it should do, but not in "should I…?" or "Where should the score go?".
+const SHOULD_DOES = new RegExp(`\\bshould(n'?t| not)?\\s+(?!(i|we|you)\\b)(?:[\\w']+\\s+){0,3}?${DOES}`);
+const ASKING = /^\s*(what|why|how|where|when|which|who|should|can|could|would|will|is|are|do|does)\b/;
+const saysWhatsWrong = (s) => NOT_DOES.test(s) || s.split(/[.?!\n]+/).some((part) => !ASKING.test(part) && SHOULD_DOES.test(part));
 function kindOf(question, hasCode) {
   const s = question.toLowerCase();
   if (/\b(fix|bugs?|broken|errors?|wrong|crash(es|ed|ing)?|stuck|mistakes?|instead|not working|does not work)\b|n'?t (work|run)/.test(s)) return 'fix';
-  if (hasCode && /n'?t\b|\bnever\b|\bshould\b/.test(s)) return 'fix';
+  // "Make a program that asks "What is your name?"" is a request, not a question, and so is "Make it so the
+  // player can't go off the screen".
+  const making = new RegExp(`^(please |ok,? |now )?((can|could|will|would) you (please )?|i want (you to |a |an )?|i'd like (you to |a |an )?|let's )?${MAKE}\\b`).test(s);
+  if (hasCode && !making && saysWhatsWrong(s)) return 'fix';
+  // "I don't get what dt means", "I don't understand this": explain their code. ("I don't know how to add a
+  // score" goes on to the rules below: a request.)
+  if (hasCode && /\bi (don'?t|do not|didn'?t|did not) (get|understand|know|see)\b/.test(s) && /\b(mean(s|ing|t)?|this|that|it|(my|the|this) (code|program)|line \d+)\b/.test(s)) return 'explain';
   if (/\b(explain|walk me through|step by step|what do(es)? (this|it|that|my|the code|the program)|how does (this|it|that|my)|what is this|what's this|mean)\b/.test(s)) return 'explain';
-  // "Make a program that asks "What is your name?"" is a request, not a question.
-  if (new RegExp(`^(please |ok,? |now )?((can|could|will|would) you (please )?|i want (you to |a |an )?|i'd like (you to |a |an )?|let's )?${MAKE}\\b`).test(s)) return 'write';
+  if (making) return 'write';
   // "Who are you?", "Are you ChatGPT?", "Which model is this?"
   if (s.length < 120 && /\b(who|what) (are|r) (you|u)\b|\bare (you|u) (an? )?(chat ?gpt|gpt|claude|gemini|qwen|llama|copilot|tuff ai|pumice|ai|robot|bot|person|human|real)\b|\b(which|what) (ai |language )?model\b|\bwho (made|built|created|trained) (you|u|this)\b|\bwhat('s| is) your name\b/.test(s)) return 'about';
-  if (/\b(suggest|ideas?|tips?|ways to|teach|how (do|can|could|should) i|what (is|are)|why|can i|is there)\b/.test(s)) return 'question';
+  if (/\b(suggest|ideas?|tips?|ways to|teach|how (do|can|could|should) i|(what|which|where|when) (should|can|could|do) (i|we)|should (i|we)|what (is|are)|why|can i|is there)\b/.test(s)) return 'question';
   if (new RegExp(`\\b${MAKE}\\b`).test(s)) return 'write';
   return 'question';
 }

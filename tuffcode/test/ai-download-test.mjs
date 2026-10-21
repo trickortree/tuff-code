@@ -482,6 +482,30 @@ try {
   };
   const gotKinds = Object.fromEntries(Object.keys(kinds).map((q) => [q, ai.improve({ question: q }).kind]));
   check('The improver tells writing, fixing, explaining and questions apart', Object.entries(kinds).every(([q, k2]) => gotKinds[q] === k2), gotKinds);
+  // The panel sends the open file by default. A not, never or should is a "fix" only when it says what the
+  // program does wrong: the card for a fix says the program is broken and asks for a whole fixed program.
+  const game = 'mention tgame\ngame = tgame.window("Catch", 600, 400)\nwhile game:open():\n    dt = game:frame()\n';
+  const kindsWithFile = {
+    "I don't get what dt means": 'explain',
+    "I don't understand how it works": 'explain',
+    'What should I add next to my game?': 'question',
+    'Should I use a while loop or every_frame?': 'question',
+    "Why don't we use def in Tuff?": 'question',
+    'How should I make the player jump?': 'question',
+    'Where should the score go?': 'question',
+    "Can't I just use a for loop?": 'question',
+    "Make it so the player can't go off the screen": 'write',
+    "My player doesn't move": 'fix',
+    "Why doesn't my player move?": 'fix',
+    'The player should jump when I press space': 'fix',
+    "It shouldn't print twice": 'fix',
+    'The apple never falls': 'fix',
+    "I can't see the ball": 'fix',
+    'Nothing happens when I press space': 'fix',
+    "My game doesn't work, it says Tuff error on line 3": 'fix',
+  };
+  const gotWithFile = Object.fromEntries(Object.keys(kindsWithFile).map((q) => [q, ai.improve({ question: q, file: 'catch.tuf', code: game }).kind]));
+  check('... with their file open too: "I don\'t get…", "should I…?" and "why don\'t we…?" are not "fix my program"', Object.entries(kindsWithFile).every(([q, k2]) => gotWithFile[q] === k2), Object.fromEntries(Object.entries(gotWithFile).filter(([q, k2]) => kindsWithFile[q] !== k2)));
   check('"Asks for your name" is a console program; buttons and mtgui mean a window', ai.improve({ question: 'Make a program that asks for your name' }).target === 'console' && ai.improve({ question: 'Make an mtgui window with a button' }).target === 'window' && ai.improve({ question: 'add a score', file: 'a.tuf', code: 'mention tgui\n' }).target === 'window', null);
   const fixIn = { question: 'It should count to 3. Can you fix it?', file: 'C:\\p\\count.tuf', code: 'say "Counting"\nfor n in range(1, 3)\n    say n\n', runError: 'Tuff error on line 2: expected ":"\n  2 | for n in range(1, 3)\n                       ^' };
   const card = ai.improve(fixIn);
