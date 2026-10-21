@@ -1,6 +1,6 @@
 # Builds TuffCode for Mac (Apple Silicon and Intel) on GitHub's Mac machines, tests the built app,
 # and adds the Mac downloads to a release: when one is published, or when it's run by hand with a
-# release tag (Actions → Mac build → Run workflow, or: gh workflow run mac.yml -f tag=v1.0.2).
+# release tag (Actions → Mac build → Run workflow, or: gh workflow run mac.yml -f tag=v1.0.4).
 name: Mac build
 
 on:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release to build and add the Mac files to, like v1.0.2. Leave empty to only build and test.'
+        description: 'Release to build and add the Mac files to, like v1.0.4. Leave empty to only build and test.'
         required: false
         default: ''
   release:
@@ -53,7 +53,7 @@ jobs:
         run: python3 -c "import tkinter; print('Tk', tkinter.TkVersion)"
 
       - name: Install PyInstaller
-        run: python3 -m pip install pyinstaller
+        run: python3 -m pip install pyinstaller certifi pywebview
 
       - name: Build the Tuff runtime
         run: npm run build:runtime:mac
@@ -96,6 +96,10 @@ jobs:
 
       - name: Open the app and check the IDE
         run: node test/app-smoke.mjs "$APP/Contents/MacOS/TuffCode" "../build/installer/screenshot-${{ matrix.arch }}.png"
+
+      # Skips the suites that only run on Windows (they say why); output goes to tuffcode/test/e2e/out.
+      - name: Drive the app through the e2e suites that work on a Mac (stand-in agents)
+        run: node test/e2e/run.mjs --app "$APP/Contents/MacOS/TuffCode"
 
       - uses: actions/upload-artifact@v4
         if: always()

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -11,6 +11,7 @@ const builder = require('./build');
 const updater = require('./updater');
 const plugins = require('./plugins');
 const agents = require('./agents');
+const ai = require('./ai');
 
 const TUFF_INTERPRETER = app.isPackaged
   ? path.join(process.resourcesPath, 'runtime-src', 'tuff.py')
@@ -295,8 +296,12 @@ ipcMain.handle('fs:replaceInFile', async (_e, file, source, flags, replacement, 
 });
 ipcMain.handle('shell:reveal', (_e, p) => shell.showItemInFolder(p));
 
+// Since Electron 43 the dialog opens in Downloads unless it's told where. It starts where the last
+// project was picked from (the folder it's in), which is what Windows and macOS used to remember.
 ipcMain.handle('dialog:openFolder', async () => {
-  const res = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
+  const last = loadSettings().lastFolder;
+  const from = typeof last === 'string' && last && fs.existsSync(path.dirname(last)) ? path.dirname(last) : app.getPath('home');
+  const res = await dialog.showOpenDialog(win, { defaultPath: from, properties: ['openDirectory'] });
   return res.canceled ? null : res.filePaths[0];
 });
 
@@ -339,7 +344,8 @@ ipcMain.handle('update:install', () => updater.install());
 ipcMain.handle('update:restart', () => updater.restart());
 ipcMain.handle('update:reschedule', () => updater.reschedule());
 
-ipcMain.handle('tuff:check', async (_e, source) => {
+// Checks Tuff source with tuff.py --check. Used by live error checking and by Tuff AI.
+async function checkSource(source) {
   const dir = path.join(app.getPath('temp'), 'tuffcode-check');
   await fsp.mkdir(dir, { recursive: true });
   const file = path.join(dir, `check-${process.pid}-${Date.now()}.tuf`);
@@ -364,7 +370,8 @@ ipcMain.handle('tuff:check', async (_e, source) => {
   });
   fsp.rm(file, { force: true }).catch(() => {});
   return result;
-});
+}
+ipcMain.handle('tuff:check', (_e, source) => checkSource(source));
 
 // plugins and Tuff Agents
 plugins.setup({ load: loadSettings, save: saveSettings });
@@ -373,6 +380,35 @@ ipcMain.handle('plugins:list', (_e, force) => plugins.list(force));
 ipcMain.handle('plugins:install', (_e, id) => plugins.install(id));
 ipcMain.handle('plugins:uninstall', (_e, id) => plugins.uninstall(id));
 ipcMain.handle('plugins:setEnabled', (_e, id, on) => plugins.setEnabled(id, on));
+// Plugins with the "files" permission save into the open project through here: the folder the IDE
+// is watching, not one the caller names. This keeps their saves in the project. It isn't a sandbox:
+// plugins run in the IDE's own page, so they can reach everything window.tuff has.
+ipcMain.handle('plugins:writeFile', async (_e, rel, data, encoding = 'utf8') => {
+  const base = path.resolve(String(watchedDir || ''));
+  const target = path.resolve(base, String(rel || ''));
+  // A drive's root (E:\) already ends in a separator.
+  const inside = base.endsWith(path.sep) ? base : base + path.sep;
+  if (!watchedDir || !rel || !target.startsWith(inside)) throw new Error('Plugins can only save inside the open project.');
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await fsp.writeFile(target, encoding === 'base64' ? Buffer.from(String(data), 'base64') : String(data), encoding === 'base64' ? undefined : 'utf8');
+  return target;
+});
+// Plugins with the "net" permission make web requests through here (http and https only, 15 s at most).
+ipcMain.handle('plugins:request', async (_e, { url, method = 'GET', headers = {}, body } = {}) => {
+  if (!/^https?:\/\//i.test(String(url || ''))) throw new Error('Only http:// and https:// addresses work.');
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 15000);
+  const started = Date.now();
+  try {
+    const res = await net.fetch(url, { method, headers, body: body == null || /^(GET|HEAD)$/i.test(method) ? undefined : String(body), signal: ctl.signal });
+    const text = await res.text();
+    return { ok: res.ok, status: res.status, statusText: res.statusText, headers: Object.fromEntries(res.headers.entries()), text: text.slice(0, 2_000_000), cut: text.length > 2_000_000, ms: Date.now() - started };
+  } catch (err) {
+    throw new Error(ctl.signal.aborted ? 'No answer within 15 seconds.' : String(err.message || err));
+  } finally {
+    clearTimeout(timer);
+  }
+});
 ipcMain.handle('agents:detect', () => agents.detect());
 ipcMain.handle('agents:connection', (_e, id) => agents.connection(id));
 ipcMain.handle('agents:connect', (_e, id, on) => agents.connect(id, on));
@@ -384,6 +420,11 @@ ipcMain.handle('agents:signIn', (_e, id) => agents.signIn(id));
 ipcMain.handle('agents:models', (_e, id, fresh) => agents.models(id, fresh));
 ipcMain.handle('agents:run', (_e, params) => { agents.run(params, (ev) => send('agents:event', ev)); return true; });
 ipcMain.handle('agents:stop', (_e, runId) => agents.stop(runId));
+ai.setup({ checkSource, settings: loadSettings, progress: (p) => send('ai:progress', p) });
+ipcMain.handle('ai:status', () => ai.status());
+ipcMain.handle('ai:download', (_e, id) => ai.fetchModel(id));
+ipcMain.handle('ai:cancel', () => ai.cancelDownload());
+ipcMain.handle('ai:remove', (_e, id) => ai.removeModel(id));
 
 ipcMain.handle('window:minimize', () => win.minimize());
 ipcMain.handle('window:toggleMaximize', () => (win.isMaximized() ? win.unmaximize() : win.maximize()));
@@ -409,6 +450,8 @@ app.whenReady().then(() => {
   updater.start((s) => send('update:status', s), loadSettings);
 });
 app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
+app.on('will-quit', () => ai.quit());
+
 app.on('window-all-closed', () => {
   if (runProc) runProc.kill();
   app.quit();

@@ -1,0 +1,12 @@
+{
+  "id": "sound-lab",
+  "name": "Sound Lab",
+  "version": "1.0.0",
+  "author": "trickortree",
+  "description": "Make sound effects for your tgame games: coins, jumps, lasers, explosions and more. Pick a preset, move the sliders, play it, then save it as a .wav file and add it to your game with one line of code.",
+  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3.5 10.5v3M7.5 7v10M11.5 3.5v17M15.5 8v8M19.5 10.5v3\"/></svg>",
+  "main": "panel.js",
+  "style": "panel.css",
+  "panels": [{ "id": "lab", "title": "Sound Lab" }],
+  "permissions": ["files"]
+}

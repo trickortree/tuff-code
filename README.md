@@ -26,7 +26,7 @@ Get the newest version from the [Releases page](https://github.com/trickortree/t
 | **Mac with Apple Silicon** (M1 and newer) | `TuffCode-<version>-mac-arm64.dmg` |
 | **Mac with an Intel chip** | `TuffCode-<version>-mac-x64.dmg` |
 
-The Mac files are built on GitHub's Macs and added to a release after the Windows installer. If a release doesn't list them yet, check back later.
+The Mac version needs macOS 13 (Ventura) or newer. The Mac files are built on GitHub's Macs and added to a release after the Windows installer. If a release doesn't list them yet, check back later.
 
 To find which Mac you have, open the Apple menu and choose **About This Mac**. The **Chip** line says Apple (M1, M2…) or Intel.
 
@@ -43,17 +43,24 @@ You only do this once. On a Mac, TuffCode tells you when there's a new version a
 
 - **PyCharm-style IDE:** project tree, tabs, Monaco editor with Tuff highlighting, autocomplete and hover help, a Run window with input, Search Everywhere (double Shift), and PyCharm shortcuts.
 - **Learn Tuff:** a step-by-step tutorial that checks your answers.
-  - Basics: 9 lessons.
+  - Basics: 10 lessons (the newest: checking answers with `err`).
   - Section 2, apps with tgui: 8 lessons.
   - Section 2.2, modern apps with mtgui: 4 lessons.
 - **tgui and mtgui:** real desktop windows with buttons, text boxes, switches, checkboxes, dropdowns, sliders, progress bars, spinners, clocks, cards and rows. mtgui adds gradients, gloss, shine and glow. Anything animated has `:speed`.
+- **atgui:** modern app windows made of real HTML and CSS, the kind of apps Claude or Codex are: sidebars, lists, chat bubbles, tables, charts, markdown, menus, pop-ups, toasts, key shortcuts, animations, glass and gradients, a custom title bar. Everything from mtgui works too.
+- **tgame:** games, like pygame. 2D sprites, keys, the mouse, collisions and sounds, or 3D worlds with a sky, an island, trees, rocks and houses, `.glb` models and a first- or third-person player. Write a `while game:open():` loop or use events. (Tuff Engine, a visual game maker, is coming soon.)
+- **tap:** the web from Tuff, like Python's `requests`: `tap.get`, `post`, `put`, `delete`, with JSON as data objects (`user:get("name")`).
 - **Design Studio** (`Ctrl+Shift+D`): build windows by clicking. Every change is written straight into your code.
 - **Gear in the margin:** hover a UI line and click the gear to change its settings without typing.
 - **Auto Code Sort** (`Ctrl+Alt+L`): fixes indentation, puts imports first and functions last, tidies spacing and adds notes. It checks the result with the interpreter first, so it never breaks working code.
 - **Build .exe** (`Ctrl+F9`): turn any program into a Windows app with your own name and icon (on a Mac, into a Mac app). The build log explains each step in plain English.
 - **Auto-updates:** checks this repo for new releases every 1, 2, 4 or 8 hours (2 by default). On Windows it can install them in the background.
-- **Plugins** (`Alt+3`): a marketplace for extra tools in a sidebar on the right, like the Snippet Library.
-- **Tuff Agents** (`Ctrl+Shift+A`): an AI chat sidebar that runs Claude Code, Codex or Antigravity on your project. They learn Tuff through TuffCode's MCP tools (see below).
+- **Plugins** (`Alt+3`): a marketplace for extra tools in a sidebar on the right: the Snippet Library, API Explorer (try a web API, click a value and get the tap code), Sprite Studio (pixel art for games and apps) and Sound Lab (game sound effects as .wav).
+- **Tuff Agents** (`Ctrl+Shift+A`): an AI chat sidebar that runs Claude Code, Codex or Antigravity on your project. They learn Tuff through TuffCode's MCP tools (see below) and share one chat.
+  - **Ask, Plan or Edit:** Ask explains and offers changes ("Edit it for me"); Plan makes a plan first ("Go ahead"); Edit changes your files.
+  - **`/` commands:** `/compact` sums up a long chat for every agent, plus `/plan`, `/model opus`, `/codex` and more (`/help`).
+  - **Explain** on a Tuff error in the Run window asks the agent what went wrong.
+- **Tuff AI (preview):** an offline helper that runs on your own computer, with no account. Download its model once (1.3 GB) from the Tuff AI tab. It's an untrained preview for now; every program it writes is checked by Tuff first.
 
 ## Using AI agents with Tuff (MCP)
 
@@ -67,7 +74,7 @@ In TuffCode, open Tuff Agents and click the plug button. There you can check the
 
 ## Running it
 
-You need [Node.js](https://nodejs.org) (for the IDE) and [Python 3](https://python.org) (to run Tuff programs).
+You need [Node.js](https://nodejs.org) 22.12 or newer (for the IDE) and [Python 3](https://python.org) (to run Tuff programs).
 
 ```bash
 cd tuffcode
@@ -75,7 +82,9 @@ npm install
 npm start
 ```
 
-On Windows you can also double-click `tuffcode/TuffCode.cmd` after `npm install`.
+`npm start` downloads Electron the first time (`npm install` doesn't, since Electron 42). On Windows you can also just double-click `tuffcode/TuffCode.cmd`: it runs `npm install` and gets Electron by itself when they're needed.
+
+**Updating a copy like this from 1.0.3 to 1.0.4:** 1.0.4 runs on a newer Electron, which 1.0.3's updater can't install by itself. On Windows, if the update says npm couldn't install the new parts, close TuffCode and double-click `tuffcode/TuffCode.cmd`. On a Mac, if TuffCode doesn't open again after the update, run `npm start` in `tuffcode/`: it downloads the new Electron.
 
 You can also run a Tuff program without the IDE:
 
@@ -91,17 +100,21 @@ python tuff.py myprogram.tuf
 | Variables | `score = 10`, `score += 5` |
 | Ask a question | `name = input "Name? "` |
 | Math | `+ - * / % ^`, `sqrt`, `abs`, `round`, `min`, `max`, `sum`, `average`, `pi` |
-| Decisions | `if answer is "yes":` (or `then` instead of `:`), `elif`, `else` |
+| Numbers and text | `number("42")` (or `num`), `int("3.7")` is 3, `text(5)` (or `str`). Text that isn't a number gives `err`: `if num(answer) is err:` |
+| Decisions | `if answer is "yes":` (or `then`, or `then:`), `elif`, `else` |
 | Loops | `for i in range(1, 10):`, `while x > 0:` |
 | Functions | `func double(n):` gives back its last value, or use `return` |
 | Live lines | `line = say "Loading"`, then `line:rewrite "Done!"` |
 | Clearing | `flush`, `clear(all)`, `clear(2)` |
-| Libraries | `import anims` or `mention anims` (same thing): `anims`, `tgui`, `mtgui` |
+| Libraries | `import anims` or `mention anims` (same thing): `anims`, `tgui`, `mtgui`, `atgui`, `tgame`, `tap` |
 
 ## Project layout
 
 - `tuff.py`: the Tuff interpreter
 - `tuff_tgui.py`: the tgui and mtgui libraries (built on tkinter, no extra installs)
+- `tuff_tap.py`: tap (HTTP, standard library only)
+- `tuff_view.py` and `tuff_view_web/`: the web view engine (pywebview, three.js) under `tuff_atgui.py` (atgui) and `tuff_tgame.py` (tgame)
+- `tuff-ai/`: Tuff AI's test set (Tuff Bench) and the model bake-off
 - `tuffcode/`: the Electron IDE
   - `main.js`: the window, files and running programs
   - `build.js`: the `.exe` builder (PyInstaller)

@@ -5,9 +5,37 @@ const fsp = fs.promises;
 const { spawn } = require('child_process');
 
 const RUNTIME_DIR = app.isPackaged ? path.join(process.resourcesPath, 'runtime-src') : path.join(__dirname, '..');
-const RUNTIME_FILES = ['tuff.py', 'tuff_tgui.py'];
+const RUNTIME_FILES = ['tuff.py', 'tuff_tgui.py', 'tuff_tap.py', 'tuff_atgui.py'];
 const DEFAULT_ICON = path.join(__dirname, 'renderer', 'assets', 'icon.png');
-const ASSET_EXTS = new Set(['.png', '.gif', '.ico', '.jpg', '.jpeg', '.txt', '.json', '.csv', '.wav']);
+const ASSET_EXTS = new Set(['.png', '.gif', '.ico', '.jpg', '.jpeg', '.webp', '.svg', '.txt', '.json', '.csv', '.wav']);
+// Libraries whose windows are web views (tuff_view.py and its page, tuff_view_web): each is tuff_<name>.py.
+const VIEW_LIBS = ['atgui', 'tgame'];
+// Files a web view program can also use: sounds, models and more kinds of picture.
+const VIEW_ASSET_EXTS = new Set(['.mp3', '.ogg', '.m4a', '.webp', '.bmp', '.svg', '.avif', '.glb']);
+// Folders that are never packed: earlier builds, tools' folders and hidden ones (.git and so on).
+const SKIP_DIRS = new Set(['dist', 'build', 'node_modules', '__pycache__', 'venv']);
+const usesLib = (src, lib) => new RegExp(`^\\s*(import|mention)\\s+${lib}\\b`, 'm').test(src);
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// The files a program can use: the ones next to it, and everything in a folder its code names in a
+// path (like "sprites/hero.png", or "sounds/" + name) or on its own ("sprites"), where Sprite Studio
+// and Sound Lab save. Gives paths relative to the program's folder, with / between folders.
+async function programFiles(dir, src, wanted) {
+  const found = [];
+  const walk = async (folder, rel, all) => {
+    for (const entry of await fsp.readdir(folder, { withFileTypes: true })) {
+      const r = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name.toLowerCase())) continue;
+        if (all || new RegExp(`["'](\\./)?${escapeRe(entry.name)}["'\\\\/]`, 'i').test(src)) await walk(path.join(folder, entry.name), r, true);
+      } else if (entry.isFile() && wanted(path.extname(entry.name).toLowerCase())) {
+        found.push(r);
+      }
+    }
+  };
+  await walk(dir, '', false);
+  return found;
+}
 const PY = process.platform === 'win32' ? { cmd: 'py', args: ['-3'] } : { cmd: 'python3', args: [] };
 // What the build makes: an .exe on Windows, an app elsewhere.
 const WIN = process.platform === 'win32';
@@ -170,7 +198,18 @@ async function build(opts, emit) {
       return fail('tools', 'Installing the build tools', 'The build tools installed, but Python can\'t start them. Try restarting TuffCode and building again.');
     }
   }
-  step('tools', 'done', `Build tools ready (PyInstaller ${r.out.trim().split(/\s+/).pop()})`);
+  const pyinstallerVersion = r.out.trim().split(/\s+/).pop();
+  // A web view program (atgui, tgame) needs pywebview in the Python that builds it, like PyInstaller.
+  const programSrc = await fsp.readFile(program, 'utf8');
+  const viewLibs = VIEW_LIBS.filter((lib) => usesLib(programSrc, lib));
+  if (viewLibs.length && (await run(py.cmd, [...py.args, '-c', 'import webview'], { onLine: log })).code !== 0) {
+    step('tools', 'running', 'Installing the window engine', 'First time only: pywebview, for game and app windows.');
+    r = await run(py.cmd, [...py.args, '-m', 'pip', 'install', ...(py === PY ? ['--user'] : []), '--disable-pip-version-check', 'pywebview'], { onLine: log });
+    if (r.code !== 0 || (await run(py.cmd, [...py.args, '-c', 'import webview'], { onLine: log })).code !== 0) {
+      return fail('tools', 'Installing the window engine', 'TuffCode couldn\'t download pywebview, which game and app windows need. Check your internet connection and try again.');
+    }
+  }
+  step('tools', 'done', `Build tools ready (PyInstaller ${pyinstallerVersion})`);
 
   // A window app needs tkinter in the Python that builds it. Without it the app would build fine
   // and then close straight away when opened, so check first.
@@ -186,6 +225,12 @@ async function build(opts, emit) {
   const work = path.join(app.getPath('temp'), 'tuffcode-build', `${name.replace(/\s/g, '_')}-${Date.now()}`);
   await fsp.mkdir(work, { recursive: true });
   for (const f of RUNTIME_FILES) await fsp.copyFile(path.join(RUNTIME_DIR, f), path.join(work, f));
+  // Web view programs get the engine, its page and their library (only those: other apps stay small).
+  const viewModules = viewLibs.map((lib) => `tuff_${lib}`).filter((m) => fs.existsSync(path.join(RUNTIME_DIR, `${m}.py`)));
+  if (viewLibs.length) {
+    for (const f of ['tuff_view.py', ...viewModules.map((m) => `${m}.py`)]) await fsp.copyFile(path.join(RUNTIME_DIR, f), path.join(work, f));
+    await fsp.cp(path.join(RUNTIME_DIR, 'tuff_view_web'), path.join(work, 'tuff_view_web'), { recursive: true });
+  }
   const programCopy = path.join(work, 'program.tuf');
   await fsp.copyFile(program, programCopy);
   const launcher = path.join(work, 'tuff_app.py');
@@ -198,6 +243,34 @@ async function build(opts, emit) {
     'if os.path.isfile(icon):',
     '    os.environ["TUFF_APP_ICON"] = icon',
     'import tuff',
+    // An app with no console shows its errors in tkinter's box, but only tgui apps carry tkinter.
+    // The others (games, atgui apps) use the system's own box, so they never just close without a word.
+    ...(usesGuiEarly ? [] : [
+      '_report = tuff.report',
+      '_shown = set()',
+      'def _box(text):',
+      '    if sys.platform == "win32":',
+      '        import ctypes',
+      '        ctypes.windll.user32.MessageBoxW(None, text, "Something went wrong", 0x10 | 0x10000 | 0x40000)  # error icon, in front',
+      '    elif sys.platform == "darwin":',
+      '        import subprocess',
+      "        subprocess.run([\"osascript\", \"-e\", \"on run argv\", \"-e\", 'display alert \"Something went wrong\" message (item 1 of argv) as critical', \"-e\", \"end run\", text], capture_output=True)",
+      'def report(err, src):',
+      '    _report(err, src)',
+      '    if not tuff.WINDOWED:',
+      '        return',
+      '    lines = src.splitlines()',
+      '    text = f"Tuff error on line {err.line}: {err.msg}" if err.line else f"Tuff error: {err.msg}"',
+      '    if err.line and 0 < err.line <= len(lines):',
+      '        text += f"\\n  {err.line} | {lines[err.line - 1]}"',
+      '    if text not in _shown:  # the same error again (a key pressed over and over) is shown once',
+      '        _shown.add(text)',
+      '        try:',
+      '            _box(text)',
+      '        except Exception:',
+      '            pass',
+      'tuff.report = report',
+    ]),
     'sys.argv = [sys.argv[0], os.path.join(base, "program.tuf")]',
     'sys.exit(tuff.main())',
     '',
@@ -223,13 +296,10 @@ async function build(opts, emit) {
   // The icon goes in a folder of its own inside the app, so no project file can clash with it.
   const addData = [`${programCopy}${sep}.`];
   if (fs.existsSync(iconPng)) addData.push(`${iconPng}${sep}_tuffcode`);
-  const assets = [];
-  for (const entry of await fsp.readdir(path.dirname(program), { withFileTypes: true })) {
-    if (entry.isFile() && ASSET_EXTS.has(path.extname(entry.name).toLowerCase())) {
-      assets.push(entry.name);
-      addData.push(`${path.join(path.dirname(program), entry.name)}${sep}.`);
-    }
-  }
+  if (viewLibs.length) addData.push(`${path.join(work, 'tuff_view_web')}${sep}tuff_view_web`);
+  // Each file keeps its folder inside the app, so "sprites/hero.png" works there as it does here.
+  const assets = await programFiles(path.dirname(program), programSrc, (ext) => ASSET_EXTS.has(ext) || (viewLibs.length > 0 && VIEW_ASSET_EXTS.has(ext)));
+  for (const rel of assets) addData.push(`${path.join(path.dirname(program), rel)}${sep}${path.posix.dirname(rel)}`);
   // On a Mac the app's icon has to be .icns; macOS's own sips tool makes one from the PNG.
   let macIcon = null;
   if (process.platform === 'darwin') {
@@ -243,7 +313,9 @@ async function build(opts, emit) {
   }
   const src = await fsp.readFile(program, 'utf8');
   const usesGui = /^\s*(import|mention)\s+m?tgui\b/m.test(src);
-  const windowed = opts.windowed ?? usesGui;
+  // tap needs Python's ssl (and certifi, where installed, for a Mac app's https:// certificates).
+  const usesTap = /^\s*(import|mention)\s+tap\b/m.test(src);
+  const windowed = opts.windowed ?? (usesGui || viewLibs.length > 0);
   step('pack', 'done', `Packed your program${assets.length ? ` and ${assets.length} file${assets.length > 1 ? 's' : ''} (${assets.slice(0, 3).join(', ')}${assets.length > 3 ? '…' : ''})` : ''}`);
 
   step('build', 'running', BUILDING, 'This usually takes 20–60 seconds.');
@@ -255,6 +327,9 @@ async function build(opts, emit) {
     ...(WIN ? ['--icon', iconFile] : macIcon ? ['--icon', macIcon] : []), windowed ? '--windowed' : '--console',
     ...addData.flatMap((d) => ['--add-data', d]),
     ...(usesGui ? ['--hidden-import', 'tuff_tgui'] : ['--exclude-module', 'tkinter', '--exclude-module', 'tuff_tgui']),
+    ...(usesTap ? ['--hidden-import', 'tuff_tap', '--hidden-import', 'ssl', '--hidden-import', 'certifi'] : ['--exclude-module', 'tuff_tap']),
+    ...(viewLibs.length ? ['--hidden-import', 'tuff_view', ...viewModules.flatMap((m) => ['--hidden-import', m])] : ['--exclude-module', 'tuff_view', '--exclude-module', 'webview']),
+    ...VIEW_LIBS.filter((lib) => !viewLibs.includes(lib)).flatMap((lib) => ['--exclude-module', `tuff_${lib}`]),
     launcher,
   ];
   let lastDetail = '';

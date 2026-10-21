@@ -1,0 +1,114 @@
+mention tgame
+
+# Every 2D part of tgame, used once. The test reads the "say" lines and drives the rest with the autopilot.
+game = tgame.window("Features 2D", 640, 400)
+game:background "#202830"
+hud = game:hud()
+title = hud:text("Features", 20, 20, 20, "white")
+title:align "left"
+star = game:image("star.png", 100, 100)
+wide = game:image("star.png", [200, 100], 96)
+box = game:box(300, 200, 40, 40, "teal")
+ball = game:circle(320, 200, 10, "red")
+dot = game:circle(50, 300, 5, "white")
+game:line(0, 380, 640, 380, "gray")
+group = game:group()
+group:add(box)
+group:add(ball)
+clicks = 0
+keys = ""
+ticks = 0
+later = false
+presses = 0
+held_frames = 0
+
+say "wide edge " + wide:touches(game:circle(245, 100, 2)) + " " + wide:touches(game:circle(255, 100, 2))
+say "spot " + box:spot()
+say "touch box ball " + box:touches(ball)
+say "touch box dot " + box:touches(dot)
+say "dot hits group " + (dot:touches(group) is nil)
+say "ball hits list " + (ball:touches([dot, box]) is box)
+group:move(10, 0)
+say "group moved " + box:x() + " " + ball:x() + " count " + group:count()
+box:set("hp", 3)
+say "hp " + box:get("hp") + " missing " + box:get("nothing")
+title:set "Features!"
+say "title " + title:value()
+box:turn(90)
+say "angle " + box:angle()
+dot:point_at(50, 200)
+say "point " + dot:angle()
+dot:forward(10)
+say "forward " + dot:spot()
+say "distance " + dot:distance(dot:x() + 3, dot:y() + 4)
+spot = game:random_spot(20)
+say "grid " + (spot[0] % 20) + " " + (spot[1] % 20)
+dot:on_edge "stop"
+dot:move(-500, 0)
+say "kept " + dot:x()
+dot:on_edge "wrap"
+dot:move(-20, 0)
+say "wrapped " + dot:x()
+dot:on_edge "none"
+dot:move_to(50, 300)
+say "say a sprite " + box
+
+star:clicked star_clicked
+game:clicked clicked_at
+game:on_key("any", key_pressed)
+game:every(0.1, tick)
+game:after(0.3, after_done)
+game:every_frame step
+ball:speed(100, 0)
+ball:on_edge "bounce"
+box:glide(500, 300, 0.5)
+wide:spin(180)
+wide:flip()
+box:layer 2
+game:sound "blip.wav"
+game:sound "coin"
+game:beep(880, 0.1)
+game:volume 80
+
+func star_clicked(s):
+    say "clicked the star at " + s:spot()
+
+func clicked_at(x, y):
+    clicks += 1
+
+func key_pressed(key):
+    keys = keys + key
+
+func tick():
+    ticks += 1
+
+func after_done():
+    later = true
+
+func step(dt):
+    if game:pressed("space"):
+        presses += 1
+    if game:held("x"):
+        held_frames += 1
+
+func report():
+    say "clicks " + clicks
+    say "keys " + keys
+    say "presses " + presses
+    say "held for a while " + (held_frames > 10)
+    say "ticks " + (ticks > 5)
+    say "after " + later
+    say "glided " + box:spot()
+    say "ball moving " + (ball:x() > 340)
+    say "time " + (game:time() > 1)
+    say "fps " + (game:fps() > 30)
+    say "width " + game:width() + " height " + game:height()
+    say "paused " + game:paused()
+
+func pause_now():
+    game:pause("Testing")
+    say "paused " + game:paused()
+
+func resume_now():
+    game:resume()
+    say "paused " + game:paused()

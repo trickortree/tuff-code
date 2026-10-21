@@ -1,0 +1,17 @@
+mention tgame
+
+# A function that fails every frame is reported once and switched off; the game keeps going.
+game = tgame.window("Errors", 400, 300)
+count = 0
+
+func broken(dt):
+    count += 1
+    items = [1, 2]
+    say "item " + items[count]
+
+func later():
+    say "still running"
+    game:close()
+
+game:every_frame broken
+game:after(0.6, later)

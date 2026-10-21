@@ -1,0 +1,11 @@
+mention tgame
+
+# An error in the main loop stops the program, and its window closes with it.
+game = tgame.window("Top error", 400, 300)
+items = [1, 2]
+n = 0
+while game:open():
+    game:frame()
+    n += 1
+    if n > 20:
+        say items[n]

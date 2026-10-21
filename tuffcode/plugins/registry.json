@@ -28,5 +28,52 @@
         "beginner"
       ]
     }
+  ],
+  "newer": [
+    {
+      "id": "api-explorer",
+      "name": "API Explorer",
+      "version": "1.0.0",
+      "author": "trickortree",
+      "description": "Try a web API and see what comes back. Click any value in the answer to get the Tuff code that reaches it with tap, or a whole program that runs. Comes with examples to try, and keeps your last 20 requests.",
+      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 3.5c-1.7 0-2.5.8-2.5 2.5v3c0 1.4-.8 2.3-2 3 1.2.7 2 1.6 2 3v3c0 1.7.8 2.5 2.5 2.5M16 3.5c1.7 0 2.5.8 2.5 2.5v3c0 1.4.8 2.3 2 3-1.2.7-2 1.6-2 3v3c0 1.7-.8 2.5-2.5 2.5M9.5 12h5M12.5 10l2 2-2 2\"/></svg>",
+      "builtin": true,
+      "tags": [
+        "web",
+        "tap",
+        "beginner"
+      ],
+      "needs": "1.0.4"
+    },
+    {
+      "id": "sprite-studio",
+      "name": "Sprite Studio",
+      "version": "1.0.0",
+      "author": "trickortree",
+      "description": "Draw pixel-art sprites and icons for your games and apps. Animate them with frames, save them as PNG pictures in your project, and get the Tuff code that shows them in tgame, mtgui or atgui.",
+      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M15.6 4.4a2 2 0 0 1 2.8 0l1.2 1.2a2 2 0 0 1 0 2.8L10.5 17.5 6 18.5l1-4.5z\"/><path d=\"M13.8 6.2l4 4\"/><path fill=\"#000\" stroke=\"none\" d=\"M2.5 19.5h3v3h-3zM2.5 14h3v3h-3z\"/></svg>",
+      "builtin": true,
+      "tags": [
+        "pixel art",
+        "games",
+        "beginner"
+      ],
+      "needs": "1.0.4"
+    },
+    {
+      "id": "sound-lab",
+      "name": "Sound Lab",
+      "version": "1.0.0",
+      "author": "trickortree",
+      "description": "Make sound effects for your tgame games: coins, jumps, lasers, explosions and more. Pick a preset, move the sliders, play it, then save it as a .wav file and add it to your game with one line of code.",
+      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3.5 10.5v3M7.5 7v10M11.5 3.5v17M15.5 8v8M19.5 10.5v3\"/></svg>",
+      "builtin": true,
+      "tags": [
+        "games",
+        "sound",
+        "tgame"
+      ],
+      "needs": "1.0.4"
+    }
   ]
 }

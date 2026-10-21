@@ -10,7 +10,7 @@ const vm = require('vm');
 const { spawn } = require('child_process');
 const os = require('os');
 
-const VERSION = '1.0.3';
+const VERSION = '1.0.4';
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const RENDERER_JS = path.join(__dirname, '..', 'renderer', 'js');
 
@@ -128,6 +128,8 @@ function screen(raw) {
   while ((m = re.exec(raw))) {
     plain(raw.slice(last, m.index));
     last = re.lastIndex;
+    // say;<id>;<b64>[;<style>]: a style (like "notice", the yellow line tgame programs start with) only colors
+    // the line in the IDE, so it's left out here and the line reads like any other.
     const [kind, a, b] = m[1].split(';');
     const text = (s) => Buffer.from(s || '', 'base64').toString('utf8');
     if (kind === 'say') {

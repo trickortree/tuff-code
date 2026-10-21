@@ -1,0 +1,58 @@
+mention atgui
+
+app = atgui.window("Settings", 900, 700)
+app:accent "teal"
+side = app:sidebar(220)
+side:heading "Settings"
+nav = side:list()
+nav:add("General"):icon "settings"
+nav:add("Appearance"):icon "sun"
+nav:add("Notifications"):icon "bell"
+nav:add("Account"):icon "user"
+nav:set "Appearance"
+app:heading "Appearance"
+app:small "Changes apply straight away."
+look = app:card
+theme = setting(look, "Theme", "Dark, light, or the same as your computer"):dropdown(["Dark", "Light", "System"])
+theme:change pick_theme
+chips = setting(look, "Accent", "Buttons, switches and highlights")
+for name in ["Teal", "Blue", "Purple", "Pink", "Orange"]:
+    chip = chips:button(name, pick_accent, "secondary")
+    chip:style("background", name:lower())
+    chip:style("color", "white")
+    chip:style("hover scale", 1.06)
+alerts = app:card
+alerts:heading "Notifications"
+alerts:switch("Desktop alerts", true)
+alerts:switch("Play a sound", false)
+alerts:switch("Weekly summary email", true)
+me = app:card
+me:heading "Account"
+name = me:input "Display name"
+name:set "Ada Lovelace"
+buttons = me:row
+buttons:button("Save changes", save, "primary"):icon "check"
+buttons:button("Delete account", delete, "danger"):tooltip "This can't be undone"
+app:key("ctrl+s", save)
+
+func setting(where, title, hint):
+    line = where:row
+    line:justify "between"
+    words = line:column
+    words:gap 2
+    words:text title
+    words:small hint
+    return line
+
+func pick_theme(choice):
+    app:theme choice:lower()
+
+func pick_accent(color):
+    app:accent color:lower()
+
+func save():
+    app:toast("Saved, " + name:value(), "success")
+
+func delete():
+    if app:confirm "Delete your account for good?":
+        app:toast("Account deleted", "error")

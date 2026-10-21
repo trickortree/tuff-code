@@ -140,8 +140,20 @@
         file: () => ide.activeFile(),
         insert: (text) => ide.insertText(text),
         insertSnippet: (text) => ide.insertText(text, { snippet: true }),
+        replaceAll: (text) => ide.replaceAllText(text),
       },
-      project: { root: () => ide.root(), files: () => ide.listFiles(), read: (path) => api.fs.readFile(path), rel: (path) => ide.rel(path) },
+      project: {
+        root: () => ide.root(),
+        files: () => ide.listFiles(),
+        read: (path) => api.fs.readFile(path),
+        rel: (path) => ide.rel(path),
+        // "files" permission: save text or base64 data (like a PNG or WAV) at a path inside the project.
+        write: perms.includes('files') ? async (path, data, { encoding = 'utf8' } = {}) => {
+          const saved = await api.plugins.writeFile(path, data, encoding); // inside the open project
+          await ide.reloadChanged();
+          return saved;
+        } : undefined,
+      },
       openFile: (path) => ide.openFile(path),
       run: (path) => ide.runFile(path),
       toast: (msg, kind, ms) => ide.toast(msg, kind, ms),
@@ -158,6 +170,8 @@
       },
       tuff: { keywords: window.TUFF_KEYWORDS, docs: window.TUFF_DOCS, methods: window.TUFF_METHOD_DOCS, libs: window.TUFF_LIBS, templates: window.TUFF_TEMPLATES },
       agents: perms.includes('agents') ? api.agents : undefined,
+      // "net" permission: web requests from the main process: request({ url, method, headers, body }).
+      net: perms.includes('net') ? { request: (opts) => api.plugins.request(opts) } : undefined,
     };
   }
 

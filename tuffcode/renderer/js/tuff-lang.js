@@ -8,65 +8,152 @@ window.TUFF_METHOD_DOCS = {
   spinner: ['app:spinner("Loading...")', 'A spinning loading ring.'],
   checkbox: ['app:checkbox("Label", false)', 'A tick box. Read it with :value.'],
   dropdown: ['app:dropdown(["A", "B"], "A")', 'Pick one choice from a list.'],
-  speed: ['thing:speed 2', 'Animation speed: 1 is normal, 2 is twice as fast, 0.5 is half speed.'],
+  speed: ['thing:speed 2', 'Animation speed: 1 is normal, 2 is twice as fast, 0.5 is half speed. In tgame, sprite:speed(vx, vy) keeps a sprite moving by itself, that many pixels a second (objects take vx, vy, vz).'],
   gradient: ['app:gradient("#00c6ff", "#7b2ff7")', 'mtgui: sets the two accent gradient colors.'],
   now: ['clock:now', 'Sets a clock back to the real time.'],
-  pause: ['clock:pause', 'Stops a clock.'],
-  resume: ['clock:resume', 'Starts a paused clock again.'],
+  pause: ['clock:pause', 'Stops a clock. In tgame, game:pause("Paused") stops the game and shows the message; game:resume() goes on.'],
+  resume: ['clock:resume', 'Starts a paused clock again. In tgame, game:resume() carries on after :pause or :game_over.'],
   flip: ['switch:flip', 'Turns a switch or checkbox the other way.'],
   options: ['dropdown:options(["A", "B"])', 'Replaces the choices in a dropdown.'],
   start: ['spinner:start', 'Starts a spinner spinning.'],
   stop: ['spinner:stop', 'Stops a spinner.'],
   heading: ['app:heading "Text"', 'Big bold title text.'],
-  text: ['app:text "Text"', 'Normal text. Change it later with :set.'],
+  text: ['app:text "Text"', 'Normal text. Change it later with :set. On a tap response, res:text gives back what the server sent, as text. In tgame, game:text(words, x, y, size, color) puts words on the screen; change them with :set.'],
   small: ['app:small "Text"', 'Small grey text for hints and captions.'],
   button: ['app:button("Text", clicked, "primary")', 'A button. clicked is the function to run. Styles: primary, secondary, outline, ghost, success, danger.'],
   input: ['app:input "Hint"', 'A text box. Read it with :value.'],
   toggle: ['app:toggle("Label", true)', 'An on/off switch.'],
   slider: ['app:slider(min, max, start)', 'Drag to pick a number.'],
   progress: ['app:progress(percent)', 'A progress bar from 0 to 100.'],
-  image: ['app:image("pic.png", width)', 'Shows a .png or .gif from your project folder.'],
+  image: ['app:image("pic.png", width)', 'Shows a .png or .gif from your project folder. In tgame, game:image("ship.png", x, y, width) is a sprite (.png, .jpg, .gif or .webp).'],
   divider: ['app:divider', 'A thin line between sections.'],
   space: ['app:space 20', 'Empty space.'],
   row: ['row = app:row', 'Puts the things you add to it side by side.'],
   card: ['card = app:card', 'A rounded panel to group things.'],
   page: ['home = app:page "Home"', 'A page of your app. Add things to it like a card. Only one page shows at a time, starting with the first one you make.'],
-  open: ['home:open', 'Shows this page and hides the other pages.'],
+  open: ['home:open', 'Shows this page and hides the other pages. In tgame, game:open() is true until the game window is closed: while game:open():'],
   opened: ['home:opened shown', 'Runs shown each time this page opens.'],
   showing: ['home:showing', 'Gives back true if this page is the one on screen.'],
-  title: ['app:title "Title"', 'Changes the window title, even while running.'],
+  title: ['app:title "Title"', 'Changes the window title, even while running. Works on a tgame window too.'],
   icon: ['app:icon "icon.png"', 'Changes the window icon (.png, .gif or .ico in your project folder).'],
-  size: ['app:size(width, height)', 'Resizes the window.'],
+  size: ['app:size(width, height)', 'Resizes the window. On a tap data object, data:size gives how many names it has. A tgame sprite:size(width, height) resizes a box or picture (a circle takes its radius, text its letter size); an object takes size(width, height, depth).'],
   theme: ['app:theme "light"', 'Switches between "dark" and "light".'],
   accent: ['app:accent "purple"', 'Changes the highlight color: blue, purple, pink, red, orange, yellow, green, teal or a hex code.'],
-  every: ['app:every(seconds, tick)', 'Runs a function again and again, like a clock. To pause it, check a variable at the top of the function: if not running: return'],
-  after: ['app:after(seconds, done)', 'Runs a function once after a delay.'],
+  every: ['app:every(seconds, tick)', 'Runs a function again and again, like a clock. To pause it, check a variable at the top of the function: if not running: return Works the same on a tgame window (it pauses with the game).'],
+  after: ['app:after(seconds, done)', 'Runs a function once after a delay. Works the same on a tgame window.'],
   alert: ['app:alert "Message"', 'Pops up a message with an OK button.'],
   confirm: ['app:confirm "Are you sure?"', 'Pops up Yes/No and gives back true or false.'],
   ask: ['app:ask "Question?"', 'Pops up a text box and gives back what was typed.'],
-  close: ['app:close', 'Closes the window.'],
-  set: ['thing:set value', 'Changes the text or value: of a label, button, text box, slider, progress bar, switch or dropdown. It doesn\'t run :change (for a switch or checkbox, switch:set(true, true) does). A clock takes :set(hours, minutes, seconds); an image takes a new picture file.'],
-  value: ['thing:value', 'Gives back the current value: the text of a label, button or text box; the chosen option of a dropdown; true or false for a switch or checkbox; a number for a slider or progress bar; "14:05:09" for a clock.'],
+  close: ['app:close', 'Closes the window. Closes a tgame window too.'],
+  set: ['thing:set value', 'Changes the text or value: of a label, button, text box, slider, progress bar, switch or dropdown. It doesn\'t run :change (for a switch or checkbox, switch:set(true, true) does). A clock takes :set(hours, minutes, seconds); an image takes a new picture file. On a tap data object, data:set("name", value) adds or changes a value. A tgame text sprite takes new words (score:set "Score: 5"), a picture a new file, and any sprite or object keeps named values: tree:set("hp", 3).'],
+  value: ['thing:value', 'Gives back the current value: the text of a label, button or text box; the chosen option of a dropdown; true or false for a switch or checkbox; a number for a slider or progress bar; "14:05:09" for a clock. A tgame text sprite gives its words.'],
   change: ['thing:change fn', 'Runs fn when the value changes: on every key typed in a text box, or when a dropdown, switch, checkbox or slider changes. If fn has an input, it gets the new value, like func moved(v):'],
   enter: ['box:enter fn', 'Runs fn when Enter is pressed in a text box. If fn has an input, it gets the text.'],
   focus: ['box:focus', 'Puts the cursor in a text box, ready for typing.'],
   click: ['button:click fn', 'Changes which function the button runs.'],
   style: ['button:style "danger"', 'Changes a button\'s style (primary, secondary, outline, ghost, success, danger), or a clock\'s style ("analog" or "digital").'],
-  color: ['label:color "red"', 'Changes the text color: blue, purple, pink, red, orange, yellow, green, teal, white, black, gray or "#rrggbb". "text" puts it back to normal.'],
+  color: ['label:color "red"', 'Changes the text color: blue, purple, pink, red, orange, yellow, green, teal, white, black, gray or "#rrggbb". "text" puts it back to normal. A tgame sprite, object or group takes any of those colors, plus brown, gold, lime, cyan, navy, sky, sand, grass, leaf, wood, stone, water, snow, silver.'],
   disable: ['button:disable', 'Greys out a button so it can\'t be clicked.'],
   enable: ['button:enable', 'Makes a disabled button clickable again.'],
-  hide: ['thing:hide', 'Hides it.'],
-  show: ['thing:show', 'Shows it again after :hide.'],
-  remove: ['thing:remove', 'Removes a widget for good. On a list, items:remove value takes that value out (by value, not by position).'],
-  clear: ['thing:clear', 'Empties a text box, or a line you already said. On a row, card or page, removes everything inside it.'],
+  hide: ['thing:hide', 'Hides it. Works on tgame sprites, objects and groups too.'],
+  show: ['thing:show', 'Shows it again after :hide. Works on tgame sprites, objects and groups too.'],
+  remove: ['thing:remove', 'Removes a widget for good. On a list, items:remove value takes that value out (by value, not by position). In tgame, it takes a sprite or object out of the game; on a group, group:remove(thing) only takes it out of the group.'],
+  clear: ['thing:clear', 'Empties a text box, or a line you already said. On a row, card or page, removes everything inside it. In tgame, game:clear() removes everything the program made, and group:clear() everything in a group.'],
   rewrite: ['line:rewrite value', 'Replaces the text of a line you already said.'],
   append: ['line:append value', 'Adds text to the end of a line you already said.'],
-  add: ['items:add value', 'Lists: adds value to the end of the list.'],
+  add: ['items:add value', 'Lists: adds value to the end of the list. A tgame group adds a sprite or object.'],
   pop: ['items:pop', 'Lists: takes the last item off the list and gives it back.'],
-  has: ['thing:has value', 'Lists: true if the list holds value. Text: true if the text contains it, like name:has "a".'],
+  has: ['thing:has value', 'Lists: true if the list holds value. Text: true if the text contains it, like name:has "a". Data objects (tap): true if it has that name, like user:has "email". A tgame group: true if the thing is in it.'],
   upper: ['text:upper', 'Text: gives back the text in CAPITAL letters.'],
   lower: ['text:lower', 'Text: gives back the text in small letters.'],
   trim: ['text:trim', 'Text: gives back the text without spaces at the start and end.'],
+  status: ['res:status', 'tap responses: the status code, like 200 (it worked) or 404 (not found).'],
+  ok: ['res:ok', 'tap responses: true if the request worked (a status from 200 to 299). Errors like 404 don\'t stop the program, so check this.'],
+  json: ['res:json', 'tap responses: reads what the server sent as JSON. An object {...} gives a data object (read it with :get), an array [...] gives a list.'],
+  header: ['res:header("Content-Type")', 'tap responses: one header the server sent, or nil if it didn\'t send it.'],
+  get: ['data:get("name")', 'tap data objects: the value with that name, or nil if there isn\'t one. Objects inside are data objects too, and arrays are lists. tgame sprites and objects keep values too: tree:get("hp").'],
+  keys: ['data:keys', 'tap data objects: a list of all its names. Loop over it with: for name in data:keys():'],
+  // tgame (games). Names tgui or tap also use (text, set, open...) have one entry above, which mentions tgame too.
+  frame: ['game:frame()', 'tgame: draws the next frame, handles keys and clicks, and gives back the seconds since the last one (dt). Use it in a loop: while game:open(): dt = game:frame()'],
+  every_frame: ['game:every_frame(step)', 'tgame: runs step(dt) every frame, with the seconds since the last one. The callback style: no loop needed.'],
+  on_key: ['game:on_key("space", jump)', 'tgame: runs jump when the key is pressed. "any" runs it for every key, and the function can take the key\'s name: func pressed(key):'],
+  clicked: ['thing:clicked fn', 'tgame: runs fn when it\'s clicked. A sprite or object gives fn itself (func chop(tree):); the game gives x and y (a world gives x, y and z).'],
+  held: ['game:held("left")', 'tgame: true while the key is held down. Keys: a letter, a number, space, enter, shift, up, down, left, right, "mouse".'],
+  pressed: ['game:pressed("space")', 'tgame: true only in the frame the key went down (for a pygame-style loop).'],
+  mouse_x: ['game:mouse_x()', 'tgame: where the mouse is, across.'],
+  mouse_y: ['game:mouse_y()', 'tgame: where the mouse is, down.'],
+  time: ['game:time()', 'tgame: seconds since the game started, not counting pauses.'],
+  fps: ['game:fps()', 'tgame: frames per second right now.'],
+  paused: ['game:paused()', 'tgame: true while the game is paused or over.'],
+  game_over: ['game:game_over("Score: 5", restart)', 'tgame: stops the game and shows "Game over" with the message. Space (or a click) then runs restart, which should set everything back. Leave restart out to just stop.'],
+  sound: ['game:sound "coin"', 'tgame: plays a sound: beep, coin, jump, hit, boom, chop, laser, pop, click, step, powerup, win, lose, or a .wav, .mp3 or .ogg file from your project folder.'],
+  beep: ['game:beep(pitch, seconds)', 'tgame: a beep. pitch is in hertz (440 by default).'],
+  music: ['game:music "song.mp3"', 'tgame: plays a sound file over and over. game:stop_music() stops it.'],
+  stop_music: ['game:stop_music()', 'tgame: stops the music.'],
+  volume: ['game:volume 50', 'tgame: how loud everything is, from 0 to 100.'],
+  width: ['game:width()', 'tgame: how wide the game is.'],
+  height: ['game:height()', 'tgame: how tall the game is.'],
+  background: ['game:background "black"', 'tgame: the color behind everything (in 3D, a plain sky).'],
+  random_spot: ['game:random_spot()', 'tgame: a random spot on the screen, [x, y] (or [x, 0, z] on the ground in 3D). random_spot(20) keeps to a grid of 20. Use it anywhere x and y go: food:move_to(game:random_spot())'],
+  group: ['things = game:group()', 'tgame: a group of sprites or objects: :add, :remove, :has, :items, :count, and :move, :hide, :show, :color, :clear for all of them at once.'],
+  hud: ['hud = game:hud()', 'tgame: a layer on top of the game that the camera doesn\'t move, for scores and messages: hud:text("Score: 0", 80, 30).'],
+  box: ['game:box(x, y, width, height, color)', 'tgame: a rectangle. x and y are its middle. In 3D: world:box(x, y, z, size, color), with its bottom at y (0 is the ground); size is a number or [width, height, depth].'],
+  circle: ['game:circle(x, y, radius, color)', 'tgame: a circle.'],
+  line: ['game:line(x1, y1, x2, y2, color)', 'tgame: a line. :size changes how thick it is.'],
+  camera: ['game:camera(x, y)', 'tgame (2D): the point in the middle of the screen, for games bigger than the window. The HUD stays put.'],
+  sky: ['world:sky "sunset"', 'tgame (3D): day, sunset, dawn, night, cloudy or space. It sets the sky, the sun, the light and the fog.'],
+  fog: ['world:fog 60', 'tgame (3D): things fade into the sky this far away. 0 turns the fog off.'],
+  sun: ['world:sun 1.5', 'tgame (3D): how bright the sun is (1 is normal, 0 is off).'],
+  light: ['world:light(x, y, z, color)', 'tgame (3D): a lamp that lights up what\'s around it.'],
+  ground: ['world:ground "grass"', 'tgame (3D): a big flat floor at height 0. world:ground(color, size).'],
+  island: ['world:island(80)', 'tgame (3D): a round grassy island this wide, with a beach and the sea around it. The player can\'t walk off it.'],
+  sphere: ['world:sphere(x, y, z, size, color)', 'tgame (3D): a ball, size across, sitting at height y.'],
+  cylinder: ['world:cylinder(x, y, z, size, color)', 'tgame (3D): a cylinder. size is a number or [width, height].'],
+  cone: ['world:cone(x, y, z, size, color)', 'tgame (3D): a cone. size is a number or [width, height].'],
+  plane: ['world:plane(x, y, z, size, color)', 'tgame (3D): a flat square lying down (a mat, a path, water). size is a number or [width, depth].'],
+  spawn: ['world:spawn("tree", x, y, z)', 'tgame (3D): a ready-made model: tree, pine, rock, bush, flower, house, hut, sign, crate, fence or coin (or a .glb file). Leave out the spot for a random one.'],
+  player: ['player = world:player "first person"', 'tgame (3D): you, walking with WASD or the arrows, jumping with Space and looking with the mouse once the game is clicked. "first person" or "third person".'],
+  camera_at: ['world:camera_at(x, y, z)', 'tgame (3D): puts the camera there. Point it with world:look_at.'],
+  look_at: ['thing:look_at(x, y, z)', 'tgame (3D): turns the camera (world:look_at) or an object to face a spot or another object.'],
+  follow: ['world:follow(thing, distance, height)', 'tgame (3D): the camera follows behind an object (7 back and 3 up by default).'],
+  orbit: ['world:orbit(thing)', 'tgame (3D): the camera circles an object or a spot: drag with the mouse to turn, scroll to zoom.'],
+  looking_at: ['world:looking_at()', 'tgame (3D): the object in the middle of the view (under the crosshair), or nil. looking_at(4) only finds things within 4.'],
+  x: ['thing:x()', 'tgame: where a sprite or object is, across.'],
+  y: ['thing:y()', 'tgame: where a sprite is, down (in 3D: how high an object\'s bottom is).'],
+  z: ['thing:z()', 'tgame (3D): where an object is, front to back.'],
+  spot: ['thing:spot()', 'tgame: where it is, as a list: [x, y] (or [x, y, z] in 3D). Use it anywhere a spot goes: tail:move_to(head:spot())'],
+  move: ['thing:move(dx, dy)', 'tgame: moves it by that much (in 3D: dx, dy, dz). A group moves everything in it.'],
+  move_to: ['thing:move_to(x, y)', 'tgame: puts it at x, y (in 3D: x, y, z), or at a spot: food:move_to(game:random_spot())'],
+  glide: ['thing:glide(x, y, seconds)', 'tgame: moves it smoothly to x, y over some seconds (in 3D: x, y, z, seconds).'],
+  forward: ['thing:forward(distance)', 'tgame: moves it the way it\'s facing (2D: angle 0 is to the right; 3D: an object starts facing away from the camera).'],
+  turn: ['thing:turn(degrees)', 'tgame: turns it by that many degrees. More than 0 turns right (clockwise).'],
+  turn_to: ['thing:turn_to(degrees)', 'tgame: sets which way it faces, in degrees.'],
+  angle: ['thing:angle()', 'tgame: which way it faces, in degrees.'],
+  spin: ['thing:spin(degrees_per_second)', 'tgame: keeps it turning by itself. spin(0) stops.'],
+  point_at: ['sprite:point_at(x, y)', 'tgame (2D): turns a sprite to face a spot or another sprite.'],
+  on_edge: ['sprite:on_edge "bounce"', 'tgame (2D): what a sprite does at the edge of the screen: "bounce", "wrap" (comes back on the other side), "stop" (stays on screen) or "none".'],
+  on_screen: ['sprite:on_screen()', 'tgame (2D): true if any of it can be seen.'],
+  touches: ['thing:touches(other)', 'tgame: true if it touches another sprite or object. Give it a list or a group and it gives back the one it touches, or nil: hit = ball:touches(bricks)'],
+  distance: ['thing:distance(other)', 'tgame: how far it is from another sprite, object, the player, or a spot.'],
+  scale: ['thing:scale 2', 'tgame: how big it is drawn: 1 is normal, 2 is twice as big.'],
+  layer: ['sprite:layer 2', 'tgame (2D): which sprites are drawn on top. Higher layers are on top; 0 by default.'],
+  flip: ['sprite:flip()', 'tgame (2D): mirrors a sprite left to right (again to flip back).'],
+  align: ['label:align "left"', 'tgame (2D): makes x the left edge of the text ("left"), its middle ("center") or its right edge ("right").'],
+  shake: ['thing:shake()', 'tgame: shakes it for a moment, like a tree being chopped.'],
+  fall: ['tree:fall()', 'tgame (3D): it topples over, away from the player. It stops being solid.'],
+  fallen: ['tree:fallen()', 'tgame (3D): true from :fall until it stands up again.'],
+  grow: ['thing:grow()', 'tgame (3D): grows from tiny to its full size.'],
+  regrow: ['tree:regrow(5)', 'tgame (3D): after it falls, it stands up again and grows back this many seconds later.'],
+  swing: ['axe:swing()', 'tgame (3D): swings it forward and back, like an axe chopping.'],
+  glow: ['thing:glow "gold"', 'tgame (3D): makes it shine in that color. "none" stops.'],
+  solid: ['thing:solid false', 'tgame (3D): whether the player bumps into it (true for most things you make).'],
+  label: ['thing:label "Oak"', 'tgame (3D): text floating above an object. label "" removes it.'],
+  walk_speed: ['player:walk_speed 6', 'tgame (3D): how fast the player walks (5 by default). Shift runs.'],
+  jump_height: ['player:jump_height 2', 'tgame (3D): how high the player jumps (1.2 by default).'],
+  jump: ['player:jump()', 'tgame (3D): makes the player jump (Space does it too).'],
+  hold: ['axe = player:hold "axe"', 'tgame (3D): the player holds an axe, pickaxe, sword, torch or hammer. It gives back the held thing, so axe:swing() works.'],
+  items: ['group:items()', 'tgame: a list of everything in a group.'],
+  count: ['group:count()', 'tgame: how many things are in a group.'],
 };
 
 window.TUFF_LIBS = {
@@ -82,6 +169,17 @@ window.TUFF_LIBS = {
     type: ['anims.type(text, speed)', 'Types text out one letter at a time. speed is seconds per letter (0.04 by default), so a bigger number is slower.'],
     countdown: ['anims.countdown(start, then)', 'Counts down on one line, then shows the `then` text.'],
   },
+  tap: {
+    get: ['tap.get(url, headers)', 'Gets a web page or API and gives back a response: res:status, res:ok, res:text, res:json, res:header(name). headers is optional: a data object.'],
+    post: ['tap.post(url, body, headers)', 'Sends body to url and gives back a response. Text goes as plain text; a data object or a list goes as JSON. headers is optional.'],
+    put: ['tap.put(url, body, headers)', 'Like tap.post, but for replacing what is at url. headers is optional.'],
+    delete: ['tap.delete(url, headers)', 'Asks the server to delete what is at url, and gives back a response. headers is optional.'],
+    data: ['tap.data()', 'Makes an empty data object, for a JSON body or headers. Fill it with :set("name", value).'],
+  },
+  tgame: {
+    window: ['tgame.window("Title", width, height)', 'Opens a 2D game window (800 by 600 by default). Make boxes, circles, text and pictures on it, then loop: while game:open(): dt = game:frame()'],
+    world: ['tgame.world("Title", width, height)', 'Opens a 3D game world: a sky, the ground or an island, shapes, ready-made trees and houses (:spawn), and a player who walks around (:player).'],
+  },
 };
 
 window.TUFF_DOCS = {
@@ -92,13 +190,17 @@ window.TUFF_DOCS = {
   if: ['if condition:', 'Runs the indented block only when the condition is true. `then` works instead of `:`.'],
   elif: ['elif condition:', 'Checked when the `if` above it was false.'],
   else: ['else:', 'Runs when nothing above it matched.'],
-  then: ['then', 'Starts a block, same as `:`.'],
+  then: ['then', 'Starts a block, same as `:`. Writing both (`then:`) works too.'],
   while: ['while condition:', 'Repeats the block as long as the condition stays true.'],
   for: ['for item in list:', 'Runs the block once for every item in a list, text or range().'],
   is: ['a is b', 'True when both sides are equal. Use `is not` for the opposite.'],
   print: ['print(a, b, ...)', 'Like `say`, but takes several values separated by commas.'],
-  number: ['number(text)', 'Turns text like "42" into the number 42.'],
+  number: ['number(text)', 'Turns text like "42" into the number 42. Text that is not a number gives err instead of stopping: check with `if number(t) is err:`.'],
+  num: ['num(text)', 'Short for number(): num("42") is 42, and text that is not a number gives err.'],
+  int: ['int(value)', 'A whole number, dropping any decimals: int("42") is 42, int(3.7) is 3. Text that is not a number gives err.'],
   text: ['text(value)', 'Turns any value into text.'],
+  str: ['str(value)', 'Same as text(): turns any value into text, like str(5) + " apples".'],
+  err: ['err', 'What number(), num() and int() give back for text that is not a number. Check with `if num(answer) is err:`. Using an err in maths stops the program and says why.'],
   len: ['len(value)', 'How many characters are in some text, or items in a list.'],
   round: ['round(number, digits)', 'Rounds a number. digits is optional.'],
   random: ['random(low, high)', 'A random whole number from low to high, both included.'],
@@ -111,6 +213,8 @@ window.TUFF_DOCS = {
   anims: ['import anims', 'Ready-made animations: loading, bar, type, countdown.'],
   tgui: ['import tgui', 'Tuff GUI: make real app windows with buttons, text boxes, toggles and more.'],
   mtgui: ['mention mtgui', 'Modern Tuff GUI: like tgui with gradients, gloss, shine and glow.'],
+  tap: ['mention tap', 'Get and send things on the web (HTTP), like Python\'s requests: tap.get, post, put, delete. JSON comes back as data objects.'],
+  tgame: ['mention tgame', 'Make games, like pygame: tgame.window for 2D (sprites, keys, the mouse, collisions, sounds) and tgame.world for 3D (a sky, trees, a first-person player).'],
   mention: ['mention library', 'Loads a library. Works exactly like import.'],
   sqrt: ['sqrt(number)', 'Square root: sqrt(81) is 9.'],
   abs: ['abs(number)', 'Removes the minus sign: abs(-5) is 5.'],
@@ -125,7 +229,103 @@ window.TUFF_DOCS = {
   append: ['line:append value', 'Adds text to the end of a line you already said.'],
 };
 
-const TUFF_BUILTINS = ['print', 'number', 'text', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average'];
+// atgui: its library entry and its methods. TUFF_METHOD_DOCS is one namespace for every library, so a name
+// atgui shares with tgui or tap keeps its doc, with atgui's use added at the end.
+(() => {
+  window.TUFF_LIBS.atgui = {
+    window: ['atgui.window("Title", width, height)', 'Opens a modern app window made of real HTML and CSS: sidebars, lists, chat bubbles, dashboards, menus and pop-ups, all styled from Tuff. Width and height are optional.'],
+  };
+  window.TUFF_DOCS.atgui = ['mention atgui', 'Advanced Tuff GUI: apps that look like the Claude or Codex desktop apps. Sidebars, lists, tables, tabs, markdown, menus, toasts, animations and styling, with no HTML to write.'];
+  const docs = window.TUFF_METHOD_DOCS;
+  const also = {
+    set: 'atgui: also lists (picks an item), tables, markdown, code, charts, badges, icons, avatars, modals and the title bar.',
+    value: 'atgui: a list gives the picked item\'s text (nil if none), a table the picked row as a list, tabs the open tab\'s name.',
+    change: 'atgui: a list\'s :change gets the picked item\'s text, a table\'s the row (a list), tabs\' the tab\'s name.',
+    enter: 'atgui: in a textarea, Enter runs fn and Shift+Enter starts a new line.',
+    focus: 'atgui: box:focus fn runs fn(true) when the cursor goes in and fn(false) when it leaves.',
+    add: 'atgui: list:add("Inbox") adds an item and gives it back; table:add(["Ada", "Admin"]) adds a row; markdown, code and charts add to the end.',
+    remove: 'atgui: list:remove "Inbox" takes an item out of a list or table (with no input, the whole widget goes).',
+    clear: 'atgui: empties a list, table, markdown or code block too.',
+    open: 'atgui: tabs:open "Home", dlg:open shows a modal, menu:open shows a menu under what was just clicked.',
+    opened: 'atgui: also for a tab.',
+    close: 'atgui: dlg:close closes a modal; menu:close closes a menu.',
+    style: 'atgui: w:style(name, value) with friendly names: background, color, radius, padding, margin, border, shadow, size, bold, opacity, glass, blur, gradient, width, height, scale... Start the name with hover, pressed or focus for that moment, like btn:style("hover scale", 1.05). Buttons, badges and spinners also take one style name.',
+    color: 'atgui: also icons.',
+    icon: 'atgui: btn:icon "send" puts a built-in icon on a button (or a list item, badge or menu item); row:icon("search", 20) shows one; app:icon "logo.png" sets the window\'s icon.',
+    image: 'atgui: also .jpg, .webp and .svg, or a web address.',
+    theme: 'atgui: also "system", which follows the computer.',
+    accent: 'atgui: also indigo and gray.',
+    start: 'atgui: timer:start runs a timer from app:every again.',
+    stop: 'atgui: timer:stop pauses a timer from app:every or app:after.',
+    small: 'atgui: item:small "text" gives a list item a second line.',
+    spinner: 'atgui: spinner:style "dots" makes three bouncing dots, like "someone is typing".',
+    every: 'atgui: gives back a timer with :stop and :start.',
+    after: 'atgui: gives back a timer with :stop.',
+    title: 'atgui: also changes the title bar\'s text.',
+    button: 'atgui: also the gradient style, and the function gets the button\'s text (or leave the input out).',
+    page: 'atgui: works the same, as screens in the window\'s main area (tabs show a tab bar instead).',
+    gradient: 'atgui: the accent and its partner color (gradient buttons, progress bars).',
+  };
+  for (const [name, text] of Object.entries(also)) if (docs[name] && text) docs[name] = [docs[name][0], `${docs[name][1]} ${text}`];
+  const own = {
+    textarea: ['app:textarea "Message"', 'atgui: a text box for several lines that grows as you type. With :enter, Enter runs the function and Shift+Enter starts a new line.'],
+    switch: ['app:switch("Dark mode", true)', 'atgui: an on/off switch (tgui calls it toggle). Read it with :value.'],
+    list: ['items = app:list(["Inbox", "Sent"])', 'atgui: a list to pick from. items:add("x") gives back the item (:icon, :small, :badge); items:change fn gets the picked item\'s text.'],
+    table: ['t = app:table(["Name", "Role"])', 'atgui: a table. t:add(["Ada", "Admin"]) adds a row; t:change fn gets the picked row as a list.'],
+    tabs: ['tabs = app:tabs()', 'atgui: tabs. home = tabs:tab "Home" makes one to add widgets to; tabs:open "Home", tabs:value, tabs:change fn.'],
+    tab: ['home = tabs:tab "Home"', 'atgui: a tab of a tabs widget. Add widgets to it like a card.'],
+    column: ['col = row:column', 'atgui: stacks things down, like the window does. Useful inside a row.'],
+    grid: ['g = app:grid(3)', 'atgui: things in equal columns (with no number, as many as fit). card:style("span", 2) makes a card two columns wide.'],
+    scroll: ['msgs = app:scroll()', 'atgui: a part that scrolls on its own and takes the space left, like a chat\'s messages. msgs:to_bottom scrolls to the end.'],
+    split: ['panes = app:split(260)', 'atgui: two panes side by side; the first is 260 wide, with a handle to drag between them.'],
+    sidebar: ['side = app:sidebar(240)', 'atgui: a column down the left side of the window, or app:sidebar(240, "right").'],
+    avatar: ['app:avatar("Ada Lovelace")', 'atgui: a round badge with someone\'s initials, or a picture file. A color is optional: app:avatar("Ada", "pink").'],
+    badge: ['app:badge("New", "success")', 'atgui: a small pill of text. Styles: accent, gray, success, warning, danger, info, outline. item:badge "3" shows a count on a list item.'],
+    markdown: ['app:markdown "**bold**"', 'atgui: formatted text from Markdown: headings, **bold**, *italic*, `code`, lists, links, tables and code blocks. :add adds more at the end, for replies that arrive bit by bit.'],
+    code: ['app:code(text, "tuff")', 'atgui: a code block with colors and a Copy button.'],
+    html: ['app:html("<b>Hi</b>")', 'atgui, for experts: your own HTML.'],
+    chart: ['app:chart([3, 8, 5], "line")', 'atgui: a small line or bar chart. chart:add 9 adds a point; chart:set([...]) replaces them all.'],
+    gap: ['box:gap 12', 'atgui: the space between the things in a row, column, card, grid or the window.'],
+    padding: ['box:padding 20', 'atgui: the space inside the edges of a row, column, card or the window.'],
+    align: ['box:align "center"', 'atgui: lines things up across a row or column: start, center, end or stretch.'],
+    justify: ['row:justify "between"', 'atgui: spreads things along a row or column: start, center, end, between, around or evenly.'],
+    grow: ['w:grow', 'atgui: makes it take the space left over in its row or column.'],
+    fill: ['w:fill', 'atgui: stretches it across its row or column.'],
+    width: ['w:width 200', 'atgui: sets the width (pixels, or text like "50%").'],
+    height: ['w:height 120', 'atgui: sets the height (pixels, or text like "50%").'],
+    drag: ['bar:drag', 'atgui: dragging it moves a window that has no frame.'],
+    tooltip: ['w:tooltip "Hint"', 'atgui: a little label that shows when the mouse rests on it.'],
+    hover: ['w:hover fn', 'atgui: runs fn(true) when the mouse goes over it and fn(false) when it leaves.'],
+    clicked: ['w:clicked fn', 'atgui: runs fn when it\'s clicked. Works on any widget; fn gets its text (or leave the input out).'],
+    animate: ['w:animate "slide-up"', 'atgui: fade-in, fade-out, slide-up, slide-down, slide-left, slide-right, pop, zoom-in, zoom-out, bounce, shake, pulse, spin, wiggle, float, blink. w:animate("pulse", 1, "forever") repeats; "none" stops.'],
+    css: ['w:css("letter-spacing: 2px")', 'atgui, for experts: adds CSS to it. app:css(".at-card { ... }") adds CSS rules to the whole window.'],
+    font: ['app:font "rounded"', 'atgui: the window\'s font: system, rounded, serif, mono, or a font\'s name.'],
+    frameless: ['app:frameless', 'atgui: a window without the system\'s frame or title bar. Use it at the top of the program.'],
+    titlebar: ['bar = app:titlebar("My App")', 'atgui: a frameless window with its own title bar (drag it to move; minimize, maximize and close). Add things to it like a row.'],
+    modal: ['dlg = app:modal("Rename")', 'atgui: a dialog over the window. Add widgets to it, then dlg:open and dlg:close; Escape or a click outside closes it. dlg:closed fn.'],
+    menu: ['m = app:menu()', 'atgui: a pop-up menu: m:item("Copy", copy), m:divider. w:menu m opens it on a right-click; m:open opens it under what was just clicked.'],
+    item: ['m:item("Delete", delete_it, "danger")', 'atgui: adds an item to a menu. Its function gets the text of the list item that was right-clicked (or nil).'],
+    toast: ['app:toast("Saved", "success")', 'atgui: a message that pops up in the corner for a few seconds: info, success, warning or error.'],
+    key: ['app:key("ctrl+s", save)', 'atgui: runs a function when a key is pressed: "ctrl+s", "escape", "f5", "ctrl+shift+n"...'],
+    closed: ['app:closed fn', 'atgui: runs fn when the window closes (or a modal: dlg:closed fn).'],
+    minimize: ['app:minimize', 'atgui: minimizes the window.'],
+    maximize: ['app:maximize', 'atgui: maximizes the window, or puts it back.'],
+    password: ['box:password', 'atgui: hides what\'s typed in a text box, with dots.'],
+    items: ['items:items()', 'atgui: the texts of every item in a list, as a list.'],
+    to_bottom: ['msgs:to_bottom', 'atgui: scrolls a scroll() to the end.'],
+    to_top: ['msgs:to_top', 'atgui: scrolls a scroll() to the start.'],
+    select: ['item:select', 'atgui: picks this list item (or table row), without running :change.'],
+  };
+  // A name tgame has too (align, clicked, grow, width...) keeps both meanings. Its doc then starts with
+  // neither library's name, so completions offer it in atgui and tgame files alike.
+  for (const [name, [sig, text]] of Object.entries(own)) {
+    docs[name] = docs[name] && /^tgame\b/.test(docs[name][1])
+      ? [docs[name][0], `In tgame: ${docs[name][1].replace(/^tgame( \([^)]*\))?:\s*/, '')} In atgui: ${text.replace(/^atgui:\s*/, '')}`]
+      : [sig, text];
+  }
+})();
+
+const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average'];
 
 // A line that opens an indented block: if/elif/else/while/for/func ending in ':' or 'then'.
 const BLOCK_OPENER = /^\s*(if|elif|else|while|for|func)\b.*(:|\bthen)\s*(#.*)?$/;
@@ -166,7 +366,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
 
   monaco.languages.setMonarchTokensProvider('tuff', {
     keywords: window.TUFF_KEYWORDS.filter((k) => !['true', 'false', 'nil'].includes(k)),
-    constants: ['true', 'false', 'nil', 'all', 'pi'],
+    constants: ['true', 'false', 'nil', 'err', 'all', 'pi'],
     builtins: TUFF_BUILTINS,
     libs: Object.keys(window.TUFF_LIBS),
     operators: ['=', '==', '!=', '<', '>', '<=', '>=', '+', '-', '*', '/', '%', '^', '+=', '-=', '*=', '/='],
@@ -251,7 +451,16 @@ window.registerTuff = function registerTuff(monaco, accent) {
         return { suggestions: Object.keys(window.TUFF_LIBS).map((l) => ({ label: l, kind: K.Module, insertText: l, range, documentation: window.TUFF_DOCS[l]?.[1] })) };
       }
       if (/\w:$/.test(before)) {
-        const methods = new Set([...Object.keys(window.TUFF_METHOD_DOCS), 'clear', 'upper', 'lower', 'trim', 'has', 'add', 'pop']);
+        // atgui's and tgame's own methods (their docs start with "atgui" or "tgame") only crowd the list in files
+        // that use that library.
+        const src = model.getValue();
+        const games = /^\s*(import|mention)\s+tgame\b/m.test(src);
+        const modern = /^\s*(import|mention)\s+atgui\b/m.test(src);
+        const names = Object.keys(window.TUFF_METHOD_DOCS).filter((m) => {
+          const doc = window.TUFF_METHOD_DOCS[m][1] || '';
+          return (games || !/^tgame\b/.test(doc)) && (modern || !/^atgui\b/.test(doc));
+        });
+        const methods = new Set([...names, 'clear', 'upper', 'lower', 'trim', 'has', 'add', 'pop']);
         return {
           suggestions: [...methods].map((m) => ({
             label: m, kind: K.Method, insertText: m, range,
@@ -268,8 +477,13 @@ window.registerTuff = function registerTuff(monaco, accent) {
         { label: 'while', kind: K.Snippet, insertText: 'while ${1:condition}:\n    $0', insertTextRules: R, detail: 'While loop', range },
         { label: 'for', kind: K.Snippet, insertText: 'for ${1:i} in range(${2:1}, ${3:10}):\n    $0', insertTextRules: R, detail: 'Count loop', range },
         { label: 'line', kind: K.Snippet, insertText: '${1:line} = say "${2:text}"\n${1:line}:rewrite "${3:new text}"', insertTextRules: R, detail: 'Say, then rewrite', range },
+        { label: 'ask number', kind: K.Snippet, insertText: '${1:n} = num(input "${2:A number?} ")\nwhile ${1:n} is err:\n    say "Please type a number."\n    ${1:n} = num(input "${2:A number?} ")\n$0', insertTextRules: R, detail: 'Ask until they type a number (err)', range },
         { label: 'import anims', kind: K.Snippet, insertText: 'import anims\n', range, detail: 'Load the animations library' },
+        { label: 'tap', kind: K.Snippet, insertText: 'mention tap\n\nres = tap.get("${1:https://api.github.com/users/octocat}")\nif res:ok:\n    info = res:json\n    say info:get("${2:name}")\nelse:\n    say "Error " + res:status\n', insertTextRules: R, range, detail: 'Get JSON from the web' },
+        { label: 'tgame 2D', kind: K.Snippet, insertText: 'mention tgame\n\ngame = tgame.window("${1:My Game}", 600, 400)\nplayer = game:box(300, 200, 40, 40, "${2:teal}")\nscore = game:text("Score: 0", 300, 30)\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        player:move(-300 * dt, 0)\n    if game:held("right"):\n        player:move(300 * dt, 0)\n    $0\n', insertTextRules: R, range, detail: 'A starter 2D game' },
+        { label: 'tgame 3D', kind: K.Snippet, insertText: 'mention tgame\n\ngame = tgame.world("${1:My World}")\ngame:sky "${2:day}"\ngame:island(80)\nplayer = game:player("first person")\nfor i in range(1, 20):\n    tree = game:spawn("tree")\n    tree:clicked ${3:chop}\n\nfunc ${3:chop}(tree):\n    tree:shake()\n    $0\n\nwhile game:open():\n    game:frame()\n', insertTextRules: R, range, detail: 'A starter 3D world' },
         { label: 'tgui app', kind: K.Snippet, insertText: 'import tgui\n\napp = tgui.window("${1:My App}")\napp:heading "${2:Hello!}"\n\nfunc ${3:clicked}():\n    $0\n\napp:button("${4:Click me}", ${3:clicked})\n', insertTextRules: R, range, detail: 'A starter app window' },
+        { label: 'atgui app', kind: K.Snippet, insertText: 'mention atgui\n\napp = atgui.window("${1:My App}", 900, 600)\napp:accent "${2:indigo}"\nside = app:sidebar(220)\nside:heading "${3:My App}"\npages = side:list(["Home", "Settings"])\npages:change opened\ntitle = app:heading "Home"\ncard = app:card\ncard:text "${4:Hello!}"\n\nfunc opened(name):\n    title:set name\n    $0\n', insertTextRules: R, range, detail: 'A modern app with a sidebar' },
       ];
       const kws = window.TUFF_KEYWORDS.map((k) => ({ label: k, kind: K.Keyword, insertText: k, range, documentation: window.TUFF_DOCS[k]?.[1] }));
       const fns = TUFF_BUILTINS.map((b) => ({ label: b, kind: K.Function, insertText: `${b}($0)`, insertTextRules: R, range, detail: window.TUFF_DOCS[b]?.[0], documentation: window.TUFF_DOCS[b]?.[1] }));
@@ -445,8 +659,8 @@ function registerTuffNavigation(monaco) {
         if ((m = text.match(/^\s*func\s+([A-Za-z_]\w*)\s*(\([^)]*\))?/))) {
           const end = blockEnd(model, line);
           symbols.push({ name: m[1], detail: m[2] || '()', kind: K.Function, range: new monaco.Range(line, 1, end, model.getLineMaxColumn(end)), selectionRange: range(line, 1, model.getLineMaxColumn(line)), tags: [] });
-        } else if ((m = text.match(/^([A-Za-z_]\w*)\s*=\s*(m?tgui)\.window/))) {
-          symbols.push({ name: m[1], detail: `${m[2]} window`, kind: K.Class, range: range(line, 1, model.getLineMaxColumn(line)), selectionRange: range(line, 1, m[1].length + 1), tags: [] });
+        } else if ((m = text.match(/^([A-Za-z_]\w*)\s*=\s*(m?tgui|atgui|tgame)\.(window|world)/))) {
+          symbols.push({ name: m[1], detail: `${m[2]} ${m[3]}`, kind: K.Class, range: range(line, 1, model.getLineMaxColumn(line)), selectionRange: range(line, 1, m[1].length + 1), tags: [] });
           seen.add(m[1]);
         } else if ((m = text.match(/^([A-Za-z_]\w*)\s*=\s*[A-Za-z_]\w*:([a-z]+)/))) {
           if (seen.has(m[1])) return;

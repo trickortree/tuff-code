@@ -1,0 +1,162 @@
+/* API Explorer. Flat and calm, in the IDE's own colour tokens: thin borders, one accent, no glows. */
+.ax {
+  --ax-line: var(--border-soft);
+  --ax-link: color-mix(in srgb, var(--accent) 70%, var(--text));
+  --ax-bool: color-mix(in srgb, var(--accent) 60%, var(--text));
+  height: 100%; display: flex; flex-direction: column; min-height: 0; font-size: 13px; container-type: inline-size;
+}
+.ax-ic { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ax input, .ax textarea, .ax select { font: inherit; }
+.ax-method, .ax-url, .ax-hrow input, .ax-body { border: 1px solid var(--ax-line); border-radius: 7px; background-color: var(--bg-editor); color: var(--text); outline: none; transition: border-color .12s; }
+.ax-method:focus, .ax-url:focus, .ax-hrow input:focus, .ax-body:focus { border-color: var(--accent); }
+.ax-url::placeholder, .ax-hrow input::placeholder, .ax-body::placeholder { color: var(--text-muted); }
+
+/* ---------------------------------------------------------------- the request */
+.ax-bar { display: flex; gap: 6px; padding: 0 10px 6px; }
+.ax-method {
+  flex: none; width: 78px; height: 30px; padding: 0 22px 0 9px; font: 600 12px var(--font-ui); cursor: pointer; appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%239da0a8' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 7px center; background-size: 12px;
+}
+.ax-method option { background: var(--bg-panel); color: var(--text); }
+.ax-url { flex: 1; min-width: 0; height: 30px; padding: 0 9px; font: 12.5px var(--font-code); user-select: text; }
+.ax-send { flex: none; justify-content: center; min-width: 62px; height: 30px; }
+.ax-send:disabled { opacity: .75; cursor: default; filter: none; }
+
+.ax-opts { display: flex; gap: 2px; padding: 0 6px 4px; }
+.ax-opt { display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 8px 0 4px; border-radius: 6px; font: 600 12px var(--font-ui); color: var(--text-dim); }
+.ax-opt:hover { background: var(--bg-hover); color: var(--text); }
+.ax-opt .ax-ic { width: 12px; height: 12px; transition: transform .12s; }
+.ax-opt.on { color: var(--text); }
+.ax-opt.on .ax-ic { transform: rotate(90deg); }
+.ax-n { color: var(--text-muted); font-weight: 600; }
+
+.ax-edit { display: flex; flex-direction: column; gap: 6px; padding: 2px 10px 8px; }
+.ax-hrows { display: flex; flex-direction: column; gap: 6px; }
+.ax-hrows:empty { display: none; }
+.ax-hrow { display: flex; align-items: center; gap: 6px; }
+.ax-hrow input { flex: 1 1 0; min-width: 0; height: 28px; padding: 0 8px; font: 12px var(--font-code); user-select: text; }
+.ax-hrow input[data-f="value"] { flex-grow: 1.4; }
+.ax-ib { flex: none; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; color: var(--text-muted); }
+.ax-ib:hover { background: var(--bg-hover); color: var(--text); }
+.ax-link { display: inline-flex; align-items: center; gap: 5px; align-self: flex-start; padding: 3px 6px; margin-left: -6px; border-radius: 6px; font: 600 12px var(--font-ui); color: var(--ax-link); }
+.ax-link:hover { background: var(--bg-hover); }
+.ax-link .ax-ic { width: 13px; height: 13px; }
+.ax-body { width: 100%; min-height: 72px; max-height: 240px; resize: vertical; padding: 7px 9px; font: 12px/1.5 var(--font-code); user-select: text; tab-size: 2; }
+.ax-bodyerr { color: var(--red); font-size: 12px; line-height: 1.45; }
+
+.ax-seg { display: inline-flex; align-self: flex-start; gap: 2px; padding: 2px; border-radius: 8px; border: 1px solid var(--ax-line); background: var(--bg-editor); }
+.ax-seg button { height: 24px; padding: 0 10px; border-radius: 6px; font: 600 12px var(--font-ui); color: var(--text-dim); white-space: nowrap; }
+.ax-seg button:hover { color: var(--text); }
+.ax-seg button.on { background: var(--bg-active); color: var(--text); }
+
+/* ---------------------------------------------------------------- tabs and lists */
+.ax-tabs { display: flex; gap: 4px; padding: 4px 10px 8px; border-bottom: 1px solid var(--ax-line); }
+.ax-tabs button { flex: 1; min-width: 0; height: 28px; border-radius: 7px; font: 600 12.5px var(--font-ui); color: var(--text-dim); white-space: nowrap; }
+.ax-tabs button:hover { background: var(--bg-hover); color: var(--text); }
+.ax-tabs button.on { background: var(--bg-active); color: var(--text); }
+
+.ax-main { flex: 1 1 0; min-height: 64px; overflow: auto; padding: 10px 10px 16px; }
+.ax-note { margin: 0 2px 8px; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+.ax-empty { padding: 28px 12px; text-align: center; color: var(--text-muted); font-size: 12.5px; line-height: 1.5; }
+.ax-list { display: flex; flex-direction: column; gap: 6px; }
+.ax-item { display: flex; flex-direction: column; gap: 3px; width: 100%; min-width: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--ax-line); background: var(--bg-editor); text-align: left; transition: background .12s, border-color .12s; }
+.ax-item:hover { border-color: var(--bg-active); background: color-mix(in srgb, var(--bg-hover) 45%, var(--bg-editor)); }
+.ax-item-h { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ax-item-h b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; }
+.ax-item-s { display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--text-dim); font-size: 12px; line-height: 1.4; }
+.ax-item-u { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font: 11.5px var(--font-code); }
+.ax-hitem .ax-item-h .ax-item-u { flex: 1; color: var(--text); font-size: 12px; }
+.ax-hitem .ax-item-s { color: var(--text-muted); font-size: 11.5px; }
+.ax-meth { flex: none; font: 700 10.5px var(--font-code); letter-spacing: .02em; color: var(--text-muted); }
+.ax-meth.m-get { color: var(--green); }
+.ax-meth.m-post { color: var(--yellow); }
+.ax-meth.m-put { color: var(--ax-link); }
+.ax-meth.m-delete { color: var(--red); }
+.ax-hs { font-weight: 600; }
+.ax-hs.ok { color: var(--green); }
+.ax-hs.mid { color: var(--yellow); }
+.ax-hs.bad { color: var(--red); }
+.ax-foot { display: flex; justify-content: center; padding-top: 12px; }
+
+/* ---------------------------------------------------------------- the answer */
+.ax-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-bottom: 8px; }
+.ax-code { display: inline-flex; align-items: center; gap: 6px; font: 700 12.5px var(--font-ui); }
+.ax-code::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.ax-code.ok { color: var(--green); }
+.ax-code.mid { color: var(--yellow); }
+.ax-code.bad { color: var(--red); }
+.ax-meta { color: var(--text-dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ax-codeall { margin: 0 -6px 0 auto; }
+.ax-why { margin: -2px 2px 10px; color: var(--text-dim); font-size: 12px; line-height: 1.45; }
+.ax-sub { display: flex; gap: 16px; margin-bottom: 8px; border-bottom: 1px solid var(--ax-line); }
+.ax-sub button { margin-bottom: -1px; padding: 4px 1px 6px; border-bottom: 2px solid transparent; font: 600 12px var(--font-ui); color: var(--text-dim); white-space: nowrap; }
+.ax-sub button:hover { color: var(--text); }
+.ax-sub button.on { color: var(--text); border-bottom-color: var(--accent); }
+
+.ax-wait { display: flex; justify-content: space-between; gap: 10px; padding: 12px 2px; color: var(--text-dim); font-size: 12.5px; }
+.ax-wait span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ax-wait span:first-child::after { content: "…"; }
+.ax-secs { flex: none; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.ax-err { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--red) 35%, var(--ax-line)); background: color-mix(in srgb, var(--red) 6%, var(--bg-editor)); }
+.ax-err-h { display: flex; align-items: center; gap: 8px; color: var(--red); }
+.ax-err-h .ax-ic { width: 16px; height: 16px; }
+.ax-err-h b { color: var(--text); font-size: 13px; }
+.ax-err p { margin: 0; color: var(--text-dim); font-size: 12.5px; line-height: 1.5; }
+
+.ax-raw { margin: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--ax-line); background: var(--bg-editor); color: var(--text); font: 12px/1.5 var(--font-code); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.ax-raw.empty { color: var(--text-muted); }
+.ax-heads { display: flex; flex-direction: column; }
+.ax-heads > div { display: grid; grid-template-columns: minmax(84px, 38%) 1fr; gap: 10px; padding: 5px 2px; border-bottom: 1px solid color-mix(in srgb, var(--ax-line) 60%, transparent); font: 11.5px/1.45 var(--font-code); }
+.ax-heads b { font-weight: 600; color: var(--text-dim); overflow-wrap: anywhere; }
+.ax-heads span { color: var(--text); overflow-wrap: anywhere; user-select: text; }
+.ax-heads > .ax-empty { display: block; border: 0; font-family: var(--font-ui); }
+
+/* the JSON tree */
+.ax-tree { margin: 0 -4px; font: 12.5px var(--font-code); }
+.ax-row { display: flex; align-items: center; gap: 4px; height: 24px; min-width: 0; padding: 0 6px 0 calc(var(--d) * 14px + 2px); border-radius: 5px; white-space: nowrap; cursor: pointer; outline: none; }
+.ax-row:hover { background: var(--bg-hover); }
+.ax-row:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+.ax-row.sel { background: var(--bg-active); }
+.ax-tog { flex: none; display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; color: var(--text-muted); }
+.ax-row.box .ax-tog:hover { background: var(--bg-active); color: var(--text); }
+.ax-tog .ax-ic { width: 12px; height: 12px; transition: transform .12s; }
+.ax-row.open .ax-tog .ax-ic { transform: rotate(90deg); }
+.ax-k { flex: none; max-width: 55%; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.ax-k.ax-i { color: var(--text-muted); }
+.ax-colon { flex: none; margin: 0 2px 0 -4px; color: var(--text-muted); }
+.ax-v { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ax-v.str { color: var(--green); }
+.ax-v.num { color: var(--yellow); }
+.ax-v.bool { color: var(--ax-bool); }
+.ax-v.nil { color: var(--text-muted); font-style: italic; }
+.ax-v.sum { color: var(--text-muted); font-family: var(--font-ui); font-size: 12px; }
+.ax-more { display: block; margin: 2px 0 4px calc(var(--d) * 14px + 22px); padding: 2px 8px; border-radius: 5px; font: 600 12px var(--font-ui); color: var(--ax-link); }
+.ax-more:hover { background: var(--bg-hover); }
+
+/* ---------------------------------------------------------------- the Tuff code */
+/* When the panel is short, the code box gives up room first (it scrolls), and the answer keeps a little. */
+.ax-drawer { flex: 0 1 auto; display: flex; flex-direction: column; gap: 8px; max-height: 55%; min-height: 0; padding: 10px 10px 12px; border-top: 1px solid var(--ax-line); background: var(--bg-panel); }
+.ax-dh { display: flex; align-items: center; gap: 8px; min-width: 0; margin-right: -4px; }
+.ax-dh b { flex: none; font-size: 12.5px; }
+.ax-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font: 11.5px var(--font-code); }
+.ax-pre { flex: 0 1 auto; min-height: 52px; margin: 0; padding: 8px 10px; overflow: auto; border-radius: 8px; border: 1px solid var(--ax-line); background: var(--bg-editor); color: var(--text); font: 12px/1.55 var(--font-code); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.ax-pre .ln { display: block; padding-left: calc((var(--i) + 4) * 1ch); text-indent: calc((var(--i) + 4) * -1ch); }
+.ax-pre .ln:empty::after { content: "\200b"; }
+.ax-pre .k { color: var(--ax-bool); }
+.ax-pre .s { color: var(--green); }
+.ax-pre .n { color: var(--yellow); }
+.ax-pre .f, .ax-pre .l { color: var(--text-dim); }
+.ax-tip { margin: -2px 2px 0; }
+.ax-inexact { color: var(--yellow); }
+.ax-dbtns { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* a narrow sidebar */
+@container (max-width: 330px) {
+  .ax-bar { gap: 5px; }
+  .ax-method { width: 72px; padding-right: 20px; }
+  .ax-send { min-width: 54px; padding: 4px 10px; }
+  .ax-tabs button { font-size: 12px; }
+  .ax-sub { gap: 12px; }
+}

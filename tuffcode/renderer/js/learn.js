@@ -46,7 +46,7 @@
       id: 'input',
       title: 'Asking questions',
       body: `<p><code>input</code> asks a question. When it runs, click the Run window, type your answer and press <kbd>Enter</kbd>.</p>
-             <p>Answers are always text. Use <code>number(...)</code> to turn an answer into a number.</p>`,
+             <p>Answers are always text. Use <code>number(...)</code> to turn an answer into a number. (If someone types a word instead, you get <code>err</code>. Lesson 10 shows how to check for it.)</p>`,
       example: 'name = input "What\'s your name? "\nsay "Nice to meet you, " + name + "!"\n\nage = number(input "How old are you? ")\nsay "Next year you\'ll be " + (age + 1)',
       task: 'Ask for someone\'s favorite food, then say something about their answer.',
       starter: '# Lesson 4: Asking questions\n# Ask for a favorite food with input, then say something about it.\n\n',
@@ -122,6 +122,21 @@
         if (!/anims\.loading\s*\(/.test(src)) return 'Show a loader with anims.loading()';
         if (!/^\s*(flush|clear\s*\()/m.test(src)) return 'Wipe the screen with flush (or clear(all)).';
         return lines(out).length ? true : 'Say something after you flush.';
+      },
+    },
+    {
+      id: 'checking-answers',
+      title: 'Checking answers',
+      body: `<p>People type all sorts of things. When an answer isn't a number, <code>number(...)</code> (or the short <code>num(...)</code>) gives back <code>err</code> instead of a number, so you can check first:</p>
+             <p><code>if num(answer) is err:</code> means "if that wasn't a number". If you use an <code>err</code> in maths anyway, the program stops and tells you why.</p>
+             <p><code>int(...)</code> gives a whole number (<code>int("3.7")</code> is 3), and <code>str(...)</code> turns anything into text, just like <code>text(...)</code>.</p>`,
+      example: 'bet = input "How many coins do you bet? "\nif num(bet) is err:\n    say "That isn\'t a number!"\nelse:\n    coins = int(bet)\n    say "You bet " + str(coins) + " coins"',
+      task: 'Ask for a number. If it isn\'t one, say so. If it is, say double it.',
+      starter: '# Lesson 10: Checking answers\n# Ask for a number, check it with "is err", then say double it.\n\n',
+      check: (src, out) => {
+        if (!/\binput\b/.test(src)) return 'Ask with input first, like: n = input "A number? "';
+        if (!/\bis\s+(not\s+)?err\b/.test(src)) return 'Check the answer with: if num(n) is err:';
+        return lines(out).length ? true : 'Say something with the answer.';
       },
     },
   ];

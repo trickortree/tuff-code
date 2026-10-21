@@ -1,0 +1,27 @@
+mention tgame
+
+# 300 boxes, every one moved by Tuff code every frame, with a first-person player (the pygame style).
+game = tgame.world("300 moving boxes", 960, 600)
+game:sky "day"
+game:ground "grass"
+player = game:player("first person")
+boxes = []
+colors = ["red", "orange", "yellow", "green", "teal", "blue"]
+for n in range(0, 299):
+    boxes:add(game:box((n % 20) * 2 - 19, 0, -4 - floor(n / 20) * 2, 0.8, colors[n % 6]))
+fps_label = game:hud():text("fps", 480, 24, 22, "white")
+shown = 0
+t = 0
+
+while game:open():
+    dt = game:frame()
+    t += dt
+    up = 0.5 + (t * 2 % 2)
+    if up > 1.5:
+        up = 3 - up
+    for b in boxes:
+        b:move_to(b:x(), up, b:z())
+    shown += dt
+    if shown > 0.5:
+        shown = 0
+        fps_label:set "fps: " + game:fps()

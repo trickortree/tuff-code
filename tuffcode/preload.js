@@ -49,6 +49,8 @@ contextBridge.exposeInMainWorld('tuff', {
     install: invoke('plugins:install'),
     uninstall: invoke('plugins:uninstall'),
     setEnabled: invoke('plugins:setEnabled'),
+    writeFile: invoke('plugins:writeFile'),
+    request: invoke('plugins:request'),
   },
   agents: {
     detect: invoke('agents:detect'),
@@ -63,6 +65,13 @@ contextBridge.exposeInMainWorld('tuff', {
     run: invoke('agents:run'),
     stop: invoke('agents:stop'),
     onEvent: on('agents:event'),
+    ai: {
+      status: invoke('ai:status'),
+      download: invoke('ai:download'),
+      cancel: invoke('ai:cancel'),
+      remove: invoke('ai:remove'),
+      onProgress: on('ai:progress'),
+    },
   },
   version: invoke('app:version'),
   checkSource: invoke('tuff:check'),

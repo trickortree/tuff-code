@@ -1,0 +1,60 @@
+mention atgui
+
+app = atgui.window("Dashboard", 1120, 740)
+app:accent "blue"
+visitors = 312
+side = app:sidebar(210)
+side:heading "Acme Inc."
+nav = side:list()
+nav:add("Overview"):icon "grid"
+nav:add("Orders"):icon "cart"
+nav:add("Customers"):icon "users"
+nav:add("Reports"):icon "chart"
+nav:set "Overview"
+top = app:row
+top:justify "between"
+title = top:column
+title:heading "Overview"
+title:small "Last 7 days"
+top:button("Export", export, "secondary"):icon "download"
+stats = app:grid(4)
+stat("Revenue", "$48.2k", "+12.4%", "success", [12, 18, 15, 22, 28, 26, 34])
+stat("Orders", "1,284", "+8.1%", "success", [30, 28, 35, 33, 40, 44, 46])
+stat("Refunds", "23", "-3.2%", "danger", [9, 7, 8, 6, 7, 5, 4])
+live = stat("Visitors now", "312", "live", "info", [280, 300, 290, 310, 305, 320, 312])
+lower = app:grid(3)
+sales = lower:card
+sales:style("span", 2)
+sales:heading "Sales by month"
+sales:chart([21, 28, 25, 33, 38, 35, 44, 49, 46, 55, 61, 58], "bar")
+best = lower:card
+best:heading "Top products"
+for name in ["Desk lamp", "Keyboard", "Monitor arm"]:
+    best:small name
+    best:progress(random(40, 95))
+orders = app:table(["Order", "Customer", "Status", "Total"])
+orders:add(["#1042", "Ada Lovelace", "Paid", "$120.00"])
+orders:add(["#1041", "Alan Turing", "Shipped", "$89.50"])
+orders:add(["#1040", "Grace Hopper", "Refunded", "$45.00"])
+orders:change open_order
+app:every(1.5, tick)
+
+func stat(name, value, change, mood, points):
+    box = stats:card
+    box:small name
+    line = box:row
+    shown = line:heading value
+    line:badge(change, mood)
+    box:chart(points, "line")
+    box:animate "slide-up"
+    return shown
+
+func tick():
+    visitors += random(-12, 15)
+    live:set text(visitors)
+
+func open_order(row):
+    app:toast("Order " + row[0] + " for " + row[1], "info")
+
+func export():
+    app:toast("Exported 3 orders to orders.csv", "success")

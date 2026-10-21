@@ -56,7 +56,7 @@ Antigravity also has to be allowed to use the tools, because it can't ask for pe
 `ELECTRON_RUN_AS_NODE=1` makes TuffCode's own program run the server, so you don't need Node.js. An installed TuffCode checks and runs Tuff with its bundled runtime, so you don't need Python either.
 
 **Running TuffCode from source?** Then:
-- the command is `node` (or `tuffcode/node_modules/electron/dist/electron.exe` with `ELECTRON_RUN_AS_NODE=1`);
+- the command is `node` (or `tuffcode/node_modules/electron/dist/electron.exe` with `ELECTRON_RUN_AS_NODE=1`. Since Electron 42 that file only appears after `TuffCode.cmd`, `npm start` or `node node_modules/electron/install.js` has run once);
 - the path is `tuffcode/mcp/tuff-mcp.js` in your checkout;
 - Python 3 must be installed.
 

@@ -5,6 +5,7 @@ import inspect
 import math
 import os
 import random
+import re
 import sys
 import tempfile
 import time
@@ -197,10 +198,22 @@ class Parser:
 
     def block(self, opener_optional=False):
         tok = self.peek()
-        if self.at("COLON") or self.at("KW", "then"):
-            self.next()
+        # A ':' glued to the next word (then:say "hi", else:say, func f():say) is read as a method's ':', but no
+        # method call can start here, so it's this block's ':'.
+        if self.at("COLON") or self.at("METHOD") or self.at("KW", "then"):
+            # "then:" works too: people often write both.
+            if self.next().kind == "KW" and (self.at("COLON") or self.at("METHOD")):
+                self.next()
         elif not (opener_optional and self.at("NEWLINE")):
-            raise TuffError(f"Expected ':' or 'then' to start a block, but found {tok.show()}.", tok.line, tok.col)
+            # if x:say "hi" -> x:say was read as a method call, so the block's ':' seems to be missing
+            j = self.i - 1
+            while j >= 0 and self.toks[j].line == tok.line and self.toks[j].kind != "METHOD":
+                j -= 1
+            after = self.toks[j + 1] if j >= 0 and self.toks[j].kind == "METHOD" and self.toks[j].line == tok.line else None
+            tip = " Put a space after the ':' that starts the block (with a word right after it, ':' is read as a method)." \
+                if after is not None and ((after.kind == "KW" and after.value in ("say", "return", "break", "continue", "flush"))
+                                          or (tok.kind == "OP" and tok.value in ASSIGN_OPS)) else ""
+            raise TuffError(f"Expected ':' or 'then' to start a block, but found {tok.show()}.{tip}", tok.line, tok.col)
         if not self.at("NEWLINE"):
             stmt = self.simple_statement()
             self.end_line()
@@ -467,8 +480,9 @@ class Func:
 
 
 class Builtin:
-    def __init__(self, name, fn):
+    def __init__(self, name, fn, takes_err=False):
         self.name, self.fn = name, fn
+        self.takes_err = takes_err  # number(), text(), print()...: an err given to them doesn't stop the program
 
 
 class Line:
@@ -484,8 +498,9 @@ class Module:
 class Native:
     """An object made by a library (like a tgui button) with its own :methods."""
 
-    def __init__(self, kind, methods):
+    def __init__(self, kind, methods, show=None):
         self.kind, self.methods = kind, methods
+        self.show = show  # show(nested) gives the text say shows for it, like a tap data object's JSON
 
 
 class AllLines:
@@ -493,22 +508,52 @@ class AllLines:
 
 
 ALL = AllLines()
-LIBRARIES = ("anims", "tgui", "mtgui")
-BUILTIN_NAMES = {"print", "number", "text", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
+
+
+# err: what number(), int() and num() give back for text that isn't a number, so a program can check
+# (if num(bet) is err:) instead of stopping. Every err is "is err". Using one in maths, or anywhere a value
+# is needed, stops the program with the reason it's an err.
+class Err:
+    def __init__(self, why=""):
+        self.why = why
+
+    def stop(self, doing=""):
+        tip = " Check for it first with: if x is err" if self.why else ""
+        raise TuffError(f"{doing or 'That value'} is err{': ' + self.why if self.why else ''}.{tip}")
+
+
+ERR = Err()
+LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame")
+# Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
+# second thread, because the web view needs the main thread.
+VIEW_LIBRARIES = ("atgui", "tgame")
+VIEW_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:" + "|".join(VIEW_LIBRARIES) + r")\b", re.M)
+# The first line a tgame program shows, in yellow, before anything it prints. Change "is coming soon" to
+# "is available" here once Tuff Engine ships.
+TGAME_NOTICE = "Tuff Engine is coming soon: a visual way to make games with TuffCode."
+TGAME_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+tgame\b", re.M)
+BUILTIN_NAMES = {"print", "number", "num", "text", "str", "int", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
                  "floor", "ceil", "min", "max", "sum", "average"}
+# Built-ins that are new in Tuff 1.0.4 and that people already use as their own variables (num = 0, err = "...").
+# Giving one a value inside a function makes that function's own variable, as it did before they were built in,
+# and the built-in stays for the rest of the program. At the top of the program it still replaces the built-in.
+OWN_NAME_BUILTINS = {"num", "int", "str", "err"}
 
 
+# return, break and continue on their way out. They keep their line, for when there's nothing to catch them.
 class ReturnSignal(Exception):
-    def __init__(self, value):
-        self.value = value
+    def __init__(self, value, line=None, col=None):
+        self.value, self.line, self.col = value, line, col
 
 
 class BreakSignal(Exception):
-    pass
+    def __init__(self, line=None, col=None):
+        self.line, self.col = line, col
 
 
 class ContinueSignal(Exception):
-    pass
+    def __init__(self, line=None, col=None):
+        self.line, self.col = line, col
 
 
 def b64(text):
@@ -535,9 +580,11 @@ def to_text(v, nested=False):
     if isinstance(v, Module):
         return f"<library {v.name}>"
     if isinstance(v, Native):
-        return f"<{v.kind}>"
+        return v.show(nested) if v.show else f"<{v.kind}>"
     if v is ALL:
         return "all"
+    if isinstance(v, Err):
+        return "err"
     return str(v)
 
 
@@ -560,12 +607,16 @@ def type_name(v):
         return f"a {v.kind}"
     if v is ALL:
         return "all"
+    if isinstance(v, Err):
+        return "err"
     return "a function"
 
 
 def truthy(v):
     if isinstance(v, Line):
         return True
+    if isinstance(v, Err):
+        return False
     return v not in (None, False, 0, "") and v != []
 
 
@@ -573,7 +624,7 @@ def plain(v):
     return v.text if isinstance(v, Line) else v
 
 
-def call_python(label, fn, args):
+def call_python(label, fn, args, takes_err=False):
     """Call a built-in written in Python, turning Python problems into friendly Tuff errors."""
     try:
         inspect.signature(fn).bind(*args)
@@ -581,6 +632,10 @@ def call_python(label, fn, args):
         raise TuffError(f"{label} got the wrong number of inputs ({len(args)}).")
     except ValueError:
         pass
+    if not takes_err:  # an err stops here with the reason it's an err, before Python can say something confusing
+        for a in args:
+            if isinstance(plain(a), Err):
+                plain(a).stop(f"The input to {label}")
     try:
         return fn(*args)
     except (TuffError, ReturnSignal, BreakSignal, ContinueSignal, KeyboardInterrupt, SystemExit, RecursionError):
@@ -590,19 +645,23 @@ def call_python(label, fn, args):
 
 
 class Console:
-    def __init__(self):
-        self.next_id = 1
+    def __init__(self, first_id=1):
+        self.next_id = first_id
         self.rows = 0
 
     def write(self, text):
         sys.stdout.write(text)
         sys.stdout.flush()
 
-    def say(self, text):
+    def say(self, text, style=None):
+        """Show a line. style "notice" shows it in yellow: through the line protocol in the IDE, with an ANSI
+        color in a terminal, and as plain text when the output goes to a file or a pipe."""
         line = Line(self.next_id, text, self.rows)
         self.next_id += 1
         if IDE:
-            self.write(f"\x1b]tuff;say;{line.id};{b64(text)}\x07\n")
+            self.write(f"\x1b]tuff;say;{line.id};{b64(text)}{';' + style if style else ''}\x07\n")
+        elif style == "notice" and sys.stdout.isatty():
+            self.write(f"\x1b[33m{text}\x1b[0m\n")
         else:
             self.write(text + "\n")
         self.rows += text.count("\n") + 1
@@ -639,9 +698,10 @@ class Console:
 
 
 class Env:
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, own_names=False):
         self.vars = {}
         self.parent = parent
+        self.own_names = own_names  # holds OWN_NAME_BUILTINS: giving one of them a value makes a new variable
 
     def find(self, name):
         env = self
@@ -667,7 +727,9 @@ class Env:
         return env.vars[name]
 
     def set(self, name, value):
-        env = self.find(name) or self
+        env = self.find(name)
+        if env is None or env.own_names:
+            env = self
         env.vars[name] = value
 
 
@@ -680,6 +742,13 @@ class Runtime:
 
     def text(self, v):
         return to_text(plain(v))
+
+    def plain(self, v):
+        return plain(v)
+
+    def what(self, v):
+        """'text', 'a number', 'a data object'... for messages."""
+        return type_name(plain(v))
 
     def number(self, v, what="This"):
         v = plain(v)
@@ -696,8 +765,8 @@ class Runtime:
     def error(self, msg):
         return TuffError(msg)
 
-    def native(self, kind, methods):
-        return Native(kind, methods)
+    def native(self, kind, methods, show=None):
+        return Native(kind, methods, show)
 
     def builtin(self, name, fn):
         return Builtin(name, fn)
@@ -719,8 +788,8 @@ class Runtime:
             report(err, self.interp.src)
         except RecursionError:
             report(TuffError(f"{getattr(fn, 'name', 'This function')}() called itself too many times."), self.interp.src)
-        except (BreakSignal, ContinueSignal):
-            report(TuffError("'break' and 'continue' can only be used inside a loop."), self.interp.src)
+        except (BreakSignal, ContinueSignal) as sig:
+            report(TuffError("'break' and 'continue' can only be used inside a loop.", sig.line, sig.col), self.interp.src)
         return False, None
 
 
@@ -730,11 +799,16 @@ class Interpreter:
         self.base_dir = base_dir
         self.rt = Runtime(self)
         self.console = Console()
-        self.globals = Env()
+        self.own_names = Env(own_names=True)  # OWN_NAME_BUILTINS, just above the program's own top-level names
+        self.globals = Env(self.own_names)
         builtins = {
             "print": self.b_print,
             "number": self.b_number,
             "text": lambda v: to_text(plain(v)),
+            # The names people bring from Python: str is text, int is a whole number.
+            "str": lambda v: to_text(plain(v)),
+            "int": self.b_int,
+            "num": lambda v: self.b_number(v, "num"),
             "len": self.b_len,
             "round": lambda v, digits=0: round(self.num_arg("round", v), int(digits)) if digits else round(self.num_arg("round", v)),
             "random": self.b_random,
@@ -750,14 +824,18 @@ class Interpreter:
             "sum": lambda *v: sum(self.num_list("sum", v, allow_empty=True)),
             "average": lambda *v: (lambda nums: sum(nums) / len(nums))(self.num_list("average", v)),
         }
+        takes_err = {"number", "num", "int", "text", "str", "print"}  # they hand an err back, or show it as "err"
         for name, fn in builtins.items():
-            self.globals.vars[name] = Builtin(name, fn)
+            (self.own_names if name in OWN_NAME_BUILTINS else self.globals).vars[name] = Builtin(name, fn, name in takes_err)
         self.globals.vars["all"] = ALL
         self.globals.vars["pi"] = math.pi
+        self.own_names.vars["err"] = ERR
 
     # math helpers
     def num_arg(self, name, v):
         v = plain(v)
+        if isinstance(v, Err):
+            v.stop(f"The input to {name}()")
         if isinstance(v, bool) or not isinstance(v, (int, float)):
             raise TuffError(f"{name}() needs a number, not {type_name(v)}.")
         return v
@@ -791,6 +869,26 @@ class Interpreter:
         except ImportError:
             raise TuffError("mtgui needs Python's tkinter, which isn't installed. Reinstall Python and tick 'tcl/tk and IDLE'.")
         return tuff_tgui.make_library(self.rt, modern=True)
+
+    def lib_tap(self):
+        try:
+            import tuff_tap
+        except ImportError as exc:
+            raise TuffError(f"tap couldn't load ({exc}). Reinstall TuffCode.")
+        return tuff_tap.make_library(self.rt)
+
+    def lib_atgui(self):
+        try:
+            import tuff_atgui
+        except ImportError as exc:
+            raise TuffError(f"atgui couldn't load ({exc}). Reinstall TuffCode.")
+        return tuff_atgui.make_library(self.rt)
+    def lib_tgame(self):
+        try:
+            import tuff_tgame
+        except ImportError as exc:
+            raise TuffError(f"tgame couldn't load ({exc}). Reinstall TuffCode.")
+        return tuff_tgame.make_library(self.rt)
 
     def lib_anims(self):
         con = self.console
@@ -853,15 +951,29 @@ class Interpreter:
     def b_print(self, *args):
         return self.console.say(" ".join(to_text(a) for a in args))
 
-    def b_number(self, v):
+    def b_number(self, v, name="number"):
+        # Text that isn't a number gives err (check with: if number(t) is err) instead of stopping the program.
+        # Anything else that isn't a number (a text box, nil, a list...) is a mistake in the program, so it stops.
         v = plain(v)
+        if isinstance(v, Err):
+            return v
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             return v
+        if isinstance(v, Native) and "value" in v.methods:  # a text box, a slider... (or a tgame text sprite)
+            thing = "sprite" if v.kind == "sprite" else f"{v.kind} widget"
+            raise TuffError(f"{name}() needs text or a number, not the {thing}. Add :value() to get what's in it.")
+        if not isinstance(v, str):
+            raise TuffError(f"{name}() needs text or a number, not {type_name(v)}.")
         try:
-            s = str(v).strip()
+            s = v.strip()
             return float(s) if "." in s else int(s)
         except ValueError:
-            raise TuffError(f"'{to_text(v)}' isn't a number.")
+            return Err(f"{name}() couldn't turn '{to_text(v)}' into a number")
+
+    def b_int(self, v):
+        # A whole number, dropping any decimals toward zero: int("42") is 42, int(3.7) and int("3.7") are 3.
+        n = self.b_number(v, "int")
+        return n if isinstance(n, Err) else int(n)
 
     def b_len(self, v):
         v = plain(v)
@@ -946,7 +1058,9 @@ class Interpreter:
         if isinstance(items, bool) or isinstance(items, (int, float)):
             raise TuffError(f"Can't loop over a number. Try: for {s.name} in range({to_text(items)}):")
         if not isinstance(items, (list, str)):
-            raise TuffError(f"Can't loop over {type_name(items)}.")
+            owner = s.items.name if s.items.kind == "var" else "thing"
+            tip = f" Loop over its names instead: for {s.name} in {owner}:keys():" if isinstance(items, Native) and "keys" in items.methods else ""
+            raise TuffError(f"Can't loop over {type_name(items)}.{tip}")
         for item in list(items):
             env.set(s.name, item)
             try:
@@ -974,13 +1088,13 @@ class Interpreter:
         return None
 
     def s_return(self, s, env):
-        raise ReturnSignal(None if s.value is None else self.eval(s.value, env))
+        raise ReturnSignal(None if s.value is None else self.eval(s.value, env), s.line, s.col)
 
     def s_break(self, s, env):
-        raise BreakSignal()
+        raise BreakSignal(s.line, s.col)
 
     def s_continue(self, s, env):
-        raise ContinueSignal()
+        raise ContinueSignal(s.line, s.col)
 
     # expressions
     def eval(self, e, env):
@@ -1022,7 +1136,9 @@ class Interpreter:
         if k == "index":
             obj = plain(self.eval(e.obj, env))
             if not isinstance(obj, (list, str)):
-                raise TuffError(f"Can't use [ ] on {type_name(obj)}.")
+                owner = e.obj.name if e.obj.kind == "var" else "thing"
+                tip = f" Use :get instead, like {owner}:get(\"name\")." if isinstance(obj, Native) and "keys" in obj.methods else ""
+                raise TuffError(f"Can't use [ ] on {type_name(obj)}.{tip}")
             return obj[self.list_index(obj, self.eval(e.index, env))]
         if k == "call":
             return self.call(e, env)
@@ -1048,6 +1164,13 @@ class Interpreter:
 
     def binop(self, op, a, b):
         a, b = plain(a), plain(b)
+        if isinstance(a, Err) or isinstance(b, Err):
+            # "x is err" is true for every err; anything else done with an err stops with its reason.
+            if op == "==":
+                return isinstance(a, Err) and isinstance(b, Err)
+            if op == "!=":
+                return not (isinstance(a, Err) and isinstance(b, Err))
+            (a if isinstance(a, Err) else b).stop(f"Can't use {op} here, because one side")
         num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
         if op == "+":
             if isinstance(a, str) or isinstance(b, str):
@@ -1088,7 +1211,7 @@ class Interpreter:
                 return a / b
             if op == "%":
                 return a % b
-        verb = {"+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "use %", "^": "use ^ on"}[op]
+        verb = {"+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "use % on", "^": "use ^ on"}[op]
         raise TuffError(f"Can't {verb} {type_name(a)} and {type_name(b)}.")
 
     def call(self, e, env):
@@ -1100,7 +1223,7 @@ class Interpreter:
 
     def invoke(self, fn, args, loose=False):
         if isinstance(fn, Builtin):
-            return call_python(fn.name + "()", fn.fn, args)
+            return call_python(fn.name + "()", fn.fn, args, fn.takes_err)
         if isinstance(fn, Func):
             if loose and len(args) > len(fn.params):
                 args = args[: len(fn.params)]
@@ -1199,8 +1322,6 @@ PY_NAMES = {
     "True": "Tuff writes true in lowercase.",
     "False": "Tuff writes false in lowercase.",
     "None": "Tuff writes nil for 'nothing'.",
-    "str": "To turn a value into text, use text(value).",
-    "int": "To turn text into a number, use number(text).",
     "float": "To turn text into a number, use number(text).",
     "math": "sqrt, floor, ceil, abs, round and pi are built in, so there's nothing to import.",
     "time": "Use wait(seconds) to pause. In an app, app:every(seconds, fn) runs something again and again.",
@@ -1310,6 +1431,55 @@ def gui_tables():
     return _GUI or None
 
 
+_TAP = None
+
+
+def tap_tables():
+    """tap's functions ("lib") and the methods of its responses and data objects ("kinds"), read from
+    the library itself without going online. None when it can't be loaded."""
+    global _TAP
+    if _TAP is None:
+        try:
+            import tuff_tap
+            _TAP = tuff_tap.tables()
+        except Exception:
+            _TAP = {}
+    return _TAP or None
+
+
+_ATGUI = None
+
+
+def atgui_tables():
+    """atgui's functions, every kind's methods ("kinds"), what makers make, and the styles, icons, themes and
+    animations it knows, read from the library itself without opening a window. None when it can't be loaded."""
+    global _ATGUI
+    if _ATGUI is None:
+        try:
+            import tuff_atgui
+            _ATGUI = tuff_atgui.tables()
+        except Exception:
+            _ATGUI = {}
+    return _ATGUI or None
+
+
+_TGAME = None
+
+
+def tgame_tables():
+    """tgame's functions ("lib"), the methods of everything it makes ("kinds"), what they give back, its events,
+    hints for guessed names and a check for text inputs, read from the library without opening a window.
+    None when it can't be loaded."""
+    global _TGAME
+    if _TGAME is None:
+        try:
+            import tuff_tgame
+            _TGAME = tuff_tgame.tables()
+        except Exception:
+            _TGAME = {}
+    return _TGAME or None
+
+
 def nodes(x):
     """Every node inside a node, or inside a list of nodes."""
     if isinstance(x, N):
@@ -1371,7 +1541,7 @@ class Checker:
     CONTAINERS = ("window", "row", "card", "page")
     TYPE = {"$text": "text", "$list": "a list", "$line": "a line", "$number": "a number", "$bool": "true/false",
             "$nil": "nil", "$func": "a function", "$builtin": "a function"}
-    NUMBER_FNS = {"number", "len", "random", "round", "sqrt", "abs", "floor", "ceil", "min", "max", "sum", "average"}
+    NUMBER_FNS = {"number", "num", "int", "len", "random", "round", "sqrt", "abs", "floor", "ceil", "min", "max", "sum", "average"}
     NUMBER_INPUT_FNS = {"round", "floor", "ceil", "abs", "sqrt", "min", "max", "sum", "average"}  # these fail on text
     MATHS = ("+", "-", "*", "/", "%", "^")
     COMPARE = ("==", "!=", "<", ">", "<=", ">=")
@@ -1382,7 +1552,13 @@ class Checker:
     # take fewer inputs than it's given (extras are dropped), not more.
     EVENT_GIVES = {"click": (0, "a button click"), "button": (0, "a button click"), "opened": (0, ":opened"),
                    "every": (0, ":every"), "after": (0, ":after"), "change": (1, ":change"), "enter": (1, ":enter")}
-    HANDLER_POS = {"click": 0, "opened": 0, "change": 0, "enter": 0, "button": 1, "every": 1, "after": 1}
+    HANDLER_POS = {"click": 0, "opened": 0, "change": 0, "enter": 0, "button": 1, "every": 1, "after": 1,
+                   "every_frame": 0, "on_key": 1, "clicked": 0, "game_over": 1}
+    TGAME_KINDS = ("game", "world", "sprite", "object", "player", "hud", "group")  # what tgame makes
+    # What tap's functions make, and what the methods of those give back (left out: it depends, like :json).
+    TAP_MAKES = {"get": "response", "post": "response", "put": "response", "delete": "response", "data": "data object"}
+    TAP_GIVES = {"response": {"status": "$number", "ok": "$bool", "text": "$text"},
+                 "data object": {"has": "$bool", "keys": "$list", "size": "$number", "set": "data object"}}
 
     def __init__(self, program, base_dir=None):
         self.program = program
@@ -1395,7 +1571,7 @@ class Checker:
         self.loop_vars = set()
         self.imports = set()
         self.interp = Interpreter()
-        self.builtins = dict(self.interp.globals.vars)
+        self.builtins = {**self.interp.own_names.vars, **self.interp.globals.vars}
         self.memo = {}
         self.anims = None
         self.calls = {}  # name -> every line it's called on, like name(...)
@@ -1464,7 +1640,7 @@ class Checker:
         self.problems.append((node.line, node.col, msg))
 
     def what(self, kind):
-        return "a function" if kind.startswith("$libfn:") else self.TYPE.get(kind) or a_kind(kind)
+        return "a function" if kind.startswith("$libfn:") else self.TYPE.get(kind) or a_kind(kind.lstrip("@"))
 
     def only_func(self, name):
         """True when name is one top-level function and never anything else."""
@@ -1489,6 +1665,8 @@ class Checker:
             return self.memo[name]
         if name in seen:
             return None
+        if name in OWN_NAME_BUILTINS and name in self.everywhere and name not in self.top.names:
+            return None  # only functions make their own variables with this name; everywhere else it's the built-in
         kinds = set()
         if name in self.imports:
             kinds.add("$module:" + name)
@@ -1544,14 +1722,27 @@ class Checker:
             return f"$libfn:{lib[8:]}.{e.name}" if lib and lib.startswith("$module:") else None
         if k == "call" and e.fn.kind == "var" and e.fn.name not in self.user:
             name = e.fn.name
-            return "$text" if name == "text" else "$list" if name == "range" else "$number" if name in self.NUMBER_FNS else None
+            return "$text" if name in ("text", "str") else "$list" if name == "range" else "$number" if name in self.NUMBER_FNS else None
         if k == "call" and e.fn.kind == "attr":
             lib = self.kind(e.fn.obj, seen)
             if lib in ("$module:tgui", "$module:mtgui") and e.fn.name == "window":
                 return "window"
+            if lib == "$module:tap":
+                return self.TAP_MAKES.get(e.fn.name)
+            if lib == "$module:atgui":
+                return "@window" if e.fn.name == "window" else None
+            if lib == "$module:tgame":
+                return {"window": "game", "world": "world"}.get(e.fn.name)
             return None
         if k == "method":
             obj = self.kind(e.obj, seen)
+            if obj and obj.startswith("@"):
+                return self.atgui_kind(obj[1:], e)
+            if obj in self.TAP_GIVES:
+                return self.TAP_GIVES[obj].get(e.name)
+            if obj in self.TGAME_KINDS:
+                tg = tgame_tables()
+                return tg["gives"].get(obj, {}).get(e.name) if tg else None
             gui = gui_tables()
             if obj in self.CONTAINERS and gui and e.name in gui["kinds"] and e.name != "window" and (e.name != "page" or obj == "window"):
                 return e.name
@@ -1629,6 +1820,9 @@ class Checker:
             self.expr(s.items, scope)
             if self.kind(s.items) == "$number":
                 self.problem(s, f"Can't loop over a number. Try: for {s.name} in range(...):")
+            elif self.kind(s.items) == "data object":
+                owner = s.items.name if s.items.kind == "var" else "thing"
+                self.problem(s, f"Can't loop over a data object. Loop over its names instead: for {s.name} in {owner}:keys():")
             self.check_range_len(s)
             self.body(s.body, scope, True, in_func)
         elif k == "return":
@@ -1723,32 +1917,85 @@ class Checker:
             if self.anims is None:
                 self.anims = {n: b.fn for n, b in self.interp.lib_anims().items()}
             return self.anims
+        if lib == "tap":
+            tap = tap_tables()
+            return tap["lib"] if tap else None
+        if lib == "atgui":
+            at = atgui_tables()
+            return at["lib"] if at else None
+        if lib == "tgame":
+            tg = tgame_tables()
+            return tg["lib"] if tg else None
         gui = gui_tables()
         return gui["libs"].get(lib) if gui else None
 
     # ---- checks
     def check_top_level(self):
-        """A built-in's name given a value at the top replaces it, so later calls of it fail. And a
-        function made twice at the top: the second replaces the first."""
+        """A built-in's name given a value at the top replaces it, so later uses of it fail: calls of a built-in
+        function, and "is err" checks of what number() gave. And a function made twice at the top: the second
+        replaces the first."""
         made = {}
+        owner = {}  # id(node) -> the top-level function it's written in (nodes at the top aren't in here)
+        for f in nodes(self.program):
+            if f.kind == "func" and id(f) not in owner:
+                for x in nodes(f.body):
+                    owner[id(x)] = f.name
+        calls, uses = {}, {}  # name -> its calls; function name -> (call or event input, given to an event?)
+        for x in nodes(self.program):
+            if x.kind == "call" and x.fn.kind == "var":
+                calls.setdefault(x.fn.name, []).append(x)
+                uses.setdefault(x.fn.name, []).append((x, False))
+            elif x.kind == "method":
+                for a in x.args:
+                    if a.kind == "var":
+                        uses.setdefault(a.name, []).append((a, True))
+
+        def runs_after(fname, after, seen):
+            """Can the function fname run after line `after`? Yes when it's called on a later line, given to an
+            event at the top (events happen after the top of the program has run), or used in a function that can."""
+            for x, event in uses.get(fname, []):
+                where = owner.get(id(x))
+                if where is None:
+                    if x.line > after or event:
+                        return True
+                elif where not in seen and runs_after(where, after, seen | {where}):
+                    return True
+            return False
+
+        def later(found, after):
+            """The first line of these that can run after line `after`, or None."""
+            lines = [x.line for x in found if (x.line > after if owner.get(id(x)) is None else runs_after(owner[id(x)], after, {owner[id(x)]}))]
+            return min(lines) if lines else None
 
         def replaces(s, name, after):
-            """s sets the built-in called name; any call of it after line `after` breaks."""
+            """s sets the built-in called name; any call of it that runs after line `after` breaks."""
             if self.kind(s.value) in ("$func", "$builtin") or (self.kind(s.value) or "").startswith("$libfn:"):
                 return
-            later = [line for line in self.calls.get(name, []) if line > after]
-            if later:
-                self.problem(s, f"'{name}' is a built-in function, and giving it a value replaces it everywhere, so {name}() on line {later[0]} won't work. Use another name, like my_{name}.")
+            line = later(calls.get(name, []), after)
+            if line:
+                self.problem(s, f"'{name}' is a built-in function, and giving it a value replaces it everywhere, so {name}() on line {line} won't work. Use another name, like my_{name}.")
+
+        def replaces_err(s):
+            """s gives err a value, so a later "is err" check of what number() gave never finds one."""
+            if self.gives_err(s.value) or (s.value.kind == "var" and s.value.name == "err"):
+                return
+            checks = [x for x in nodes(self.program) if x.kind == "binop" and x.op in ("==", "!=") and self.err_check(x)]
+            line = later(checks, s.line)
+            if line:
+                self.problem(s, f"'err' is built in (number() and num() give it for text that isn't a number), and giving it a value replaces it everywhere, so the is err check on line {line} won't work. Use another name, like my_err.")
 
         for s in self.program:
             if s.kind == "assign" and s.op == "=" and s.target.kind == "var" and isinstance(self.builtins.get(s.target.name), Builtin):
                 replaces(s, s.target.name, s.line)
+            elif s.kind == "assign" and s.op == "=" and s.target.kind == "var" and s.target.name == "err":
+                replaces_err(s)
             # f() at the top runs f, and f setting a built-in's name (not one of its inputs) replaces it for everyone
+            # (except the OWN_NAME_BUILTINS: there it's f's own variable)
             if s.kind == "expr" and s.expr.kind == "call" and s.expr.fn.kind == "var" and self.only_func(s.expr.fn.name):
                 f = self.func_nodes[s.expr.fn.name]
                 for t in f.body:
                     if t.kind == "assign" and t.op == "=" and t.target.kind == "var" and t.target.name not in f.params \
-                            and isinstance(self.builtins.get(t.target.name), Builtin):
+                            and t.target.name not in OWN_NAME_BUILTINS and isinstance(self.builtins.get(t.target.name), Builtin):
                         replaces(t, t.target.name, s.line)
             if s.kind == "func":
                 if s.name in made:
@@ -1778,19 +2025,40 @@ class Checker:
             owner = cond.obj.name if cond.obj.kind == "var" else "thing"
             self.problem(cond, f"Everything after {owner}:has was read as the thing to look for. Put brackets around its input, like: {owner}:has(x) and ...")
 
+    def gives_err(self, x, seen=frozenset()):
+        """Could x be the err that number(), num() or int() give for text that isn't a number?"""
+        if x.kind == "call" and x.fn.kind == "var":
+            return x.fn.name in ("number", "num", "int") and x.fn.name not in self.func_count
+        if x.kind == "var" and x.name not in seen:
+            return any(self.gives_err(t.value, seen | {x.name}) for t in self.assigned.get(x.name, []) if t.op == "=")
+        return False
+
+    def err_check(self, e):
+        """e compares err with something that could really be err, like: if num(t) is err"""
+        sides = (e.left, e.right)
+        return any(x.kind == "var" and x.name == "err" for x in sides) and any(self.gives_err(x) for x in sides)
+
     def check_binop(self, e):
         op, a, b = e.op, self.kind(e.left), self.kind(e.right)
         typed = next((x for x in (e.left, e.right) if self.typed(x)), None)
         tip = f" {self.describe(typed)} is typed text, so turn it into a number first: number({self.describe(typed)})." if typed is not None and self.describe(typed) else ""
+        other = e.right if e.left.kind == "var" and e.left.name == "err" else e.left if e.right.kind == "var" and e.right.name == "err" else None
         if op in self.ORDER and e.left.kind == "binop" and e.left.op in self.COMPARE:
             self.problem(e, "Tuff can't chain comparisons like 1 < x < 9: the first part gives true or false. Write x > 1 and x < 9.")
         elif op in self.ORDER and {a, b} == {"$text", "$number"}:
             self.problem(e, f"Can't compare text with a number using {op}.{tip}")
+        elif op in ("==", "!=") and other is not None and "err" not in self.everywhere and self.kind(other) == "$text":
+            # answer is err: only number(), num() and int() give err, so typed text never is
+            who, word, check = self.describe(other), "never" if op == "==" else "always", "is" if op == "==" else "is not"
+            self.problem(e, f"{who} is text, so it's never err and this is {word} true. Use num({who}) {check} err to check whether it's a number." if who
+                         else f"Text is never err, so this is {word} true. Use num(...) {check} err to check whether it's a number.")
+        elif op in ("==", "!=") and other is not None and self.err_check(e):
+            pass  # num(t) is err: if err was given a value, check_top_level says so
         elif op in ("==", "!=") and {a, b} == {"$text", "$number"}:
             word = "never" if op == "==" else "always"
             self.problem(e, f"Text is never equal to a number, so this is {word} true.{tip or ' Turn the text into a number with number(...) first.'}")
         elif op in ("-", "/", "%", "^") and "$text" in (a, b) and None not in (a, b):
-            verb = {"-": "subtract", "/": "divide", "%": "use %", "^": "use ^ on"}[op]
+            verb = {"-": "subtract", "/": "divide", "%": "use % on", "^": "use ^ on"}[op]
             first, second = self.TYPE[a], self.TYPE.get(b, self.what(b))
             hint = tip
             if e.left.kind == "binop" and e.left.op == "+" and a == "$text":
@@ -1833,8 +2101,14 @@ class Checker:
         gui = gui_tables()
         if gui is None:
             return True
+        at = atgui_tables()
+        if at is not None and any(name in m for m in at["kinds"].values()):
+            return True
+        tap = tap_tables()
+        tg = tgame_tables()
         return name in SIMPLE_METHODS["text"] or name in SIMPLE_METHODS["list"] or name in SIMPLE_METHODS["line"] or \
-            any(name in m for m in gui["kinds"].values())
+            any(name in m for m in gui["kinds"].values()) or (tap is None or any(name in m for m in tap["kinds"].values())) or \
+            (tg is None or any(name in m for m in tg["kinds"].values()))
 
     def check_call(self, e, scope):
         fn, n = e.fn, len(e.args)
@@ -1861,6 +2135,8 @@ class Checker:
                             tip = f" Use number({who})." if who and self.typed(a) else ""
                             self.problem(a, f"{name}() needs a number, not text.{tip}")
                             break
+                elif name in ("number", "num", "int") and n == 1:
+                    self.check_number_input(e.args[0], name)
             elif name not in self.builtins and not local:
                 kind = self.var_kind(name, frozenset())
                 if kind and not kind.startswith(("$module:", "$libfn:")) and kind not in ("$func", "$builtin"):
@@ -1871,6 +2147,20 @@ class Checker:
                 members = self.lib_members(lib[8:]) or {}
                 if fn.name in members and not accepts(members[fn.name], n):
                     self.problem(e, f"{lib[8:]}.{fn.name}() got the wrong number of inputs ({n}).")
+
+    def check_number_input(self, a, name):
+        """number(), num() and int() give err for text that isn't a number, but anything else that isn't text or a
+        number (a text box itself, a list, nil...) stops the program."""
+        kind = self.kind(a)
+        if kind is None or kind in ("$text", "$number", "$line"):
+            return
+        widget = kind.lstrip("@")
+        gui, at = gui_tables(), atgui_tables()
+        kinds = (at or {}).get("kinds", {}) if kind.startswith("@") else (gui or {}).get("kinds", {})
+        if "value" in kinds.get(widget, {}) and a.kind == "var":
+            self.problem(a, f"{name}() needs text or a number, not the {widget} widget. Use {name}({a.name}:value()) to get what's in it.")
+        else:
+            self.problem(a, f"{name}() needs text or a number, not {'a library' if kind.startswith('$module:') else self.what(kind)}.")
 
     def check_gives_back(self, e, name):
         """The answer of name() is used, but name() can't give one back."""
@@ -1922,7 +2212,8 @@ class Checker:
             return
         # Unknown value: only a library can use '.', and libraries only have these.
         gui = gui_tables()
-        members = {"window"} | set(self.lib_members("anims") or {})
+        members = {"window"} | set(self.lib_members("anims") or {}) | set(self.lib_members("tap") or {}) | \
+            set(self.lib_members("tgame") or {})
         if gui is not None and e.name not in members and e.obj.kind == "var" and e.obj.name not in self.imports:
             self.problem(e, dot_help("not a library", e.obj, e.name))
 
@@ -1938,6 +2229,9 @@ class Checker:
         bare_fix = f"{owner}:{name} doesn't take an input, so what comes after it was read as one. Write {owner}:{name}() instead."
         if obj.startswith("$libfn:"):
             self.problem(e, f"'{owner}' is the function {obj[7:]} itself, not what it makes. Add brackets, like: {owner} = {obj[7:]}(...)")
+            return
+        if obj.startswith("@"):
+            self.check_atgui(e, obj[1:])
             return
         simple = SIMPLE_METHODS.get(obj[1:]) if obj.startswith("$") else None
         if simple:
@@ -1965,8 +2259,12 @@ class Checker:
         if obj in self.TYPE:
             self.problem(e, f"{self.TYPE[obj].capitalize()} doesn't have any :methods.")
             return
+        if obj in self.TGAME_KINDS:
+            self.check_tgame(e, obj, bare_fix)
+            return
         gui = gui_tables()
-        methods = gui["kinds"].get(obj) if gui else None
+        tap = tap_tables() if obj in self.TAP_GIVES else None
+        methods = tap["kinds"].get(obj) if tap else gui["kinds"].get(obj) if gui else None
         if methods is None:
             return
         if name == "page" and obj in ("row", "card", "page"):
@@ -2003,6 +2301,55 @@ class Checker:
         choices = [to_text(x.value) for x in made.args[0].items]
         if to_text(arg.value) not in choices:
             self.problem(arg, f"'{to_text(arg.value)}' isn't one of this dropdown's choices: {', '.join(choices)}.")
+
+    def check_tgame(self, e, obj, bare_fix):
+        """A method of something tgame made: its name, its input count, the function an event runs, and inputs
+        written as text that have to be a color, a sky, a key, a sound or a file tgame knows."""
+        tg = tgame_tables()
+        methods = tg["kinds"].get(obj) if tg else None
+        if methods is None:
+            return
+        name, n = e.name, len(e.args)
+        what = a_kind(obj).capitalize()
+        if name not in methods:
+            alt = tg["hints"].get(obj, {}).get(name.lower())
+            self.problem(e, f"{what} doesn't have :{name}. Use :{alt} instead." if alt in methods else method_help(what, name, list(methods)))
+            return
+        if not accepts(methods[name], n):
+            self.problem(e, bare_fix if e.bare and accepts(methods[name], 0) else f"{obj}:{name} got the wrong number of inputs ({n}).")
+            return
+        event = tg["handlers"].get(obj, {}).get(name)
+        fn = e.args[event[0]] if event and len(e.args) > event[0] else None
+        if fn is not None:
+            owner = e.obj.name if e.obj.kind == "var" else obj
+            if fn.kind == "call" and fn.fn.kind == "var" and self.only_func(fn.fn.name) and not self.returns_function(fn.fn.name):
+                self.problem(fn, f"Pass the function's name without brackets: {fn.fn.name}, not {fn.fn.name}(). With brackets it runs once at the start instead of when it should.")
+            elif fn.kind == "method":
+                target = f"{fn.obj.name}:{fn.name}" if fn.obj.kind == "var" else f":{fn.name}"
+                self.problem(fn, f"{target} runs right away here, while this line runs. Make a small function (func do_it(): {target}) and pass its name.")
+            elif fn.kind == "const" and isinstance(fn.value, str):
+                self.problem(fn, f"This needs a function name, not text. Write {fn.value} without the quotes, and make it with func {fn.value}():")
+            elif fn.kind == "var" and self.only_func(fn.name):
+                want, gives, given = len(self.funcs[fn.name]), event[1], event[2]
+                if want > gives:
+                    fix = f" Write it as: func {fn.name}():" if gives == 0 else f" Write it as: func {fn.name}({', '.join(self.funcs[fn.name][:gives])}):"
+                    self.problem(fn, f"{fn.name}() needs {want} input{'s' if want != 1 else ''}, but {owner}:{name} gives it {given}.{fix}")
+                node = self.func_nodes.get(fn.name)
+                if node is not None and id(node) not in self.handlers_seen:
+                    self.handlers_seen.add(id(node))
+                    for x in nodes(node.body):
+                        if x.kind == "call" and x.fn.kind == "var" and x.fn.name == "wait" and "wait" not in self.user:
+                            self.problem(x, f"wait() freezes the game: nothing moves or redraws until it's over. To do something later, use {owner}:after(seconds, fn).")
+                        elif x.kind == "input":
+                            self.problem(x, "input reads from the console and freezes the game while it waits.")
+        base = self.base_dir
+        if base and os.path.abspath(base).lower().startswith(os.path.abspath(tempfile.gettempdir()).lower()):
+            base = None  # a snippet in a temporary folder: its files aren't next to it
+        for i, a in enumerate(e.args):
+            if a.kind == "const" and isinstance(a.value, str):
+                msg = tg["check"](obj, name, i, a.value, base)
+                if msg:
+                    self.problem(a, msg)
 
     def check_values(self, e, obj):
         """Styles, colors and themes written as text must be ones the library knows."""
@@ -2136,6 +2483,189 @@ class Checker:
                                 f"Stop at 0 instead, like range(len({lst}) - 1, 0, -1).")
                 return
 
+    # ---- atgui (its tables come from tuff_atgui.tables(); its kinds are written "@button", "@window"...)
+    def atgui_kind(self, kind, e):
+        """What an atgui method gives back: another widget, the same one (so calls can be chained), or a value."""
+        at = atgui_tables()
+        if at is None:
+            return None
+        name = e.name
+        made = at["makes_on"].get(kind, {}).get(name)
+        if made:
+            return "@" + made
+        methods = at["kinds"].get(kind, {})
+        if name in at["makes"] and "heading" in methods:
+            if name == "icon" and kind == "window" and self.atgui_file(e.args[0] if e.args else None):
+                return None
+            return "@" + at["makes"][name]
+        if name == "value" and not e.args:
+            return ("$text" if kind in at["text_values"] else "$bool" if kind in at["bool_values"]
+                    else "$number" if kind in at["number_values"] else None)
+        if name in ("confirm", "showing"):
+            return "$bool"
+        if name == "ask":
+            return "$text"
+        if name == "items":
+            return "$list"
+        if name in at["self_methods"] and name in methods:
+            return "@" + kind
+        return None
+
+    def atgui_file(self, arg):
+        """Is this input a picture file's name (rather than a built-in icon's)?"""
+        if arg is None or arg.kind != "const" or not isinstance(arg.value, str):
+            return False
+        text = arg.value.strip().lower()
+        return text.endswith(atgui_tables()["image_exts"]) or "/" in text or "\\" in text
+
+    def check_atgui(self, e, kind):
+        at = atgui_tables()
+        methods = at["kinds"].get(kind) if at else None
+        if methods is None:
+            return
+        name, n = e.name, len(e.args)
+        owner = e.obj.name if e.obj.kind == "var" else "thing"
+        if name not in methods:
+            self.problem(e, method_help(a_kind(kind).capitalize(), name, list(methods)))
+            return
+        if not accepts(methods[name], n):
+            if e.bare and accepts(methods[name], 0):
+                self.problem(e, f"{owner}:{name} doesn't take an input, so what comes after it was read as one. Write {owner}:{name}() instead.")
+            else:
+                self.problem(e, f"{kind}:{name} got the wrong number of inputs ({n}).")
+            return
+        self.atgui_values(e, kind, at)
+        self.atgui_handler(e, at)
+        if kind == "dropdown" and name == "set" and e.obj.kind == "var" and e.args:
+            self.check_dropdown_set(e)
+
+    def atgui_values(self, e, kind, at):
+        """Styles, icons, themes, colors, animations and keys written as text must be ones atgui knows."""
+        name = e.name
+        container = "heading" in at["kinds"].get(kind, {})
+
+        def const(i):
+            a = e.args[i] if len(e.args) > i else None
+            ok = a is not None and a.kind == "const" and isinstance(a.value, str)
+            return a, a.value.strip().lower() if ok else None
+
+        def one_of(i, choices, msg, aliases=()):
+            a, v = const(i)
+            if v is not None and v not in choices and v not in aliases:
+                self.problem(a, msg.replace("{}", v))
+
+        buttons = "'{}' isn't a button style. Use one of: " + ", ".join(at["button_styles"]) + "."
+        badges = "'{}' isn't a badge style. Use one of: " + ", ".join(at["badge_styles"]) + "."
+        if name == "button" and container:
+            one_of(2, at["button_styles"], buttons)
+        elif name == "badge" and container:
+            one_of(1, at["badge_styles"], badges, at["badge_aliases"])
+        elif name == "style" and len(e.args) == 1:
+            if kind == "button":
+                one_of(0, at["button_styles"], buttons)
+            elif kind == "badge":
+                one_of(0, at["badge_styles"], badges, at["badge_aliases"])
+            elif kind == "spinner":
+                one_of(0, at["spinner_styles"], "A spinner's style can be \"ring\" or \"dots\".")
+            else:
+                self.problem(e, f"{kind}:style needs a name and a value, like box:style(\"radius\", 12).")
+        elif name == "style":
+            a, v = const(0)
+            first, _, rest = (v or "").partition(" ")
+            prop = rest.strip() if first in at["states"] and rest else v
+            if v is not None and prop not in at["styles"] and "-" not in prop:
+                hint = difflib.get_close_matches(prop, list(at["styles"]), n=1, cutoff=0.6)
+                self.problem(a, f"'{prop}' isn't a style I know." + (f" Did you mean \"{hint[0]}\"?" if hint else
+                             " Try: background, color, radius, padding, border, shadow, size, bold, opacity, glass, gradient, width or height."))
+        elif name == "theme":
+            one_of(0, at["themes"], "The theme can be \"dark\", \"light\" or \"system\".")
+        elif name == "accent":
+            a, v = const(0)
+            if v is not None and v not in at["accents"] and not re.fullmatch(r"#(?:[0-9a-f]{3}|[0-9a-f]{6})", v):
+                self.problem(a, f"'{v}' isn't an accent color. Try {', '.join(at['accents'])} or a hex code like \"#ff8800\".")
+        elif name == "icon" and kind == "window" and self.atgui_file(e.args[0] if e.args else None):
+            self.atgui_picture(e.args[0], icon=True)
+        elif name == "icon":
+            a, v = const(0)
+            if v is not None and v not in at["icons"]:
+                hint = difflib.get_close_matches(v, list(at["icons"]), n=1, cutoff=0.6)
+                self.problem(a, f"There's no icon called '{v}'." + (f" Did you mean \"{hint[0]}\"?" if hint else
+                             " Try home, search, settings, user, chat, send, plus, check, x, star, heart, trash, edit or bell."))
+        elif (name == "image" and container) or (name == "set" and kind == "image"):
+            self.atgui_picture(e.args[0] if e.args else None)
+        elif name == "animate":
+            one_of(0, at["animations"], "There's no animation called '{}'. Try one of: " + ", ".join(at["animations"]) + ".")
+        elif name == "toast":
+            one_of(1, at["toast_styles"], "A toast's style can be " + ", ".join(at["toast_styles"]) + ".", at["toast_aliases"])
+        elif name == "chart" and container:
+            one_of(1, at["charts"], "A chart can be \"line\" or \"bar\".")
+        elif name == "key" and kind == "window":
+            a, v = const(0)
+            if v is not None and at["key_combo"](v) is None:
+                self.problem(a, f"'{v}' isn't a key I know. Write keys like \"ctrl+s\", \"escape\", \"f5\" or \"ctrl+shift+n\".")
+        elif name == "sidebar":
+            one_of(1, ("left", "right"), "A sidebar goes on the \"left\" or the \"right\".")
+        elif name == "align":
+            one_of(0, at["align"], "align can be start, center, end or stretch.")
+        elif name == "justify":
+            one_of(0, at["justify"], "justify can be start, center, end, between, around or evenly.")
+
+    def atgui_picture(self, arg, icon=False):
+        """A picture named in the program: a kind of file atgui can show, and there (when we know the folder)."""
+        if arg is None or arg.kind != "const" or not isinstance(arg.value, str):
+            return
+        path = arg.value.strip()
+        if not icon and re.match(r"^(https?:|data:)", path, re.I):
+            return
+        if not path.lower().endswith((".png", ".ico") if icon else atgui_tables()["image_exts"]):
+            self.problem(arg, f"Couldn't use '{path}' as the window's icon. Use a .png or .ico file." if icon
+                         else f"'{path}' isn't a picture. Use a .png, .jpg, .gif, .webp or .svg file.")
+            return
+        base = self.base_dir
+        if base and not os.path.isabs(path) and not os.path.abspath(base).lower().startswith(os.path.abspath(tempfile.gettempdir()).lower()):
+            if not os.path.isfile(os.path.join(base, path)):
+                what = "icon" if icon else "image"
+                self.problem(arg, f"Couldn't find the {what} '{path}'. Put the picture in your project folder (next to your .tuf file).")
+
+    def atgui_handler(self, e, at):
+        """Event functions are passed by name, and don't ask for more inputs than their event gives."""
+        name = e.name
+        if name not in at["events"]:
+            return
+        gives, what, pos, given = at["events"][name]
+        fn = e.args[pos] if len(e.args) > pos else None
+        if fn is None:
+            return
+        if fn.kind == "call" and fn.fn.kind == "var" and self.only_func(fn.fn.name) and not self.returns_function(fn.fn.name):
+            f = fn.fn.name
+            self.problem(fn, f"Pass the function's name without brackets: {f}, not {f}(). With brackets it runs once at the start instead of when it should.")
+            return
+        if fn.kind == "method":
+            target = f"{fn.obj.name}:{fn.name}" if fn.obj.kind == "var" else f":{fn.name}"
+            self.problem(fn, f"{target} runs right away here, while this line runs. Make a small function (func do_it(): {target}) and pass its name.")
+            return
+        if fn.kind == "const" and isinstance(fn.value, str):
+            self.problem(fn, f"This needs a function name, not text. Write {fn.value} without the quotes, and make it with func {fn.value}():")
+            return
+        if fn.kind != "var" or not self.only_func(fn.name):
+            return
+        want = len(self.funcs[fn.name])
+        if want > gives:
+            how = "doesn't give it any. Write it as: func " + fn.name + "():" if gives == 0 else f"only gives it 1 ({given})."
+            self.problem(fn, f"{fn.name}() needs {want} input{'s' if want != 1 else ''}, but {what} {how}")
+        node = self.func_nodes.get(fn.name)
+        if node is not None and id(node) not in self.handlers_seen:
+            self.handlers_seen.add(id(node))
+            for x in nodes(node.body):
+                if x.kind == "call" and x.fn.kind == "var" and x.fn.name == "wait" and "wait" not in self.user:
+                    self.problem(x, "wait() freezes the window: nothing redraws or runs until it's over. To do something later, use app:after(seconds, fn).")
+                elif x.kind == "input":
+                    self.problem(x, "input reads from the console and freezes the window while it waits. In a window app, ask with app:ask \"...\" instead.")
+
+
+# atgui's event methods too, so a missing event function gets "Make it with func" (atgui's checks are just above).
+Checker.HANDLER_POS = {**Checker.HANDLER_POS, "clicked": 0, "hover": 0, "focus": 0, "key": 1, "closed": 0, "item": 1}
+
 
 # ---------------------------------------------------------------- entry point
 
@@ -2176,14 +2706,44 @@ def setup_streams():
         sys.stderr.reconfigure(encoding="utf-8", newline="\n")
         sys.stdin.reconfigure(encoding="utf-8")
     else:
+        # Piped (an agent's tuff_run, a test, `> out.txt`): UTF-8 both ways, as in the IDE. The built runtime
+        # ignores PYTHONIOENCODING, so on Windows a pipe would otherwise get the old code page and "°" or "…"
+        # would come out as "�". A real terminal keeps its own encoding.
+        for stream in (sys.stdout, sys.stderr, sys.stdin):
+            try:
+                if stream is not None and not stream.isatty():
+                    stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, OSError, ValueError):  # a closed or unusual stream: leave it as it is
+                pass
         sys.stdout.reconfigure(errors="replace")
         if os.name == "nt":
             os.system("")
 
 
+def read_source(path):
+    """The program's text, or None after a one-line message when the file can't be read."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        # UTF-8 (with or without a BOM), or UTF-16 with its BOM: Notepad's "Unicode", and what Windows
+        # PowerShell's > and Out-File write.
+        text = data.decode("utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig")
+        return text.replace("\r\n", "\n").replace("\r", "\n")
+    except FileNotFoundError:
+        msg = f"There's no file called '{path}'."
+    except UnicodeDecodeError:
+        msg = f"'{path}' isn't a text file, so it can't be a Tuff program." if b"\x00" in data else \
+            f"'{path}' isn't saved as UTF-8, so Tuff can't read it. Save it again as UTF-8, or copy its code into a new TuffCode file."
+    except OSError as exc:
+        msg = f"'{path}' is a folder, not a .tuf file." if os.path.isdir(path) else f"Couldn't open '{path}': {exc.strerror or exc}."
+    report(TuffError(msg), "")
+    return None
+
+
 def run_file(path):
-    with open(path, encoding="utf-8-sig") as f:
-        src = f.read()
+    src = read_source(path)
+    if src is None:
+        return 1
     try:
         program = Parser(tokenize(src)).program()
         interp = Interpreter(src, os.path.dirname(os.path.abspath(path)))
@@ -2198,16 +2758,40 @@ def run_file(path):
         return 1
     except (ReturnSignal, BreakSignal, ContinueSignal) as sig:
         word = {"ReturnSignal": "return", "BreakSignal": "break", "ContinueSignal": "continue"}[type(sig).__name__]
-        report(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}."), src)
+        report(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}.", sig.line, sig.col), src)
         return 1
     except KeyboardInterrupt:
         return 130
     return 0
 
 
+def run_program(path):
+    src = read_source(path)
+    if src is None:
+        return 1
+    if not VIEW_IMPORT.search(src):
+        return run_file(path)
+    if TGAME_IMPORT.search(src) and not WINDOWED:
+        Console(first_id=0).say(TGAME_NOTICE, "notice")  # line 0: the program's own lines start at 1
+    try:
+        import tuff_view
+    except ImportError:
+        report(TuffError("This program needs Tuff's window engine (tuff_view.py), which isn't installed next to tuff.py."), src)
+        return 1
+    try:
+        code = tuff_view.run(run_file, path)
+    except KeyboardInterrupt:
+        return 130
+    except tuff_view.ViewError as err:
+        report(TuffError(str(err)), src)
+        return 1
+    return 0 if code is None else code
+
+
 def check_file(path):
-    with open(path, encoding="utf-8-sig") as f:
-        src = f.read()
+    src = read_source(path)
+    if src is None:
+        return 1
     try:
         program = Parser(tokenize(src)).program()
     except TuffError as err:
@@ -2230,6 +2814,13 @@ def check_file(path):
     return 0
 
 
+def usage():
+    me = os.path.basename(sys.executable) if getattr(sys, "frozen", False) else "python tuff.py"
+    return ("Usage:\n"
+            f"  {me} yourfile.tuf            run a Tuff program\n"
+            f"  {me} --check yourfile.tuf    check it for mistakes without running it")
+
+
 def main():
     setup_streams()
     args = sys.argv[1:]
@@ -2238,9 +2829,18 @@ def main():
         print("TuffCode runs on its own coding language called Tuff, files end in .tuf")
         print("Run a program with: python tuff.py yourfile.tuf")
         return 0
-    if args[0] == "--check" and len(args) > 1:
+    if args[0] in ("--help", "-h", "/?"):
+        print(usage())
+        return 0
+    if args[0] == "--check":
+        if len(args) < 2:
+            sys.stderr.write("--check needs a file to check.\n" + usage() + "\n")
+            return 2
         return check_file(args[1])
-    code = run_file(args[0])
+    if args[0].startswith("--") and not os.path.exists(args[0]):
+        sys.stderr.write(f"Unknown option '{args[0]}'.\n" + usage() + "\n")
+        return 2
+    code = run_program(args[0])
     if getattr(sys, "frozen", False) and not WINDOWED and not IDE:
         try:
             input("\nPress Enter to close...")

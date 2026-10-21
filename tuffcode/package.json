@@ -1,16 +1,17 @@
 {
   "name": "tuffcode",
   "productName": "TuffCode",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "TuffCode - the IDE for the Tuff language",
   "author": "trickortree",
   "repository": "github:trickortree/tuff-code",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build:runtime": "py -3 -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py",
+    "test:e2e": "node test/e2e/run.mjs",
+    "build:runtime": "py -3 -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --hidden-import tuff_tap --hidden-import tuff_atgui --hidden-import ssl --hidden-import certifi --hidden-import tuff_view --add-data ../tuff_view_web:tuff_view_web --hidden-import tuff_tgame --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py",
     "dist": "npm run build:runtime && electron-builder --win nsis --x64 --publish never",
-    "build:runtime:mac": "python3 -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py",
+    "build:runtime:mac": "python3 -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --hidden-import tuff_tap --hidden-import tuff_atgui --hidden-import ssl --hidden-import certifi --hidden-import tuff_view --add-data ../tuff_view_web:tuff_view_web --hidden-import tuff_tgame --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py",
     "dist:mac": "npm run build:runtime:mac && electron-builder --mac dmg zip --publish never"
   },
   "build": {
@@ -28,10 +29,18 @@
       "agents.js",
       "shellpath.js",
       "plugins.js",
+      "ai.js",
+      "ai-worker.mjs",
       "plugins/**/*",
       "mcp/**/*",
       "renderer/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/node-llama-cpp/llama/gitRelease.bundle",
+      "!node_modules/node-llama-cpp/templates{,/**/*}",
+      "!node_modules/@node-llama-cpp/*-cuda{,/**/*}",
+      "!node_modules/@node-llama-cpp/*-cuda-ext{,/**/*}",
+      "!node_modules/@node-llama-cpp/win-arm64{,/**/*}",
+      "!node_modules/@node-llama-cpp/linux-*{,/**/*}"
     ],
     "extraResources": [
       {
@@ -45,6 +54,26 @@
       {
         "from": "../tuff_tgui.py",
         "to": "runtime-src/tuff_tgui.py"
+      },
+      {
+        "from": "../tuff_tap.py",
+        "to": "runtime-src/tuff_tap.py"
+      },
+      {
+        "from": "../tuff_atgui.py",
+        "to": "runtime-src/tuff_atgui.py"
+      },
+      {
+        "from": "../tuff_view.py",
+        "to": "runtime-src/tuff_view.py"
+      },
+      {
+        "from": "../tuff_view_web",
+        "to": "runtime-src/tuff_view_web"
+      },
+      {
+        "from": "../tuff_tgame.py",
+        "to": "runtime-src/tuff_tgame.py"
       }
     ],
     "win": {
@@ -58,6 +87,7 @@
       ],
       "icon": "build-res/icon.png",
       "category": "public.app-category.developer-tools",
+      "minimumSystemVersion": "13.0",
       "identity": "-",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
@@ -85,15 +115,19 @@
     "asarUnpack": [
       "mcp/**/*",
       "renderer/js/tuff-lang.js",
-      "renderer/js/tuff-templates.js"
+      "renderer/js/tuff-templates.js",
+      "node_modules/node-llama-cpp/bins/**/*",
+      "node_modules/node-llama-cpp/llama/localBuilds/**/*",
+      "node_modules/@node-llama-cpp/**/*"
     ]
   },
   "devDependencies": {
-    "electron": "^38.0.0",
-    "electron-builder": "^26.15.3"
+    "electron": "^44.9.1",
+    "electron-builder": "^26.17.0"
   },
   "dependencies": {
-    "electron-updater": "^6.8.9",
-    "monaco-editor": "^0.52.2"
+    "electron-updater": "^6.8.10",
+    "monaco-editor": "^0.52.2",
+    "node-llama-cpp": "3.22.2"
   }
 }

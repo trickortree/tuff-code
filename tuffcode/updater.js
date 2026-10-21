@@ -26,6 +26,7 @@ const INTERVALS = [1, 2, 4, 8];
 let emit = () => {};
 let state = { status: 'idle', latest: null, ready: null, error: null };
 let timer = null;
+let installOnRestart = false;
 
 const version = () => app.getVersion();
 const isGitCheckout = () => !app.isPackaged && fs.existsSync(path.join(ROOT, '.git'));
@@ -65,12 +66,20 @@ async function findLatest() {
   return null;
 }
 
+// npm is a .cmd file on Windows, which only cmd.exe can start. This is the command line Node's
+// shell: true would build, written out because shell: true with an args list is deprecated (DEP0190).
+// The arguments here are fixed words and paths.
+function spawnCmd(file, args, opts) {
+  const line = [file, ...args].map((a) => (/^[\w\-.:=\\]+$/.test(a) ? a : `"${a}"`)).join(' ');
+  return spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${line}"`], { ...opts, windowsVerbatimArguments: true });
+}
+
 function run(cmd, args, cwd) {
   return new Promise((resolve) => {
     let out = '';
     let proc;
     try {
-      proc = spawn(cmd, args, { cwd, windowsHide: true, shell: process.platform === 'win32' && /\.cmd$/i.test(cmd) });
+      proc = process.platform === 'win32' && /\.cmd$/i.test(cmd) ? spawnCmd(cmd, args, { cwd, windowsHide: true }) : spawn(cmd, args, { cwd, windowsHide: true });
     } catch (err) {
       resolve({ code: -1, out: String(err.message) });
       return;
@@ -130,10 +139,21 @@ async function installFromZip(latest) {
   await copyTree(source, ROOT);
   const depsChanged = JSON.stringify(oldPkg.dependencies || {}) !== JSON.stringify(newPkg.dependencies || {})
     || JSON.stringify(oldPkg.devDependencies || {}) !== JSON.stringify(newPkg.devDependencies || {});
-  if (depsChanged) {
+  const electronChanged = (oldPkg.devDependencies || {}).electron !== (newPkg.devDependencies || {}).electron;
+  if (depsChanged && electronChanged && process.platform === 'win32') {
+    // Windows won't let npm replace the Electron this TuffCode is running on, so TuffCode.cmd runs
+    // npm install before it starts TuffCode again (restart() goes through it).
+    installOnRestart = true;
+  } else if (depsChanged) {
     set({ status: 'installing', detail: 'Installing new parts…' });
     const npm = await run(findNpm(), ['install', '--no-fund', '--no-audit'], __dirname);
     if (npm.code !== 0) throw new Error('The update needs new parts, but npm couldn\'t install them. Install Node.js, then try again.');
+    // Since Electron 42, npm install doesn't download Electron itself. Its install script does, and
+    // the restart needs it there.
+    if (electronChanged) {
+      const got = await run('node', [path.join(__dirname, 'node_modules', 'electron', 'install.js')], __dirname);
+      if (got.code !== 0) throw new Error('The update needs a new version of Electron, but it couldn\'t be downloaded. Check your internet connection, then try again.');
+    }
   }
   fsp.rm(work, { recursive: true, force: true }).catch(() => {});
 }
@@ -250,9 +270,26 @@ function reschedule() {
   timer = setInterval(background, hours() * HOUR);
 }
 
+// The Electron package-lock.json asks for, when this copy runs on a different one. That happens after
+// TuffCode 1.0.3 updated a Windows copy: it copied the new files, but npm couldn't replace the Electron
+// that was running, and the restart started the old one again.
+function staleElectron() {
+  try {
+    const want = JSON.parse(fs.readFileSync(path.join(__dirname, 'package-lock.json'), 'utf8')).packages['node_modules/electron'].version;
+    return want && want !== process.versions.electron ? want : null;
+  } catch {
+    return null;
+  }
+}
+
 function start(sendEvent, getSettings) {
   emit = sendEvent;
   readSettings = getSettings;
+  if (process.platform === 'win32' && !app.isPackaged && !isGitCheckout() && staleElectron()) {
+    // Restarting through TuffCode.cmd installs the right Electron (see restart()).
+    installOnRestart = true;
+    set({ status: 'ready', ready: version(), detail: null });
+  }
   setTimeout(background, 15000);
   reschedule();
 }
@@ -260,6 +297,15 @@ function start(sendEvent, getSettings) {
 function restart() {
   if (app.isPackaged && au) {
     au.quitAndInstall(true, true);
+    return;
+  }
+  if (installOnRestart) {
+    // TuffCode.cmd installs the new Electron and starts TuffCode on it, once this one has closed.
+    // `start` gives it a window of its own, so if that fails its message shows and waits there
+    // (this detached cmd has no console). cmd /c closes that window once TuffCode.cmd is done.
+    const cmd = path.join(__dirname, 'TuffCode.cmd');
+    spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"ping -n 4 127.0.0.1 >nul & start "TuffCode" cmd /d /s /c ""${cmd}"""`], { detached: true, stdio: 'ignore', windowsVerbatimArguments: true }).unref();
+    app.exit(0);
     return;
   }
   app.relaunch();

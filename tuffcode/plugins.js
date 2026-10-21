@@ -27,15 +27,27 @@ function readManifest(dir) {
   } catch { return null; }
 }
 
+// TuffCode 1.0.3 and older read only "plugins" from registry.json, also from the main branch, and offer
+// to download any entry there they didn't come with. So a plugin that needs a newer TuffCode goes in
+// "newer", with "needs": the first version that has what it uses. This version reads both lists and
+// leaves out what needs a newer version than this one.
+const versionParts = (v) => String(v || '').replace(/^v/i, '').split(/[.+-]/).slice(0, 3).map((n) => parseInt(n, 10) || 0);
+function tooNew(needs) {
+  const want = versionParts(needs), have = versionParts(app.getVersion());
+  for (let i = 0; i < 3; i++) if (want[i] !== have[i]) return want[i] > have[i];
+  return false;
+}
+const entries = (json) => [...(json.plugins || []), ...(json.newer || [])].filter((p) => p && !(p.needs && tooNew(p.needs)));
+
 async function bundledRegistry() {
-  try { return JSON.parse(await fsp.readFile(path.join(BUILTIN_DIR, 'registry.json'), 'utf8')).plugins || []; } catch { return []; }
+  try { return entries(JSON.parse(await fsp.readFile(path.join(BUILTIN_DIR, 'registry.json'), 'utf8'))); } catch { return []; }
 }
 
 async function remoteRegistry() {
   try {
     const res = await Promise.race([net.fetch(REGISTRY_URL, { headers: { 'Cache-Control': 'no-cache' } }), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))]);
     if (!res.ok) return [];
-    return (await res.json()).plugins || [];
+    return entries(await res.json());
   } catch { return []; }
 }
 

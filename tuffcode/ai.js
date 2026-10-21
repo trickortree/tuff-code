@@ -1,0 +1,341 @@
+// Tuff AI: the offline helper. The model runs in ai-worker.mjs (a utility process). This side downloads
+// the model, checks there's enough memory, keeps the worker alive while it's being used, and checks
+// every Tuff program the model writes with tuff.py --check. A program that fails gets one more try with
+// the checker's error, the way Tuff Bench scores it (tuff-ai/bakeoff/run.mjs).
+const { app, utilityProcess, net } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const fsp = fs.promises;
+const os = require('os');
+const crypto = require('crypto');
+const { pipeline } = require('stream/promises');
+
+// Until Pumice (the trained model) is ready, the preview uses its base model as it is.
+const MODELS = [
+  {
+    id: 'qwen3.5-2b',
+    name: 'Qwen3.5-2B',
+    sub: 'Untrained preview. Pumice, trained on Tuff, replaces it later.',
+    file: 'Qwen3.5-2B-Q4_K_M.gguf',
+    url: 'https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf',
+    size: 1280835840,
+    sha256: 'aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223',
+    ram: 1.8e9, // measured peak in Phase 1 was ~1.6 GB, plus room for the answer
+  },
+];
+const IDLE_MS = 5 * 60 * 1000;
+const MAX_TOKENS = 700;
+
+let checkSource = async () => ({ ok: true, unknown: true });
+let readSettings = () => ({});
+let onProgress = () => {};
+let download = null; // { id, got, total, abort }
+let worker = null; // { proc, model, ready, info }
+let idleTimer = null;
+const runs = new Map(); // runId -> { emit, resolve }: questions the worker is answering
+const active = new Set(); // runIds of questions still going, from the first check to the last event
+const stoppedRuns = new Set(); // the active ones the person stopped
+
+function setup(opts) {
+  if (opts.checkSource) checkSource = opts.checkSource;
+  if (opts.settings) readSettings = opts.settings;
+  if (opts.progress) onProgress = opts.progress;
+}
+
+const modelsDir = () => path.join(app.getPath('userData'), 'models');
+const modelPath = (m) => path.join(modelsDir(), m.file);
+const find = (id) => MODELS.find((m) => m.id === id) || MODELS[0];
+const downloaded = (m) => { try { return fs.statSync(modelPath(m)).size === m.size; } catch { return false; } };
+
+async function runtimeAvailable() {
+  try {
+    if (process.env.TUFFCODE_LLAMA_RUNTIME) return fs.existsSync(path.join(process.env.TUFFCODE_LLAMA_RUNTIME, 'node_modules', 'node-llama-cpp'));
+    require.resolve('node-llama-cpp');
+    return true;
+  } catch { return false; }
+}
+
+async function status() {
+  return {
+    runtime: await runtimeAvailable(),
+    models: MODELS.map((m) => ({ id: m.id, name: m.name, sub: m.sub, size: m.size, downloaded: downloaded(m) })),
+    downloading: download ? { id: download.id, got: download.got, total: download.total } : null,
+    loaded: worker?.info ? { model: worker.model, ...worker.info } : null,
+    ram: { total: os.totalmem(), free: freeMemory(), need: find().ram },
+  };
+}
+
+// Memory the model can have. On a Mac, os.freemem() leaves out the cache macOS gives back when asked,
+// so it's often only a few hundred MB; availableMemory() counts it. On Windows they're the same.
+const freeMemory = () => process.availableMemory?.() ?? os.freemem();
+
+// ---------------------------------------------------------------- the model file
+async function fetchModel(id) {
+  const m = find(id);
+  if (download) throw new Error('A download is already running.');
+  if (downloaded(m)) return status();
+  await fsp.mkdir(modelsDir(), { recursive: true });
+  const part = modelPath(m) + '.part';
+  let have = 0;
+  try { have = fs.statSync(part).size; } catch {}
+  if (have > m.size) { await fsp.rm(part, { force: true }); have = 0; }
+  const abort = new AbortController();
+  download = { id: m.id, got: have, total: m.size, abort };
+  const tell = () => onProgress({ id: m.id, got: download?.got || 0, total: m.size, done: false });
+  try {
+    // Carry on from where an interrupted download stopped. A .part that's already whole (TuffCode was
+    // closed while it was being checked, say) only needs the check below: the server refuses to send
+    // anything from past the end.
+    if (have < m.size) {
+      let res = await net.fetch(m.url, { headers: have ? { Range: `bytes=${have}-` } : {}, signal: abort.signal });
+      if (have && res.status === 416) {
+        // The server can't carry on from there, so start again from the beginning.
+        await res.body?.cancel().catch(() => {});
+        have = 0;
+        download.got = 0;
+        res = await net.fetch(m.url, { signal: abort.signal });
+      }
+      if (!res.ok && res.status !== 206) throw new Error(`The download failed (${res.status}).`);
+      if (have && res.status !== 206) { have = 0; download.got = 0; }
+      let last = 0;
+      // pipeline hands a failed write (a full disk, say) and Stop to the catch below, and closes the file.
+      await pipeline(res.body, async function* count(body) {
+        for await (const chunk of body) {
+          download.got += chunk.length;
+          if (Date.now() - last > 250) { last = Date.now(); tell(); }
+          yield chunk;
+        }
+      }, fs.createWriteStream(part, { flags: have ? 'a' : 'w' }), { signal: abort.signal });
+    }
+    // Check the whole file, including a part downloaded earlier.
+    const hash = crypto.createHash('sha256');
+    await new Promise((r, j) => fs.createReadStream(part).on('data', (d) => hash.update(d)).on('end', r).on('error', j));
+    if (fs.statSync(part).size !== m.size || hash.digest('hex') !== m.sha256) {
+      await fsp.rm(part, { force: true });
+      throw new Error("The downloaded model didn't match what was expected, so it was deleted. Try again.");
+    }
+    // On Windows, antivirus can hold a brand-new file for a moment, so try the rename a few times.
+    for (let i = 0; ; i++) {
+      try { await fsp.rename(part, modelPath(m)); break; } catch (err) {
+        if (i >= 4 || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+    onProgress({ id: m.id, got: m.size, total: m.size, done: true });
+  } catch (err) {
+    const stopped = abort.signal.aborted;
+    const why = err.code === 'ENOSPC' ? `There isn't enough free disk space. Tuff AI needs ${(m.size / 1e9).toFixed(1)} GB. Free some up, then try again.` : String(err.message || err);
+    onProgress({ id: m.id, got: download?.got || 0, total: m.size, done: true, error: stopped ? null : why, stopped });
+    if (!stopped) throw err;
+  } finally {
+    download = null;
+  }
+  return status();
+}
+
+function cancelDownload() {
+  download?.abort.abort();
+}
+
+async function removeModel(id) {
+  const m = find(id);
+  if (worker?.model === m.id) unload();
+  await fsp.rm(modelPath(m), { force: true });
+  await fsp.rm(modelPath(m) + '.part', { force: true });
+  return status();
+}
+
+// ---------------------------------------------------------------- the worker
+// It stays inside app.asar with node-llama-cpp's JavaScript; only its native files are unpacked.
+const workerFile = () => path.join(__dirname, 'ai-worker.mjs');
+
+function unload() {
+  clearTimeout(idleTimer);
+  if (!worker) return;
+  const w = worker;
+  worker = null;
+  try { w.proc.kill(); } catch {}
+  // Each question being answered then finishes with this, and sends its own done.
+  for (const [, r] of runs) r.resolve({ ok: false, error: 'Tuff AI stopped.' });
+  runs.clear();
+}
+
+// The model is unloaded after 5 minutes without questions, but never while one is being answered.
+function touch() {
+  clearTimeout(idleTimer);
+  if (!active.size) idleTimer = setTimeout(unload, IDLE_MS);
+}
+
+function start(m) {
+  if (worker?.model === m.id) return worker.ready;
+  unload();
+  const proc = utilityProcess.fork(workerFile(), [], { serviceName: 'Tuff AI', stdio: 'pipe', env: { ...process.env } });
+  const w = { proc, model: m.id, info: null, err: '' };
+  // What the worker prints only matters when it fails, so keep the last bit for the error message.
+  proc.stderr?.on('data', (d) => { w.err = (w.err + d).slice(-2000); });
+  proc.stdout?.on('data', () => {});
+  w.ready = new Promise((resolve, reject) => {
+    proc.on('message', (msg) => {
+      if (msg.type === 'loaded') { w.info = { gpu: msg.gpu, device: msg.device }; resolve(w.info); return; }
+      if (msg.type === 'failed') {
+        // The model didn't load. Let this worker go, so the next question starts a fresh one.
+        if (worker === w) worker = null;
+        try { proc.kill(); } catch {}
+        reject(new Error(msg.error));
+        return;
+      }
+      const r = runs.get(msg.runId);
+      if (!r) return;
+      if (msg.type === 'delta') r.emit({ kind: 'delta', text: msg.text });
+      else if (msg.type === 'done') { runs.delete(msg.runId); r.resolve(msg); }
+    });
+    proc.on('exit', (code) => {
+      // A worker that was already let go (unloaded, or failed to load) has no questions left here.
+      const mine = worker === w;
+      if (mine) worker = null;
+      const why = w.err.trim().split(/\r?\n/).pop();
+      reject(new Error(`Tuff AI's model stopped unexpectedly (code ${code}).${why ? ` ${why}` : ''}`));
+      if (mine) for (const [id, r] of runs) { runs.delete(id); r.resolve({ ok: false, error: 'Tuff AI stopped unexpectedly. Try again.' }); }
+    });
+  });
+  w.ready.catch(() => {});
+  const s = readSettings();
+  proc.postMessage({ type: 'load', modelPath: modelPath(m), gpu: s.aiGpu === 'cpu' ? 'cpu' : 'auto', contextSize: 8192 });
+  worker = w;
+  return w.ready;
+}
+
+function ask(runId, type, payload, emit) {
+  if (!worker) return Promise.resolve({ ok: false, error: 'Tuff AI stopped unexpectedly. Try again.' });
+  return new Promise((resolve) => {
+    runs.set(runId, { emit, resolve });
+    worker.proc.postMessage({ type, runId, maxTokens: MAX_TOKENS, ...payload });
+  });
+}
+
+// ---------------------------------------------------------------- prompts
+// The guide's opening sections stay the same for every chat, so the worker only reads them once.
+// One or two more sections that match the question go in the message itself.
+let guide = null;
+function guideSections() {
+  if (guide) return guide;
+  const text = fs.readFileSync(path.join(__dirname, 'mcp', 'tuff-guide.md'), 'utf8').replace(/\r\n/g, '\n');
+  const all = [];
+  for (const part of text.split(/\n(?=##+ )/)) {
+    const title = (/^##+ (.*)/.exec(part) || [])[1];
+    if (title) all.push({ title, text: part.trim() });
+  }
+  const CORE = ['Tuff is not Python', 'Two rules that trip everyone up', 'Basics', 'Asking questions'];
+  const rest = all.filter((s) => !CORE.includes(s.title) && s.title !== 'Using the tools');
+  const words = (t) => t.toLowerCase().match(/[a-z_]{3,}/g) || [];
+  const df = new Map();
+  for (const s of rest) for (const w of new Set(words(s.text))) df.set(w, (df.get(w) || 0) + 1);
+  guide = { core: all.filter((s) => CORE.includes(s.title)), rest, words, df };
+  return guide;
+}
+
+function relevant(text, n = 2) {
+  const g = guideSections();
+  const q = new Set(g.words(text));
+  return g.rest.map((s) => {
+    const have = new Set(g.words(`${s.title} ${s.text}`));
+    let score = 0;
+    for (const w of q) if (have.has(w)) score += Math.log(1 + g.rest.length / (g.df.get(w) || 1));
+    return { s, score };
+  }).sort((a, b) => b.score - a.score).slice(0, n).filter((x) => x.score > 0).map((x) => x.s);
+}
+
+function systemPrompt() {
+  return `You are Tuff AI, the helper built into TuffCode. You run on this computer, with no internet. You help beginners with the Tuff programming language.
+Tuff is its own language, not Python. Only use what the Tuff guide below shows.
+Keep answers short and friendly. When you give a program, give the whole program in one \`\`\`tuff code block.
+
+# Tuff guide (the basics)
+
+${guideSections().core.map((s) => s.text).join('\n\n')}`;
+}
+
+// Only a ```tuff block is a program to check. Other blocks are an error message, what a program prints,
+// or another language, and the checker would wrongly say they're broken.
+function codeOf(text) {
+  const m = /```[ \t]*tuff[^\n]*\n([\s\S]*?)```/i.exec(text);
+  return m ? m[1] : null;
+}
+
+// ---------------------------------------------------------------- runs (same events as the CLI agents)
+async function run(params, emit) {
+  // While a question is going, the idle timer waits.
+  active.add(params.runId);
+  touch();
+  try {
+    await answerRun(params, emit);
+  } finally {
+    active.delete(params.runId);
+    stoppedRuns.delete(params.runId);
+    touch();
+  }
+}
+
+async function answerRun({ runId, prompt, model }, emit) {
+  const send = (e) => emit({ runId, ...e });
+  const m = find(model);
+  // Stop can come at any point: while the model loads, while the checker runs, or between the two answers.
+  const halted = () => stoppedRuns.has(runId);
+  if (!(await runtimeAvailable())) { send({ kind: 'done', ok: false, error: "Tuff AI's engine isn't in this copy of TuffCode." }); return; }
+  if (!downloaded(m)) { send({ kind: 'done', ok: false, error: 'Download Tuff AI first (the card at the top).' }); return; }
+  if (!worker || worker.model !== m.id) {
+    const free = freeMemory();
+    if (free < m.ram) {
+      send({ kind: 'done', ok: false, error: `Tuff AI needs about ${(m.ram / 1e9).toFixed(1)} GB of free memory, and ${(free / 1e9).toFixed(1)} GB is free right now. Close some apps or browser tabs, then try again.` });
+      return;
+    }
+    send({ kind: 'note', text: 'Starting Tuff AI on this computer…' });
+  }
+  send({ kind: 'model', id: m.id, name: m.name });
+  try {
+    await start(m);
+  } catch (err) {
+    send({ kind: 'done', ok: false, error: String(err.message || err) });
+    return;
+  }
+  if (halted()) { send({ kind: 'done', ok: true, error: null }); return; }
+  const extra = relevant(prompt);
+  const message = `${extra.length ? `More of the Tuff guide that may help:\n\n${extra.map((s) => s.text).join('\n\n')}\n\n---\n\n` : ''}${prompt}`;
+  let r = await ask(runId, 'chat', { system: systemPrompt(), prompt: message }, send);
+  if (r.ok && !r.stopped && !halted()) {
+    const code = codeOf(r.text || '');
+    if (code) {
+      send({ kind: 'tool', name: 'mcp__tuffcode__tuff_check', input: { code } });
+      const c = await checkSource(code);
+      send({ kind: 'tool_result', ok: c.ok });
+      if (!c.ok && !c.unknown && !halted()) {
+        send({ kind: 'note', text: "The checker found a mistake, so Tuff AI is fixing it." });
+        send({ kind: 'break' });
+        r = await ask(runId, 'followup', { prompt: `That program doesn't pass Tuff's checker:\n${c.message}\n\nFix it and give the whole program again.` }, send);
+        const again = codeOf(r.text || '');
+        if (r.ok && again && !halted()) {
+          send({ kind: 'tool', name: 'mcp__tuffcode__tuff_check', input: { code: again } });
+          const c2 = await checkSource(again);
+          send({ kind: 'tool_result', ok: c2.ok });
+          if (!c2.ok && !c2.unknown) send({ kind: 'note', text: `The checker still finds a mistake: ${c2.message}` });
+        }
+      }
+    }
+  }
+  const ok = !!r.ok || !!r.stopped || halted();
+  send({ kind: 'done', ok, error: ok ? null : r.error });
+}
+
+function stop(runId) {
+  if (!active.has(runId)) return;
+  stoppedRuns.add(runId);
+  // The worker stops the answer it's writing, or skips the question when it gets to it.
+  if (worker && runs.has(runId)) worker.proc.postMessage({ type: 'stop', runId });
+}
+
+function quit() {
+  cancelDownload();
+  unload();
+}
+
+module.exports = { MODELS, setup, status, fetchModel, cancelDownload, removeModel, run, stop, quit, codeOf };
