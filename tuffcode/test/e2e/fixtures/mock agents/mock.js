@@ -57,6 +57,10 @@ process.stdin.on('end', async () => {
   const prompt = printArg ? printArg.slice('--print='.length) : stdin;
   log({ args, cwd: process.cwd(), prompt });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // "LINKS" in the prompt: a reply with the Markdown real agents write (file:/// links like Antigravity's,
+  // file:line links, a table, numbered items split by blank lines, a web link and a link that must stay text).
+  const url = (f) => 'file:///' + path.join(process.cwd(), f).replace(/\\/g, '/').replace(/^\//, '');
+  const links = () => `Right now you've got [main.tuf](${url('main.tuf')}) open. Line two is [main.tuf:2](main.tuf:2).\n\n1. Claude Code answered first.\n\n2. Tuff AI answered next.\n\n| Who | Messages |\n| --- | --- |\n| Claude Code | **3** |\n| Antigravity | \`1\` |\n\nMore at https://example.com/tuff. [Not a link](javascript:alert(1))`;
   if (who === 'claude') {
     let mcpCfg = null;
     const i = args.indexOf('--mcp-config');
@@ -66,7 +70,7 @@ process.stdin.on('end', async () => {
     out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } });
     out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'Read', input: { file_path: path.join(process.cwd(), 'main.tuf') } }] } });
     out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't2', content: 'ok' }] } });
-    const text = "Here's a **friendlier** greeting:\n\n```tuff\nsay \"Hi there!\"\n```\n\n- It uses `say`\n- It's short";
+    const text = stdin.includes('LINKS') ? links() : "Here's a **friendlier** greeting:\n\n```tuff\nsay \"Hi there!\"\n```\n\n- It uses `say`\n- It's short";
     for (const chunk of text.match(/[\s\S]{1,9}/g)) { out({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: chunk } } }); await sleep(15); }
     out({ type: 'stream_event', event: { type: 'content_block_stop' } });
     if (args.includes('acceptEdits')) {
@@ -78,8 +82,9 @@ process.stdin.on('end', async () => {
     out({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: 'sess-123', total_cost_usd: 0.01 });
   } else if (who === 'agy') {
     out({ event: 'init', conversation_id: 'conv-1' });
-    out({ event: 'step_update', step_update: { step_index: 0, step_type: 'agent_response', text_delta: 'Antigravity says: hello from the stand-in.' } });
-    out({ event: 'result', result: { status: 'success', response: 'Antigravity says: hello from the stand-in.', conversation_id: 'conv-1' } });
+    const text = prompt.includes('LINKS') ? links() : 'Antigravity says: hello from the stand-in.';
+    out({ event: 'step_update', step_update: { step_index: 0, step_type: 'agent_response', text_delta: text } });
+    out({ event: 'result', result: { status: 'success', response: text, conversation_id: 'conv-1' } });
   } else {
     out({ type: 'thread.started', thread_id: 'th-1' });
     out({ type: 'turn.started' });

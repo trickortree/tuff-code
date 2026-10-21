@@ -1951,7 +1951,12 @@
     saveSettings,
     toast,
     refreshTree,
-    openFile: (p) => openFile(p),
+    // With a line, the cursor goes there (a link like "main.tuf:12" in an agent's reply).
+    openFile: async (p, line) => {
+      const tab = await openFile(p);
+      if (tab && line > 0) { editor.revealLineInCenter(line); editor.setPosition({ lineNumber: line, column: 1 }); editor.focus(); }
+      return tab;
+    },
     runFile: async (p) => { await saveAll(); startRun(p); },
     openBuild: (p) => openBuildDialog(p),
     editor: () => editor,
@@ -2006,6 +2011,7 @@
     addCommand: (id, def) => { commands[id] = def; if (def.sc) keymap[def.sc] = id; },
     removeCommand: (id) => { const sc = commands[id]?.sc; if (sc && keymap[sc] === id) delete keymap[sc]; delete commands[id]; },
     openExternal: (url) => api.openRepo(url),
+    openWeb: (url) => api.openWeb(url),
     studioVisible: () => studio.visible,
     activeFile: () => activeTab()?.path || null,
     monacoReady: () => monacoReady,

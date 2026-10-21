@@ -951,6 +951,16 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (act === 'do-edit') { send('Yes please, make that change for me.', { mode: 'edit' }); return; }
     const s = e.target.closest('[data-s]');
     if (s) { send(SUGGEST[+s.dataset.s][1]); return; }
+    const a = e.target.closest('.ta-link');
+    if (a) {
+      e.preventDefault();
+      if (a.dataset.file) t.openFile(a.dataset.file, +a.dataset.line || 0);
+      else if (a.dataset.url) {
+        const url = a.dataset.url;
+        t.ask({ title: `Open ${url.length > 90 ? url.slice(0, 87) + '…' : url} in your web browser?`, confirm: true, okLabel: 'Open' }).then((ok) => ok && t.openWeb(url));
+      }
+      return;
+    }
     const b = e.target.closest('[data-code]');
     if (!b) return;
     const code = decodeURIComponent(b.closest('.ta-code').dataset.src || '');
@@ -963,7 +973,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     }
   }
 
-  // Small markdown: code blocks (with Copy / Insert), headings, lists, `code`, **bold** and *italics*.
+  // Small markdown: code blocks (with Copy / Insert), and prose() for everything between them.
   function md(src) {
     if (!src) return '';
     const parts = [];
@@ -983,36 +993,107 @@ TuffPlugins.register('tuff-agents', (t) => {
     return parts.join('');
   }
 
+  // One line of text: `code`, [links](…), <web addresses>, **bold**, *italics*, ~~struck~~ and \escapes.
+  // Code spans, links and escapes become placeholders first, so their insides aren't styled again.
   function inline(s) {
-    return esc(s)
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
+    const keep = [];
+    const hold = (html) => `\u0000${keep.push(html) - 1}\u0000`;
+    const x = String(s)
+      .replace(/\\([\\`*_[\]()#+\-.!~|>])/g, (_, c) => hold(esc(c)))
+      .replace(/`([^`]+)`/g, (_, c) => hold(`<code>${esc(c)}</code>`))
+      .replace(/!?\[([^\]]+)\]\(\s*(?:<([^>]+)>|([^)\s]+))(?:\s+"[^"]*")?\s*\)/g, (_, text, inAngles, href) => hold(link(text, inAngles || href)))
+      .replace(/<((?:https?|file):\/\/[^>\s]+)>/gi, (_, href) => hold(link(href, href)))
+      .replace(/\bhttps?:\/\/[^\s<>()"'`]*[^\s<>()"'`.,;:!?]/gi, (href) => hold(link(href, href)));
+    return esc(x)
       .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-      .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>');
+      .replace(/(^|[^\w])__([^_]+)__(?=$|[^\w])/g, '$1<b>$2</b>')
+      .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+      .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>')
+      .replace(/(^|[\s(])_([^_\s][^_]*)_(?=$|[\s).,;:!?])/g, '$1<i>$2</i>')
+      .replace(/\u0000(\d+)\u0000/g, (_, i) => keep[+i]);
   }
 
+  // A link in a reply. Files (file:///…, a path, "main.tuf:12") open in the editor, at the line if one is
+  // given. Web pages (http and https only) ask first, because they open in the browser. Anything else
+  // (javascript:, data:…) is shown as plain text.
+  function link(text, href) {
+    const to = linkTarget(href);
+    const label = esc(text);
+    if (!to) return label;
+    if (to.url) return `<a class="ta-link web" data-url="${esc(to.url)}" title="${esc(to.url)}">${label}</a>`;
+    return `<a class="ta-link file" data-file="${esc(to.file)}"${to.line ? ` data-line="${to.line}"` : ''} title="Open ${esc(short(to.file))}${to.line ? `, line ${to.line}` : ''}">${label}</a>`;
+  }
+
+  function linkTarget(href) {
+    let h = String(href || '').trim();
+    if (/^https?:\/\/[^/\s]/i.test(h)) return { url: h };
+    let line = 0;
+    const hash = h.match(/#L?(\d+)(?:[-:]L?\d+)?$/i);
+    if (hash) { line = +hash[1]; h = h.slice(0, hash.index); }
+    const lc = !line && h.match(/^(.*\.\w+):(\d+)(?::\d+)?$/); // main.tuf:12 or main.tuf:12:5
+    if (lc) { h = lc[1]; line = +lc[2]; }
+    if (/^file:\/\//i.test(h)) {
+      try { h = decodeURIComponent(h.replace(/^file:\/\/(localhost)?/i, '')); } catch { return null; }
+      if (/^\/[a-z]:[\\/]/i.test(h)) h = h.slice(1); // file:///C:/… → C:/…
+    } else if (/^[a-z][\w+.-]*:/i.test(h) && !/^[a-z]:[\\/]/i.test(h)) return null; // another scheme, not a drive
+    if (!h || h.startsWith('#')) return null;
+    const root = t.project.root();
+    const abs = /^([a-z]:[\\/]|[\\/])/i.test(h);
+    if (!abs && !root) return null;
+    let file = abs ? h : `${root.replace(/[\\/]+$/, '')}/${h.replace(/^\.[\\/]/, '')}`;
+    // One kind of slash, the one the project uses, so an open tab is found again instead of opened twice.
+    if (/^[a-z]:/i.test(file) || (root || '').includes('\\')) file = file.replace(/\//g, '\\');
+    return { file, line };
+  }
+
+  // Lines of text between code blocks: headings, lists (numbered ones keep their numbers, indented items
+  // sit under the one above), tables, > quotes, --- lines and paragraphs.
   function prose(text) {
     const out = [];
     let list = null;
     let para = [];
+    let quote = [];
     const flushPara = () => { if (para.length) out.push(`<p>${para.map(inline).join('<br>')}</p>`); para = []; };
-    const flushList = () => { if (list) out.push(`<${list.tag}>${list.items.map((x) => `<li>${inline(x)}</li>`).join('')}</${list.tag}>`); list = null; };
-    for (const raw of text.split('\n')) {
-      const line = raw.trimEnd();
+    const flushQuote = () => { if (quote.length) out.push(`<blockquote>${quote.map(inline).join('<br>')}</blockquote>`); quote = []; };
+    const flushList = () => {
+      if (list) out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ''}>${list.items.map((x) => `<li${x.sub ? ' class="ta-sub"' : ''}>${x.lines.map(inline).join('<br>')}</li>`).join('')}</${list.tag}>`);
+      list = null;
+    };
+    const flush = () => { flushPara(); flushQuote(); flushList(); };
+    const cells = (row) => row.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim());
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trimEnd();
       let m;
-      if (!line.trim()) { flushPara(); flushList(); continue; }
-      if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { flushPara(); flushList(); out.push(`<h4>${inline(m[2])}</h4>`); continue; }
-      if ((m = line.match(/^\s*(?:[-*•]|(\d+)[.)])\s+(.*)$/))) {
-        flushPara();
-        const tag = m[1] ? 'ol' : 'ul';
-        if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
-        list.items.push(m[2]);
+      if (!line.trim()) { flush(); continue; }
+      // A table: a row of | cells, then a |---|---| line.
+      if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1] || '')) {
+        flush();
+        const head = cells(line);
+        const rows = [];
+        for (i += 2; i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i]); i++) rows.push(cells(lines[i]));
+        i--;
+        out.push(`<div class="ta-table"><table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${head.map((_, k) => `<td>${inline(r[k] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
         continue;
       }
+      if ((m = line.match(/^(#{1,6})\s+(.*)$/))) { flush(); out.push(`<h4>${inline(m[2].replace(/\s#+$/, ''))}</h4>`); continue; }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { flush(); out.push('<hr>'); continue; }
+      if ((m = line.match(/^\s*>\s?(.*)$/))) { flushPara(); flushList(); quote.push(m[1]); continue; }
+      flushQuote();
+      if ((m = line.match(/^(\s*)(?:[-*+•]|(\d+)[.)])\s+(.*)$/))) {
+        flushPara();
+        const sub = m[1].length >= 2 && list;
+        const tag = m[2] ? 'ol' : 'ul';
+        if (!sub && (!list || list.tag !== tag)) { flushList(); list = { tag, start: m[2] ? +m[2] : 1, items: [] }; }
+        list.items.push({ sub: !!sub, lines: [m[3]] });
+        continue;
+      }
+      // An indented line under a list item belongs to that item.
+      if (list && /^\s{2,}\S/.test(line)) { list.items[list.items.length - 1].lines.push(line.trim()); continue; }
       flushList();
       para.push(line);
     }
-    flushPara();
-    flushList();
+    flush();
     return out.join('');
   }
 

@@ -336,6 +336,14 @@ ipcMain.handle('shell:openExternal', (_e, url) => {
   // Only TuffCode's repo and the sites of the agents Tuff Agents can run.
   if (/^https:\/\/(github\.com\/trickortree\/tuff-code\b|code\.claude\.com\/|developers\.openai\.com\/codex|antigravity\.google\b)/.test(url)) shell.openExternal(url);
 });
+// A web link in an agent's reply, after the user said yes to opening it. Only http:// and https:// pages.
+ipcMain.handle('shell:openWeb', (_e, url) => {
+  let u;
+  try { u = new URL(String(url)); } catch { return false; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  shell.openExternal(u.href);
+  return true;
+});
 
 ipcMain.handle('app:version', () => app.getVersion());
 ipcMain.handle('update:state', () => updater.state());

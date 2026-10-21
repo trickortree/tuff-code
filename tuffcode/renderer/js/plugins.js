@@ -154,12 +154,14 @@
           return saved;
         } : undefined,
       },
-      openFile: (path) => ide.openFile(path),
+      openFile: (path, line) => ide.openFile(path, line),
       run: (path) => ide.runFile(path),
       toast: (msg, kind, ms) => ide.toast(msg, kind, ms),
       ask: (opts) => ide.ask(opts),
       reloadChanged: () => ide.reloadChanged(),
       openExternal: (url) => ide.openExternal(url),
+      // Any http(s) page, for links the user clicked (ask them first: it leaves TuffCode).
+      openWeb: (url) => ide.openWeb(url),
       storage: {
         get: (k, d) => ((ide.settings().pluginData || {})[p.id] || {})[k] ?? d,
         set: (k, v) => {
