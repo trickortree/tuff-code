@@ -146,7 +146,7 @@
 .ta-ctx button.on { color: var(--text-dim); border-style: solid; border-color: transparent; background: var(--bg-active); text-decoration: none; }
 .ta-compose textarea { width: 100%; box-sizing: border-box; min-height: 52px; max-height: 220px; padding: 2px 2px; resize: none; border: 0; outline: 0; background: transparent; color: var(--text); font: 13px/1.5 var(--font-ui); }
 .ta-compose textarea::placeholder { color: var(--text-muted); }
-/* One row: Ask / Plan / Edit, the model and thinking chips, then Send. It wraps only when very narrow. */
+/* One row: Plan / Ask / Edit, the model and thinking chips, then Send. */
 .ta-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .ta-opts { display: flex; gap: 6px; min-width: 0; flex: 0 1 auto; }
 .ta-opts.hidden { display: none; }
@@ -157,17 +157,19 @@
 .ta-mode button[data-m="plan"].on { background: color-mix(in srgb, var(--accent) 30%, var(--bg-active)); color: var(--text); }
 .ta-mode button:disabled { opacity: .4; cursor: not-allowed; }
 .ta-hint { display: none; }
-/* Send is a round icon button; its text (Send / Stop) stays for screen readers and tests. */
-.ta-send { flex: none; margin-left: auto; display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 50%; background: var(--accent); color: #fff; font-size: 0; transition: filter .12s; }
-.ta-send::before { content: ''; width: 13px; height: 13px; background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 13V3M3.5 7.5 8 3l4.5 4.5'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 13V3M3.5 7.5 8 3l4.5 4.5'/%3E%3C/svg%3E") center / contain no-repeat; }
+/* Send is a round icon button, as tall as the chips beside it; its text (Send / Stop) stays for screen
+   readers and tests. */
+.ta-send { flex: none; margin-left: auto; display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border-radius: 50%; background: var(--accent); color: #fff; font-size: 0; transition: filter .12s; }
+.ta-send::before { content: ''; width: 12px; height: 12px; background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 13V3M3.5 7.5 8 3l4.5 4.5'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 13V3M3.5 7.5 8 3l4.5 4.5'/%3E%3C/svg%3E") center / contain no-repeat; }
 .ta-send:hover { filter: brightness(1.1); }
 .ta-send.stop { background: var(--red); }
-.ta-send.stop::before { -webkit-mask: none; mask: none; width: 10px; height: 10px; border-radius: 2px; }
+.ta-send.stop::before { -webkit-mask: none; mask: none; width: 9px; height: 9px; border-radius: 2px; }
 /* The chips in the message box: no "Model" / "Thinking" label (it's in the tooltip), shorter. */
 .ta-row .ta-dd-k { display: none; }
 .ta-row .ta-dd-btn { height: 26px; max-width: 132px; padding: 0 6px 0 8px; gap: 4px; border-color: transparent; background: transparent; color: var(--text-dim); }
 .ta-row .ta-dd-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: transparent; color: var(--text); }
-.ta-row .ta-dd[data-o="effort"] .ta-dd-btn { max-width: 104px; }
+/* min(…, 100%): in a narrow panel the chip shrinks with its box instead of running under Send. */
+.ta-row .ta-dd[data-o="effort"] .ta-dd-btn { max-width: min(104px, 100%); }
 .ta-row .ta-dd-v { font-weight: 600; }
 
 /* Model and Thinking: TuffCode's own dropdowns, opening upwards from the message box. */

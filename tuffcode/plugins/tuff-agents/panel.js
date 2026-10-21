@@ -163,8 +163,8 @@ TuffPlugins.register('tuff-agents', (t) => {
           <textarea rows="3" spellcheck="true" placeholder="Ask about your code…"></textarea>
           <div class="ta-row">
             <div class="ta-mode" role="radiogroup" aria-label="What the agent may do">
-              <button data-m="ask" title="Ask: explains and suggests, and asks before changing anything. Won't change your files.">Ask</button>
               <button data-m="plan" title="Plan: makes a step-by-step plan first. Nothing changes until you click Go ahead.">Plan</button>
+              <button data-m="ask" title="Ask: explains and suggests, and asks before changing anything. Won't change your files.">Ask</button>
               <button data-m="edit" title="Edit: can change files in this project to do what you ask.">Edit</button>
             </div>
             <div class="ta-opts">
