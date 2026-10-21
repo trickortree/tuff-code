@@ -1,6 +1,6 @@
 # TuffCode
 
-**TuffCode** is a desktop IDE for **Tuff**, a small programming language that's easy to read and fun to learn. It looks and feels like PyCharm and comes with an animated intro, a built-in tutorial, a visual Design Studio for app windows, and a one-click `.exe` builder.
+**TuffCode** is a desktop IDE for **Tuff**, a small programming language that's easy to read and fun to learn. It looks and feels like PyCharm and comes with an animated intro, a built-in tutorial, a visual Design Studio for app windows, Tuff Engine for games, and a one-click `.exe` builder.
 
 ```tuff
 mention mtgui
@@ -48,9 +48,10 @@ You only do this once. On a Mac, TuffCode tells you when there's a new version a
   - Section 2.2, modern apps with mtgui: 4 lessons.
 - **tgui and mtgui:** real desktop windows with buttons, text boxes, switches, checkboxes, dropdowns, sliders, progress bars, spinners, clocks, cards and rows. mtgui adds gradients, gloss, shine and glow. Anything animated has `:speed`.
 - **atgui:** modern app windows made of real HTML and CSS, the kind of apps Claude or Codex are: sidebars, lists, chat bubbles, tables, charts, markdown, menus, pop-ups, toasts, key shortcuts, animations, glass and gradients, a custom title bar. Everything from mtgui works too.
-- **tgame:** games, like pygame. 2D sprites, keys, the mouse, collisions and sounds, or 3D worlds with a sky, an island, trees, rocks and houses, `.glb` models and a first- or third-person player. Write a `while game:open():` loop or use events. (Tuff Engine, a visual game maker, is coming soon.)
+- **tgame:** games, like pygame. 2D sprites, keys, the mouse, collisions and sounds, or 3D worlds with a sky, an island, trees, rocks and houses, `.glb` models and a first- or third-person player. Write a `while game:open():` loop or use events. Build them visually in Tuff Engine.
 - **tap:** the web from Tuff, like Python's `requests`: `tap.get`, `post`, `put`, `delete`, with JSON as data objects (`user:get("name")`).
 - **Design Studio** (`Ctrl+Shift+D`): build windows by clicking. Every change is written straight into your code.
+- **Tuff Engine** (`Ctrl+Shift+G`): build tgame games by clicking and dragging, with ready-made players, coins and enemies. The preview is the real game engine, and every change is real Tuff code.
 - **Gear in the margin:** hover a UI line and click the gear to change its settings without typing.
 - **Auto Code Sort** (`Ctrl+Alt+L`): fixes indentation, puts imports first and functions last, tidies spacing and adds notes. It checks the result with the interpreter first, so it never breaks working code.
 - **Build .exe** (`Ctrl+F9`): turn any program into a Windows app with your own name and icon (on a Mac, into a Mac app). The build log explains each step in plain English.
@@ -119,7 +120,7 @@ python tuff.py myprogram.tuf
   - `main.js`: the window, files and running programs
   - `build.js`: the `.exe` builder (PyInstaller)
   - `updater.js`: the auto-updater
-  - `renderer/`: the IDE's interface, including the editor, Design Studio, tutorial, intro and Auto Code Sort
+  - `renderer/`: the IDE's interface, including the editor, Design Studio, Tuff Engine (`js/tuff-engine.js`, with its game preview in `engine-host/`), tutorial, intro and Auto Code Sort
 
 ## Releasing an update
 

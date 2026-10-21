@@ -405,6 +405,12 @@ while game:open():
 - **Without a player:** `game:camera_at(x, y, z)` with `game:look_at(thing)`, or `game:follow(thing)` (behind it), or `game:orbit(thing)` (drag to turn around it).
 - **Testing a game:** add `game:after(2, selftest)`, call your functions in `func selftest():`, `say` what you find, and end it with `game:close()`.
 
+#### Games Tuff Engine can edit
+TuffCode's Tuff Engine tab (`Ctrl+Shift+G`) builds tgame games by clicking and dragging, and writes everything as normal Tuff code. It can only show and edit simple top-level lines, so when you change a game someone is building in it:
+- Make each new thing with **one top-level line and plain numbers**, like `coin = game:circle(200, 200, 14, "gold")` or `tree = game:spawn("tree", -5, 0, -10)`. Things made in a loop, a function or a chained line (`game:spawn("sign"):label "Hi"`) still work, but show as "Made by your code" and can't be dragged.
+- Put new lines **above** any `while game:open():` loop.
+- Add behaviour as a **func registered with one line**, like `game:every_frame coin_spin` or `coin:clicked coin_clicked`. Functions under a `# Tuff Engine:` comment were written by Tuff Engine, and it keeps that comment and `play_again` up to date as the game changes. Changing one is fine: Tuff Engine then shows it as the person's own code.
+
 ## App windows (tgui / mtgui)
 ```tuff
 mention mtgui
