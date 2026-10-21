@@ -1,13 +1,16 @@
 // MANUAL: Tuff AI in the real IDE, with the real model. It needs the 1.3 GB model file, so it never runs on CI.
 // It checks:
 //   - the Tuff AI tab, and Stop while the model is starting;
-//   - a real answer whose code went through the checker;
-//   - a fast follow-up, and /compact (which Tuff AI can't do);
+//   - a real answer from Pumice 1 whose code went through the checker, with the improved request and the
+//     thinking folded under it;
+//   - a fast follow-up, "Who are you?", and /compact (which Tuff AI can't do);
+//   - the thinking levels: Off, and High (plan, "Thinking…", Stop while it thinks);
 //   - Explain on a Run error;
 //   - Apply with one-step undo;
-//   - the download card, which starts a download and stops it straight away.
+//   - the download card, which starts a download and stops it straight away (--no-download leaves the
+//     download out, so nothing is fetched).
 // Stand-in agents and a scratch home are used, as in the mock suites.
-// Usage: node test/e2e/manual/tuff-ai.mjs --model <Qwen3.5-2B-Q4_K_M.gguf> [--app <TuffCode binary>]
+// Usage: node test/e2e/manual/tuff-ai.mjs --model <Qwen3.5-2B-Q4_K_M.gguf> [--app <TuffCode binary>] [--no-download]
 // A source checkout without node-llama-cpp installed can point TUFFCODE_LLAMA_RUNTIME at a separate install.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -68,14 +71,45 @@ try {
   await idle();
   const a1 = await last();
   console.log(`      first answer: ${Date.now() - t0} ms`);
-  check('Tuff AI answers, marked with its model', /Tuff AI · Qwen3\.5-2B/.test(a1?.who || '') && (a1?.text || '').length > 5 && !a1?.err, a1);
+  check('Tuff AI answers, marked with its model, Pumice 1, and its level', /^Tuff AI · Pumice 1 · (Low|Medium|High)$/.test(a1?.who || '') && (a1?.text || '').length > 5 && !a1?.err, a1);
   check('Its code went through the checker, and has Apply', !/```/.test(a1?.text || '') || (a1?.tools.some((x) => /check/i.test(x)) && a1?.apply), a1);
+  const folds = () => ev(`(() => { const m = [...document.querySelectorAll('.ta-msg.agent')].pop(); return [...m.querySelectorAll('details.ta-fold')].map(d => ({ cls: d.className, open: d.open, summary: d.querySelector('summary').textContent.trim(), body: d.querySelector('.ta-fold-b').textContent.slice(0, 300) })); })()`);
+  const f1 = await folds();
+  check('The reply shows the improved request and the thinking, both folded ("Thought for N s")', f1.length === 2 && f1.every((f) => !f.open) && f1[0].summary === 'Made your request clearer' && /^Thought for \d+ s$/.test(f1[1].summary) && f1[1].body.length > 20, f1);
 
   const t1 = Date.now();
   await send('What does round(2.5) give?');
   await idle();
   const ms = Date.now() - t1;
   check(`A follow-up is fast (${ms} ms)`, ms < 20000 && ((await last())?.text || '').length > 3, await last());
+
+  // Who it says it is.
+  await send('Who are you?');
+  await idle();
+  const who = await last();
+  check('Asked who it is, it says Pumice 1, based on Qwen3.5-2B', /Pumice 1/.test(who?.text || '') && !/\bI(?:'m| am) (?:ChatGPT|Qwen\b|Tuff AI\b)/i.test(who?.text || ''), who?.text);
+  console.log(`      "Who are you?" -> ${(who?.text || '').replace(/\s+/g, ' ').slice(0, 300)}`);
+
+  // Thinking levels: Off answers straight away; High plans, then thinks, and Stop works while it thinks.
+  const dd = (o) => `document.querySelector('.ta-dd[data-o="${o}"]')`;
+  const pickLevel = async (v) => { await ev(`${dd('effort')}.querySelector('.ta-dd-btn').click()`); await ev(`${dd('effort')}.querySelector('.ta-dd-opt[data-v="${v}"]').click()`); };
+  await pickLevel('off');
+  const t2 = Date.now();
+  await send('Make a program that says Hello three times.');
+  await idle();
+  const offMs = Date.now() - t2;
+  const offReply = await last();
+  check(`Off: no thinking fold, and the header says just Pumice 1 (${offMs} ms)`, /Tuff AI · Pumice 1$/.test(offReply?.who || '') && !(await folds()).some((f) => f.cls.includes('ta-thought')), { who: offReply?.who, folds: await folds() });
+  await pickLevel('high');
+  await send('Make a guessing game where the player guesses a number from 1 to 10.');
+  const thinking = await waitFor(`!!document.querySelector('.ta-msg.agent.live details.ta-thought .ta-typing')`, 60000);
+  const planned = await ev(`[...document.querySelectorAll('.ta-msg.agent')].pop().querySelector('.ta-improved .ta-fold-b')?.textContent || ''`);
+  check('High: it rewrites the request, then the fold says "Thinking…" while it thinks', thinking && /rewrote it as/.test(planned), planned.slice(0, 300));
+  await ev(`document.querySelector('.ta-send').click()`);
+  await waitFor(`/Stopped\\./.test([...document.querySelectorAll('.ta-msg.agent')].pop()?.textContent || '')`, 10000);
+  const stopped = await folds();
+  check('Stop while it thinks: Stopped, with "Thought for N s"', stopped.some((f) => /^Thought for \d+ s$/.test(f.summary)), stopped);
+  await pickLevel('low');
 
   await send('/compact');
   const note = await ev(`[...document.querySelectorAll('.ta-msg.note .ta-notebox')].pop()?.textContent || ''`);
@@ -109,12 +143,15 @@ try {
     await ev(`(() => { document.querySelector('.ta-top [data-a="menu"]').click(); [...document.querySelectorAll('.ta-menu button')].find(b => /look for agents again/i.test(b.textContent))?.click(); return 1; })()`);
     const card = await waitFor(`!!document.querySelector('.ta-status [data-a="ai-get"]')`, 20000);
     const text = await ev(`document.querySelector('.ta-status')?.textContent || ''`);
-    check('Without the model: a preview card with the download size and free memory', card && /1\.3 GB/.test(text) && /preview/i.test(text) && /free memory/.test(text), text);
-    await ev(`document.querySelector('.ta-status [data-a="ai-get"]').click()`);
-    check('The download shows progress', await waitFor(`/Downloading Tuff AI/.test(document.querySelector('.ta-status')?.textContent || '')`, 15000), await ev(`document.querySelector('.ta-status')?.textContent`));
-    await t.sleep(1500);
-    await ev(`document.querySelector('.ta-status [data-a="ai-cancel"]')?.click()`);
-    check('Stop ends it and the card comes back', await waitFor(`!!document.querySelector('.ta-status [data-a="ai-get"]')`, 15000), await ev(`document.querySelector('.ta-status')?.textContent`));
+    check('Without the model: a preview card for Pumice 1 with the download size, free memory and the credit to Qwen3.5-2B', card && /1\.3 GB/.test(text) && /preview/i.test(text) && /free memory/.test(text) && /Download Pumice 1/.test(text) && /based on Qwen3\.5-2B/.test(text), text);
+    if (process.argv.includes('--no-download')) console.log('SKIP  The download itself (--no-download)');
+    else {
+      await ev(`document.querySelector('.ta-status [data-a="ai-get"]').click()`);
+      check('The download shows progress', await waitFor(`/Downloading Pumice 1/.test(document.querySelector('.ta-status')?.textContent || '')`, 15000), await ev(`document.querySelector('.ta-status')?.textContent`));
+      await t.sleep(1500);
+      await ev(`document.querySelector('.ta-status [data-a="ai-cancel"]')?.click()`);
+      check('Stop ends it and the card comes back', await waitFor(`!!document.querySelector('.ta-status [data-a="ai-get"]')`, 15000), await ev(`document.querySelector('.ta-status')?.textContent`));
+    }
   } finally {
     fs.renameSync(model + '.away', model);
   }
