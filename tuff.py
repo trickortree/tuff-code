@@ -2667,6 +2667,92 @@ class Checker:
 Checker.HANDLER_POS = {**Checker.HANDLER_POS, "clicked": 0, "hover": 0, "focus": 0, "key": 1, "closed": 0, "item": 1}
 
 
+# ---------------------------------------------------------------- Tuff Engine's preview (tuff.py --scene)
+class SceneConsole(Console):
+    """Prints nothing and answers input() with "", so a preview never shows output or waits."""
+    def write(self, text):
+        pass
+
+    def input(self, prompt):
+        return ""
+
+
+class SceneInterpreter(Interpreter):
+    """Keeps the stack of lines being run (lines[0] is the top-level line), so tgame can tell which line made
+    each thing. wait() returns at once."""
+    def __init__(self, src, base_dir):
+        super().__init__(src, base_dir)
+        self.console = SceneConsole()
+        self.lines = []
+
+    def run(self, s, env):
+        self.lines.append(s.line)
+        try:
+            return super().run(s, env)
+        finally:
+            self.lines.pop()
+
+    def b_wait(self, seconds):
+        return None
+
+    def lib_anims(self):
+        """anims' lines show at once (they would sleep): a preview never waits."""
+        names = list(super().lib_anims())
+        console = self.console
+        return {name: Builtin(f"anims.{name}", lambda *_a: console.say("")) for name in names}
+
+
+OTHER_WINDOW = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|atgui)\b", re.M)
+
+
+def scene_file(game_path, source_path, out_path):
+    """Runs a tgame program's setup with no window and writes what it made as JSON. Always exits 0."""
+    import json
+    import tuff_tgame
+    data = {"v": 1, "mode": None, "batch": [], "things": [], "player": None, "error": None,
+            "tables": tuff_tgame.editor_tables()}
+    src = read_source(source_path)
+    if src is None:
+        data["stopped"] = "unreadable"
+    elif not TGAME_IMPORT.search(src):
+        data["stopped"] = "nogame"
+    elif OTHER_WINDOW.search(src):
+        data["stopped"] = "other-window"   # runs nothing: those libraries open real windows
+    else:
+        os.environ["TUFF_SCENE"] = "1"
+        random.seed(0)
+        interp = SceneInterpreter(src, os.path.dirname(os.path.abspath(game_path)))
+        scene = tuff_tgame.start_scene(interp)
+        error = None
+        try:
+            program = Parser(tokenize(src)).program()
+            for stmt in program:
+                if stmt.kind == "func":
+                    interp.run(stmt, interp.globals)
+            interp.run_block(program, interp.globals)
+            for hook in interp.rt.finish_hooks:
+                hook()
+        except tuff_tgame.SceneDone:
+            pass
+        except TuffError as err:
+            error = {"line": err.line, "col": err.col, "message": err.msg}
+        except (ReturnSignal, BreakSignal, ContinueSignal) as sig:
+            word = {"ReturnSignal": "return", "BreakSignal": "break", "ContinueSignal": "continue"}[type(sig).__name__]
+            error = {"line": sig.line, "col": sig.col, "message": f"'{word}' can't be used here."}
+        except RecursionError:
+            error = {"line": None, "col": None, "message": "A function called itself too many times."}
+        except Exception as exc:  # a bug in scene mode must never hang the editor
+            error = {"line": None, "col": None, "message": f"Tuff Engine's preview had a problem: {exc}"}
+        try:
+            data.update(scene.dump(error))
+        except Exception as exc:
+            data.update(stopped="error", batch=[], things=[],
+                        error={"line": None, "col": None, "message": f"Tuff Engine's preview had a problem: {exc}"})
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, separators=(",", ":"), default=list)
+    return 0
+
+
 # ---------------------------------------------------------------- entry point
 
 def report(err, src):
@@ -2837,6 +2923,11 @@ def main():
             sys.stderr.write("--check needs a file to check.\n" + usage() + "\n")
             return 2
         return check_file(args[1])
+    if args[0] == "--scene":
+        if len(args) < 4:
+            sys.stderr.write("--scene needs the game file, the source file and the output file.\n")
+            return 2
+        return scene_file(args[1], args[2], args[3])
     if args[0].startswith("--") and not os.path.exists(args[0]):
         sys.stderr.write(f"Unknown option '{args[0]}'.\n" + usage() + "\n")
         return 2

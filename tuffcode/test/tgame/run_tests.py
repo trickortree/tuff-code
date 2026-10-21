@@ -608,6 +608,180 @@ def t_no_webgl(c):
             f"one clear error, on the tgame.world line, instead of one for every object (exit {r.code})", r.err[-600:])
 
 
+# ---------------------------------------------------------------- Tuff Engine's preview (tuff.py --scene)
+
+def scene(program, source=None, env=None, timeout=30):
+    """tuff.py --scene <program> <source> <out.json>: (exit code, stdout, stderr, the dump or {}, seconds)."""
+    os.makedirs(OUT, exist_ok=True)
+    out = os.path.join(OUT, "scene_" + os.path.basename(source or program).replace(".tuf", ".json"))
+    if os.path.exists(out):
+        os.remove(out)
+    full_env = {**os.environ, "PYTHONIOENCODING": "utf-8", **(env or {})}
+    full_env.pop("TUFF_TGAME_AUTOPILOT", None)
+    t0 = time.perf_counter()
+    p = subprocess.run(tuff_cmd() + ["--scene", program, source or program, out], cwd=os.path.dirname(program), env=full_env,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, stdin=subprocess.DEVNULL)
+    secs = time.perf_counter() - t0
+    try:
+        with open(out, encoding="utf-8") as f:
+            dump = json.load(f)
+    except (OSError, ValueError):
+        dump = {}
+    return p.returncode, p.stdout, p.stderr, dump, secs
+
+
+def scene_source(name, code):
+    path = os.path.join(OUT, name)
+    os.makedirs(OUT, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(code)
+    return path
+
+
+def t_scene(c):
+    """tuff.py --scene runs a game's setup with no window (Tuff Engine's preview): the engine commands it would send,
+    and every thing it made with the line that made it, for the test games and both Tuff Engine templates."""
+    def run(name, want_stopped, want_mode):
+        code, out, err, d, secs = scene(game(name))
+        c.check(code == 0 and not out.strip() and "Traceback" not in err and "Tuff error" not in err,
+                f"{name}: --scene exits 0 in {secs:.1f} s and prints nothing (no notice, no say lines)", (code, out[:200], err[-400:]))
+        c.check(d.get("v") == 1 and d.get("mode") == want_mode and d.get("stopped") == want_stopped and d.get("error") is None,
+                f"{name}: a {want_mode} dump that stopped at the {want_stopped}", {k: d.get(k) for k in ("v", "mode", "stopped", "error")})
+        batch = d.get("batch") or []
+        c.check(batch and batch[0][0] == "c" and not any(cmd[0] == "j" for cmd in batch),
+                f"{name}: {len(batch)} engine commands, starting with the {'scene' if want_mode == '3d' else 'canvas'}", batch[:2])
+        return d, batch
+
+    def thing(d, var):
+        return next((t for t in d.get("things", []) if t.get("var") == var), {})
+
+    def made_by(d, made):
+        return [t for t in d.get("things", []) if t.get("made") == made]
+
+    # snake: things made by start() keep both lines; food is moved by start(), so its spot differs from its line
+    d, batch = run("snake.tuf", "end", "2d")
+    c.check(d.get("size") == [600, 400] and d.get("title") == "Snake" and d.get("roots") == {"view": 1, "hud": None}
+            and d.get("canvas") == {"cx": 0, "cy": 0}, "snake: the size, title, roots and 2D camera", {k: d.get(k) for k in ("size", "title", "roots", "canvas")})
+    label, food = thing(d, "score_label"), thing(d, "food")
+    c.check(label.get("kind") == "text" and label.get("made") == [5] and label.get("layer") == "game" and label.get("ids") == [2]
+            and label.get("drag") == "xy", "snake: score_label is a text made on line 5", label)
+    c.check(food.get("made") == [6] and food.get("x", 0) % 20 == 10 and food.get("y", 0) % 20 == 10,
+            "snake: food (line 6) is where start() moved it, on the 20-grid", food)
+    body = made_by(d, [52, 15])
+    c.check(len(body) == 2 and [b["kind"] for b in body] == ["box", "box"] and body[0]["x"] == 150,
+            "snake: the 2 body boxes were made by start() on line 52, at line 15", body)
+    c.check(["s", 1, {"bg": "#14213d"}] in batch, "snake: the background is in the batch", batch[:3])
+
+    # axe_sim: a loop game, a first-person player holding an axe, a HUD, things made in for loops
+    d, batch = run("axe_sim.tuf", "loop", "3d")
+    p = d.get("player") or {}
+    held = p.get("held") or {}
+    c.check(p.get("mode") == "first person" and p.get("made") == [6] and p.get("ids") == [] and held.get("name") == "axe"
+            and held.get("made") == [7] and len(held.get("ids", [])) == 3, "axe_sim: the first-person player (line 6) holds the axe (line 7)", p)
+    c.check(d.get("camera") == {"cx": 0, "cy": 1.6, "cz": 0, "yaw": 0, "pitch": 0}, "axe_sim: the camera is the player's eye", d.get("camera"))
+    c.check(isinstance(d.get("roots", {}).get("hud"), int) and d["roots"]["view"] == 1, "axe_sim: the scene and the HUD are the roots", d.get("roots"))
+    island = [t for t in d.get("things", []) if t.get("kind") == "island"]
+    c.check(len(island) == 1 and island[0]["drag"] is None and island[0]["made"] == [5], "axe_sim: one island, not draggable", island)
+    kinds = {}
+    for t in d.get("things", []):
+        kinds.setdefault((t["kind"], tuple(t["made"])), []).append(t)
+    c.check(len(kinds.get(("rock", (15, 16)), [])) == 6 and len(kinds.get(("tree", (17, 18)), [])) == 20
+            and len(kinds.get(("pine", (20, 21)), [])) == 10, "axe_sim: 6 rocks, 20 trees and 10 pines made in their for loops",
+            {f"{k[0]} {list(k[1])}": len(v) for k, v in kinds.items()})
+    near = thing(d, "near")
+    c.check(near.get("kind") == "pine" and near.get("made") == [23] and near.get("x") == 0 and near.get("z") == -6 and near.get("drag") == "xz"
+            and near.get("dims") and near.get("k") == [1, 1, 1] and len(near.get("ids", [])) >= 2,
+            "axe_sim: near is a pine on line 23 at (0, 0, -6) with its size and its group and parts", near)
+    hud = [t for t in d.get("things", []) if t.get("layer") == "hud"]
+    c.check([t.get("made") for t in hud] == [[9], [10]], "axe_sim: the two HUD texts, not the crosshair or the hint", hud)
+    hidden = [cmd[1] for cmd in batch if cmd[0] == "s" and cmd[2].get("visible") is False]
+    c.check(len(hidden) >= 2, "axe_sim: the crosshair and the mouse hint are hidden in a preview", hidden)
+    c.check(batch[-1][0] == "s" and batch[-1][1] == 1 and "cx" in batch[-1][2], "axe_sim: the starting camera is the last command", batch[-1])
+
+    d, batch = run("breakout.tuf", "loop", "2d")
+    bricks = made_by(d, [31, 18, 19, 20])
+    c.check(len(bricks) == 40 and thing(d, "paddle").get("made") == [5], "breakout: 40 bricks made by start() on line 31, and the paddle", len(bricks))
+
+    d, batch = run("features_2d.tuf", "end", "2d")
+    star = thing(d, "star")
+    srcs = [cmd[5].get("src") for cmd in batch if cmd[0] == "c" and cmd[3] == "image"]
+    c.check(star.get("kind") == "image" and srcs == ["asset:star.png", "asset:star.png"], "features_2d: pictures are asset:star.png", srcs)
+    c.check(thing(d, "title").get("layer") == "hud" and d.get("roots", {}).get("hud") == 2, "features_2d: the HUD text is on the hud layer", thing(d, "title"))
+    lines = [t for t in d.get("things", []) if t.get("kind") == "line"]
+    c.check(len(lines) == 1 and lines[0]["made"] == [14] and lines[0]["var"] is None, "features_2d: the unnamed line on line 14", lines)
+    c.check(["k", 0, "sound", ["s1", "asset:blip.wav", 1, False]] in batch, "features_2d: sound files are asset: too", [b for b in batch if b[0] == "k"])
+    c.check(thing(d, "box").get("x") == 310, "features_2d: what the setup did (group:move) is in the dump", thing(d, "box"))
+
+    d, batch = run("features_3d.tuf", "end", "3d")
+    model = thing(d, "tower")
+    c.check(model.get("kind") == "model" and any(cmd[0] == "c" and cmd[5] and cmd[5].get("src") == "asset:tower.glb" for cmd in batch),
+            "features_3d: the .glb is asset:tower.glb", model)
+    ground = [t for t in d.get("things", []) if t.get("kind") == "ground"]
+    c.check(len(ground) == 1 and ground[0]["drag"] is None, "features_3d: the ground isn't draggable", ground)
+    c.check(len(made_by(d, [17, 18])) == 11, "features_3d: the 11 kit things from the for loop", len(made_by(d, [17, 18])))
+    cam = d.get("camera") or {}
+    c.check(cam.get("cx") == 0 and cam.get("cy") == 2 and cam.get("cz") == 3 and cam.get("pitch", 0) < 0 and d.get("player") is None,
+            "features_3d: camera_at and look_at give the starting camera", cam)
+
+    # The two Tuff Engine templates: every thing is on its own top-level line, named, at its line's numbers
+    d, batch = run("coin_dash.tuf", "end", "2d")
+    want = [("score_label", "text", 400, 30, 6), ("player", "box", 400, 520, 7), ("coin", "circle", 200, 200, 9),
+            ("enemy", "box", 100, 80, 10), ("ball", "circle", 600, 300, 11)]
+    got = [(t.get("var"), t.get("kind"), t.get("x"), t.get("y"), (t.get("made") or [None])[0]) for t in d.get("things", [])]
+    c.check(got == want, "coin_dash: score_label, player, coin, enemy and ball at their lines' numbers", got)
+    d, batch = run("island_walk.tuf", "end", "3d")
+    want = [(None, "island", 0, 0, 5), ("score_label", "text", 90, 30, 8), ("coin", "coin", 4, -8, 10), ("tree", "tree", -5, -10, 12),
+            ("hut", "hut", 8, -16, 14), ("enemy", "box", -12, -20, 15)]
+    got = [(t.get("var"), t.get("kind"), t.get("x"), t.get("z") if t.get("layer") == "world" else t.get("y"), (t.get("made") or [None])[0])
+           for t in d.get("things", [])]
+    c.check(got == want, "island_walk: the island, score_label, coin, tree, hut and enemy at their lines' numbers", got)
+    c.check((d.get("player") or {}).get("made") == [9] and (d.get("player") or {}).get("held") is None, "island_walk: the player on line 9", d.get("player"))
+    tables = d.get("tables") or {}
+    c.check(tables.get("colors", {}).get("gold") == "#f2c230" and "sunset" in tables.get("skies", []) and "coin" in tables.get("kit", [])
+            and "axe" in tables.get("hold", []) and "lose" in tables.get("sounds", []) and tables.get("edges") == ["bounce", "wrap", "stop", "none"],
+            "the dump has tgame's tables for the editor's menus", {k: len(v) for k, v in tables.items()})
+
+    # The editor's unsaved text: the source is another file, and the game's own folder still finds its pictures
+    src = scene_source("scene_unsaved.tuf", 'mention tgame\n\ngame = tgame.window("Unsaved", 300, 200)\npic = game:image("star.png", 50, 50)\n')
+    code, out, err, d, secs = scene(game("features_2d.tuf"), src)
+    c.check(d.get("title") == "Unsaved" and thing(d, "pic").get("kind") == "image" and d.get("stopped") == "end",
+            "the code comes from the source file; pictures are found next to the game file", (d.get("stopped"), d.get("error")))
+
+    # What a preview never does: wait, ask for input, go on the internet, or run another library's window
+    src = scene_source("scene_waits.tuf", 'mention tgame\nmention anims\nwait(20)\nname = input("Name? ")\nanims.loading("Loading", 20)\n'
+                                          'say "hello"\ngame = tgame.window("Hi " + name, 300, 200)\n')
+    code, out, err, d, secs = scene(src)
+    c.check(code == 0 and secs < 5 and d.get("title") == "Hi " and not out.strip(), f"wait, input and anims don't wait ({secs:.1f} s)", (code, d.get("title"), out[:100]))
+    src = scene_source("scene_tap.tuf", 'mention tgame\nmention tap\ngame = tgame.window("Net", 300, 200)\nr = tap.get("http://example.invalid/")\n')
+    code, out, err, d, secs = scene(src)
+    c.check(d.get("stopped") == "error" and (d.get("error") or {}).get("line") == 4 and "doesn't go on the internet" in (d.get("error") or {}).get("message", ""),
+            "tap doesn't go on the internet", d.get("error"))
+    src = scene_source("scene_tgui.tuf", 'mention tgame\nmention tgui\napp = tgui.window("App")\n')
+    c.check(scene(src)[3].get("stopped") == "other-window", "a file that also opens a tgui window runs nothing", None)
+    src = scene_source("scene_nogame.tuf", 'say "no game"\n')
+    c.check(scene(src)[3].get("stopped") == "nogame", "a file without tgame: nogame", None)
+    src = scene_source("scene_nowindow.tuf", 'mention tgame\nx = 1\n')
+    c.check(scene(src)[3].get("stopped") == "nowindow", "tgame without a window: nowindow", None)
+
+    # Errors: the line and message, and the things made before it
+    src = scene_source("scene_error.tuf", 'mention tgame\n\ngame = tgame.window("Oops", 400, 300)\na = game:box(10, 10)\nb = game:circle(20, 20, 5, "nocolour")\n')
+    code, out, err, d, secs = scene(src)
+    e = d.get("error") or {}
+    c.check(code == 0 and d.get("stopped") == "error" and e.get("line") == 5 and "isn't a color" in e.get("message", "")
+            and [t.get("var") for t in d.get("things", [])] == ["a"], "an error gives its line and message, with the things made before it", (d.get("stopped"), e))
+    src = scene_source("scene_return.tuf", 'mention tgame\ngame = tgame.window("R")\nreturn 3\n')
+    e = scene(src)[3].get("error") or {}
+    c.check(e.get("line") == 3 and "return" in e.get("message", ""), "a return outside a function is an error on its line", e)
+    src = scene_source("scene_big.tuf", 'mention tgame\ngame = tgame.window("Big", 400, 300)\nfor i in range(1, 100000):\n    game:box(i % 400, 10)\n')
+    code, out, err, d, secs = scene(src)
+    c.check(d.get("stopped") == "too-big" and d.get("batch") == [] and d.get("things") == [] and secs < 5,
+            f"a setup that makes too much stops early as too-big ({secs:.1f} s)", (d.get("stopped"), len(d.get("batch") or []), secs))
+    p = subprocess.run(tuff_cmd() + ["--scene", game("snake.tuf")], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    c.check(p.returncode == 2 and "--scene needs" in p.stderr, "--scene without its three files says what it needs", p.stderr[:200])
+    code, out, err, d, secs = scene(game("coin_dash.tuf"), env={"TUFF_IDE": "1"})
+    c.check(code == 0 and out == "" and d.get("stopped") == "end", "in the IDE's environment too, --scene shows nothing (no notice line)", out[:200])
+
+
 # ---------------------------------------------------------------- the yellow notice
 
 def t_notice(c):
@@ -895,7 +1069,7 @@ def t_perf(c):
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
          "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "no_webgl": t_no_webgl,
-         "notice": t_notice, "mcp": t_mcp, "checker": t_checker, "editor": t_editor, "guide": t_guide, "perf": t_perf}
+         "scene": t_scene, "notice": t_notice, "mcp": t_mcp, "checker": t_checker, "editor": t_editor, "guide": t_guide, "perf": t_perf}
 
 
 def main():
