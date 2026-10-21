@@ -294,7 +294,7 @@
     const lines = String(code ?? '').split(/\r?\n/);
     const P = {
       lines, lineCount: lines.length, importLine: 0, lastImport: 0, other: null, game: null, settings: {}, regs: [], nodes: [],
-      byVar: {}, byLine: {}, hud: null, player: null, funcs: [], scoreLine: 0, score: null, loopLine: 0, behaviours: [], busy: new Set(),
+      byVar: {}, byLine: {}, hud: null, player: null, funcs: [], scoreLine: 0, score: null, loopLine: 0, gameLoop: 0, behaviours: [], busy: new Set(),
     };
     let fn = null;
     for (let i = 0; i < lines.length; i++) {
@@ -322,6 +322,10 @@
         continue;
       }
       if (!P.loopLine && /^while\b/.test(c)) P.loopLine = ln;
+      if (!P.gameLoop && /^while\b/.test(c) && isGameLoop(lines, i, c)) P.gameLoop = ln;
+      // What comes after the game's loop runs only once its window has closed: it isn't how the game starts, so it
+      // isn't read as a thing's setup, and Inspector edits never touch it (spec §8.2). Functions still count.
+      if (P.gameLoop && ln > P.gameLoop) continue;
       if ((m = c.match(GAME_RE))) {
         const call = callOf(full, c, m[3]);
         P.game = { key: 'root', kind: 'game', var: m[1], mode: m[2] === 'world' ? '3d' : '2d', line: ln, comment, call, args: call.vals, text: full };
@@ -389,6 +393,14 @@
     }
     P.behaviours = recognise(P);
     return P;
+  }
+
+  // A top-level while loop is the game's loop when it asks game:open() or calls game:frame(): where tgame's preview
+  // stops (a while loop that only sets things up runs to its end, and the setup goes on after it).
+  function isGameLoop(lines, i, c) {
+    if (/:(?:open|frame)\s*\(/.test(c)) return true;
+    for (let j = i + 1; j < lines.length && (/^\s/.test(lines[j]) || !lines[j].trim()); j++) if (/:frame\s*\(/.test(K.stripComment(lines[j]).code)) return true;
+    return false;
   }
 
   const scoreLabel = (P) => P.nodes.find((n) => n.kind === 'text' && n.var && typeof n.args[0] === 'string' && n.args[0].startsWith('Score: ')) || null;

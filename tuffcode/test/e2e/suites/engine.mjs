@@ -583,6 +583,12 @@ export default async (t, ctx) => {
   const paBall = await edit(paNote, `(P, E) => E.setArgs(P, P.byVar.ball, { x: 650, y: 350 })`);
   check(changedLines(paNote, paMoved)?.[1]?.[2] === '    coin:move_to(300, 300)  # back to the start' && changedLines(paNote, paBall)?.length === 1,
     "the coin moved to 300, 300: play_again's line follows and keeps its comment; moving the ball (no behaviour) leaves play_again alone", { coin: changedLines(paNote, paMoved), ball: changedLines(paNote, paBall) });
+  // After the game loop: that code runs once the window has closed, so it isn't the thing's setup.
+  const loopGame = 'mention tgame\n\ngame = tgame.window("G", 800, 600)\ngame:background "navy"\ncoin = game:circle(200, 200, 14, "gold")\n\nwhile game:open():\n    game:frame()\n\n# after the window closes\ncoin:hide()\ngame:background "black"\nsay "Thanks for playing"\n';
+  const loopRed = await edit(loopGame, `(P, E) => E.setSetting(P, [['background', ['red']]])`);
+  const loopShow = await edit(loopGame, `(P, E) => E.setProp(P, P.byVar.coin, 'hide', [])`);
+  check(changedLines(loopGame, loopRed)?.[0]?.[2] === 'game:background "red"' && changedLines(loopGame, loopRed)?.[0]?.[0] === 4 && loopShow.endsWith('# after the window closes\ncoin:hide()\ngame:background "black"\nsay "Thanks for playing"\n') && /"gold"\)\ncoin:hide\(\)\n\nwhile/.test(loopShow),
+    'Background and Hidden at start change the setup above the game loop, never the lines after it', { red: changedLines(loopGame, loopRed), hide: loopShow.split('\n').slice(3, 7) });
 
   // ================================================================ full size, leaving and closing
   await ev(`document.querySelector('#en-stage').focus()`);
