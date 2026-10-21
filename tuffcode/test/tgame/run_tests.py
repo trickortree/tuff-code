@@ -802,6 +802,18 @@ def t_scene(c):
     src = scene_source("scene_long_loop.tuf", 'mention tgame\ngame = tgame.window("Long", 400, 300)\nfor i in range(1, 1000000):\n    x = i\nb = game:box(10, 10)\n')
     code, out, err, d, secs = scene(src)
     c.check(d.get("stopped") == "end" and [t.get("var") for t in d.get("things", [])] == ["b"], f"a loop over a million numbers still previews ({secs:.1f} s)", (d.get("stopped"), secs))
+    # Only a newline ends a line, as in the editor: a form feed, U+2028, NEL or a vertical tab inside a text or a
+    # comment leaves the line numbers alone, so every thing is made on the line the editor shows (Tuff Engine finds
+    # things by that line: a drag must change the thing's own line). On a line of its own it's an error on that line.
+    for ch in ("\x0c", " ", "\x85", "\x0b"):
+        src = scene_source("scene_breaks.tuf", f'mention tgame\n# a{ch}b\ngame = tgame.window("G", 800, 600)\nsay "x{ch}y"\n'
+                                               f'coin = game:circle(200, 200, 14, "gold")\nenemy = game:box(100, 80, 40, 40, "red")\n')
+        d = scene(src)[3]
+        made = [(t.get("var"), t.get("made")) for t in d.get("things", [])]
+        c.check(d.get("stopped") == "end" and made == [("coin", [5]), ("enemy", [6])], f"U+{ord(ch):04X} in a comment and a text: coin and enemy are made on lines 5 and 6", (d.get("stopped"), made))
+        src = scene_source("scene_break_line.tuf", f'mention tgame\n{ch}\ngame = tgame.window("G", 800, 600)\n')
+        e = scene(src)[3].get("error") or {}
+        c.check(e.get("line") == 2 and f"U+{ord(ch):04X}" in e.get("message", ""), f"U+{ord(ch):04X} on a line of its own: an error on line 2", e)
     p = subprocess.run(tuff_cmd() + ["--scene", game("snake.tuf")], capture_output=True, text=True, encoding="utf-8", timeout=60)
     c.check(p.returncode == 2 and "--scene needs" in p.stderr, "--scene without its three files says what it needs", p.stderr[:200])
     code, out, err, d, secs = scene(game("coin_dash.tuf"), env={"TUFF_IDE": "1"})
