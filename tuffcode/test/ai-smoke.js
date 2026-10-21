@@ -61,6 +61,17 @@ app.whenReady().then(async () => {
     console.log(`[${lv}] ${q}\n      ${a.text.replace(/\s+/g, ' ').slice(0, 300)}`);
     check(`"${q}" (${lv}): it says it's Pumice 1, and claims to be nothing else`, /Pumice 1/.test(a.text) && !falseClaim.test(a.text), a.text);
   }
+  // ... and only when it's asked. With the sentence to say in the system prompt, it began 58 of 60 Tuff Bench
+  // answers with it. These are at the default level, with a file open for the first one, like the panel.
+  for (const [q, parts] of [['What does say do?', { file: 'main.tuf', code: 'say "Hello"\n' }], ['Make a program that counts from 1 to 10.', {}], ['How do I make a list in Tuff?', {}]]) {
+    const got = await events(q, `plain-${q}`, () => {}, { ai: { question: q, ...parts } });
+    const done = got[got.length - 1];
+    const said = (done.stats?.answers || []).join('\n\n');
+    console.log(`[default] ${q}\n      ${said.replace(/\s+/g, ' ').slice(0, 200)}`);
+    check(`"${q}": the answer doesn't say who it is`, done.ok && said.trim() && !/Pumice|TuffCode's own AI|I(?:'m| am) based on/i.test(said), said);
+  }
+  const firstTwo = [r1, r2].map((r) => (r.stats?.answers || []).join('\n\n'));
+  check('... nor do the first two answers', firstTwo.every((t) => t.trim() && !/Pumice|TuffCode's own AI/i.test(t)), firstTwo);
 
   // The thinking levels with the real model.
   const run = async (q, effort, id, onEvent) => {

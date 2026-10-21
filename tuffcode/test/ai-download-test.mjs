@@ -364,7 +364,14 @@ try {
   check('The model is called Pumice 1, with its base model and licence for the credit line', m.name === 'Pumice 1' && m.base === 'Qwen3.5-2B' && m.licence === 'Apache 2.0' && /Qwen3\.5-2B/.test(m.sub), m);
   check('... and keeps the id and file name 1.0.4 used, so a downloaded model is still found', m.id === 'qwen3.5-2b' && m.file === 'Qwen3.5-2B-Q4_K_M.gguf', m);
   const sys = ai.systemPrompt();
-  check('The system prompt says it is Pumice 1, based on Qwen3.5-2B, on this computer, and not another assistant', /^You are Pumice 1\b/.test(sys) && /based on Qwen3\.5-2B/.test(sys) && /run on the person's own computer/.test(sys) && /Answer like this: "I'm Pumice 1, TuffCode's own AI model\. I'm based on the open Qwen3\.5-2B model, and I run right here on your computer\."/.test(sys) && /not ChatGPT, Claude, Gemini or Qwen's own chat app/.test(sys) && !/You are Tuff AI/.test(sys), sys.slice(0, 600));
+  check('The system prompt says it is Pumice 1, based on Qwen3.5-2B, on this computer, and not another assistant', /^You are Pumice 1\b/.test(sys) && /based on Qwen3\.5-2B/.test(sys) && /run on the person's own computer/.test(sys) && /not ChatGPT, Claude, Gemini or Qwen's own chat app/.test(sys) && !/You are Tuff AI/.test(sys), sys.slice(0, 600));
+  // With the sentence to say in the system prompt, the 2B began almost every answer with it (58 of 60 in
+  // Tuff Bench), so only the card for "who are you?" has it.
+  const intro = "I'm Pumice 1, TuffCode's own AI model. I'm based on the open Qwen3.5-2B model, and I run right here on your computer.";
+  check('... without a sentence to say word for word, and told not to say who it is unless they ask', !/I'm Pumice|Answer like this/.test(sys) && /When they ask about anything else, don't say who you are/.test(sys), sys.slice(0, 900));
+  const whoCard = ai.improve({ question: 'Who are you?' }).text;
+  const sayCard = ai.improve({ question: 'What does say do?', file: 'main.tuf', code: 'say "Hello"\n' }).text;
+  check('The card for "Who are you?" has the sentence to answer with; the card for another question does not', whoCard.includes(intro) && !/Pumice/.test(sayCard) && !/Pumice/.test(ai.improve({ question: 'Make a program that counts from 1 to 10.' }).text), { whoCard, sayCard });
   const now = await ai.status();
   check('status() names Pumice 1 for the download card', now.models[0].name === 'Pumice 1' && now.models[0].base === 'Qwen3.5-2B', now.models[0]);
 
@@ -475,7 +482,50 @@ try {
   };
   const gotKinds = Object.fromEntries(Object.keys(kinds).map((q) => [q, ai.improve({ question: q }).kind]));
   check('The improver tells writing, fixing, explaining and questions apart', Object.entries(kinds).every(([q, k2]) => gotKinds[q] === k2), gotKinds);
+  // The panel sends the open file by default. A not, never or should is a "fix" only when it says what the
+  // program does wrong: the card for a fix says the program is broken and asks for a whole fixed program.
+  const game = 'mention tgame\ngame = tgame.window("Catch", 600, 400)\nwhile game:open():\n    dt = game:frame()\n';
+  const kindsWithFile = {
+    "I don't get what dt means": 'explain',
+    "I don't understand how it works": 'explain',
+    'What should I add next to my game?': 'question',
+    'Should I use a while loop or every_frame?': 'question',
+    "Why don't we use def in Tuff?": 'question',
+    'How should I make the player jump?': 'question',
+    'Where should the score go?': 'question',
+    "Can't I just use a for loop?": 'question',
+    "Make it so the player can't go off the screen": 'write',
+    "My player doesn't move": 'fix',
+    "Why doesn't my player move?": 'fix',
+    'The player should jump when I press space': 'fix',
+    "It shouldn't print twice": 'fix',
+    'The apple never falls': 'fix',
+    "I can't see the ball": 'fix',
+    'Nothing happens when I press space': 'fix',
+    "My game doesn't work, it says Tuff error on line 3": 'fix',
+  };
+  const gotWithFile = Object.fromEntries(Object.keys(kindsWithFile).map((q) => [q, ai.improve({ question: q, file: 'catch.tuf', code: game }).kind]));
+  check('... with their file open too: "I don\'t get…", "should I…?" and "why don\'t we…?" are not "fix my program"', Object.entries(kindsWithFile).every(([q, k2]) => gotWithFile[q] === k2), Object.fromEntries(Object.entries(gotWithFile).filter(([q, k2]) => kindsWithFile[q] !== k2)));
   check('"Asks for your name" is a console program; buttons and mtgui mean a window', ai.improve({ question: 'Make a program that asks for your name' }).target === 'console' && ai.improve({ question: 'Make an mtgui window with a button' }).target === 'window' && ai.improve({ question: 'add a score', file: 'a.tuf', code: 'mention tgui\n' }).target === 'window', null);
+  const targets = {
+    'Make a game where you catch apples': 'game',
+    'Can you make a snake game?': 'game',
+    'Make a game where you dodge falling blocks': 'game',
+    'make a pong game': 'game',
+    'Make a guessing game where the secret number is 42.': 'console',
+    'Make a program that keeps a game score in a variable.': 'console',
+    'Make an mtgui number guessing game with a Guess button': 'window',
+  };
+  const gotTargets = Object.fromEntries(Object.keys(targets).map((q) => [q, ai.improve({ question: q, file: 'main.tuf', code: 'say "Hello"\n' }).target]));
+  check('"Make a game where you catch apples" is a tgame game, even with a console program open; a guessing game or a score in a variable is still a console program', Object.entries(targets).every(([q, t]) => gotTargets[q] === t), gotTargets);
+  const apples = { question: 'Make a game where you catch apples' };
+  const applesMsg = ai.buildMessage(apples, ai.improve(apples));
+  check('... and its message has the tgame section and the tgame line in the card', /^### tgame/m.test(applesMsg) && /It's a tgame game/.test(applesMsg) && !/It's a console program/.test(applesMsg), applesMsg.slice(-600));
+  // The guide splits at every heading, so "Games Tuff Engine can edit" (under tgame) is its own section. It
+  // went into a quarter of Tuff Bench's console messages.
+  const consoleMsgs = ['Make a program that shows these three lines:\nGood morning, campers!\nBreakfast is at 8', 'Make a program that adds up the numbers in a list and shows the total.', 'Make a guessing game where the secret number is 42.'].map((q) => ai.buildMessage({ question: q }, ai.improve({ question: q })));
+  const windowMsg = ai.buildMessage({ question: 'Make an mtgui window with a heading and a button' }, ai.improve({ question: 'Make an mtgui window with a heading and a button' }));
+  check('A console or window request never gets the guide\'s tgame sections', [...consoleMsgs, windowMsg].every((t) => !/^#+ (tgame|Games Tuff Engine can edit)/m.test(t)), [...consoleMsgs, windowMsg].map((t) => t.match(/^#+ .*/gm)));
   const fixIn = { question: 'It should count to 3. Can you fix it?', file: 'C:\\p\\count.tuf', code: 'say "Counting"\nfor n in range(1, 3)\n    say n\n', runError: 'Tuff error on line 2: expected ":"\n  2 | for n in range(1, 3)\n                       ^' };
   const card = ai.improve(fixIn);
   check('A fix: the card names the file, the error\'s line and what it says, and what a good answer has', card.kind === 'fix' && /count\.tuf \(3 lines\)/.test(card.text) && /stopped at line 2 \(for n in range\(1, 3\)\): Tuff error on line 2: expected ":"/.test(card.text) && /naming the mistake and the line/.test(card.text), card.text);

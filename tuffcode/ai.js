@@ -271,11 +271,12 @@ function relevant(text, n = 2, { first = [], skip = [] } = {}) {
 }
 
 // Who it is. Asked "who are you?" or "are you ChatGPT?", a base model says it's Qwen or a made-up helper,
-// so it's told plainly what's true.
+// so it's told plainly what's true. The exact sentence to answer with is only in the improver's card for
+// those questions (GOOD.about): with it in the system prompt, the 2B started almost every answer with it.
 function systemPrompt() {
   const m = MODELS[0];
   return `You are ${m.name}, TuffCode's own AI model. You power Tuff AI, the helper built into TuffCode, the code editor for the Tuff programming language. ${m.name} is based on ${m.base}, an open model by the Qwen team at Alibaba Cloud (${m.licence} licence). You run on the person's own computer, with no internet.
-If they ask who or what you are, which model you are, or who made you, say it in a sentence or two: you're ${m.name}, TuffCode's model, based on the open ${m.base} model, running on their computer. Answer like this: "I'm ${m.name}, TuffCode's own AI model. I'm based on the open ${m.base} model, and I run right here on your computer." You are not ChatGPT, Claude, Gemini or Qwen's own chat app, and you're not a person.
+If they ask who or what you are, which model you are, or who made you, say it in a sentence or two: you're ${m.name}, TuffCode's model, based on the open ${m.base} model, running on their computer. You are not ChatGPT, Claude, Gemini or Qwen's own chat app, and you're not a person. When they ask about anything else, don't say who you are: go straight to their question.
 You help beginners, often kids, with the Tuff programming language.
 Tuff is its own language, not Python. Only use what the Tuff guide below shows.
 Keep answers short and friendly. When you give a program, give the whole program in one \`\`\`tuff code block.
@@ -300,24 +301,45 @@ const baseName = (p) => String(p || '').split(/[\\/]/).pop();
 const errLineOf = (s) => +((/Tuff error on line (\d+)/.exec(s || '') || [])[1] || 0);
 
 const MAKE = '(make|write|create|build|code|program|add|change|turn|give me|show me)';
+// With their program open, "my player doesn't move", "it never stops" or "the ball should bounce" say what
+// it does wrong: a not, never or should, then (a few words on) something a program does. Without that,
+// "I don't get what dt means", "Why don't we use def?" and "What should I add next?" are questions.
+const DOES = "(work|run|ran|show|say|said|print|move|happen|stop|start|appear|change|count|jump|load|go|went|end|close|open|play|draw|display|fall|fell|bounce|turn|hit|touch|update|ask|wait|respond|react|spawn|collide|do (anything|what|it|that))(s|es|ed|d|ing|ning|ped|ping|n)?\\b";
+// ("I don't get why it moves" is about them, not the program.)
+const NOT_DOES = new RegExp(`\\b(doesn'?t|does not|don'?t|do not|didn'?t|did not|won'?t|will not|isn'?t|is not|aren'?t|are not|wasn'?t|was not|can'?t|cannot|can not|couldn'?t|could not|never|nothing)\\s+(?!(get|understand|know|see|think|remember|mind)\\b)(?:[\\w']+\\s+){0,3}?${DOES}|\\b(can'?t|cannot) see\\b|\\b(keeps|kept) \\w+ing\\b`);
+// "Should" says what it should do, but not in "should I…?" or "Where should the score go?".
+const SHOULD_DOES = new RegExp(`\\bshould(n'?t| not)?\\s+(?!(i|we|you)\\b)(?:[\\w']+\\s+){0,3}?${DOES}`);
+const ASKING = /^\s*(what|why|how|where|when|which|who|should|can|could|would|will|is|are|do|does)\b/;
+const saysWhatsWrong = (s) => NOT_DOES.test(s) || s.split(/[.?!\n]+/).some((part) => !ASKING.test(part) && SHOULD_DOES.test(part));
 function kindOf(question, hasCode) {
   const s = question.toLowerCase();
   if (/\b(fix|bugs?|broken|errors?|wrong|crash(es|ed|ing)?|stuck|mistakes?|instead|not working|does not work)\b|n'?t (work|run)/.test(s)) return 'fix';
-  if (hasCode && /n'?t\b|\bnever\b|\bshould\b/.test(s)) return 'fix';
+  // "Make a program that asks "What is your name?"" is a request, not a question, and so is "Make it so the
+  // player can't go off the screen".
+  const making = new RegExp(`^(please |ok,? |now )?((can|could|will|would) you (please )?|i want (you to |a |an )?|i'd like (you to |a |an )?|let's )?${MAKE}\\b`).test(s);
+  if (hasCode && !making && saysWhatsWrong(s)) return 'fix';
+  // "I don't get what dt means", "I don't understand this": explain their code. ("I don't know how to add a
+  // score" goes on to the rules below: a request.)
+  if (hasCode && /\bi (don'?t|do not|didn'?t|did not) (get|understand|know|see)\b/.test(s) && /\b(mean(s|ing|t)?|this|that|it|(my|the|this) (code|program)|line \d+)\b/.test(s)) return 'explain';
   if (/\b(explain|walk me through|step by step|what do(es)? (this|it|that|my|the code|the program)|how does (this|it|that|my)|what is this|what's this|mean)\b/.test(s)) return 'explain';
-  // "Make a program that asks "What is your name?"" is a request, not a question.
-  if (new RegExp(`^(please |ok,? |now )?((can|could|will|would) you (please )?|i want (you to |a |an )?|i'd like (you to |a |an )?|let's )?${MAKE}\\b`).test(s)) return 'write';
+  if (making) return 'write';
   // "Who are you?", "Are you ChatGPT?", "Which model is this?"
   if (s.length < 120 && /\b(who|what) (are|r) (you|u)\b|\bare (you|u) (an? )?(chat ?gpt|gpt|claude|gemini|qwen|llama|copilot|tuff ai|pumice|ai|robot|bot|person|human|real)\b|\b(which|what) (ai |language )?model\b|\bwho (made|built|created|trained) (you|u|this)\b|\bwhat('s| is) your name\b/.test(s)) return 'about';
-  if (/\b(suggest|ideas?|tips?|ways to|teach|how (do|can|could|should) i|what (is|are)|why|can i|is there)\b/.test(s)) return 'question';
+  if (/\b(suggest|ideas?|tips?|ways to|teach|how (do|can|could|should) i|(what|which|where|when) (should|can|could|do) (i|we)|should (i|we)|what (is|are)|why|can i|is there)\b/.test(s)) return 'question';
   if (new RegExp(`\\b${MAKE}\\b`).test(s)) return 'write';
   return 'question';
 }
 
+// "Make a game where you catch apples" is a tgame game. A guessing game, a quiz or a game score in a variable
+// is a console program (Tuff Bench has those), and an mtgui game is a window.
+const PLAYS = /\b(catch(es|ing)?|jump(s|ing)?|dodg(e|es|ing)|chas(e|es|ing)|shoot(s|ing|er)?|collect(s|ing)?|fall(s|ing)?|enem(y|ies)|players?|paddles?|balls?|maze|rac(e|es|ing)|racer|pong|snake|flappy|clicker|asteroids?|breakout|invaders|aliens?|space ?ships?|ships?|coins?|obstacles?|rocks?|bricks?|fly(ing)?|runner|3d|world)\b/;
+const NOT_PLAYED = /\b(guess(es|ing)?|quiz|trivia|hangman|riddles?|text|adventure|words?|dice|tic.?tac.?toe|in a variable|m?tgui|atgui)\b/;
+const isGame = (s) => /\bgames?\b/.test(s) && PLAYS.test(s) && !NOT_PLAYED.test(s);
+
 // Console, window, game or web: from the words, or else from the library the open file mentions.
 function targetOf(question, code) {
   const s = question.toLowerCase();
-  if (/\btgame\b|\bsprites?\b|arrow keys|\bplatformer\b/.test(s)) return 'game';
+  if (/\btgame\b|\bsprites?\b|arrow keys|\bplatformer\b/.test(s) || isGame(s)) return 'game';
   if (/\btap\b|\bweb ?(page|site)s?\b|\bwebsite\b|\bapi\b|\burl\b|\binternet\b/.test(s)) return 'web';
   if (/\b(m?tgui|atgui|windows?|buttons?|sliders?|labels?|gui|clicks?|clicked|text ?box|checkbox|dropdown|toggle|headings?)\b/.test(s)) return 'window';
   const lib = /^\s*(?:mention|import)\s+(\w+)/m.exec(code || '');
@@ -329,11 +351,13 @@ function targetOf(question, code) {
 // them in the message the model answers "ask my name" with a window (37 of Qwen's 105 failed write tasks
 // in Phase 1 did).
 const WINDOW_SECTIONS = ['App windows (tgui / mtgui)', 'Events: what the function gets', 'Timers', 'Pages (several screens in one window)', 'Layout and size', 'Looking good', 'atgui'];
+// The guide splits at every heading, so tgame's "Games Tuff Engine can edit" is a section of its own.
+const GAME_SECTIONS = ['tgame', 'Games Tuff Engine can edit'];
 const SECTIONS = {
-  console: { skip: [...WINDOW_SECTIONS, 'Libraries', 'tgame', 'tap'] },
-  window: { first: ['App windows (tgui / mtgui)'], skip: ['tgame', 'tap', 'Live lines and clearing (console programs)'] },
+  console: { skip: [...WINDOW_SECTIONS, 'Libraries', ...GAME_SECTIONS, 'tap'] },
+  window: { first: ['App windows (tgui / mtgui)'], skip: [...GAME_SECTIONS, 'tap', 'Live lines and clearing (console programs)'] },
   game: { first: ['tgame'], skip: [...WINDOW_SECTIONS, 'tap'] },
-  web: { first: ['tap'], skip: [...WINDOW_SECTIONS, 'tgame'] },
+  web: { first: ['tap'], skip: [...WINDOW_SECTIONS, ...GAME_SECTIONS] },
 };
 const WANT = {
   write: 'a Tuff program that does what they describe',
@@ -347,7 +371,7 @@ const GOOD = {
   fix: `one or two sentences naming the mistake and the line it's on, then the whole fixed program in one ${fence}tuff block.`,
   explain: 'a short explanation, step by step, in plain words. Quote small bits of their code. No whole new program unless they ask for one.',
   question: `a short, friendly answer in plain words, with a tiny ${fence}tuff example if it helps (only real Tuff code goes in it).`,
-  about: 'one or two true sentences about who you are (see the start of these instructions), and no code.',
+  about: `a sentence or two, like: "I'm ${MODELS[0].name}, TuffCode's own AI model. I'm based on the open ${MODELS[0].base} model, and I run right here on your computer." No code.`,
 };
 const ASKS = /\b(asks?|asking|types?|typed|typing|enters?|input|answers?|guess(es)?)\b/i;
 const TARGET = {
