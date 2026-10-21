@@ -22,7 +22,7 @@ The 2D, 3D and latency windows ask to stay on top.
 | `view_2d_stress.py` | **(b)** 300 sprites moved by Python every frame at 60 fps (`--sweep`: 1000, 2000, 5000); a negative-radius circle; 1,000 shapes made and removed leave no ids behind |
 | `view_3d_test.py` | **(c)** three.js, 200 cubes, a first-person camera moved from Python, raycast clicks, crosshair picks |
 | `view_latency.py` | **(d)** one event, page → Python → page, in both loop styles, plus `ask()` |
-| `view_close_test.py` | Closing the window ends the program cleanly in every loop style; a crash closes it too |
+| `view_close_test.py` | Closing the window ends the program cleanly in every loop style; a crash closes it too. The close handler runs at any moment: closed before the page is ready, closed behind a handler waiting in `frame()`, and before the window has gone (the process ended right then, like Cmd+Q). A tgame program closed the instant its window appears still runs the code after its loop |
 | `view_window_test.py` | Frameless, not resizable, `.png`/`.ico`/`TUFF_APP_ICON` icons, title, resize, no WebView2, no pywebview (Win32 checks) |
 | `view_server_test.py` | The page's file server, with no window: it serves a file with its token, and a dropped connection prints no traceback |
 | `freeze.py` | **(5)** The 3D test frozen with PyInstaller `--onefile --windowed`, then run |
@@ -31,7 +31,7 @@ The 2D, 3D and latency windows ask to stay on top.
 ## Measured on this PC
 
 i9-12900K, RX 7900 XTX, Windows 11, a monitor that WebView2 drives at **~132 Hz**. Python 3.12.10, pywebview 6.2.1, WebView2 155.0.4283.62.
-The last full run: **69 checks passed, 0 failed**; the numbers below are from an earlier one (62 checks). The frozen exe passed 9/9.
+The last full run: **77 checks passed, 0 failed**; the numbers below are from an earlier one (62 checks). The frozen exe passed 9/9.
 
 **Target met: 60 fps for (b) and (c), with Python using about 3% of each frame.**
 
@@ -62,7 +62,7 @@ It doesn't include the sleep.
 
 - **Pygame style:** the extra time is the wait for the next tick, on average half a frame. That's how a polling loop works.
 - **Opening a window:** the first `View()` takes 0.84–1.6 s until the page is ready. three.js loads on first use in about 45 ms.
-- **Closing:** after WM_CLOSE (what the X button sends), `run()` returns in about 300 ms in every loop style. That's mostly pywebview shutting WebView2 down: it waits for the browser process and deletes the profile folder. The Tuff thread sees the close straight away.
+- **Closing:** after WM_CLOSE (what the X button sends), `run()` returns in about 300 ms in every loop style. That's mostly pywebview shutting WebView2 down: it waits for the browser process and deletes the profile folder. The Tuff thread sees the close straight away, as the window starts closing, and the window goes once the close handlers have run.
 
 A first micro-benchmark of plain pywebview had already shown the bridge wasn't the problem, so no fallback was needed:
 
@@ -98,6 +98,9 @@ threads       append to a queue under a lock and wake the Tuff thread.
 - **`run(main)`:** starts `main` on the Tuff thread. When the program makes its first `View`, the main thread opens the window and runs the window system until the window closes.
 - **Why a sender thread:** pywebview's `run_js` blocks until the page ran the script. On Windows it waits on a semaphore that closing the window never releases. Run from the Tuff thread, a send in flight at close could hang the program.
 - **Backpressure:** `frame()` waits only if Python is more than `max_ahead = 2` batches ahead of the page. If the page falls behind, Python slows to its pace instead of piling up latency.
+- **Closing:** pywebview's `closing` event (on the GUI thread, before the window goes) marks the view closed and queues the `close` event. While a close handler is registered, the window waits there for it, at most `CLOSE_GRACE` (2 s), because Cmd+Q on a Mac, or logging off Windows, ends the process as soon as the window is gone.
+  - **No deadlock:** it doesn't wait while the Tuff thread is inside a call to the window (`resize`, `set_title`, `destroy`...: on Windows they wait for the GUI thread), and no new call starts once the window is closing.
+  - **At any moment:** a window closed before its page was ready still gives a `View`, a closed one, so the program can register its handlers; the first `frame()` or `loop()` runs them. A close stuck in a batch that a handler waiting in `frame()` unwound (an atgui popup) is handled by `frame()`, `loop()` or `run()` on the way out. The close handlers run once.
 - **The exit guard:** if one of pywebview's own threads is still stuck 2 s after the window closed, `run()` flushes the output and ends the process with `os._exit`. That covers pywebview's per-call threads, which aren't daemons. It never fired in testing.
 
 ### The bridge
@@ -196,6 +199,8 @@ tv.View(title="Tuff", width=900, height=600, icon=None, resizable=True, frameles
     # **options: passed to webview.create_window (on_top, min_size, x, y, hidden, focus, text_select...)
     # Raises ViewError: outside run(), a second window, no WebView2 (with the download link),
     #   no pywebview, or the page not starting within 30 s.
+    # Closed before its page was ready, it still comes back (is_open False): the first frame() or loop()
+    #   runs the close handlers registered by then.
 
 # scene (Tuff thread)
 view.create(kind, type_=None, parent=0, **props) -> Node   # Node is an int (its id) with methods
@@ -302,7 +307,7 @@ The "missing module System.*" lines in PyInstaller's warnings are .NET namespace
 - **Loading the page:** WKWebView would block `http://127.0.0.1` through App Transport Security. pywebview's Cocoa backend sets `NSAllowsArbitraryLoads` in the running bundle's Info.plist, so the local server works without a custom Info.plist.
 - **Closing on a Mac:**
   - The last window closing stops the app loop and `start()` returns, as on Windows.
-  - **Cmd+Q terminates the process outright,** so close handlers don't run. Check this in wave 3.
+  - **Cmd+Q terminates the process outright** (pywebview's `applicationShouldTerminate_`, then `exit()`). It fires `closing` first, and the window waits there for the close handlers, so they should have run. Not tried on a Mac; on Windows, ending the process the moment the window has gone shows they have.
 - **What the code skips on a Mac:** the `.ico`/`.png` window icon, the profile folder and the 1 ms timer code are Windows only. A Mac has no per-window icons, and the Dock icon comes from the `.app`.
 
 ## Research notes (pywebview 6.2.1, read from its docs and source)
@@ -335,7 +340,7 @@ The "missing module System.*" lines in PyInstaller's warnings are .NET namespace
 ## Not done, or worth knowing
 
 - **One window per program** for now. A second `View()` raises `ViewError`. Dialogs can be in-page HTML.
-- **No veto of the X button.** `closing` can't be vetoed from Tuff code: a program can react to `close`, but not cancel it. A cross-thread veto risked deadlocks.
+- **No veto of the X button.** `closing` can't be vetoed from Tuff code: a program can react to `close`, but not cancel it. A cross-thread veto risked deadlocks. The window only waits (at most 2 s) for the close handlers to finish.
 - **Smoothing:** the page draws at the display rate (~132 Hz here), but it shows Python's positions as they arrive, 60 times a second. There's no interpolation between frames yet. If motion looks steppy on high-refresh screens, an opt-in `smooth` on canvases and scenes (lerp `x y z rot` over one Python frame, adding ~16 ms of delay) is the next step.
 - **No packed bulk-move command.** It isn't needed at the targets: 5000 sprites still held 60 fps.
 - **No glTF models** (would need three's `GLTFLoader` from `examples/jsm`) and **no audio**. Those are for wave 2 if tgame needs them.
