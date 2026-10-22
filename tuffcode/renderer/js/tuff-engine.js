@@ -61,7 +61,20 @@
     stop: '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" stroke="none"/></svg>',
     cam: svg('<rect x="1.5" y="4.5" width="9.5" height="7" rx="1.5"/><path d="M11 7l3.5-2v6L11 9"/>'),
     warn: svg('<path d="M8 2.2l6 10.6H2z"/><path d="M8 6.5v3"/>') + '',
+    // The land (world:terrain) and its tools.
+    land: svg('<path d="M1.5 13l4.2-6.8 2.6 3.6 2.2-2.8 4 6z"/><path d="M4.4 8.3l1.3.9 1.1-.8"/>'),
+    raise: svg('<path d="M1.8 13.5c2.2-3 4.1-4.4 6.2-4.4s4 1.4 6.2 4.4"/><path d="M8 6.8V2.2M5.9 4.2L8 2.1l2.1 2.1"/>'),
+    lower: svg('<path d="M1.8 8.6c2.2 3 4.1 4.4 6.2 4.4s4-1.4 6.2-4.4"/><path d="M8 2v4.6M5.9 4.6L8 6.7l2.1-2.1"/>'),
+    smooth: svg('<path d="M1.8 6.2c1.5-1.6 2.7-1.6 4.1 0s2.7 1.6 4.1 0 2.7-1.6 4.2 0"/><path d="M1.8 11.8h12.4"/>'),
+    flatten: svg('<path d="M1.8 13.2h12.4"/><rect x="4" y="6.2" width="8" height="3.8" rx="1"/><path d="M8 2.2v4"/>'),
+    hill: svg('<path d="M1.5 12.5c1.8-5.4 11.2-5.4 13 0z"/>'),
+    mountain: svg('<path d="M1.5 13L6.6 3.8l2.9 4.9 1.5-2.2 3.5 6.5z"/><path d="M5.1 6.6l1.5.9 1.3-.8"/>'),
+    dip: svg('<path d="M1.5 6.5h3c1.2 4.6 5.8 4.6 7 0h3"/>'),
+    lake: svg('<path d="M1.5 5.5h2.6c1.1 5.5 6.7 5.5 7.8 0h2.6"/><path d="M5.2 8h5.6"/>'),
+    valley: svg('<path d="M1.5 3.5c3.4 0 4.1 9 6.5 9s3.1-9 6.5-9"/>'),
+    water: svg('<path d="M1.5 6.3c1.4-1.3 2.9-1.3 4.3 0s2.9 1.3 4.4 0 2.9-1.3 4.3 0M1.5 10.3c1.4-1.3 2.9-1.3 4.3 0s2.9 1.3 4.4 0 2.9-1.3 4.3 0"/>'),
   };
+  ICON.terrain = ICON.land;
   ICON.sphere = ICON.ball;
   ICON.spawn = ICON.model;
 
@@ -70,7 +83,10 @@
   const OTHER_RE = /^(?:import|mention)\s+(tgui|mtgui|atgui)\b/;
   const ANY_IMPORT_RE = /^(?:import|mention)\s+[A-Za-z_]\w*/;
   const GAME_RE = /^([A-Za-z_]\w*)\s*=\s*tgame\.(window|world)\b\s*(.*)$/;
-  const SET_RE = /^([A-Za-z_]\w*):(background|sky|fog|sun|island|ground)\b\s*(.*)$/;
+  const SET_RE = /^([A-Za-z_]\w*):(background|sky|fog|sun|island|ground|lighting)\b\s*(.*)$/;
+  // The land: land = world:terrain(200), then its own lines (land:hill(20, -10, 30, 8)...).
+  const TERRAIN_RE = /^([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*):terrain\b\s*(.*)$/;
+  const LAND_RE = /^([A-Za-z_]\w*):(style|hill|mountain|dip|lake|valley|raise|lower|smooth|flatten|water)\b\s*(.*)$/;
   const REG_RE = /^([A-Za-z_]\w*):(every_frame|on_key|every|after|clicked)\b\s*(.*)$/;
   const MAKE_RE = /^(?:([A-Za-z_]\w*)\s*=\s*)?([A-Za-z_]\w*):(box|circle|line|text|image|sphere|cylinder|cone|plane|spawn|light|player|hud|hold)\b\s*(.*)$/;
   const PROP_RE = /^([A-Za-z_]\w*):(speed|spin|on_edge|layer|turn_to|hide|label|solid|glow|align|scale|clicked|walk_speed|jump_height|move_to)\b\s*(.*)$/;
@@ -298,6 +314,7 @@
     const P = {
       lines, lineCount: lines.length, importLine: 0, lastImport: 0, other: null, game: null, settings: {}, regs: [], nodes: [],
       byVar: {}, byLine: {}, hud: null, player: null, funcs: [], scoreLine: 0, score: null, loopLine: 0, gameLoop: 0, behaviours: [], busy: new Set(),
+      land: null,
     };
     let fn = null;
     for (let i = 0; i < lines.length; i++) {
@@ -348,6 +365,21 @@
         const call = callOf(full, c, m[3]);
         const last = call.vals[call.vals.length - 1];
         P.regs.push({ line: ln, owner: 'game', method: m[2], call, args: call.vals, fn: last && last.raw && NAME_RE.test(last.raw) ? last.raw : null });
+        continue;
+      }
+      // The land and its lines: its style, its water, and every edit (hill, lake, a brush stroke...) in order.
+      if (is3d && !P.land && (m = c.match(TERRAIN_RE)) && m[2] === G && (!m[3] || (m[3].startsWith('(') && K.closesAtEnd(m[3])))) {
+        const call = callOf(full, c, m[3]);
+        P.land = { key: 'land', kind: 'terrain', var: m[1], line: ln, comment, call, args: call.vals, text: full, style: null, water: null, edits: [] };
+        P.byLine[ln] = P.land;
+        continue;
+      }
+      if (P.land && (m = c.match(LAND_RE)) && m[1] === P.land.var && (!m[3] || (m[3].startsWith('(') && K.closesAtEnd(m[3])) || !/[:(]/.test(m[3]))) {
+        const call = callOf(full, c, m[3]);
+        const e = { key: `le:${ln}`, op: m[2], line: ln, call, args: call.vals, text: full };
+        if (e.op === 'style') P.land.style = e;
+        else if (e.op === 'water') P.land.water = e;
+        else P.land.edits.push(e);
         continue;
       }
       if ((m = c.match(MAKE_RE))) {
@@ -644,6 +676,7 @@
     const settings = Object.values(P.settings).map((s) => s.line).filter(before);
     const setup = [P.importLine, P.game?.line, ...settings, P.hud?.line, P.scoreLine, P.player?.hold?.line];
     for (const n of P.nodes) setup.push(n.line, ...Object.values(n.props).map((p) => p.line));
+    if (P.land) setup.push(landLast(P.land));
     return {
       setupEnd: Math.max(0, ...setup.filter(before)),
       settingsEnd: Math.max(P.game?.line || 0, ...settings),
@@ -651,6 +684,8 @@
     };
   }
   const ownLast = (node) => Math.max(node.line, ...Object.values(node.props).map((p) => p.line), node.hold?.line || 0);
+  const landLines = (L) => [L.line, L.style?.line, L.water?.line, ...L.edits.map((e) => e.line)].filter(Boolean);
+  const landLast = (L) => Math.max(...landLines(L));
 
   function gameSize(P, d = null) {
     if (d && Array.isArray(d.size) && d.mode === P.game?.mode) return d.size;
@@ -664,6 +699,8 @@
   function find(P, key) {
     if (!key || !P.game) return null;
     if (key === 'root') return P.game;
+    if (key === 'land') return P.land;
+    if (key.startsWith('le:')) return P.land?.edits.find((e) => e.line === +key.slice(3)) || null;
     if (key.startsWith('v:')) { const n = P.byVar[key.slice(2)]; return n && P.nodes.includes(n) && n.key === key ? n : null; }
     if (key.startsWith('l:')) { const n = P.byLine[+key.slice(2)]; return n && P.nodes.includes(n) ? n : null; }
     return null;
@@ -993,7 +1030,7 @@
           case 'score': pl.needScore(); pl.done(); return pl.label ? `v:${pl.label}` : null;
           case 'light': put(nm('lamp'), ''); lines = [`${V} = ${G}:light(${num(X)}, 3, ${num(Z)}, "gold")`]; break;
           case 'island': case 'ground':
-            if (P.settings.island || P.settings.ground) return null;
+            if (P.settings.island || P.settings.ground || P.land) return null;
             settingEdit(pl, id, id === 'island' ? [80] : ['grass', 400]);
             pl.done();
             return 'root';
@@ -1267,10 +1304,154 @@
       ed.commit();
       return 'root';
     },
+
+    // ---- the land (spec: Tuff Engine's Terrain tab). Every one of these is one line, and one Ctrl+Z.
+    // Land: land = world:terrain(200) and its style, after the world's settings. With replace, it takes the place of
+    // the island or the ground (in the same step).
+    addLand(P, replace = false) {
+      if (!P.game || P.game.mode !== '3d' || P.land) return null;
+      const pl = plan(P);
+      const V = pl.nm('land');
+      const text = `${V} = ${pl.G}:terrain(200)\n${V}:style "grass"`;
+      const old = replace ? P.settings.island || P.settings.ground : null;
+      if (old) pl.ed.replace(old.line, text);
+      else pl.ed.insertAfter(pl.A.settingsEnd, text);
+      pl.done();
+      return 'land';
+    },
+
+    // A new land line (land:hill(20, -10, 30, 8), a brush stroke...) after the land's last line. Gives its key.
+    landEdit(P, op, args) {
+      const L = P.land;
+      if (!L) return null;
+      const pl = plan(P);
+      const id = pl.ed.insertAfter(landLast(L), landLine(L.var, op, args));
+      const at = pl.done();
+      return at && at[id] ? `le:${at[id]}` : 'land';
+    },
+
+    setLandEdit(P, e, args) {
+      const pl = plan(P);
+      pl.ed.replace(e.line, callText(e.call, args, { paren: true }));
+      pl.done();
+      return e.key;
+    },
+
+    removeLandEdit(P, e) {
+      const pl = plan(P);
+      pl.ed.remove(e.line);
+      pl.done();
+      ide.toast(`Removed the ${LAND_OPS[e.op].label.toLowerCase()}. Ctrl+Z brings it back.`, 'info', 3000);
+      return 'land';
+    },
+
+    // The style: its own line (land:style "desert"), or the terrain's second input when that's where it is.
+    setLandStyle(P, style) {
+      const L = P.land;
+      const pl = plan(P);
+      if (L.style) pl.ed.replace(L.style.line, callText(L.style.call, [style]));
+      else if (typeof L.args[1] === 'string') pl.ed.replace(L.line, callText(L.call, [L.args[0], style], { paren: true }));
+      else pl.ed.insertAfter(L.line, `${L.var}:style ${fmt(style)}`);
+      pl.done();
+      return S.sel;
+    },
+
+    setLandSize(P, size) {
+      const L = P.land;
+      const pl = plan(P);
+      const a = L.args.slice();
+      a[0] = size;
+      pl.ed.replace(L.line, callText(L.call, a, { paren: true }));
+      pl.done();
+      return 'land';
+    },
+
+    // A sea everywhere below a height (land:water(-1)), or none.
+    setLandWater(P, level) {
+      const L = P.land;
+      const pl = plan(P);
+      if (level === null) { if (L.water) pl.ed.remove(L.water.line); }
+      else if (L.water) pl.ed.replace(L.water.line, callText(L.water.call, [level], { paren: true }));
+      else pl.ed.insertAfter(landLast(L), landLine(L.var, 'water', [level]));
+      pl.done();
+      return S.sel;
+    },
+
+    // The land and all of its lines.
+    removeLand(P) {
+      const L = P.land;
+      const pl = plan(P);
+      for (const l of landLines(L)) pl.ed.remove(l);
+      pl.done();
+      const still = S.model.getLinesContent().some((l) => wordRe(L.var).test(K.stripComment(l).code));
+      if (still) ide.toast(`Removed the land. Some code still mentions ${L.var}. Check the red marks when you run.`, 'error', 5000);
+      else ide.toast('Removed the land. Ctrl+Z brings it back.', 'info', 3000);
+      return 'root';
+    },
   };
 
+  // ---------------------------------------------------------------- the land's lines
+  // What each land line is (and the Terrain tab's tool that writes it): its label, the inputs after its position
+  // (their names, and the defaults tgame uses), and a tip. pos: 'xz' (x, z first), 'line' (x1, z1, x2, z2: a
+  // valley), or 'spots' for a brush, which takes x, z or a stroke (a list of [x, z] spots).
+  const LAND_OPS = {
+    hill: { label: 'Hill', pos: 'xz', rest: [['Size', 30], ['Height', 8]], tip: 'A round hill' },
+    mountain: { label: 'Mountain', pos: 'xz', rest: [['Size', 60], ['Height', 30]], tip: 'A tall, rocky peak with snow on top' },
+    dip: { label: 'Dip', pos: 'xz', rest: [['Size', 16], ['Depth', 3]], tip: 'A hollow in the ground' },
+    lake: { label: 'Lake', pos: 'xz', rest: [['Size', 30], ['Depth', 4]], tip: 'A hollow with water in it' },
+    valley: { label: 'Valley', pos: 'line', rest: [['Width', 12], ['Depth', 5]], tip: 'A long trench: drag from where it starts to where it ends' },
+    raise: { label: 'Raise', pos: 'spots', rest: [['Size', 8], ['Amount', 1]], tip: 'Drag to push the land up' },
+    lower: { label: 'Lower', pos: 'spots', rest: [['Size', 8], ['Amount', 1]], tip: 'Drag to dig the land down' },
+    smooth: { label: 'Smooth', pos: 'spots', rest: [['Size', 8]], tip: 'Drag to even out bumps' },
+    flatten: { label: 'Flatten', pos: 'spots', rest: [['Size', 8], ['Height', 0]], tip: 'Drag to make the land as high as where you start' },
+  };
+  const BRUSHES = ['raise', 'lower', 'smooth', 'flatten'];
+  const SHAPES = ['hill', 'mountain', 'dip', 'lake', 'valley'];
+  const STYLES = { grass: '#5a9838', desert: '#dcb57a', snow: '#e8eef4', rocky: '#8a867c', autumn: '#c77537' };
+  const landLine = (V, op, args) => (op === 'style' ? `${V}:style ${fmt(args[0])}` : `${V}:${op}(${args.map(fmt).join(', ')})`);
+
+  // A land line read back: { spots: [[x, z]...] | null (x, z are separate inputs), x, z, x2, z2, nums: the rest
+  // with tgame's defaults, at: where the rest start }. A stroke's spots are one input, a list of lists.
+  function landRead(e) {
+    const def = LAND_OPS[e.op];
+    const a = e.args;
+    const out = { spots: null, nums: [], at: 0, code: false };
+    if (def.pos === 'line') {
+      if (Array.isArray(a[0]) && Array.isArray(a[1])) { [out.x, out.z] = [a[0][0], a[0][a[0].length - 1]]; [out.x2, out.z2] = [a[1][0], a[1][a[1].length - 1]]; out.at = 2; out.pair = true; }
+      else { [out.x, out.z, out.x2, out.z2] = a; out.at = 4; }
+    } else if (Array.isArray(a[0])) { [out.x, out.z] = [a[0][0], a[0][a[0].length - 1]]; out.at = 1; out.spot = true; }
+    else if (a[0] && a[0].raw && def.pos === 'spots') {
+      try { out.spots = JSON.parse(a[0].raw); } catch { out.spots = null; }
+      if (!Array.isArray(out.spots) || !out.spots.every((s) => Array.isArray(s) && s.every(isNum))) out.spots = null;
+      out.at = 1;
+      out.stroke = true;
+    } else { [out.x, out.z] = a; out.at = 2; }
+    out.code = !out.stroke && ![out.x, out.z, ...(def.pos === 'line' ? [out.x2, out.z2] : [])].every(isNum);
+    out.nums = def.rest.map(([, d], j) => { const v = a[out.at + j]; return v === undefined ? d : v; });
+    return out;
+  }
+
+  // Where an edit is on the land, for the preview's rings: [[x, z, r], ...].
+  function landMarks(e) {
+    const q = landRead(e);
+    const r = isNum(q.nums[0]) ? Math.max(0.5, q.nums[0] / 2) : 4;
+    if (q.stroke) return (q.spots || []).slice(0, 40).map(([x, z]) => [x, z, r]);
+    if (q.code) return [];
+    if (LAND_OPS[e.op].pos === 'line') return [[q.x, q.z, r], [q.x2, q.z2, r]];
+    return [[q.x, q.z, r]];
+  }
+
+  function landSummary(e) {
+    const q = landRead(e);
+    if (q.stroke) return q.spots ? `${q.spots.length} ${q.spots.length === 1 ? 'spot' : 'spots'}` : 'a stroke';
+    if (q.code) return 'from code';
+    if (LAND_OPS[e.op].pos === 'line') return `${num(q.x)}, ${num(q.z)} → ${num(q.x2)}, ${num(q.z2)}`;
+    return `${num(q.x)}, ${num(q.z)}`;
+  }
+
   // ---------------------------------------------------------------- templates (spec §15)
-  // coin_dash and island_walk are exactly test/tgame/games/coin_dash.tuf and island_walk.tuf (an e2e check keeps them so).
+  // coin_dash, island_walk and hills_lake are exactly test/tgame/games/coin_dash.tuf, island_walk.tuf and hills_lake.tuf
+  // (an e2e check keeps them so).
   const TEMPLATES = [
     { id: 'blank2d', name: 'Empty 2D game', desc: 'A navy 800 × 600 game area, ready for a Player, Coins and Enemies.', mode: '2d', icon: 'game',
       code: 'mention tgame\n\ngame = tgame.window("My Game", 800, 600)\ngame:background "navy"\n' },
@@ -1394,6 +1575,43 @@ func play_again():
     coin:move_to(4, 0, -8)
     enemy:move_to(-12, 0, -20)
 ` },
+    { id: 'hills_lake', name: 'Hills and Lake (3D)', desc: 'Land with a hill, a snowy mountain, a lake and a valley, in modern light. Climb the hill for the coin.', mode: '3d', icon: 'land',
+      code: `mention tgame
+
+game = tgame.world("Hills and Lake", 960, 600)
+game:sky "day"
+game:lighting "modern"
+land = game:terrain(200)
+land:style "grass"
+land:hill(-24, -32, 40, 12)
+land:mountain(26, -80, 64, 32)
+land:lake(14, -14, 30, 3)
+land:valley(44, 24, 76, -46, 16, 6)
+hud = game:hud()
+score = 0
+score_label = hud:text("Score: 0", 90, 30, 26, "white")
+player = game:player("first person")
+player:move_to(0, 0, 12)
+coin = game:spawn("coin", -24, 0, -32)
+coin:spin 90
+tree = game:spawn("tree", -8, 0, -4)
+pine = game:spawn("pine", -34, 0, -24)
+pine2 = game:spawn("pine", -16, 0, -44)
+tree2 = game:spawn("tree", 34, 0, 0)
+rock = game:spawn("rock", 2, 0, -32)
+
+game:every_frame coin_collect
+
+# Tuff Engine: player collects coin
+func coin_collect(dt):
+    if coin:touches(player):
+        score += 1
+        score_label:set "Score: " + score
+        game:sound "coin"
+        coin:move_to(game:random_spot())
+        while coin:touches(player):
+            coin:move_to(game:random_spot())
+` },
   ];
 
   // ---------------------------------------------------------------- state
@@ -1402,6 +1620,11 @@ func play_again():
     sel: 'root', selfEdit: false, version: 0, ready: false, webgl: null, cams: new Map(), assetEpoch: 0, tables: null, busy: false,
     loadSeq: 0, loadedSeq: 0, hostFile: null, hostErr: null, camMode: 'editor', zoom: 'fit', tab: 'add', picSize: new Map(),
     files: [], log: [], asks: new Map(), askNo: 0, timer: null, frameRO: null, typing: null, openStep: null,
+    // The Terrain tab's tool (null, or a LAND_OPS name) and each tool's own Size and Strength (or Height / Depth).
+    tool: null, tools: {
+      raise: { size: 12, amount: 1 }, lower: { size: 12, amount: 1 }, smooth: { size: 12 }, flatten: { size: 12 },
+      hill: { size: 30, amount: 8 }, mountain: { size: 60, amount: 30 }, dip: { size: 16, amount: 3 }, lake: { size: 30, amount: 4 }, valley: { size: 18, amount: 6 },
+    },
   };
   const host = () => $('#engine');
   const is3d = () => S.parsed?.game?.mode === '3d';
@@ -1442,6 +1665,7 @@ func play_again():
         break;
       case 'pick': onPick(m); break;
       case 'drag': onDrag(m); break;
+      case 'brush': onBrush(m); break;
       case 'cam': if (S.hostFile) S.cams.set(S.hostFile, { tx: m.tx, ty: m.ty, tz: m.tz, az: m.az, el: m.el, dist: m.dist }); break;
       case 'key': onHostKey(m); break;
       case 'wheel': if (m.ctrl && !is3d()) setZoom(zoomNow() * (m.dy < 0 ? 1.1 : 1 / 1.1)); break;
@@ -1486,6 +1710,7 @@ func play_again():
     // The Inspector's hints follow the new scene, unless someone is typing in it.
     if (!S.selfEdit && !$('#en-inspector')?.contains(document.activeElement)) renderInspector();
     renderAdd();
+    renderTerrain();
     layoutFrame();
   }
 
@@ -1502,7 +1727,8 @@ func play_again():
       const n = t.made?.length === 1 ? P.byLine[m0] : null;
       let key;
       if (n && n.floor) { key = 'root'; J.drag.set(t.i, null); }
-      else if (n && n.kind !== 'player') {
+      else if (n && n.kind === 'terrain' && t.kind === 'terrain') { key = 'land'; J.drag.set(t.i, null); }
+      else if (n && n.kind !== 'player' && n.kind !== 'terrain') {
         key = n.key;
         J.drag.set(t.i, n.pos.form === 'code' ? null : t.drag || null);
       } else {
@@ -1549,9 +1775,11 @@ func play_again():
     const things = d.things.map((t) => ({ ...t, drag: J.drag.has(t.i) ? J.drag.get(t.i) : null }));
     const player = d.player ? { ...d.player, drag: J.playerDrag && S.dumpParsed?.player?.var ? 'xz' : null } : null;
     const dir = S.file.replace(/[\\/][^\\/]*$/, '');
+    const land = d.terrain && J.byKey.get('land') ? d.terrain : null;
     const m = {
       tuffHost: 'load', seq: ++S.loadSeq, mode: d.mode, size: d.size, batch: d.batch, things, player, canvas: d.canvas, camera: d.camera, roots: d.roots,
-      gameDirRel: ide.rel(dir).replace(/\\/g, '/'), assetEpoch: S.assetEpoch, camMode: S.camMode, select: selIs(),
+      gameDirRel: ide.rel(dir).replace(/\\/g, '/'), assetEpoch: S.assetEpoch, camMode: S.camMode, select: selIs(), marks: selMarks(),
+      terrain: land ? { ids: land.ids, size: land.size, n: land.n, heights: land.heights, lakes: land.lakes, sea: land.sea } : null, tool: toolMsg(),
     };
     if (S.hostFile !== S.file) m.cam = S.cams.get(S.file) || null; // the first load of a file fits the camera; later ones keep it
     S.hostFile = S.file;
@@ -1559,7 +1787,14 @@ func play_again():
     hostPost(m);
   }
 
-  function postSelect() { if (S.ready && S.loadSeq) hostPost({ tuffHost: 'select', is: selIs() }); }
+  function postSelect() { if (S.ready && S.loadSeq) hostPost({ tuffHost: 'select', is: selIs(), marks: selMarks() }); }
+
+  // Rings on the land where the selected land line works (not while a tool paints: they'd be in the way).
+  function selMarks() {
+    if (!S.sel.startsWith('le:') || S.tool || !S.parsed) return [];
+    const e = find(S.parsed, S.sel);
+    return e ? landMarks(e) : [];
+  }
 
   function onPick(m) {
     if (!S.join) return;
@@ -1602,6 +1837,39 @@ func play_again():
     }
     const y = isNum(q.y) ? q.y : t?.y ?? 0;
     return { x: snap(m.x, 0.01), y, z: snap(m.z, 0.01) };
+  }
+
+  // ---------------------------------------------------------------- the Terrain tab's tools in the preview
+  // The host paints its own copy of the heights while the mouse is down (the same maths as tgame), and says what was
+  // done when it's let go: brush { tool, spots: [[x, z], ...], size, amount }. Here that becomes one line.
+  const toolMsg = () => (S.tool && is3d() && S.camMode === 'editor' && S.parsed?.land ? { kind: S.tool, size: S.tools[S.tool].size, amount: S.tools[S.tool].amount ?? 0 } : null);
+  function postTool() { if (S.ready && S.loadSeq) hostPost({ tuffHost: 'tool', tool: toolMsg() }); }
+
+  function setTool(tool) {
+    S.tool = tool && LAND_OPS[tool] ? tool : null;
+    postTool();
+    postSelect();
+    if (S.tab === 'terrain') renderTerrain();
+    renderHint();
+  }
+
+  function onBrush(m) {
+    const op = m.tool;
+    if (!LAND_OPS[op] || !Array.isArray(m.spots) || !m.spots.length || !S.model) return;
+    const r1 = (v) => +(+v).toFixed(1) || 0;
+    const spots = m.spots.map(([x, z]) => [r1(x), r1(z)]);
+    const size = +num(m.size);
+    const amount = +num(m.amount);
+    let args;
+    if (op === 'valley') {
+      const [a, b] = [spots[0], spots[spots.length - 1]];
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 1) { ide.toast('Drag from where the valley starts to where it ends.', 'info', 3500); return; }
+      args = [a[0], a[1], b[0], b[1], size, amount];
+    } else if (BRUSHES.includes(op)) {
+      const where = spots.length === 1 ? spots[0] : [spots];
+      args = op === 'smooth' ? [...where, size] : [...where, size, amount];
+    } else args = [...spots[spots.length - 1], size, amount];
+    act((P) => (P.land ? Edits.landEdit(P, op, args) : null));
   }
 
   // ---------------------------------------------------------------- doing things
@@ -1655,7 +1923,7 @@ func play_again():
   function skeleton() {
     const st = ide.settings();
     S.zoom = st.engineZoom === 'fit' || st.engineZoom === undefined ? 'fit' : Number(st.engineZoom) || 'fit';
-    S.tab = ['add', 'objects', 'assets'].includes(st.engineTab) ? st.engineTab : 'add';
+    S.tab = ['add', 'objects', 'assets', 'terrain'].includes(st.engineTab) ? st.engineTab : 'add';
     host().innerHTML = `
       <div class="sd en">
         <div class="sd-bar">
@@ -1686,11 +1954,12 @@ func play_again():
         <div class="sd-main">
           <aside class="sd-left en-left">
             <div class="en-tabs">
-              <button data-tab="add" title="Add things">${UI.plus}<span class="lbl">Add</span></button><button data-tab="objects" title="Everything in the game">${UI.grid}<span class="lbl">Objects</span></button><button data-tab="assets" title="Pictures, sounds and models">${ICON.image}<span class="lbl">Assets</span></button>
+              <button data-tab="add" title="Add things">${UI.plus}<span class="lbl">Add</span></button><button data-tab="objects" title="Everything in the game">${UI.grid}<span class="lbl">Objects</span></button><button data-tab="assets" title="Pictures, sounds and models">${ICON.image}<span class="lbl">Assets</span></button><button data-tab="terrain" title="Shape the land: hills, lakes, valleys and brushes">${ICON.land}<span class="lbl">Terrain</span></button>
             </div>
             <div class="en-pane" data-pane="add"><div id="en-add"></div></div>
             <div class="en-pane" data-pane="objects"><div class="sd-layers" id="en-objects"></div></div>
             <div class="en-pane" data-pane="assets"><div class="en-assets" id="en-assets"></div></div>
+            <div class="en-pane" data-pane="terrain"><div class="en-terrain" id="en-terrain"></div></div>
           </aside>
           <section class="en-stage" id="en-stage" tabindex="-1">
             <div class="en-scroll" id="en-scroll"><iframe id="en-frame" src="tuffview://app/host/index.html" title="Game preview"></iframe></div>
@@ -1724,19 +1993,28 @@ func play_again():
     setTab(S.tab);
   }
 
+  // The Terrain tab is for 3D worlds; a 2D game shows Add instead (and keeps Terrain as the tab to come back to).
   function setTab(tab) {
     S.tab = tab;
-    $('.en-left')?.classList.toggle('layers', tab !== 'add');
-    $$('.en-left .en-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
-    $$('.en-left .en-pane').forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== tab));
+    const shown = showTab();
     ide.saveSettings({ engineTab: tab });
-    if (tab === 'assets') renderAssets();
+    if (shown === 'assets') renderAssets();
+    if (shown === 'terrain') renderTerrain();
+  }
+  function showTab() {
+    const shown = S.tab === 'terrain' && S.parsed?.game && !is3d() ? 'add' : S.tab;
+    if (shown !== 'terrain' && S.tool) setTool(null);
+    $('.en-left')?.classList.toggle('layers', shown !== 'add');
+    $$('.en-left .en-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === shown));
+    $$('.en-left .en-pane').forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== shown));
+    return shown;
   }
 
   function setCamMode(mode) {
     S.camMode = mode === 'game' ? 'game' : 'editor';
     $$('#en-cam button').forEach((b) => b.classList.toggle('on', b.dataset.cam === S.camMode));
     hostPost({ tuffHost: 'view', cam: S.camMode });
+    postTool();
     renderHint();
   }
 
@@ -1807,6 +2085,7 @@ func play_again():
       S.dumpVer = null; // (the last file's version number could match this file's)
       S.join = null;
       S.hostErr = null;
+      S.tool = null;
       if (S.loadSeq) $('#en-stage').classList.add('switching'); // the last file's scene hides until this one's is drawn
     }
     const want = S.file;
@@ -1840,6 +2119,7 @@ func play_again():
   function hide() {
     clearTimeout(S.timer);
     closeStep();
+    if (S.tool) setTool(null);
     $$('.sd-modal', host()).forEach((m) => m.remove());
   }
 
@@ -1862,7 +2142,13 @@ func play_again():
     $('#en-stage').classList.toggle('start', !!start);
     renderStart();
     if (S.sel !== 'root' && !find(P, S.sel) && !(S.sel.startsWith('g:') && S.join?.byKey.has(S.sel))) S.sel = 'root';
+    const three = g?.mode === '3d';
+    $('.en-tabs [data-tab="terrain"]').classList.toggle('hidden', !three);
+    $('.en-tabs').classList.toggle('four', three);
+    if (S.tool && !(three && P.land)) setTool(null);
+    showTab();
     renderAdd();
+    renderTerrain();
     renderObjects();
     if (withForm) renderInspector();
     renderBanner();
@@ -1886,8 +2172,15 @@ func play_again():
     const h = $('#en-hint');
     if (!h) return;
     const g = S.parsed?.game;
+    const tool = toolMsg() && LAND_OPS[S.tool];
+    const how = !tool ? '' : S.tool === 'valley' ? 'Drag on the land from where the valley starts to where it ends'
+      : BRUSHES.includes(S.tool) ? `Drag on the land to ${S.tool === 'raise' ? 'raise it' : S.tool === 'lower' ? 'dig it down' : S.tool === 'smooth' ? 'smooth it' : 'flatten it'}`
+        : `Click on the land to put a ${tool.label.toLowerCase()} there`;
+    h.classList.toggle('en-tooling', !!tool);
     h.textContent = !g || S.parsed.other ? '' : g.mode === '3d'
-      ? S.camMode === 'game' ? "The game's camera when it starts. Switch to Editor to move things." : 'Drag a thing to move it · Drag empty space to look around · Shift-drag to pan · Scroll to zoom'
+      ? S.camMode === 'game' ? "The game's camera when it starts. Switch to Editor to move things."
+        : tool ? `${how} · Right-drag to look around · Esc puts the tool away`
+          : 'Drag a thing to move it · Drag empty space to look around · Shift-drag to pan · Scroll to zoom'
       : 'Click to select · Drag to move · Arrow keys nudge (Shift ×10)';
   }
 
@@ -1999,8 +2292,9 @@ func play_again():
       ]],
       ['World', [
         { id: 'light', label: 'Light', icon: ICON.light, tip: 'A glowing lamp' },
-        { id: 'island', label: 'Island', icon: ICON.island, tip: 'An island in the sea', off: !!(P.settings.island || P.settings.ground) },
-        { id: 'ground', label: 'Ground', icon: ICON.ground, tip: 'Flat grass to stand on', off: !!(P.settings.island || P.settings.ground) },
+        { id: 'land', label: 'Land', icon: ICON.land, tip: P.land ? 'Shape it in the Terrain tab' : 'Land to shape with hills, lakes and brushes (the Terrain tab)' },
+        { id: 'island', label: 'Island', icon: ICON.island, tip: 'An island in the sea', off: !!(P.settings.island || P.settings.ground || P.land) },
+        { id: 'ground', label: 'Ground', icon: ICON.ground, tip: 'Flat grass to stand on', off: !!(P.settings.island || P.settings.ground || P.land) },
       ]],
       ...(models.length ? [['Models', models.map((f) => ({ id: `glb:${f.rel}`, label: f.rel.split('/').pop(), icon: ICON.model, tip: `Add ${f.rel}` }))]] : []),
       ['Screen', [{ id: 'hudtext', label: 'Screen text', icon: ICON.hudtext, tip: 'Text on top of the world (lives, a timer)' }, ...(pictureTiles.length ? [{ id: 'pics', label: 'Pictures', icon: ICON.image, tip: 'Pictures go on the screen: see Assets', off: false }] : [])]],
@@ -2039,6 +2333,13 @@ func play_again():
       return;
     }
     if (id === 'pics') { setTab('assets'); return; }
+    // Land: made here when nothing is in its way (an island or the ground: the Terrain tab offers to swap them).
+    if (id === 'land') {
+      setTab('terrain');
+      const P = parse(codeNow());
+      if (!P.land && !P.settings.island && !P.settings.ground) addLand(false);
+      return;
+    }
     if (id.startsWith('pic:')) await picSize(id.slice(4));
     act((P) => Edits.add(P, id));
   }
@@ -2062,6 +2363,11 @@ func play_again():
       return b;
     };
     row('root', P.game.mode === '3d' ? ICON.world : ICON.game, P.game.mode === '3d' ? 'World' : 'Game', typeof P.game.args[0] === 'string' ? P.game.args[0] : '', P.game.var, 'en-root');
+    // The land, and each of its lines under it (the order they're made in).
+    if (P.land) {
+      row('land', ICON.land, 'Land', landStyle(P.land), P.land.var, drawn('land') ? '' : 'en-dim');
+      for (const e of P.land.edits) row(e.key, ICON[e.op], LAND_OPS[e.op].label, landSummary(e), '', 'en-edit').title = `Line ${e.line}: ${K.stripComment(e.text).code.trim().slice(0, 120)}`;
+    }
     const whatOf = (n) => (n.kind === 'text' || n.kind === 'image' ? (typeof n.args[0] === 'string' ? n.args[0] : '') : n.kind === 'spawn' ? '' : typeof fieldOf(n, 'color') === 'string' ? fieldOf(n, 'color') : '');
     const main = P.nodes.filter((n) => n.layer !== 'hud' && n.kind !== 'player');
     for (const n of main) row(n.key, iconFor(n), KIND_LABEL(n), whatOf(n), n.var, drawn(n.key) ? '' : 'en-dim').title = drawn(n.key) ? '' : 'Not drawn yet';
@@ -2299,6 +2605,8 @@ func play_again():
     box.innerHTML = '';
     if (!P.game || P.other) return;
     if (S.sel.startsWith('g:')) { box.append(...groupCard(P)); return; }
+    if (S.sel === 'land' && P.land) { box.append(...landCard(P)); return; }
+    if (S.sel.startsWith('le:') && find(P, S.sel)) { box.append(...editCard(P, find(P, S.sel))); return; }
     const node = find(P, S.sel);
     if (!node || node === P.game) { box.append(...rootCard(P)); return; }
     box.append(...nodeCard(P, node));
@@ -2356,6 +2664,11 @@ func play_again():
       });
       const look = [fieldEl('Sky', skySel)];
       if (!s.sky && s.background) look.push(fieldEl(colorLabel('Plain colour', s.background.args[0]), colorPick(s.background.args[0], (v) => set([['background', [v]]], true))));
+      // Simple is the default (no line); Modern writes game:lighting "modern".
+      const lit = typeof s.lighting?.args[0] === 'string' ? s.lighting.args[0] : 'simple';
+      const litSeg = K.control('segment', lit, { options: tbl('lightings', ['simple', 'modern']) }, (v) => set([['lighting', v === 'simple' ? null : [v]]], true));
+      litSeg.id = 'en-lighting';
+      look.push(fieldEl('Lighting', litSeg, 'Modern: softer light from the sky, and shiny water'));
       look.push(numbers([
         ['Fog', isNum(s.fog?.args[0]) ? s.fog.args[0] : '', (v) => set([['fog', v === '' ? null : [v]]]), { blank: true, min: 0, title: 'How far you can see. Empty: the sky\'s own fog' }],
         ['Sun', isNum(s.sun?.args[0]) ? s.sun.args[0] : 1, (v) => set([['sun', v === 1 || v === '' ? null : [v]]]), { step: 0.1, min: 0, blank: true }],
@@ -2530,6 +2843,8 @@ func play_again():
   }
 
   function removeKey(key) {
+    if (key === 'land') { landAct((Q) => Edits.removeLand(Q)); return; }
+    if (key.startsWith('le:')) { act((Q) => { const e = find(Q, key); return e ? Edits.removeLandEdit(Q, e) : null; }); return; }
     act((Q) => { const n = find(Q, key); return n ? Edits.remove(Q, n) : null; });
   }
 
@@ -2674,6 +2989,224 @@ func play_again():
     return sec('Behaviours', kids);
   }
 
+  // ---------------------------------------------------------------- the land: the Terrain tab and its Inspector
+  const landStyle = (L) => (typeof L.style?.args[0] === 'string' ? L.style.args[0] : typeof L.args[1] === 'string' ? L.args[1] : 'grass');
+  const landAct = (fn, form = false) => act((Q) => (Q.land ? fn(Q, Q.land) : null), { form });
+
+  function addLand(replace) {
+    // The camera is fitted again, around the new land.
+    S.cams.delete(S.file);
+    S.hostFile = null;
+    act((Q) => Edits.addLand(Q, replace));
+  }
+
+  function styleChips(cur) {
+    const names = tbl('terrain_styles', Object.keys(STYLES));
+    const el = K.chips(names, names.includes(cur) ? cur : null, (v) => landAct((Q) => Edits.setLandStyle(Q, v)), (o) => `<i class="sw-dot" style="background:${esc(STYLES[o] || '#8a8d94')}"></i>${esc(cap(o))}`);
+    el.classList.add('swatches', 'en-styles');
+    $$('.pf-chip', el).forEach((b, i) => { b.dataset.style = names[i]; });
+    return el;
+  }
+
+  // A labelled slider that shows its number: for the Terrain tab's Size and Strength.
+  function slider(label, value, [min, max, step], onInput) {
+    const l = document.createElement('label');
+    l.className = 'en-slider';
+    l.innerHTML = `<span class="en-sl-h"><span>${esc(label)}</span><b></b></span><input type="range" min="${min}" max="${max}" step="${step}">`;
+    const inp = $('input', l);
+    const out = $('b', l);
+    inp.value = value;
+    out.textContent = num(+inp.value);
+    inp.oninput = () => { out.textContent = num(+inp.value); onInput(+inp.value); };
+    return l;
+  }
+
+  function waterField(L) {
+    const level = L.water && isNum(L.water.args[0]) ? L.water.args[0] : null;
+    const row = document.createElement('div');
+    row.className = 'en-water';
+    const sw = boolEl(!!L.water, (on) => landAct((Q) => Edits.setLandWater(Q, on ? -1 : null)));
+    sw.title = 'A sea everywhere the land is lower than the sea level';
+    const lv = numbers([['Sea level', level ?? -1, (v) => landAct((Q) => Edits.setLandWater(Q, +num(v)), true), { step: 0.5, disabled: !L.water || level === null, title: 'The sea fills the land up to this height' }]]);
+    row.append(fieldEl('Sea', sw), lv);
+    return row;
+  }
+
+  let terrainSig = '';
+  function renderTerrain() {
+    const box = $('#en-terrain');
+    if (!box || !S.parsed) return;
+    const P = S.parsed;
+    const L = P.land;
+    const old = P.settings.island ? 'island' : P.settings.ground ? 'ground' : '';
+    const drawn = !!S.join?.byKey.get('land');
+    // Drawn again only when what it shows changes (a slider being dragged must stay where it is).
+    const sig = JSON.stringify([P.game?.mode, !!P.other, L && [L.var, landStyle(L), L.water?.args[0] ?? null, L.water ? 1 : 0], old, S.tool, drawn, !!S.dump]);
+    if (sig === terrainSig && box.firstChild) return;
+    terrainSig = sig;
+    box.innerHTML = '';
+    if (!P.game || P.other || P.game.mode !== '3d') { box.innerHTML = '<div class="sd-hint">Land is for 3D worlds.</div>'; return; }
+    if (!L) {
+      const card = document.createElement('div');
+      card.className = 'en-landcard';
+      card.innerHTML = `<span class="ic big">${ICON.land}</span><b>Make some land</b><span>A square of land 200 wide to shape however you like: hills, mountains, lakes and valleys, with brushes or ready-made shapes.</span>`;
+      if (old) card.insertAdjacentHTML('beforeend', `<span class="en-landnote">Your world stands on ${old === 'island' ? 'an island' : 'flat ground'}. The land can take its place.</span>`);
+      const btns = document.createElement('div');
+      btns.className = 'en-btns';
+      btns.innerHTML = old ? `<button class="btn primary" data-a="swap">${ICON.land}Swap the ${old} for land</button><button class="btn sm" data-a="add">Keep the ${old} too</button>`
+        : `<button class="btn primary" data-a="add">${ICON.land}Add land</button>`;
+      $('[data-a="swap"]', btns)?.addEventListener('click', () => addLand(true));
+      $('[data-a="add"]', btns).onclick = () => addLand(false);
+      card.appendChild(btns);
+      box.appendChild(card);
+      return;
+    }
+    const grid = (title, ops) => {
+      box.insertAdjacentHTML('beforeend', `<div class="sd-cat">${esc(title)}</div>`);
+      const g = document.createElement('div');
+      g.className = 'sd-tiles en-tools';
+      for (const op of ops) {
+        const b = document.createElement('button');
+        b.className = `sd-tile en-tile en-tool${S.tool === op ? ' on' : ''}`;
+        b.dataset.tool = op;
+        b.title = `${LAND_OPS[op].label}: ${LAND_OPS[op].tip}`;
+        b.setAttribute('aria-pressed', S.tool === op ? 'true' : 'false');
+        b.innerHTML = `<span class="ic">${ICON[op]}</span><span class="lbl">${esc(LAND_OPS[op].label)}</span>`;
+        b.onclick = () => setTool(S.tool === op ? null : op);
+        g.appendChild(b);
+      }
+      box.appendChild(g);
+    };
+    grid('Brushes', BRUSHES);
+    grid('Shapes', SHAPES);
+    const set = document.createElement('div');
+    set.className = 'en-toolset';
+    if (!S.tool) set.innerHTML = '<div class="en-empty">Pick a brush or a shape, then drag or click on the land in the preview. Each one is a line of code, and Ctrl+Z takes it back.</div>';
+    else {
+      const t = S.tools[S.tool];
+      const def = LAND_OPS[S.tool];
+      set.insertAdjacentHTML('beforeend', `<div class="en-toolset-h"><span class="ic">${ICON[S.tool]}</span><b>${esc(def.label)}</b><span>${esc(def.tip)}</span></div>`);
+      set.append(slider(S.tool === 'valley' ? 'Width' : 'Size', t.size, [2, 60, 1], (v) => { t.size = v; postTool(); }));
+      if (S.tool === 'raise' || S.tool === 'lower') set.append(slider('Strength', t.amount, [0.2, 5, 0.1], (v) => { t.amount = v; postTool(); }));
+      else if (SHAPES.includes(S.tool)) set.append(slider(def.rest[1][0], t.amount, [0.5, 40, 0.5], (v) => { t.amount = v; postTool(); }));
+    }
+    box.appendChild(set);
+    if (S.dump && !drawn) box.insertAdjacentHTML('beforeend', '<div class="en-empty en-note">The land isn\'t in the preview yet (look for a mistake above it in the code), so the tools wait for it.</div>');
+    box.insertAdjacentHTML('beforeend', '<div class="sd-cat">Style</div>');
+    box.appendChild(styleChips(landStyle(L)));
+    box.insertAdjacentHTML('beforeend', '<div class="sd-cat">Water</div>');
+    box.appendChild(waterField(L));
+    box.insertAdjacentHTML('beforeend', `<div class="sd-hint">Things stand on the land: their <b>y</b> is how high above it they are. Every shape is listed under <b>Land</b> in Objects.</div>`);
+  }
+
+  function editRow(e) {
+    const row = document.createElement('div');
+    row.className = 'en-erow';
+    row.dataset.key = e.key;
+    row.innerHTML = `<span class="ic">${ICON[e.op]}</span><span class="lb">${esc(LAND_OPS[e.op].label)}</span><span class="what">${esc(landSummary(e))}</span>`;
+    row.title = `Line ${e.line}: ${K.stripComment(e.text).code.trim().slice(0, 120)}`;
+    row.onclick = () => select(e.key);
+    row.appendChild(xBtn((ev) => { ev.stopPropagation(); act((Q) => { const x = find(Q, e.key); return x ? Edits.removeLandEdit(Q, x) : null; }); }, `Remove this ${LAND_OPS[e.op].label.toLowerCase()}`));
+    return row;
+  }
+
+  function landCard(P) {
+    const L = P.land;
+    const out = [head(ICON.land, 'Land', `${L.var} · world:terrain`)];
+    out.push(tip('The ground of your world. Shape it in the Terrain tab, or change its lines here.'));
+    const form = document.createElement('div');
+    form.className = 'in-form';
+    form.append(sec('Land', [
+      numbers([['Size', isNum(L.args[0]) ? L.args[0] : 200, (v) => landAct((Q) => Edits.setLandSize(Q, Math.min(1000, Math.round(v))), true), { step: 10, min: 10, tooSmall: 'The land is at least 10 wide.', disabled: L.args[0] !== undefined && !isNum(L.args[0]), title: 'How wide the square of land is, in metres' }]]),
+      fieldEl(`Style · ${landStyle(L)}`, styleChips(landStyle(L))),
+    ]));
+    const rows = L.edits.map(editRow);
+    // Lines made by code (in a loop or a function) show too, but only the code changes them.
+    const d = S.dump?.terrain;
+    if (d && S.dumpVer === verNow()) {
+      const mine = new Set(landLines(L));
+      for (const x of d.edits || []) {
+        if (!LAND_OPS[x.op] || (x.made.length === 1 && mine.has(x.made[0]))) continue;
+        const r = document.createElement('div');
+        r.className = 'en-erow en-yours';
+        r.innerHTML = `<span class="ic">${ICON[x.op]}</span><span class="lb">${esc(LAND_OPS[x.op].label)}</span><span class="what">your code, line ${x.made[0]}</span>`;
+        r.onclick = () => ide.goToLine(S.file, x.made[0]);
+        r.title = 'Made by your code: change it in the code';
+        rows.push(r);
+      }
+    }
+    form.append(sec('Shapes and strokes', rows.length ? rows : [tip('Nothing yet: pick a brush or a shape in the Terrain tab.')]));
+    form.append(sec('Water', [waterField(L)]));
+    out.push(form);
+    out.push(actions([
+      ['Shape it', ICON.land, () => setTab('terrain'), '', 'Open the Terrain tab'],
+      ['Show in code', UI.code, () => ide.goToLine(S.file, L.line)],
+      ['Ask an agent about it', ICON.ask, () => openAsk('land')],
+      ['Delete', UI.trash, () => removeKey('land'), 'danger', 'Delete the land and all its shapes (Del)'],
+    ]));
+    return out;
+  }
+
+  // A land line's inputs with some changed: x, z (x2, z2 for a valley's end), and n0, n1 (the inputs after them).
+  function landArgs(e, patch) {
+    const q = landRead(e);
+    const def = LAND_OPS[e.op];
+    const a = e.args.slice();
+    if (['x', 'z', 'x2', 'z2'].some((k) => k in patch)) {
+      const x = patch.x ?? q.x;
+      const z = patch.z ?? q.z;
+      if (def.pos === 'line') {
+        const x2 = patch.x2 ?? q.x2;
+        const z2 = patch.z2 ?? q.z2;
+        if (q.pair) a.splice(0, 2, [x, z], [x2, z2]); else a.splice(0, 4, x, z, x2, z2);
+      } else if (q.spot) a[0] = [x, z];
+      else a.splice(0, 2, x, z);
+    }
+    def.rest.forEach(([, d], j) => {
+      if (!(`n${j}` in patch)) return;
+      for (let k = 0; k < j; k++) if (a[q.at + k] === undefined) a[q.at + k] = def.rest[k][1];
+      a[q.at + j] = patch[`n${j}`];
+    });
+    return a;
+  }
+
+  function editCard(P, e) {
+    const def = LAND_OPS[e.op];
+    const q = landRead(e);
+    const key = e.key;
+    const out = [head(ICON[e.op], def.label, `${P.land.var}:${e.op} · line ${e.line}`)];
+    out.push(tip(q.stroke ? `A ${def.label.toLowerCase()} brush stroke through ${q.spots ? q.spots.length : 'some'} spots on the land.` : `${def.tip}.`));
+    const form = document.createElement('div');
+    form.className = 'in-form';
+    const setE = (patch) => act((Q) => { const x = find(Q, key); return x && x.op === e.op ? Edits.setLandEdit(Q, x, landArgs(x, patch)) : null; }, { form: true });
+    const v3 = (v) => +num(v);
+    const where = [];
+    if (!q.stroke) {
+      const o = { step: 0.5, disabled: q.code };
+      if (def.pos === 'line') {
+        where.push(numbers([['From X', q.x, (v) => setE({ x: v3(v) }), o], ['From Z', q.z, (v) => setE({ z: v3(v) }), o]]));
+        where.push(numbers([['To X', q.x2, (v) => setE({ x2: v3(v) }), o], ['To Z', q.z2, (v) => setE({ z2: v3(v) }), o]]));
+      } else where.push(numbers([['X', q.x, (v) => setE({ x: v3(v) }), o], ['Z', q.z, (v) => setE({ z: v3(v) }), o]]));
+      if (q.code) where.push(tip('This spot comes from code.', 'en-note'));
+      form.append(sec('Where', where));
+    }
+    const nums = def.rest.map(([name], j) => {
+      const sizeLike = j === 0;
+      const deep = e.op === 'lake' && j === 1;
+      const o = sizeLike ? { step: 1, min: 0.5, tooSmall: `The ${name.toLowerCase()} is more than 0.` } : deep ? { step: 0.5, min: 0.1, tooSmall: 'A lake needs some depth.' } : { step: e.op === 'raise' || e.op === 'lower' ? 0.1 : 0.5 };
+      const v = q.nums[j];
+      return [name, isNum(v) ? v : '', (x) => setE({ [`n${j}`]: v3(x) }), { ...o, disabled: !isNum(v) }];
+    });
+    form.append(sec(def.label, [numbers(nums)]));
+    out.push(form);
+    out.push(actions([
+      ['The land', ICON.land, () => select('land'), '', 'Back to the land'],
+      ['Show in code', UI.code, () => ide.goToLine(S.file, e.line)],
+      ['Remove', UI.trash, () => removeKey(key), 'danger', 'Remove this line (Del)'],
+    ]));
+    return out;
+  }
+
   // ---------------------------------------------------------------- templates gallery
   function openTemplates() {
     const box = document.createElement('div');
@@ -2731,10 +3264,11 @@ func play_again():
     let sel = '';
     if (about && about !== 'root') {
       const n = find(P, about);
-      if (n) sel = ` They have ${n.var || KIND_LABEL(n).toLowerCase()} selected (line ${n.line}).`;
+      if (n && n.op) sel = ` They have the ${LAND_OPS[n.op].label.toLowerCase()} on line ${n.line} selected (a line that shapes the land, ${P.land.var}).`;
+      else if (n) sel = ` They have ${n.var || KIND_LABEL(n).toLowerCase()} selected (line ${n.line}).`;
       else if (about.startsWith('g:')) { const g = S.join?.groups.find((x) => x.key === about); if (g) sel = ` They have the ${g.kind}s made on line ${g.line} selected.`; }
     }
-    return `(From TuffCode: they're building ${ide.rel(S.file)} in Tuff Engine, TuffCode's visual game editor, as a ${what}. Tuff Engine can only show and edit simple top-level lines, so: make each new thing with one top-level line and plain numbers, like coin = game:circle(200, 200, 14, "gold"); put new lines above any while game:open(): loop; add behaviour as a func registered with a line like game:every_frame coin_spin or coin:clicked coin_clicked.${sel} Check the file with tuff_check when you're done.)`;
+    return `(From TuffCode: they're building ${ide.rel(S.file)} in Tuff Engine, TuffCode's visual game editor, as a ${what}. Tuff Engine can only show and edit simple top-level lines, so: make each new thing with one top-level line and plain numbers, like coin = game:circle(200, 200, 14, "gold"); put new lines above any while game:open(): loop; add behaviour as a func registered with a line like game:every_frame coin_spin or coin:clicked coin_clicked.${P?.land ? ` The world's land is ${P.land.var} (world:terrain): shape it with top-level lines like ${P.land.var}:hill(20, -10, 30, 8), and remember every y is the height above the land.` : ''}${sel} Check the file with tuff_check when you're done.)`;
   }
 
   function openAsk(about) {
@@ -2742,7 +3276,7 @@ func play_again():
     box.className = 'sd-modal';
     const n = about && about !== 'root' ? find(S.parsed, about) : null;
     const g = about && about.startsWith('g:') ? S.join?.groups.find((x) => x.key === about) : null;
-    const subject = n ? (n.var || KIND_LABEL(n).toLowerCase()) : g ? `the ${g.kind}s on line ${g.line}` : '';
+    const subject = n ? (n.op ? `the ${LAND_OPS[n.op].label.toLowerCase()}` : n.var || KIND_LABEL(n).toLowerCase()) : g ? `the ${g.kind}s on line ${g.line}` : '';
     box.innerHTML = `<div class="sd-mbox en-askbox" role="dialog" aria-label="Ask an agent">
       <div class="sd-mhead"><div><b>Ask an agent${subject ? ` about ${esc(subject)}` : ''}</b><span>Your AI agent in Tuff Agents changes ${esc(ide.basename(S.file))}, and the scene updates by itself.</span></div><button class="sd-ib" data-a="x" title="Close (Esc)">${UI.close}</button></div>
       <div class="en-ask">
@@ -2809,10 +3343,13 @@ func play_again():
     if (ctrl && !is3d() && k === '-') { setZoom(zoomNow() / 1.25); return true; }
     if (ctrl && !is3d() && k === '0') { setZoom(1); return true; }
     const node = find(P, S.sel);
-    const thing = node && node !== P.game ? node : null;
+    const landKey = S.sel === 'land' || S.sel.startsWith('le:');
+    const thing = node && node !== P.game && !landKey ? node : null;
     if (ctrl && !e.shiftKey && !e.altKey && k === 'd') { if (thing) act((Q) => { const n = find(Q, thing.key); return n ? Edits.duplicate(Q, n) : null; }); return true; }
     if (ctrl || e.altKey) return false;
-    if (k === 'Delete' || k === 'Backspace') { if (thing) removeKey(thing.key); return true; }
+    if (k === 'Delete' || k === 'Backspace') { if (thing || (landKey && node)) removeKey(S.sel); return true; }
+    // Escape puts a Terrain tool away first (and stops what it was painting).
+    if (k === 'Escape' && S.tool) { hostPost({ tuffHost: 'cancel' }); setTool(null); return true; }
     if (k === 'Escape') { hostPost({ tuffHost: 'cancel' }); select('root'); return true; }
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(k)) {
       if (!thing) return true;
@@ -2883,6 +3420,7 @@ func play_again():
     lineFor: (node, args, name) => lineFor(node, args, name),
     fixups,
     templates: () => TEMPLATES.map((t) => ({ ...t })),
+    landRead: (e) => landRead(e),
     // A snapshot for tests and DevTools.
     debug: () => ({
       file: S.file, sel: S.sel, ready: S.ready, webgl: S.webgl, busy: S.busy, version: S.version, loadSeq: S.loadSeq, loadedSeq: S.loadedSeq,
@@ -2890,6 +3428,7 @@ func play_again():
       things: S.dump?.things?.length ?? 0, keys: S.parsed?.nodes.map((n) => n.key) || [], groups: S.join?.groups.map((g) => ({ key: g.key, why: g.why, n: S.join.byKey.get(g.key)?.is.length })) || [],
       behaviours: S.parsed?.behaviours.map((b) => ({ id: b.id, type: b.type, V: b.V, p: b.p })) || [], banner: $('#en-banner')?.classList.contains('hidden') ? '' : $('#en-banner')?.textContent || '',
       zoom: S.zoom, camMode: S.camMode, cam: S.cams.get(S.file) || null, selIs: selIs(), lastAsk: S.lastAsk || null, dumpCurrent: live() && S.dumpVer === verNow(),
+      tab: S.tab, tool: S.tool, land: S.parsed?.land ? { var: S.parsed.land.var, line: S.parsed.land.line, edits: S.parsed.land.edits.map((e) => ({ key: e.key, op: e.op })) } : null,
     }),
     // For the e2e suite: drive the frame and read what happened.
     test: {

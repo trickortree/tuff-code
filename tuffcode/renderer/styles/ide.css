@@ -878,6 +878,50 @@ body.enter #statusbar { animation: upin .55s .3s cubic-bezier(.2,.9,.25,1) both;
 .en-asset-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
 .en-empty { padding: 2px 4px 6px; font-size: 12px; line-height: 1.45; color: var(--text-dim); }
 .en-assets-foot { justify-content: flex-start; padding: 14px 2px 4px; }
+/* A 3D world has a fourth tab, Terrain: four tabs fit side by side with each icon above its name. */
+.en-tabs.four { gap: 2px; }
+.en-tabs.four button { flex-direction: column; gap: 3px; height: 42px; font-size: 11.5px; }
+.en-tabs.four button svg { width: 14px; height: 14px; }
+/* the Terrain tab: Make some land, the tools, their sliders, the style and the water */
+.en-landcard { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 10px; padding: 20px 14px 18px; border-radius: 10px; border: 1px dashed #4a4d53; background: var(--bg-editor); text-align: center; font-size: 12.5px; line-height: 1.5; color: var(--text-dim); }
+.en-landcard .ic.big { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; background: color-mix(in srgb, var(--green) 18%, var(--bg-active)); color: color-mix(in srgb, var(--green) 75%, #fff); }
+.en-landcard .ic.big svg { width: 24px; height: 24px; }
+.en-landcard b { color: var(--text); font-size: 14px; }
+.en-landcard .en-btns { flex-direction: column; align-items: stretch; width: 100%; margin-top: 6px; }
+.en-landcard .btn { justify-content: center; }
+.en-landnote { color: var(--yellow); font-size: 12px; }
+.sd-tiles.en-tools { gap: 5px; }
+.en-tools .sd-tile { flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px; cursor: pointer; }
+.en-tools .sd-tile .ic { width: 24px; height: 24px; }
+.en-tile.en-tool.on { border-color: var(--accent); background: var(--accent-soft); }
+.en-tile.en-tool.on .ic { background: var(--accent); color: #fff; }
+.en-toolset { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; padding: 12px; border-radius: 9px; border: 1px solid #393b40; background: var(--bg-editor); }
+.en-toolset .en-empty { padding: 0; }
+.en-toolset-h { display: grid; grid-template-columns: auto 1fr; column-gap: 9px; row-gap: 1px; align-items: center; font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+.en-toolset-h .ic { grid-row: span 2; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; background: var(--accent); color: #fff; }
+.en-toolset-h .ic svg { width: 15px; height: 15px; }
+.en-toolset-h b { color: var(--text); font-size: 12.5px; }
+.en-slider { display: flex; flex-direction: column; gap: 4px; }
+.en-sl-h { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--text-dim); }
+.en-sl-h b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.en-slider input[type="range"] { width: 100%; margin: 0; accent-color: var(--accent); }
+.pf-chips.en-styles { gap: 4px; }
+.pf-chips.en-styles .pf-chip { padding: 0 8px 0 6px; height: 26px; }
+.en-water { display: flex; align-items: flex-end; gap: 12px; }
+.en-water > .pf { flex: 1; min-width: 0; }
+.en-water .en-nums { width: 92px; flex: none; }
+.en-pane .en-water { padding: 0 2px; }
+.en-empty.en-note { color: var(--yellow); padding: 10px 2px 0; }
+.sd-layer.en-edit { padding-left: 18px; }
+.sd-layer.en-edit .ic { background: color-mix(in srgb, var(--green) 14%, var(--bg-active)); color: color-mix(in srgb, var(--green) 70%, #fff); }
+.en-erow { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 2px 0 4px; border-radius: 7px; font-size: 12.5px; cursor: pointer; }
+.en-erow:hover { background: rgba(255,255,255,.045); }
+.en-erow .ic { width: 20px; height: 20px; flex: none; display: grid; place-items: center; border-radius: 5px; background: color-mix(in srgb, var(--green) 14%, var(--bg-active)); color: color-mix(in srgb, var(--green) 70%, #fff); }
+.en-erow .ic svg { width: 12px; height: 12px; }
+.en-erow .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+.en-erow.en-yours { border: 1px dashed #4a4d53; }
+.pf-sec > .en-erow + .en-erow { margin-top: -10px; }
+.en-hint.en-tooling { color: var(--text); }
 /* the templates gallery and Ask an agent */
 .en-tthumb { height: 120px; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--accent); background: radial-gradient(circle at 1px 1px, #2f3136 1px, transparent 0) 0 0 / 16px 16px; }
 .en-tthumb svg { width: 52px; height: 52px; stroke-width: 1.2; }
@@ -898,6 +942,7 @@ body.enter #statusbar { animation: upin .55s .3s cubic-bezier(.2,.9,.25,1) both;
   .sd-left:not(.layers) .en-pane { padding: 0 8px 12px; }
   .sd-left:not(.layers) .en-tabs { flex-direction: column; padding: 8px; }
   .sd-left:not(.layers) .en-tabs .lbl { display: none; }
+  .sd-left:not(.layers) .en-tabs.four button { height: 30px; }
 }
 /* Code and Play must always show: when the bar is short of room the file list gets narrower first, and with
    Learn open in the smallest window (Tuff Engine gets about 500 px) zoom (Ctrl+= and Ctrl+wheel still zoom) and
