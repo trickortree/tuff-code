@@ -723,6 +723,191 @@ def t_no_webgl(c):
             f"one clear error, on the tgame.world line, instead of one for every object (exit {r.code})", r.err[-600:])
 
 
+# ---------------------------------------------------------------- menus, buttons and screens (atgui on a game)
+
+ACCENT = (59, 130, 246)  # atgui's blue: primary buttons, the start screen's hint
+CARD = (23, 26, 31)      # atgui's dark surface: a screen's card
+
+
+def ui_of(d):
+    return d.get("ui") or {}
+
+
+def screen_shown(d, title):
+    return any(s["title"] == title and s["shown"] for s in ui_of(d).get("screens", []))
+
+
+def preview_leaves_menus_out(c, name):
+    """tuff.py --scene (Tuff Engine's preview) runs a game with menus without a crash, and leaves the menus out."""
+    code, out, err, d, secs = scene(game(name))
+    batch = json.dumps(d.get("batch", []))
+    c.check(code == 0 and d.get("stopped") == "end" and d.get("error") is None and d.get("things"),
+            f"tuff.py --scene previews {name} without errors ({len(d.get('things', []))} things, {secs:.1f} s)",
+            (d.get("stopped"), d.get("error"), err[-300:]))
+    c.check("at-" not in batch and "tg-" not in batch, "the preview leaves the menus out (no atgui elements in its batch)")
+
+
+def t_ui_2d(c):
+    """games/ui_2d.tuf: a start screen the autopilot clicks to enter, a panel button that changes the score (and isn't
+    a click on the game), a shop screen that pauses the game, a name box whose keys don't move the player, and a game
+    over screen with Play again and Main menu (then Enter starts again)."""
+    r = play("ui_2d", game("ui_2d.tuf"), [
+        {"at": 0.3, "hold": "right", "for": 0.4},
+        {"at": 0.8, "dump": "ui2d_start.json"}, {"at": 0.9, "shot": "ui2d_start.png"},
+        {"at": 1.0, "click_ui": "Click to play"},
+        {"at": 1.2, "dump": "ui2d_playing.json"},
+        {"at": 1.25, "hold": "right", "for": 0.4},
+        {"at": 1.8, "dump": "ui2d_moved.json"},
+        {"at": 1.9, "click_ui": "+1"}, {"at": 2.0, "click_ui": "+1"}, {"at": 2.1, "click_ui": "+1"},
+        {"at": 2.2, "click": [700, 120]},
+        {"at": 2.35, "dump": "ui2d_score.json"}, {"at": 2.4, "shot": "ui2d_panel.png"}, {"at": 2.45, "call": "report"},
+        {"at": 2.5, "click_ui": "Shop"},
+        {"at": 2.6, "hold": "right", "for": 0.4},
+        {"at": 3.0, "dump": "ui2d_shop.json"}, {"at": 3.05, "shot": "ui2d_shop.png"},
+        {"at": 3.1, "click_ui": "Faster (2)"},
+        {"at": 3.2, "click_ui": "Close"},
+        {"at": 3.4, "dump": "ui2d_closed.json"},
+        {"at": 3.5, "click_ui": "Your name"},
+        {"at": 3.6, "type": "dddd", "for": 0.5},
+        {"at": 3.9, "dump": "ui2d_typing.json"},
+        {"at": 4.2, "click": [700, 120]},
+        {"at": 4.3, "hold": "d", "for": 0.3},
+        {"at": 4.8, "dump": "ui2d_after.json"},
+        {"at": 4.9, "call": "lose"},
+        {"at": 5.3, "dump": "ui2d_over.json"}, {"at": 5.35, "shot": "ui2d_over.png"},
+        {"at": 5.4, "click_ui": "Play again"},
+        {"at": 5.6, "dump": "ui2d_again.json"},
+        {"at": 5.7, "call": "lose"},
+        {"at": 5.9, "click_ui": "Main menu"},
+        {"at": 6.1, "dump": "ui2d_menu.json"},
+        {"at": 6.2, "key": "enter"},
+        {"at": 6.4, "dump": "ui2d_enter.json"}, {"at": 6.45, "call": "report"},
+        {"at": 6.5, "close": True},
+    ])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    d = {k[5:-5]: v for k, v in r.dumps.items()}
+    x = {k: (v.get("sprites") or [[None, None]])[0][1] for k, v in d.items()}  # the player is the first sprite made
+    start = d.get("start", {})
+    c.check(screen_shown(start, "Star Catcher") and start.get("paused") and start.get("time") == 0 and x.get("start") == 400,
+            "the start screen shows over the game, which waits: time 0, and holding right doesn't move the player",
+            (ui_of(start).get("screens"), start.get("paused"), start.get("time"), x.get("start")))
+    playing = d.get("playing", {})
+    c.check(not screen_shown(playing, "Star Catcher") and playing.get("paused") is False,
+            "clicking it (click_ui \"Click to play\") hides it and the game runs", ui_of(playing).get("screens"))
+    c.check((x.get("moved") or 0) > 440, f"then the player moves (x {x.get('moved')})", x.get("moved"))
+    c.check("Stars: 3" in ui_of(d.get("score", {})).get("texts", []), "three clicks on the panel's +1 button set its heading to Stars: 3",
+            ui_of(d.get("score", {})).get("texts"))
+    c.check("stars 3, game clicks 1, starts 1" in r.lines, "the panel's clicks aren't the game's (1 game click: the one on the game)", r.lines)
+    shop = d.get("shop", {})
+    c.check(screen_shown(shop, "Shop") and shop.get("paused") and x.get("shop") == x.get("moved"),
+            "the Shop button shows the shop, which pauses the game: holding right doesn't move the player",
+            (ui_of(shop).get("screens"), shop.get("paused"), x.get("shop"), x.get("moved")))
+    c.check(abs((shop.get("time") or 0) - (d.get("score", {}).get("time") or 0)) < 0.35, "and the game's clock waits",
+            (d.get("score", {}).get("time"), shop.get("time")))
+    closed = d.get("closed", {})
+    c.check(not screen_shown(closed, "Shop") and closed.get("paused") is False and "Stars: 1" in ui_of(closed).get("texts", []),
+            "buying in the shop spends 2 stars, and Close hides it and the game goes on", (ui_of(closed).get("texts"), closed.get("paused")))
+    typing = d.get("typing", {})
+    c.check(ui_of(typing).get("inputs") == ["dddd"] and x.get("typing") == x.get("closed") and typing.get("down") == [],
+            "keys typed into the name box (D, held) go in the box and don't move the player",
+            (ui_of(typing).get("inputs"), x.get("closed"), x.get("typing"), typing.get("down")))
+    c.check((x.get("after") or 0) > (x.get("typing") or 0) + 20, "after a click on the game, D moves the player again", (x.get("typing"), x.get("after")))
+    over = d.get("over", {})
+    c.check(screen_shown(over, "Game over") and over.get("paused") and "Stars caught: 1" in ui_of(over).get("texts", []),
+            "the game over screen shows the score and pauses the game", (ui_of(over).get("texts"), over.get("paused")))
+    again = d.get("again", {})
+    c.check(not screen_shown(again, "Game over") and again.get("paused") is False and x.get("again") == 400
+            and "Stars: 0" in ui_of(again).get("texts", []), "Play again hides it and starts over", (ui_of(again).get("texts"), x.get("again")))
+    c.check(screen_shown(d.get("menu", {}), "Star Catcher") and d.get("menu", {}).get("paused"),
+            "Main menu shows the start screen again", ui_of(d.get("menu", {})).get("screens"))
+    enter = d.get("enter", {})
+    c.check(not screen_shown(enter, "Star Catcher") and enter.get("paused") is False and r.lines[-1:] == ["stars 0, game clicks 2, starts 2"],
+            "and Enter starts the game (start:clicked runs again)", (ui_of(enter).get("screens"), r.lines[-1:]))
+    shots = r.shots
+    c.check(shots.get("ui2d_start.png") and color_share(shots["ui2d_start.png"], ACCENT, 50, (0.38, 0.6, 0.62, 0.72)) > 0.2,
+            "the start screen's picture has its hint, a blue button in the middle", shots.get("ui2d_start.png"))
+    c.check(shots.get("ui2d_panel.png") and color_share(shots["ui2d_panel.png"], ACCENT, 40, (0.01, 0.09, 0.08, 0.17)) > 0.3,
+            "the panel's +1 button is drawn at the top left, in atgui's blue", shots.get("ui2d_panel.png"))
+    c.check(shots.get("ui2d_shop.png") and color_share(shots["ui2d_shop.png"], CARD, 12, (0.3, 0.3, 0.7, 0.7)) > 0.3,
+            "the shop is a card in the middle (atgui's dark surface)", shots.get("ui2d_shop.png"))
+    preview_leaves_menus_out(c, "ui_2d.tuf")
+
+
+def t_ui_3d(c):
+    """games/ui_3d.tuf, a first-person world: click to play (that click asks the page to lock the mouse), a panel
+    button that changes the coins, B opens a shop that pauses the world (no walking, no looking around, and the mouse
+    is let go), buying changes the panel, W typed into the chat box doesn't walk, Escape shows a pause menu."""
+    r = play("ui_3d", game("ui_3d.tuf"), [
+        {"at": 0.3, "hold": "w", "for": 0.4},
+        {"at": 0.9, "dump": "ui3d_start.json"}, {"at": 1.2, "shot": "ui3d_start.png"},
+        {"at": 1.3, "click_ui": "Click to play"},
+        {"at": 1.5, "dump": "ui3d_playing.json"},
+        {"at": 1.6, "hold": "w", "for": 0.5},
+        {"at": 2.3, "dump": "ui3d_walked.json"},
+        {"at": 2.35, "click_ui": "Chop"}, {"at": 2.45, "click_ui": "Chop"}, {"at": 2.55, "click_ui": "Chop"},
+        {"at": 2.8, "shot": "ui3d_panel.png"},
+        {"at": 2.85, "lock": True},
+        {"at": 2.9, "key": "b"},
+        {"at": 3.1, "hold": "w", "for": 0.5},
+        {"at": 3.2, "look": [300, 0]},
+        {"at": 3.5, "shot": "ui3d_shop.png"},
+        {"at": 3.8, "dump": "ui3d_shop.json"},
+        {"at": 3.9, "click_ui": "Buy for 15"},
+        {"at": 4.1, "click_ui": "Close"},
+        {"at": 4.3, "dump": "ui3d_closed.json"},
+        {"at": 4.35, "lock": False},
+        {"at": 4.4, "click_ui": "Say something"},
+        {"at": 4.5, "type": "w", "for": 0.6},
+        {"at": 4.8, "dump": "ui3d_typing.json"},
+        {"at": 5.3, "key": "escape"},
+        {"at": 5.8, "shot": "ui3d_pause.png"}, {"at": 5.9, "dump": "ui3d_pause.json"},
+        {"at": 6.0, "click_ui": "Resume"},
+        {"at": 6.2, "dump": "ui3d_resumed.json"},
+        {"at": 6.4, "close": True},
+    ])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    d = {k[5:-5]: v for k, v in r.dumps.items()}
+    z = {k: (v.get("player") or [None] * 5)[2] for k, v in d.items()}
+    start = d.get("start", {})
+    c.check(screen_shown(start, "Chop! Chop!") and start.get("paused") and start.get("time") == 0 and z.get("start") == 0,
+            "the start screen shows over the world, which waits: holding W doesn't walk",
+            (ui_of(start).get("screens"), start.get("paused"), z.get("start")))
+    playing = d.get("playing", {})
+    c.check(not screen_shown(playing, "Chop! Chop!") and playing.get("paused") is False and ui_of(playing).get("lock_asks", 0) >= 1,
+            "clicking it starts the game, and that same click asks the page to lock the mouse for looking around",
+            (ui_of(playing).get("screens"), ui_of(playing).get("lock_asks"), playing.get("locked")))
+    c.check((z.get("walked") or 0) < -1, f"then W walks (z {z.get('walked')})", z.get("walked"))
+    c.check("Coins: 15" in ui_of(d.get("shop", {})).get("texts", []), "three clicks on the panel's Chop button make Coins: 15",
+            ui_of(d.get("shop", {})).get("texts"))
+    shop = d.get("shop", {})
+    heading = lambda k: (d.get(k, {}).get("player") or [0] * 5)[3]
+    c.check(screen_shown(shop, "Shop") and shop.get("paused") and z.get("shop") == z.get("walked") and heading("shop") == heading("walked"),
+            "B shows the shop, which pauses the world: W doesn't walk and the mouse doesn't turn the player",
+            (shop.get("paused"), z.get("walked"), z.get("shop"), heading("walked"), heading("shop")))
+    c.check(not shop.get("locked"), "and the mouse is let go, to use the shop", shop.get("locked"))
+    closed = d.get("closed", {})
+    texts = ui_of(closed).get("texts", [])
+    c.check(not screen_shown(closed, "Shop") and closed.get("paused") is False and "Coins: 0" in texts and "Stone axe" in texts,
+            "buying the stone axe changes the panel (coins and badge), and Close goes back to the game", texts)
+    typing = d.get("typing", {})
+    c.check(ui_of(typing).get("inputs") == ["w"] and z.get("typing") == z.get("closed") and typing.get("down") == [],
+            "W typed (and held) in the chat box goes in the box and doesn't walk",
+            (ui_of(typing).get("inputs"), z.get("closed"), z.get("typing"), typing.get("down")))
+    pause, resumed = d.get("pause", {}), d.get("resumed", {})
+    c.check(screen_shown(pause, "Paused") and pause.get("paused") and not screen_shown(resumed, "Paused") and resumed.get("paused") is False,
+            "Escape shows the pause menu (the program's on_key), and its Resume button hides it", (pause.get("paused"), resumed.get("paused")))
+    shots = r.shots
+    c.check(shots.get("ui3d_start.png") and color_share(shots["ui3d_start.png"], ACCENT, 50, (0.42, 0.6, 0.58, 0.68)) > 0.2,
+            "the start screen's picture has its hint over the dimmed world", shots.get("ui3d_start.png"))
+    c.check(shots.get("ui3d_panel.png") and color_share(shots["ui3d_panel.png"], ACCENT, 40, (0.015, 0.14, 0.075, 0.19)) > 0.3,
+            "the panel's Chop button is drawn over the sky", shots.get("ui3d_panel.png"))
+    c.check(shots.get("ui3d_shop.png") and color_share(shots["ui3d_shop.png"], CARD, 12, (0.3, 0.3, 0.7, 0.7)) > 0.3,
+            "the shop is a card in the middle", shots.get("ui3d_shop.png"))
+    preview_leaves_menus_out(c, "ui_3d.tuf")
+
+
 # ---------------------------------------------------------------- Tuff Engine's preview (tuff.py --scene)
 
 def scene(program, source=None, env=None, timeout=30):
@@ -1090,7 +1275,7 @@ try { window.registerTuff(monaco, '#3574f0'); } catch (e) { console.error(e); }
 const after = (src) => provider.provideCompletionItems({ getWordUntilPosition: () => ({ startColumn: 5, endColumn: 5 }),
   getLineContent: () => 'app:', getValue: () => src, getLinesContent: () => src.split('\\n') }, { lineNumber: 1, column: 5 }).suggestions.map((s) => s.label);
 console.log(JSON.stringify({ libs: window.TUFF_LIBS, docs: window.TUFF_DOCS, methods: window.TUFF_METHOD_DOCS, snippets,
-  plain: after('app = tgui.window()\\n'), games: after('mention tgame\\n') }));
+  plain: after('app = tgui.window()\\n'), games: after('mention tgame\\n'), ui: after('mention tgame\\nbar = game:panel("top left")\\n') }));
 """
 
 
@@ -1114,6 +1299,12 @@ def t_editor(c):
     c.check("button" in t["plain"] and "frame" not in t["plain"] and "spawn" not in t["plain"],
             "after app: in a file without tgame, the list leaves out tgame's own methods", [m for m in t["plain"] if m in ("frame", "spawn", "button")])
     c.check("frame" in t["games"] and "spawn" in t["games"] and "button" in t["games"], "in a tgame file it offers them all", len(t["games"]))
+    ui = ("panel", "screen", "start_screen", "shown")
+    c.check(all(m in t["methods"] and "tgame" in t["methods"][m][1] for m in ui), "game:panel, :screen, :start_screen and :shown have tgame hover docs",
+            [m for m in ui if m not in t["methods"]])
+    c.check(all(m in t["games"] for m in ui), "a tgame file offers them after a ':'", [m for m in ui if m not in t["games"]])
+    c.check("textarea" in t["ui"] and "switch" in t["ui"] and "textarea" not in t["games"],
+            "with a panel or screen in it, a tgame file offers atgui's widgets too (and only then)", [m for m in ("textarea", "switch") if m not in t["ui"]])
     games = [(label, text) for label, text in t["snippets"] if label.startswith("tgame")]
     c.check(len(games) == 2, "there are 2D and 3D starter snippets", [g[0] for g in games])
     import re
@@ -1159,7 +1350,8 @@ def t_guide(c):
 
 GOOD = ["snake.tuf", "breakout.tuf", "snake3d.tuf", "axe_sim.tuf", "features_2d.tuf", "features_3d.tuf", "player_3d.tuf",
         "perf_2d.tuf", "perf_2d_speed.tuf", "perf_3d.tuf", "perf_3d_move.tuf", "callback.tuf", "errors.tuf", "top_error.tuf",
-        "churn.tuf", "pause_key.tuf", "hud_3d.tuf", "terrain_walk.tuf", "terrain_look.tuf", "terrain_dig.tuf"]
+        "churn.tuf", "pause_key.tuf", "hud_3d.tuf", "terrain_walk.tuf", "terrain_look.tuf", "terrain_dig.tuf",
+        "ui_2d.tuf", "ui_3d.tuf"]
 BAD = [
     ('game = tgame.window("x")\ngame:rect(1, 2)\n', "A game doesn't have :rect. Use :box instead."),
     ('game = tgame.window("x")\nb = game:box(1, 2)\nb:moov(1, 2)\n', "A sprite doesn't have :moov. Did you mean :move?"),
@@ -1232,6 +1424,46 @@ BAD = [
     ('w = tgame.world("x")\nw:landscape(100)\n', "A world doesn't have :landscape. Use :terrain instead."),
     ('w = tgame.world("x")\nw:terrain(100, "grass", 3)\n', "world:terrain got the wrong number of inputs (3)."),
     ('game = tgame.window("x")\ngame:terrain(100)\n', "A game doesn't have :terrain."),
+    ('game = tgame.window("x")\ngame:panel "top lft"\n', 'not "top lft". Did you mean "top left"?'),
+    ('w = tgame.world("x")\nw:panel("middle", 3)\n', "w:panel got the wrong number of inputs (2)."),
+    ('game = tgame.window("x")\ngame:menu "Shop"\n', "A game doesn't have :menu. Use :screen instead."),
+    ('w = tgame.world("x")\nw:title_screen "Go"\n', "A world doesn't have :title_screen. Use :start_screen instead."),
+    # Menus, buttons and screens: where a panel goes (with "did you mean"), the inputs of game:panel, game:screen
+    # and game:start_screen, the widgets on them (checked like atgui's), and widgets asked of the game or the HUD.
+    ('game = tgame.window("x")\nbar = game:panel("top-centre")\n',
+     'A panel can go at "top left", "top", "top right", "left", "center", "right", "bottom left", "bottom" or "bottom right", '
+     'not "top-centre". Did you mean "top"?'),
+    ('game = tgame.window("x")\nbar = game:panel("middel")\n', 'not "middel". Did you mean "center"?'),
+    ('w = tgame.world("x")\nbar = w:panel("upper right")\n', 'not "upper right". Did you mean "top right"?'),
+    ('game = tgame.window("x")\nbar = game:panel("sideways")\n', 'A panel can go at "top left"'),
+    ('game = tgame.window("x")\nbar = game:panel("top", "left")\n', "game:panel got the wrong number of inputs (2)."),
+    ('game = tgame.window("x")\nbar = game:panel(10)\n', "A panel's input is where it goes, written as text"),
+    ('game = tgame.window("x")\nshop = game:screen("Shop", "no")\n', "A screen's second input is whether it pauses the game while it shows: true or false"),
+    ('game = tgame.window("x")\nshop = game:screen("Shop", true, 3)\n', "game:screen got the wrong number of inputs (3)."),
+    ('game = tgame.window("x")\nfunc go():\n    nil\nshop = game:screen(go)\n', "A screen's first input is its title"),
+    ('w = tgame.world("x")\nfunc go():\n    nil\nstart = w:start_screen("Go", go)\n',
+     "A start screen takes a title and a hint, both text, like: start = w:start_screen(\"My Game\", \"Click to play\")."),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nbar:buton("Shop")\n', "A panel doesn't have :buton. Did you mean :button?"),
+    ('game = tgame.window("x")\nshop = game:screen("Shop")\nshop:shwo()\n', "A screen doesn't have :shwo. Did you mean :show?"),
+    ('w = tgame.world("x")\nstart = w:start_screen("Go")\nstart:opn()\n', "A screen doesn't have :opn."),
+    ('game = tgame.window("x")\nshop = game:screen("Shop")\nshop:close()\n', "A screen doesn't have :close. Use :hide instead."),
+    ('game = tgame.window("x")\nshop = game:screen("Shop")\nif shop:visible():\n    nil\n', "A screen doesn't have :visible. Use :shown instead."),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nb = bar:button("Shop")\nb:wobble()\n', "A button doesn't have :wobble."),
+    ('game = tgame.window("x")\nshop = game:screen("Shop")\nbox = shop:input("Name")\nbox:set(1, 2)\n', "input:set got the wrong number of inputs (2)."),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nbar:button("Shop", go, "shiny")\nfunc go():\n    nil\n', "'shiny' isn't a button style."),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nbar:button("Shop", go)\nfunc go(a, b):\n    nil\n',
+     "go() needs 2 inputs, but a button click only gives it 1"),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nbar:button("Shop", go())\nfunc go():\n    nil\n',
+     "Pass the function's name without brackets: go, not go()."),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nbar:button("Shop", go)\nfunc go():\n    wait(1)\n',
+     "wait() freezes the game: nothing moves or redraws until it's over. To do something later, use game:after(seconds, fn)."),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nbar:icon "hom"\n', "There's no icon called 'hom'. Did you mean \"home\"?"),
+    ('game = tgame.window("x")\ngame:button("Shop")\n',
+     "A game doesn't have :button. Buttons, text boxes and other widgets go on a panel or a screen: bar = game:panel(\"top left\"), then bar:button(...)"),
+    ('w = tgame.world("x")\nw:slider(0, 10, 5)\n', "A world doesn't have :slider. Buttons, text boxes and other widgets go on a panel or a screen"),
+    ('game = tgame.window("x")\nhud = game:hud()\nhud:button("Shop")\n', "A hud doesn't have :button. The HUD only draws."),
+    ('game = tgame.window("x")\ngame:menu("Shop")\n', "A game doesn't have :menu. Use :screen instead."),
+    ('w = tgame.world("x")\nw:title_screen("Go")\n', "A world doesn't have :title_screen. Use :start_screen instead."),
 ]
 
 
@@ -1263,6 +1495,25 @@ GOOD_SNIPPETS = [
     'land:lower(stroke, 6, 1)\nfunc dig(x, y, z):\n    land:lower(x, z, 4, 0.5)\nw:clicked dig\np = w:player()\n'
     'say land:height_at(p:x(), p:z())\n',
     'w = tgame.world("x")\nw:terrain(80, "autumn"):hill(0, 0, 20, 4)\nw:island(60)\n',
+    # Menus, buttons and screens: a panel at every place (in any case, with - or _), chained widgets, a start screen
+    # with only a title, screens that pause or not, and :shown as true or false.
+    'game = tgame.window("x")\nfor place in ["top left", "top", "top right", "left", "center", "right", "bottom left", "bottom", "bottom right"]:\n'
+    '    game:panel(place):small place\ngame:panel "Top-Left"\ngame:panel("bottom_right"):card():text "Hi"\n'
+    'start = game:start_screen("Go!")\nstart:text "Dodge the rocks."\nshop = game:screen()\nquiet = game:screen("Map", false)\n'
+    'quiet:hide()\nif shop:shown() and not quiet:shown():\n    say "shop"\nstart:show()\n',
+    # A whole game's UI: a click-to-play start screen, a HUD panel with a button and a progress bar, a pausing shop
+    # with a row, a text box, a slider (its :change), a dropdown, a switch and tabs, and a game over screen.
+    'game = tgame.world("Chop! Chop!", 960, 600)\nplayer = game:player("first person")\n'
+    'start = game:start_screen("Chop! Chop!", "Click to play")\nstart:text "Chop trees for coins, buy better axes."\n'
+    'bar = game:panel("top left")\ncoins_label = bar:heading "Coins: 0"\nbar:button("Shop", open_shop):icon "cart"\nhp = bar:progress(100)\n'
+    'shop = game:screen("Shop")\nrow = shop:row()\nrow:button("Stone Axe (15)", buy_stone)\nrow:badge("New", "success")\n'
+    'name_box = shop:input("Your name")\nname_box:enter named\nvolume = shop:slider(0, 100, 50)\nvolume:change volume_changed\n'
+    'size = shop:dropdown(["Small", "Big"], "Small")\nmusic = shop:switch("Music", true)\ntabs = shop:tabs()\ntabs:tab("Axes"):text "Sharp"\n'
+    'shop:button("Close", close_shop, "secondary")\nshop:hide()\nover = game:screen("Game over")\nover:hide()\n'
+    'over:button("Play again", again):style("radius", 20)\ncoins = 0\n'
+    'func open_shop():\n    shop:show()\nfunc close_shop():\n    shop:hide()\nfunc buy_stone(text):\n    coins_label:set "Coins: " + coins\n'
+    '    hp:set 50\nfunc named(text):\n    say text\nfunc volume_changed(v):\n    game:volume v\nfunc again():\n    over:hide()\n    start:show()\n'
+    'func step(dt):\n    if shop:shown() and size:value() is "Big" and music:value():\n        say name_box:value()\ngame:every_frame step\n',
 ]
 
 
@@ -1291,6 +1542,8 @@ def t_checker(c):
         c.check(True, "Node isn't installed: skipped the MCP's game examples")
     if games is not None:
         c.check(any("terrain(" in g["code"] for g in games), "the MCP's game examples have a world with land (terrain)", [g["id"] for g in games])
+        c.check(any(all(m in g["code"] for m in (":start_screen(", ":panel(", ":button(", ":screen(")) for g in games),
+                "... and a game with a start screen, a panel with a button and a screen", [g["id"] for g in games])
     for g in games or []:
         path = os.path.join(folder, f"example_{g['id']}.tuf")
         with open(path, "w", encoding="utf-8") as f:
@@ -1344,7 +1597,7 @@ def t_perf(c):
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
          "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "terrain": t_terrain,
-         "terrain_look": t_terrain_look, "no_webgl": t_no_webgl,
+         "terrain_look": t_terrain_look, "no_webgl": t_no_webgl, "ui_2d": t_ui_2d, "ui_3d": t_ui_3d,
          "scene": t_scene, "notice": t_notice, "mcp": t_mcp, "checker": t_checker, "editor": t_editor, "guide": t_guide, "perf": t_perf}
 
 

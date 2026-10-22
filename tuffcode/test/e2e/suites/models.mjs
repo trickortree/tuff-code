@@ -198,14 +198,12 @@ export default async (t, ctx) => {
   await send('Make a program that says Hi');
   await idle();
   const high = lastAnswer();
-  check('High: the model thinks with its 512-token budget, after the improver and a plan', high.thoughts === 'auto' && high.budget === 512 && prompts().some((p) => p.plan) && prompts().some((p) => p.improved), prompts());
+  check('High: the model thinks with its 512-token budget, with no improver and no plan (both off since 1.1.0)', high.thoughts === 'auto' && high.budget === 512 && !prompts().some((p) => p.plan) && !prompts().some((p) => p.improved), prompts());
   check('High: the reply says Tuff AI · Pumice 1 · High', /Tuff AI · Pumice 1 · High/.test(await who()), await who());
   const folds = await ev(`(() => { const m = [...document.querySelectorAll('.ta-msg.agent')].pop(); return [...m.querySelectorAll('details.ta-fold')].map(d => ({ cls: d.className, open: d.open, summary: d.querySelector('summary').textContent.trim(), body: d.querySelector('.ta-fold-b').textContent })); })()`);
-  check('The reply has the improved request, folded, with its plan', folds[0]?.cls.includes('ta-improved') && !folds[0].open && folds[0].summary === 'Made your request clearer' && /They want: a Tuff program/.test(folds[0].body) && /rewrote it as/.test(folds[0].body) && /Task: show Hi/.test(folds[0].body), folds[0]);
-  check('... and the thinking, folded, as "Thought for N s"', folds[1]?.cls.includes('ta-thought') && !folds[1].open && /^Thought for \d+ s$/.test(folds[1].summary) && /Thinking it over/.test(folds[1].body), folds[1]);
+  check('The reply has no "Made your request clearer" fold, only the thinking, folded, as "Thought for N s"', folds.length === 1 && folds[0]?.cls.includes('ta-thought') && !folds[0].open && /^Thought for \d+ s$/.test(folds[0].summary) && /Thinking it over/.test(folds[0].body), folds);
   await ev(`[...document.querySelectorAll('.ta-msg.agent')].pop().querySelector('details.ta-thought summary').click()`);
   check('Clicking "Thought for N s" opens the thinking', await ev(`[...document.querySelectorAll('.ta-msg.agent')].pop().querySelector('details.ta-thought').open`), null);
-  await ev(`[...document.querySelectorAll('.ta-msg.agent')].pop().querySelector('details.ta-improved summary').click()`);
   await t.sleep(200);
   await t.shot('tuffai_folds.png');
   check('Its code went through the checker', await ev(`[...[...document.querySelectorAll('.ta-msg.agent')].pop().querySelectorAll('.ta-tool')].some(x => /Checked/.test(x.textContent))`), null);
@@ -242,9 +240,8 @@ export default async (t, ctx) => {
   await send('make it say hi');
   await idle();
   const edited = await t.code();
-  const editCard = await lastMsg(`m.querySelector('details.ta-improved .ta-fold-b')?.textContent || ''`);
   const editText = await lastMsg('m.textContent');
-  check('Edit: Pumice 1 is asked to change the open program, puts its checked program into the file, and says so', /say "Hi"/.test(edited) && !/Bye/.test(edited) && /their open program changed/.test(editCard) && /Changed .+Ctrl\+Z undoes it/.test(editText), { edited, editCard, end: editText.slice(-160) });
+  check('Edit: Pumice 1 puts its checked program into the open file, and says so', /say "Hi"/.test(edited) && !/Bye/.test(edited) && /Changed .+Ctrl\+Z undoes it/.test(editText), { edited, end: editText.slice(-160) });
   await ev(`monaco.editor.getEditors()[0].trigger('test', 'undo')`);
   check('... and one Ctrl+Z puts the file back', /say "Bye"/.test(await t.code()), await t.code());
   const long = Array.from({ length: 30 }, (_, i) => `say "Line ${i + 1}"`).join('\n') + '\n';
@@ -253,11 +250,10 @@ export default async (t, ctx) => {
   await idle();
   check('Edit: a program much shorter than the file (cut off halfway) is not put in, and it says why', (await t.code()) === long && /much shorter than .+ so your file wasn't changed/.test(await lastMsg('m.textContent')), (await lastMsg('m.textContent')).slice(-200));
   await ev(`document.querySelector('.ta-mode button[data-m="ask"]').click()`);
-  // A word or two with a file open is a question about that program: explain it.
-  await send('what');
+  // "hi" is just "hi": no card turns it into something else.
+  await send('hi');
   await idle();
-  const vague = await lastMsg(`m.querySelector('details.ta-improved .ta-fold-b')?.textContent || ''`);
-  check('"what" with a file open becomes: explain what this program does', /an explanation of their code/.test(vague) && /say what .+ does as a whole/.test(vague), vague);
+  check('"hi" gets no "Made your request clearer" card', await lastMsg(`!m.querySelector('details.ta-improved')`), null);
 
   await choose('effort', 'medium');
   await t.reload();

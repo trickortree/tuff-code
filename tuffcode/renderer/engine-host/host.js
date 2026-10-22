@@ -24,11 +24,20 @@
 //              file). null: fit the camera around the world. Left out: keep the current camera (same file again).
 //            - camMode (3D): 'editor' (the default, the orbit camera) or 'game' (the game's own starting camera).
 //            - select: like `select` below, drawn with the load. Without it the selection is cleared, so send
-//              `select` again after `loaded`.
+//              `select` again after `loaded`. marks: like select's.
+//            - terrain (3D): the dump's terrain { ids, size, n, heights, lakes, sea } when the editor can change the
+//              land (its world:terrain line is a simple one), or null. The brush paints this page's copy of it.
+//            - tool: like `tool` below, drawn with the load.
 //            The old scene goes; a 3D scene's WebGL context is kept from one 3D load to the next.
-//   select { is: [i, ...] | ['player'] | [] }
+//   select { is: [i, ...] | ['player'] | [], marks?: [[x, z, r], ...] }
 //            2D: a blue box around the union of those things. 3D: a blue wire box in each thing (it moves, turns
-//            and scales with it); 'player' outlines the start marker.
+//            and scales with it); 'player' outlines the start marker. marks: blue rings on the land (where a
+//            selected land line works: a hill's middle, a stroke's spots).
+//   tool   { tool: null | { kind, size, amount } }  (3D, with terrain) The Terrain tab's tool: 'raise', 'lower',
+//            'smooth', 'flatten' (brushes: drag on the land to paint), 'hill', 'mountain', 'dip', 'lake' (click to
+//            place) or 'valley' (drag from its start to its end). size: the brush's width (a valley's width), amount:
+//            a brush's strength, a shape's height or depth. A ring shows where it works; while it's on, a left drag
+//            on the land paints instead of orbiting (right-drag still orbits, Shift- or middle-drag pans).
 //   view   { cam: 'editor' | 'game' }  (3D) The orbit camera, or the game's starting camera (view only: no
 //            picking, dragging or orbiting; camera-attached things like a held axe show; the start marker hides).
 //   camera { cam: { tx, ty, tz, az, el, dist } }  (3D) Move the editor camera (answered with `cam`).
@@ -40,12 +49,19 @@
 //                              load, b, scene, sel2d }
 //            'pos', i        thing i's live position: 2D { x, y }, 3D { x, y, z } (follows a drag in progress)
 //            'fetch', url    { status, type, size } of a tuffview://app/ address (tests of what the scheme serves)
+//            'height', x, z  the land's height there, in this page's copy (follows the brush)
+//            'spot', x, z    where that point of the land is on screen, in this page's CSS pixels: [x, y]
 //
 // HOST -> PARENT
 //   ready  { webgl }          The engine has started (webgl: WebGL 2 works here). Send `load` after this.
 //   loaded { seq, objs, mode } A load has been drawn (seq is the load's).
 //   pick   { i, point? }      Pointer down on thing i (a number, or 'player'), or i: null for a click (no drag) on
 //                             empty space, the island or the ground. 3D adds point: [x, y, z] on what was hit.
+//                             A click (no drag) on the land picks the terrain's thing; a drag on it orbits.
+//   brush  { tool, spots: [[x, z], ...], size, amount }   A Terrain tool was used (the mouse was let go): a
+//                             brush's spots along its stroke (one for a click; about size / 3 apart, to 0.1), a
+//                             shape's one spot, a valley's start and end. amount: flatten's is the height where the
+//                             stroke started. The land was painted live here; write the line.
 //   drag   { i, phase: 'end', dx, dy, alt }   2D: thing i was dragged by (dx, dy) game units (whole numbers).
 //          { i, phase: 'end', x, z, alt }     3D: thing i's group (or the player marker) now stands at x, z, snapped
 //                                             to 0.5 (0.1 with Alt held). Moving the thing was live; write the code.
@@ -62,6 +78,7 @@
 // Controls. 2D: press a thing to pick it, drag to move it (live), click empty space to pick nothing. 3D: press a
 // thing to pick it and drag it over the ground at its height; drag empty space (or a thing that can't move, or
 // right-drag anywhere) to orbit; Shift-drag or middle-drag to pan; the wheel zooms; double-click a thing to frame it.
+// With a Terrain tool on, a left drag on the land paints it (see `tool`). Things on the land are dragged over it.
 // The HUD over a 3D world picks and drags like 2D, before the world. Size the iframe to the game's W:H (a 2D
 // game is letterboxed in it, filled with its background). The dump comes from window.tuff.engine.scene(file,
 // source) (preload.js); its things are { i, kind, layer, ids, x, y, z, dims, k, heading, hidden, made, var, drag },
@@ -94,6 +111,7 @@
   const SEL = '#4da3ff';
   const MARKER = 900001;          // + B: the player's start marker (a group), and its capsule (+1)
   const OUTLINES = 900100;        // + B: selection outlines, counting up within a load
+  const EXTRAS = 900400;          // + B: the Terrain tool's ring, rings on the land and a new lake's water, counting up
   const DROP_CALLS = new Set(['sound', 'sound_stop', 'sound_volume', 'sound_state', 'tones', 'unlock', 'css', 'cursor']);
   const CAM_KEYS = ['cx', 'cy', 'cz', 'yaw', 'pitch', 'roll', 'look'];
   const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
@@ -113,6 +131,12 @@
   let outlineIds = [];
   let outlineNo = 0;
   let press = null;               // what the pointer is doing (see onDown)
+  let tool = null;                // the Terrain tab's tool: { kind, size, amount }
+  let marks = [];                 // [x, z, r] rings for a selected land line
+  let markIds = [];
+  let extraNo = 0;
+  let ring = null;                // the tool's ring: { id, r, shown }
+  let hover = null;               // where the pointer is over the page, for the ring: [x, y]
   const sel2d = () => document.getElementById('sel2d');
 
   // ---------------------------------------------------------------- messages from the parent
@@ -133,6 +157,7 @@
 
   let heldLoad = null; // the newest scene that came while the mouse was held
   let heldTimer = null;
+  let painted = false; // a brush stroke was just written: the scene for it is on its way
   function startLoad(m) {
     load(m).catch((err) => post('error', { message: String(err && err.message || err), where: 'loading the scene' }));
   }
@@ -141,6 +166,16 @@
     const m = heldLoad;
     heldLoad = null;
     if (m) startLoad(m);
+  }
+  // A release this page never sees can't keep the scene old for long: 4 s after the pointer last moved, the press
+  // ends. A brush stroke is kept (its line is written), anything else is put back.
+  function armHeld() {
+    clearTimeout(heldTimer);
+    heldTimer = setTimeout(() => {
+      if (!heldLoad) return;
+      finish(null, !(press && press.kind === 'paint'));
+      if (painted) { heldLoad = null; painted = false; } else loadHeld();
+    }, 4000);
   }
 
   function handle(m) {
@@ -152,15 +187,14 @@
         case 'load':
           if (!press) { startLoad(m); break; }
           heldLoad = m;
-          // A release this page never sees can't keep the scene old for long.
-          clearTimeout(heldTimer);
-          heldTimer = setTimeout(() => { if (heldLoad) { finish(null, true); loadHeld(); } }, 4000);
+          armHeld();
           break;
-        case 'select': select(Array.isArray(m.is) ? m.is : []); break;
+        case 'select': select(Array.isArray(m.is) ? m.is : [], m.marks); break;
+        case 'tool': setTool(m.tool); break;
         case 'view': setCamMode(m.cam === 'game' ? 'game' : 'editor'); break;
         case 'camera': if (m.cam && L && L.mode === '3d') { cam = { ...cam, ...m.cam }; applyCam(); postCam(true); } break;
         case 'ask': ask(m); break;
-        case 'cancel': if (press && press.started) finish(null, true); else press = null; loadHeld(); break;
+        case 'cancel': if (press && (press.started || press.kind === 'paint')) finish(null, true); else press = null; loadHeld(); break;
         default: break;
       }
     } catch (err) {
@@ -262,8 +296,9 @@
     if (is3d && m.player && rawScene) {
       const pl = m.player;
       const sceneId = keep || mapId(rawScene);
+      // (On land, the dump's y is the height above it, and ground is the land's height there.)
       player = { ids: [B + MARKER, B + MARKER + 1, ...(pl.ids || []).map(mapId), ...((pl.held && pl.held.ids) || []).map(mapId)],
-        drag: pl.drag === null ? null : 'xz', x: pl.x || 0, y: pl.y || 0, z: pl.z || 0 };
+        drag: pl.drag === null ? null : 'xz', x: pl.x || 0, y: (pl.y || 0) + (pl.ground || 0), z: pl.z || 0 };
       for (const id of player.ids) idToThing.set(id, 'player');
       out.push(['c', B + MARKER, 'obj', 'group', sceneId, { x: player.x, y: player.y, z: player.z }]);
       out.push(['c', B + MARKER + 1, 'obj', 'capsule', B + MARKER, { r: 0.3, h: 1.1, y: 0.85, seg: 12, color: SEL, opacity: 0.45, shadow: false }]);
@@ -273,11 +308,21 @@
       sceneId: is3d && rawScene ? keep || mapId(rawScene) : null,
       gameCanvas: !is3d && m.roots && m.roots.view ? mapId(m.roots.view) : null,
       hudCanvas: m.roots && m.roots.hud ? mapId(m.roots.hud) : null,
-      gameCamera: is3d ? m.camera || null : null, cameraNodes, gameVisible };
+      gameCamera: is3d ? m.camera || null : null, cameraNodes, gameVisible, land: null };
+    const tr = is3d && m.terrain;
+    if (tr && Array.isArray(tr.ids) && tr.ids.length && Array.isArray(tr.heights) && tr.n > 1 && tr.heights.length === tr.n * tr.n) {
+      const t = things.find((x) => x.kind === 'terrain');
+      L.land = { id: mapId(tr.ids[0]), i: t ? t.i : null, size: +tr.size, n: tr.n, step: tr.size / (tr.n - 1), h: Float64Array.from(tr.heights, (v) => +v || 0) };
+    }
     outlineIds = [];
     outlineNo = 0;
+    markIds = [];
+    marks = [];
+    extraNo = 0;
+    ring = null;
     selIs = [];
     press = null;
+    if ('tool' in m) tool = m.tool && L.land ? m.tool : null;
     send(out);
     await settle();
     if (token !== loadToken) return;
@@ -288,8 +333,9 @@
       applyView();
       postCam(true);
     }
-    if (Array.isArray(m.select)) select(m.select);
+    if (Array.isArray(m.select)) select(m.select, m.marks);
     else drawSel();
+    if (hover) showRing(hover[0], hover[1]);
     post('loaded', { seq: m.seq, objs: objs().size, mode: L.mode });
   }
 
@@ -303,15 +349,19 @@
 
   function defaultCam() { return { tx: 0, ty: 0, tz: -6, az: 0, el: 35, dist: 18 }; }
 
-  // The middle of the x/z box around every object (not the island or the ground) and the player.
+  // The middle of the x/z box around every object (not the island, the ground or the land) and the player. With land,
+  // far enough back to see most of it, looking at the land's height there.
   function fitCam(things, pl) {
-    const pts = things.filter((t) => t.layer === 'world' && t.kind !== 'island' && t.kind !== 'ground').map((t) => [t.x, t.z]);
+    const pts = things.filter((t) => t.layer === 'world' && t.kind !== 'island' && t.kind !== 'ground' && t.kind !== 'terrain').map((t) => [t.x, t.z]);
     if (pl) pts.push([pl.x || 0, pl.z || 0]);
-    if (!pts.length) return defaultCam();
+    const land = L && L.land;
+    if (!pts.length) return land ? { ...defaultCam(), tz: 0, ty: landAt(0, 0), dist: clamp(land.size * 0.4, 12, 150) } : defaultCam();
     const xs = pts.map((p) => p[0]);
     const zs = pts.map((p) => p[1]);
     const [x0, x1, z0, z1] = [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)];
-    return { tx: (x0 + x1) / 2, ty: 0, tz: (z0 + z1) / 2, az: 0, el: 35, dist: clamp(1.4 * Math.hypot(x1 - x0, z1 - z0), 12, 150) };
+    const c = { tx: (x0 + x1) / 2, ty: 0, tz: (z0 + z1) / 2, az: 0, el: 35, dist: clamp(1.4 * Math.hypot(x1 - x0, z1 - z0), 12, 150) };
+    if (land) { c.dist = clamp(Math.max(1.1 * Math.hypot(x1 - x0, z1 - z0), land.size * 0.4), 12, 150); c.ty = landAt(c.tx, c.tz); }
+    return c;
   }
 
   function camPos(c) {
@@ -342,8 +392,10 @@
 
   function setCamMode(mode) {
     if (mode === camMode) return;
+    if (press && press.kind === 'paint') unpaint(press);
     camMode = mode;
     press = null;
+    if (mode === 'game') hideRing();
     applyView();
     loadHeld();
   }
@@ -403,6 +455,7 @@
         if (!L.idToThing.has(k.id)) continue;
         const i = L.idToThing.get(k.id);
         const t = L.meta.get(i);
+        if (t && t.kind === 'terrain') return { i: null, point, floor: true, land: i };   // a click picks it, a drag orbits
         return t && (t.kind === 'island' || t.kind === 'ground') ? { i: null, point, floor: true } : { i, point };
       }
       return { i: null, point };
@@ -421,6 +474,241 @@
     if (!g) return null;
     const hit = new g.T.Vector3();
     return g.rc.ray.intersectPlane(new g.T.Plane(new g.T.Vector3(0, 1, 0), -y), hit) ? hit : null;
+  }
+
+  // Where the pointer is on the land (and only the land: things on it don't get in the way), or null.
+  function onLand(px, py) {
+    if (!L || !L.land) return null;
+    const n = objs().get(L.land.id);
+    const g = n && n.obj && shown(n.obj) ? ray(px, py) : null;
+    if (!g) return null;
+    const hits = g.rc.intersectObject(n.obj, false);
+    return hits.length ? hits[0].point : null;
+  }
+
+  // ---------------------------------------------------------------- the land, and the Terrain tab's tools
+  // L.land: { id (its node), i (its thing), size, n, step, h }. h is this page's own copy of the heights (n * n, row
+  // by row from -z to +z, each row from -x to +x). While the mouse is down a tool changes it with the same maths as
+  // tgame's Terrain (tuff_tgame.py: every edit's weight is (1 - (d / r)²)² within r of its middle), so the land
+  // shown while painting is the land the line it writes will make. The next load brings tgame's own heights.
+
+  // The height at x, z, between the four points around it (like Terrain.at); outside the square, the edge's.
+  function landAt(x, z) {
+    const d = L && L.land;
+    if (!d) return 0;
+    const { n, step, size, h } = d;
+    const fx = clamp((x + size / 2) / step, 0, n - 1);
+    const fz = clamp((z + size / 2) / step, 0, n - 1);
+    const i = Math.min(Math.floor(fx), n - 2);
+    const j = Math.min(Math.floor(fz), n - 2);
+    const tx = fx - i;
+    const tz = fz - j;
+    const k = j * n + i;
+    const a = h[k];
+    const b = h[k + 1];
+    const c = h[k + n];
+    const e = h[k + n + 1];
+    return a + (b - a) * tx + (c - a) * tz + (a - b - c + e) * tx * tz;
+  }
+
+  // The grid's points inside a box: fn(index, x, z).
+  function landPoints(x0, z0, x1, z1, fn) {
+    const { n, step, size } = L.land;
+    const half = size / 2;
+    const i0 = Math.max(0, Math.ceil((x0 + half) / step));
+    const i1 = Math.min(n - 1, Math.floor((x1 + half) / step));
+    const j0 = Math.max(0, Math.ceil((z0 + half) / step));
+    const j1 = Math.min(n - 1, Math.floor((z1 + half) / step));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) fn(j * n + i, i * step - half, j * step - half);
+  }
+
+  // Every point within r of (x, z) changes by fn(weight, index, x, z).
+  function dab(x, z, r, fn) {
+    const h = L.land.h;
+    const rr = r * r;
+    landPoints(x - r, z - r, x + r, z + r, (k, px, pz) => {
+      const d2 = (px - x) ** 2 + (pz - z) ** 2;
+      if (d2 < rr) { const q = 1 - d2 / rr; h[k] += fn(q * q, k, px, pz); }
+    });
+  }
+
+  // Smooth: each point moves toward the average of its 4 neighbours (as they were before this dab), by its weight.
+  function smoothDab(x, z, r) {
+    const { n, h } = L.land;
+    const old = h.slice();
+    dab(x, z, r, (w, k) => {
+      const i = k % n;
+      const j = (k - i) / n;
+      const avg = (old[i > 0 ? k - 1 : k] + old[i < n - 1 ? k + 1 : k] + old[j > 0 ? k - n : k] + old[j < n - 1 ? k + n : k]) / 4;
+      return (avg - old[k]) * w;
+    });
+  }
+
+  // tgame's value noise (_noise in tuff_tgame.py), bit for bit: a mountain here is the mountain the game makes.
+  const ease = (t) => t * t * (3 - 2 * t);
+  function noise(x, z, seed) {
+    const ix = Math.floor(x);
+    const iz = Math.floor(z);
+    const fx = ease(x - ix);
+    const fz = ease(z - iz);
+    const corner = (i, j) => {
+      let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263) + Math.imul(seed, 1442695041)) >>> 0;
+      h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+      return ((h ^ (h >>> 16)) & 0xFFFF) / 65535;
+    };
+    const a = corner(ix, iz);
+    const b = corner(ix + 1, iz);
+    const c = corner(ix, iz + 1);
+    const d = corner(ix + 1, iz + 1);
+    return a + (b - a) * fx + (c - a) * fz + (a - b - c + d) * fx * fz;
+  }
+  // Python's round(): halves go to the even number.
+  const pyRound = (v) => { const f = Math.floor(v); const d = v - f; return d > 0.5 ? f + 1 : d < 0.5 ? f : f % 2 === 0 ? f : f + 1; };
+
+  function mountain(x, z, size, tall) {
+    const seed = (Math.imul(pyRound(x * 10), 73856093) ^ Math.imul(pyRound(z * 10), 19349663) ^ Math.imul(pyRound(size * 10), 83492791)) & 0x7FFFFFFF;
+    const cell = Math.max(2, size / 8);
+    const ridge = (a, b, s) => 1 - Math.abs(2 * noise(a, b, s) - 1);
+    dab(x, z, size / 2, (w, _k, px, pz) => {
+      const fx = px / cell;
+      const fz = pz / cell;
+      const rough = 0.5 * ridge(fx, fz, seed) + 0.3 * ridge(fx * 2.1, fz * 2.1, seed + 1) + 0.2 * noise(fx * 4.3, fz * 4.3, seed + 2);
+      return tall * w ** 1.5 * (0.75 + 0.25 * rough);
+    });
+  }
+
+  // A valley: lower along the segment, the falloff measured from the nearest point on it.
+  function valley(ax, az, bx, bz, r, depth) {
+    const h = L.land.h;
+    const dx = bx - ax;
+    const dz = bz - az;
+    const ll = dx * dx + dz * dz;
+    const rr = r * r;
+    landPoints(Math.min(ax, bx) - r, Math.min(az, bz) - r, Math.max(ax, bx) + r, Math.max(az, bz) + r, (k, px, pz) => {
+      const t = ll ? clamp(((px - ax) * dx + (pz - az) * dz) / ll, 0, 1) : 0;
+      const d2 = (px - ax - dx * t) ** 2 + (pz - az - dz * t) ** 2;
+      if (d2 < rr) { const q = 1 - d2 / rr; h[k] -= depth * q * q; }
+    });
+  }
+
+  const BRUSH = new Set(['raise', 'lower', 'smooth', 'flatten']);
+  const r1 = (v) => Math.round(v * 10) / 10 || 0;   // the editor writes spots to 0.1: paint just where the line will
+
+  // One dab of a brush at a spot.
+  function brushAt(p, x, z) {
+    const r = p.size / 2;
+    if (p.tool === 'raise') dab(x, z, r, (w) => p.amount * w);
+    else if (p.tool === 'lower') dab(x, z, r, (w) => -p.amount * w);
+    else if (p.tool === 'smooth') smoothDab(x, z, r);
+    else if (p.tool === 'flatten') { const h = L.land.h; dab(x, z, r, (w, k) => (p.amount - h[k]) * w); }
+  }
+
+  // A shape (or a valley so far) where it is now: the land as it was when the mouse went down, with it on.
+  function shapeAt(p, x, z) {
+    L.land.h.set(p.base);
+    const r = p.size / 2;
+    if (p.tool === 'hill') dab(x, z, r, (w) => p.amount * w);
+    else if (p.tool === 'dip') dab(x, z, r, (w) => -p.amount * w);
+    else if (p.tool === 'mountain') mountain(x, z, p.size, p.amount);
+    else if (p.tool === 'lake') {
+      const level = landAt(x, z) - 0.2;   // the water sits just below the ground that was there
+      dab(x, z, r, (w) => -p.amount * w);
+      if (!p.water && L.sceneId) {
+        p.water = L.B + EXTRAS + extraNo++;
+        send([['c', p.water, 'obj', 'water', L.sceneId, { x, z, y: level, r }]]);
+      } else if (p.water) send([['s', p.water, { x, z, y: level, r }]]);
+    } else if (p.tool === 'valley') {
+      const [ax, az] = p.spots[0];
+      valley(ax, az, x, z, r, p.amount);
+    }
+  }
+
+  function startPaint(x, y) {
+    const at = onLand(x, y);
+    if (!at) return false;
+    const p = { kind: 'paint', tool: tool.kind, size: Math.max(0.5, +tool.size || 8), amount: +tool.amount || 0, x0: x, y0: y, base: L.land.h.slice(), spots: [] };
+    if (p.tool === 'flatten') p.amount = r1(landAt(at.x, at.z));   // toward the height where the stroke starts
+    if (p.tool === 'valley') p.spots.push([r1(at.x), r1(at.z)]);
+    press = p;
+    paintTo(at.x, at.z);
+    hideRing();
+    showRing(x, y);
+    return true;
+  }
+
+  // The pointer is at x, z on the land. A brush dabs every size / 3 along the way (and only when it has gone that
+  // far); a shape moves to where the pointer is; a valley's end does.
+  function paintTo(x, z) {
+    const p = press;
+    if (BRUSH.has(p.tool)) {
+      const gap = Math.max(0.3, p.size / 3);
+      if (!p.spots.length) { p.spots.push([r1(x), r1(z)]); brushAt(p, ...p.spots[0]); }
+      for (let guard = 0; guard < 400 && p.spots.length < 400; guard++) {
+        const [lx, lz] = p.spots[p.spots.length - 1];
+        const d = Math.hypot(x - lx, z - lz);
+        if (d < gap) break;
+        const s = [r1(lx + ((x - lx) * gap) / d), r1(lz + ((z - lz) * gap) / d)];
+        p.spots.push(s);
+        brushAt(p, ...s);
+      }
+    } else {
+      const s = [r1(x), r1(z)];
+      if (p.tool === 'valley') p.spots[1] = s; else p.spots = [s];
+      shapeAt(p, ...s);
+    }
+    flushLand();
+  }
+
+  // Escape (or a cancel) while painting: the land goes back to how it was.
+  function unpaint(p) {
+    if (!L || !L.land || !p.base) return;
+    L.land.h.set(p.base);
+    if (p.water) send([['r', p.water]]);
+    flushLand(true);
+  }
+
+  // The new heights go to the engine once a frame at most (it works out again only the rows that changed).
+  let flushing = false;
+  function flushLand(now) {
+    const go = () => { flushing = false; if (L && L.land && objs().get(L.land.id)) send([['s', L.land.id, { heights: Array.from(L.land.h) }]]); };
+    if (now) { go(); return; }
+    if (flushing) return;
+    flushing = true;
+    requestAnimationFrame(go);
+  }
+
+  // The ring shows where the tool works: as wide as it, on the land under the pointer.
+  let ringQueued = false;
+  function queueRing() {
+    if (ringQueued) return;
+    ringQueued = true;
+    requestAnimationFrame(() => { ringQueued = false; if (hover && !press) showRing(hover[0], hover[1]); });
+  }
+  function showRing(px, py) {
+    const at = tool && L && L.land && L.mode === '3d' && camMode === 'editor' ? onLand(px, py) : null;
+    if (!at) { hideRing(); return; }
+    const r = Math.max(0.5, (+tool.size || 8) / 2);
+    const props = { x: at.x, y: at.y + 0.06, z: at.z, visible: true };
+    if (!ring || !objs().get(ring.id)) {
+      ring = { id: L.B + EXTRAS + extraNo++, r };
+      send([['c', ring.id, 'obj', 'torus', L.sceneId, { ...props, r, tube: clamp(r * 0.025, 0.06, 0.3), seg: 64, rx: 90, color: SEL, mat: 'basic', pick: false, shadow: false }], ['s', ring.id, { ontop: true }]]);
+    } else {
+      if (ring.r !== r) { props.r = r; props.tube = clamp(r * 0.025, 0.06, 0.3); ring.r = r; }
+      send([['s', ring.id, props]]);
+    }
+    ring.shown = true;
+    document.documentElement.style.cursor = 'crosshair';
+  }
+  function hideRing() {
+    if (ring && ring.shown && objs().get(ring.id)) send([['s', ring.id, { visible: false }]]);
+    if (ring) ring.shown = false;
+    document.documentElement.style.cursor = '';
+  }
+
+  function setTool(t) {
+    tool = t && typeof t === 'object' && t.kind ? { kind: String(t.kind), size: +t.size || 8, amount: +t.amount || 0 } : null;
+    if (!tool && press && press.kind === 'paint') finish(null, true);
+    if (tool && hover && !press) showRing(hover[0], hover[1]); else if (!tool) hideRing();
   }
 
   // ---------------------------------------------------------------- 2D: where things are on screen
@@ -534,8 +822,9 @@
 
   // ---------------------------------------------------------------- selection
 
-  function select(is) {
+  function select(is, mk) {
     selIs = is.filter((i) => i === 'player' || L?.meta.has(i));
+    marks = Array.isArray(mk) ? mk.filter((q) => Array.isArray(q) && q.length === 3 && q.every(Number.isFinite)).slice(0, 40) : [];
     drawSel();
   }
 
@@ -560,8 +849,17 @@
       }
     }
     if (L.mode !== '3d') return;
-    const cmds = outlineIds.map((id) => ['r', id]);
+    const cmds = [...outlineIds, ...markIds].map((id) => ['r', id]);
     outlineIds = [];
+    markIds = [];
+    if (L.land && L.sceneId) {
+      for (const [x, z, r] of marks) {
+        const id = L.B + EXTRAS + extraNo++;
+        cmds.push(['c', id, 'obj', 'torus', L.sceneId, { x, y: landAt(x, z) + 0.06, z, r, tube: clamp(r * 0.03, 0.06, 0.35), seg: 48, rx: 90, color: SEL, mat: 'basic', pick: false, shadow: false }],
+          ['s', id, { ontop: true }]);
+        markIds.push(id);
+      }
+    }
     for (const i of selIs) {
       let parentId;
       let d;
@@ -571,7 +869,8 @@
         d = [0.6, 1.7, 0.6];
       } else {
         const t = L.meta.get(i);
-        if (!t || !t.dims || !t.ids.length || objs().get(t.ids[0])?.kind !== 'obj') continue;
+        // (The land shows it's picked in the Inspector: a box around all of it would only be in the way.)
+        if (!t || !t.dims || !t.ids.length || t.kind === 'terrain' || objs().get(t.ids[0])?.kind !== 'obj') continue;
         parentId = t.ids[0];
         d = t.dims;
       }
@@ -635,8 +934,9 @@
     if (e.button === 1 || (e.button === 0 && e.shiftKey)) { press = { kind: 'pan', x0: x, y0: y, lx: x, ly: y }; capture(e); return; }
     if (e.button === 2) { press = { kind: 'orbit', x0: x, y0: y, lx: x, ly: y }; capture(e); return; }
     if (e.button !== 0) return;
+    if (tool && L.land && startPaint(x, y)) { capture(e); return; }
     const hit = pick3d(x, y);
-    if (hit.i === null) { press = { kind: 'orbit', empty: true, x0: x, y0: y, lx: x, ly: y }; capture(e); return; }
+    if (hit.i === null) { press = { kind: 'orbit', empty: true, land: hit.land ?? null, x0: x, y0: y, lx: x, ly: y }; capture(e); return; }
     post('pick', { i: hit.i, point: hit.point });
     const drag = hit.i === 'player' ? L.player && L.player.drag : L.meta.get(hit.i)?.drag;
     const gid = groupOf(hit.i);
@@ -644,14 +944,19 @@
     if (drag && g) {
       const pos = g.obj.position;
       const at = onPlane(x, y, pos.y);
-      press = { kind: 'drag3d', i: hit.i, gid, x0: x, y0: y, sx: pos.x, sz: pos.z, y: pos.y,
+      // On land a thing keeps its height above it: it goes up and down with the land as it's dragged.
+      press = { kind: 'drag3d', i: hit.i, gid, x0: x, y0: y, sx: pos.x, sz: pos.z, y: pos.y, sy: pos.y,
+        above: L.land ? pos.y - landAt(pos.x, pos.z) : null,
         offx: at ? pos.x - at.x : 0, offz: at ? pos.z - at.z : 0, x: pos.x, z: pos.z };
     } else press = { kind: 'orbit', x0: x, y0: y, lx: x, ly: y };
     capture(e);
   }
 
   addEventListener('pointermove', (e) => {
+    hover = [e.clientX, e.clientY];
+    if (!press && tool) queueRing();
     if (!press || !L) return;
+    if (heldLoad) armHeld();
     const x = e.clientX;
     const y = e.clientY;
     if (!press.started) {
@@ -674,7 +979,11 @@
       p.x = snap(at.x + p.offx, e.altKey);
       p.z = snap(at.z + p.offz, e.altKey);
       p.alt = e.altKey;
-      send([['s', p.gid, { x: p.x, z: p.z }]]);
+      send([['s', p.gid, p.above === null ? { x: p.x, z: p.z } : { x: p.x, y: landAt(p.x, p.z) + p.above, z: p.z }]]);
+    } else if (p.kind === 'paint') {
+      const at = onLand(x, y);
+      if (at) paintTo(at.x, at.z);
+      showRing(x, y);
     } else if (p.kind === 'orbit' && cam) {
       cam.az -= (x - p.lx) * 0.3;
       cam.el = clamp(cam.el + (y - p.ly) * 0.3, 5, 89);
@@ -703,17 +1012,31 @@
     if (!p || !L) return;
     if (cancelled) {
       if (p.kind === 'drag2d' && p.started) { send(p.starts.map(([id, sx, sy]) => ['s', id, { x: sx, y: sy }])); drawSel(); post('drag', { i: p.i, phase: 'cancel' }); }
-      else if (p.kind === 'drag3d' && p.started) { send([['s', p.gid, { x: p.sx, z: p.sz }]]); post('drag', { i: p.i, phase: 'cancel' }); }
+      else if (p.kind === 'drag3d' && p.started) { send([['s', p.gid, { x: p.sx, y: p.sy, z: p.sz }]]); post('drag', { i: p.i, phase: 'cancel' }); }
+      else if (p.kind === 'paint') unpaint(p);
       return;
     }
     if (p.kind === 'drag2d' && p.started) post('drag', { i: p.i, phase: 'end', dx: p.dx, dy: p.dy, alt: !!(e && e.altKey) });
     else if (p.kind === 'drag3d' && p.started) post('drag', { i: p.i, phase: 'end', x: p.x, z: p.z, alt: !!(p.alt || (e && e.altKey)) });
+    else if (p.kind === 'paint') {
+      const s = p.spots;
+      if (p.tool === 'valley' && (!s[1] || Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) < 1)) unpaint(p);
+      else if (s.length) painted = true;
+      if (s.length) post('brush', { tool: p.tool, spots: s, size: p.size, amount: p.amount });
+    } else if (p.kind === 'orbit' && p.empty && !p.started && p.land !== null && p.land !== undefined) post('pick', { i: p.land });
     else if ((p.kind === 'empty' || (p.kind === 'orbit' && p.empty)) && !p.started) post('pick', { i: null });
     else if ((p.kind === 'orbit' || p.kind === 'pan') && p.started) postCam(true);
   }
 
+  document.documentElement.addEventListener('pointerleave', () => { hover = null; if (!press) hideRing(); });
+
   // (A second button pressed during a drag comes as a pointermove, and pointerup only when all are up.)
-  addEventListener('pointerup', (e) => { finish(e, false); post('focus'); loadHeld(); });
+  addEventListener('pointerup', (e) => {
+    finish(e, false);
+    post('focus');
+    if (painted) { clearTimeout(heldTimer); heldLoad = null; } else loadHeld();
+    painted = false;
+  });
   addEventListener('pointercancel', () => { finish(null, true); post('focus'); loadHeld(); });
 
   addEventListener('dblclick', (e) => {
@@ -749,7 +1072,7 @@
 
   const OURS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Delete', 'Backspace', ' ', 'F11']);
   addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && press && press.started && (press.kind === 'drag2d' || press.kind === 'drag3d')) {
+    if (e.key === 'Escape' && press && (press.kind === 'paint' || (press.started && (press.kind === 'drag2d' || press.kind === 'drag3d')))) {
       e.preventDefault();
       finish(null, true);
       return;
@@ -765,6 +1088,14 @@
     if (m.what === 'snapshot') { send([['k', 0, 'snapshot', [], m.tag]]); return; }
     if (m.what === 'fetch') { askFetch(m); return; }
     if (!L) { reply(null, 'nothing is loaded yet'); return; }
+    if (m.what === 'height' || m.what === 'spot') {
+      if (!L.land) { reply(null, 'there is no land'); return; }
+      const x = +m.x || 0;
+      const z = +m.z || 0;
+      if (m.what === 'height') reply(landAt(x, z));
+      else send([['k', L.sceneId, 'project', [x, landAt(x, z), z], m.tag]]);
+      return;
+    }
     if (m.what === 'screen' || m.what === 'pos') {
       const gid = groupOf(m.i);
       const g = gid && objs().get(gid);
@@ -792,9 +1123,13 @@
         sceneBg = c ? c.bg : null;
       }
       const marker = L.player ? objs().get(L.B + MARKER) : null;
+      const sc = L.sceneId ? objs().get(L.sceneId) : null;
+      const ln = L.land ? objs().get(L.land.id) : null;
       reply({ objs: objs().size, mode: L.mode, sceneBg, things: L.meta.size, sel: selIs, camMode, cam: cam && L.mode === '3d' ? { ...cam } : null,
         cameraNodesVisible: [...L.cameraNodes].some((id) => objs().get(id)?.obj?.visible), outlines: outlineIds.length,
-        marker: marker ? marker.obj.visible : null, load: L.seq, b: L.B, scene: L.sceneId, sel2d: !sel2d()?.hidden });
+        marker: marker ? marker.obj.visible : null, load: L.seq, b: L.B, scene: L.sceneId, sel2d: !sel2d()?.hidden,
+        modern: sc ? !!sc.modern : null, tool: tool ? tool.kind : null, ring: !!(ring && ring.shown), marks: markIds.length,
+        land: L.land ? { i: L.land.i, n: L.land.n, size: L.land.size, drawn: !!(ln && ln.land && ln.obj.visible), high: L.land.h.reduce((a, b) => Math.max(a, b), -Infinity), low: L.land.h.reduce((a, b) => Math.min(a, b), Infinity) } : null });
       return;
     }
     reply(null, `unknown ask '${m.what}'`);

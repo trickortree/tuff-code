@@ -1504,15 +1504,30 @@ _ATGUI = None
 
 def atgui_tables():
     """atgui's functions, every kind's methods ("kinds"), what makers make, and the styles, icons, themes and
-    animations it knows, read from the library itself without opening a window. None when it can't be loaded."""
+    animations it knows, read from the library itself without opening a window, with tgame's panels and screens
+    added (with_game_ui_kinds). None when it can't be loaded."""
     global _ATGUI
     if _ATGUI is None:
         try:
             import tuff_atgui
-            _ATGUI = tuff_atgui.tables()
+            _ATGUI = with_game_ui_kinds(tuff_atgui.tables())
         except Exception:
             _ATGUI = {}
     return _ATGUI or None
+
+
+def with_game_ui_kinds(at):
+    """atgui's tables with tgame's panel and screen (game:panel, game:screen, game:start_screen) as atgui kinds:
+    a panel is a column pinned to the game, and a screen a column over all of it that also has :shown, so their
+    widgets are checked like atgui's. The methods tgame's own tables list for them are added, and atgui's own
+    "panel" or "screen", if it ever has one, wins."""
+    def shown():
+        return None
+
+    own = (tgame_tables() or {}).get("kinds", {})
+    column = at["kinds"]["column"]
+    ui = {"panel": {**column, **own.get("panel", {})}, "screen": {**column, "shown": shown, **own.get("screen", {})}}
+    return {**at, "kinds": {**ui, **at["kinds"]}}
 
 
 _TGAME = None
@@ -1547,6 +1562,33 @@ VALUE_HINTS = {
 }
 
 
+# tgame's menus, buttons and screens as the checker knows them: the places a panel can go (and places people
+# guess, with the one tgame uses), names people guess for the three makers, and how each one is used, for messages.
+ANCHORS = ("top left", "top", "top right", "left", "center", "right", "bottom left", "bottom", "bottom right")
+ANCHOR_HINTS = {"middle": "center", "centre": "center", "centered": "center", "centred": "center", "top center": "top",
+                "top centre": "top", "top middle": "top", "bottom center": "bottom", "bottom centre": "bottom",
+                "bottom middle": "bottom", "middle left": "left", "center left": "left", "left center": "left",
+                "middle right": "right", "center right": "right", "right center": "right", "upper left": "top left",
+                "upper right": "top right", "lower left": "bottom left", "lower right": "bottom right",
+                "left top": "top left", "right top": "top right", "left bottom": "bottom left", "right bottom": "bottom right",
+                "topleft": "top left", "topright": "top right", "bottomleft": "bottom left", "bottomright": "bottom right",
+                "up": "top", "down": "bottom", "north": "top", "south": "bottom", "east": "right", "west": "left",
+                "middle top": "top", "middle bottom": "bottom"}
+GAME_UI = ("panel", "screen", "start_screen")
+GAME_UI_HINTS = {"menu": "screen", "overlay": "screen", "popup": "screen", "pop_up": "screen", "dialog": "screen",
+                 "modal": "screen", "page": "screen", "shop": "screen", "ui": "panel", "gui": "panel", "toolbar": "panel",
+                 "sidebar": "panel", "bar": "panel", "title_screen": "start_screen", "start_menu": "start_screen",
+                 "main_menu": "start_screen", "menu_screen": "start_screen", "splash": "start_screen",
+                 "intro": "start_screen", "click_to_play": "start_screen", "click_to_start": "start_screen",
+                 "startscreen": "start_screen", "start_page": "start_screen"}
+GAME_UI_METHOD_HINTS = {"close": "hide", "dismiss": "hide", "open": "show", "visible": "shown", "is_visible": "shown",
+                        "is_shown": "shown", "showing": "shown", "is_open": "shown", "is_showing": "shown", "empty": "clear"}
+GAME_UI_USE = {"panel": 'bar = {owner}:panel("top left")', "screen": 'shop = {owner}:screen("Shop") or {owner}:screen("Shop", false)',
+               "start_screen": 'start = {owner}:start_screen("My Game", "Click to play")'}
+GAME_UI_TAKES = {"panel": "where the panel goes", "screen": "a title, then whether it pauses the game",
+                 "start_screen": "a title, then a hint"}
+
+
 def tgame_tables():
     """tgame's functions ("lib"), the methods of everything it makes ("kinds"), what they give back, its events,
     hints for guessed names and a check for text inputs, read from the library without opening a window.
@@ -1555,10 +1597,36 @@ def tgame_tables():
     if _TGAME is None:
         try:
             import tuff_tgame
-            _TGAME = with_terrain(tuff_tgame.tables(), tuff_tgame)
+            _TGAME = with_game_ui(with_terrain(tuff_tgame.tables(), tuff_tgame), tuff_tgame)
         except Exception:
             _TGAME = {}
     return _TGAME or None
+
+
+def with_game_ui(tg, lib):
+    """tgame's tables with the menus, buttons and screens filled in where they leave them out: game:panel,
+    game:screen and game:start_screen on a game and a world, what they give back (atgui_tables' "panel" and
+    "screen", unless tgame names an atgui kind itself), the guessed names, and the places a panel can go
+    (tgame's ANCHORS when it has them). Whatever tgame's own tables say wins."""
+    def panel(anchor):
+        return None
+
+    def screen(title="", pauses=True):
+        return None
+
+    def start_screen(title, hint="Click to play"):
+        return None
+
+    makers = {"panel": panel, "screen": screen, "start_screen": start_screen}
+    made = {"panel": "@panel", "screen": "@screen", "start_screen": "@screen"}
+    kinds, gives, hints = dict(tg["kinds"]), dict(tg["gives"]), dict(tg["hints"])
+    for kind in ("game", "world"):
+        kinds[kind] = {**makers, **tg["kinds"][kind]}
+        own = tg["gives"].get(kind, {})
+        gives[kind] = {**own, **{k: v for k, v in made.items() if not str(own.get(k, "")).startswith("@")}}
+        hints[kind] = {**GAME_UI_HINTS, **tg["hints"].get(kind, {})}
+    anchors = getattr(lib, "ANCHORS", ANCHORS)
+    return {**tg, "kinds": kinds, "gives": gives, "hints": hints, "anchors": tuple(anchors)}
 
 
 def with_terrain(tg, lib):
@@ -1685,7 +1753,7 @@ class Checker:
         self.top = Scope()
         self.scope_of = {}  # id(func node) -> its Scope
         self.everywhere = set()  # every name made anywhere
-        self.makes_window = False
+        self.makes_window = self.makes_game = False
         self.handlers_seen = set()
         self.statement_call = None  # a call on a line of its own: its answer isn't used
         self.base_dir = base_dir
@@ -1734,6 +1802,7 @@ class Checker:
         self.user = self.everywhere | set(self.func_count)
         kinds = [self.kind(n) for n in nodes(self.program) if n.kind == "call" and n.fn.kind == "attr"]
         self.makes_window = "window" in kinds
+        self.makes_game = "game" in kinds or "world" in kinds  # tgame: atgui widgets on its panels and screens
         self.body(self.program, self.top, in_loop=False)
         self.check_top_level()
         self.check_one_terrain()
@@ -2466,15 +2535,33 @@ class Checker:
             return
         name, n = e.name, len(e.args)
         what = a_kind(obj).capitalize()
+        game_ui = obj in ("game", "world") and name in GAME_UI
         if name not in methods:
             alt = tg["hints"].get(obj, {}).get(name.lower())
-            self.problem(e, f"{what} doesn't have :{name}. Use :{alt} instead." if alt in methods else method_help(what, name, list(methods)))
+            at = atgui_tables()
+            if alt in methods:
+                self.problem(e, f"{what} doesn't have :{name}. Use :{alt} instead.")
+            elif obj in ("game", "world", "hud") and at and name in at["makes"]:
+                # game:button, world:slider, hud:input...: real widgets go on a panel or a screen
+                draws, game = (" The HUD only draws.", "game") if obj == "hud" else ("", e.obj.name if e.obj.kind == "var" else obj)
+                self.problem(e, f"{what} doesn't have :{name}.{draws} Buttons, text boxes and other widgets go on a panel "
+                                f"or a screen: bar = {game}:panel(\"top left\"), then bar:{name}(...)")
+            else:
+                self.problem(e, method_help(what, name, list(methods)))
             return
         if obj == "terrain" and name in TERRAIN_INPUTS:
             if not self.check_land_inputs(e):
                 return
         elif not accepts(methods[name], n):
-            self.problem(e, bare_fix if e.bare and accepts(methods[name], 0) else f"{obj}:{name} got the wrong number of inputs ({n}).")
+            owner = e.obj.name if e.obj.kind == "var" else obj
+            if game_ui:
+                use = GAME_UI_USE[name].replace("{owner}", owner)
+                self.problem(e, f"{owner}:{name} got the wrong number of inputs ({n}). It takes {GAME_UI_TAKES[name]}, like: {use}")
+            else:
+                self.problem(e, bare_fix if e.bare and accepts(methods[name], 0) else f"{obj}:{name} got the wrong number of inputs ({n}).")
+            return
+        if game_ui:
+            self.check_game_ui(e, tg)
             return
         event = tg["handlers"].get(obj, {}).get(name)
         fn = e.args[event[0]] if event and len(e.args) > event[0] else None
@@ -2543,6 +2630,53 @@ class Checker:
         hint = guess if guess in names else next(iter(difflib.get_close_matches(low, names, n=1, cutoff=0.6)), None)
         thing, shown = ("The land's style", list(names)) if what == "style" else ("The lighting", [f'"{x}"' for x in names])
         msg = f"{thing} can be {', '.join(shown[:-1])} or {shown[-1]}, not \"{value}\"."
+        return msg + (f" Did you mean \"{hint}\"?" if hint else "")
+
+    def check_game_ui(self, e, tg):
+        """game:panel, game:screen and game:start_screen: where a panel goes (one of the places tgame knows, or a
+        "did you mean"), and inputs that can't be right: a function or a number where a place goes, a function as a
+        title or hint (people expect the start screen to take the function that starts the game), and text or a
+        function where a screen's true or false goes."""
+        name = e.name
+        owner = e.obj.name if e.obj.kind == "var" else "game"
+        kinds = [self.kind(a) for a in e.args]
+        use = GAME_UI_USE[name].replace("{owner}", owner)
+        funcs = ("$func", "$builtin")
+        if name == "panel" and e.args:
+            a = e.args[0]
+            if a.kind == "const" and isinstance(a.value, str):
+                msg = self.anchor_problem(a.value, tg["anchors"])
+                if msg:
+                    self.problem(a, msg)
+            elif kinds[0] in funcs + ("$number", "$bool"):
+                self.problem(a, f"A panel's input is where it goes, written as text, like: {use}")
+        elif name == "screen":
+            if kinds and kinds[0] in funcs + ("$list",):
+                self.problem(e.args[0], f"A screen's first input is its title, like: {use}")
+            if len(kinds) > 1 and kinds[1] in funcs + ("$text", "$list"):
+                self.problem(e.args[1], "A screen's second input is whether it pauses the game while it shows: true or false (without quotes).")
+        elif name == "start_screen":
+            bad = next((a for a, k in zip(e.args, kinds) if k in funcs), None)
+            if bad is not None:
+                self.problem(bad, f"A start screen takes a title and a hint, both text, like: {use}. A click on it starts the game by itself.")
+
+    def anchor_problem(self, value, anchors):
+        """Where a panel goes, written as text: one of the places tgame knows (in any case, with - or _ for the
+        spaces), or a "did you mean"."""
+        def plain(text):
+            return " ".join(text.strip().lower().replace("-", " ").replace("_", " ").split())
+
+        places = {plain(a) for a in anchors}
+        low = plain(value)
+        if low in places:
+            return None
+        guess = ANCHOR_HINTS.get(low) or ANCHOR_HINTS.get(low.replace(" ", ""))
+        near = difflib.get_close_matches(low, sorted(places) + list(ANCHOR_HINTS), n=1, cutoff=0.6)  # "middel", "top lef"
+        if guess not in places and near:
+            guess = ANCHOR_HINTS.get(near[0], near[0])
+        hint = guess if guess in places else None
+        shown = [f'"{x}"' for x in ANCHORS if x in places] or [f'"{x}"' for x in sorted(places)]
+        msg = f"A panel can go at {', '.join(shown[:-1])} or {shown[-1]}, not \"{value}\"."
         return msg + (f" Did you mean \"{hint}\"?" if hint else "")
 
     def check_values(self, e, obj):
@@ -2695,7 +2829,7 @@ class Checker:
         if name == "value" and not e.args:
             return ("$text" if kind in at["text_values"] else "$bool" if kind in at["bool_values"]
                     else "$number" if kind in at["number_values"] else None)
-        if name in ("confirm", "showing"):
+        if name in ("confirm", "showing") or (name == "shown" and name in methods):  # :shown is a game screen's
             return "$bool"
         if name == "ask":
             return "$text"
@@ -2720,11 +2854,16 @@ class Checker:
         name, n = e.name, len(e.args)
         owner = e.obj.name if e.obj.kind == "var" else "thing"
         if name not in methods:
-            self.problem(e, method_help(a_kind(kind).capitalize(), name, list(methods)))
+            alt = GAME_UI_METHOD_HINTS.get(name.lower()) if kind in ("panel", "screen") else None
+            self.problem(e, f"{a_kind(kind).capitalize()} doesn't have :{name}. Use :{alt} instead." if alt in methods
+                         else method_help(a_kind(kind).capitalize(), name, list(methods)))
             return
         if not accepts(methods[name], n):
             if e.bare and accepts(methods[name], 0):
                 self.problem(e, f"{owner}:{name} doesn't take an input, so what comes after it was read as one. Write {owner}:{name}() instead.")
+            elif name == "slider" and "heading" in methods and any(self.kind(a) in ("$func", "$builtin") for a in e.args):
+                self.problem(e, f"A slider takes low, high and where it starts, not a function. To run a function when it moves, "
+                                f"use its :change, like: volume = {owner}:slider(0, 100, 50) then volume:change fn")
             else:
                 self.problem(e, f"{kind}:{name} got the wrong number of inputs ({n}).")
             return
@@ -2859,9 +2998,13 @@ class Checker:
             self.handlers_seen.add(id(node))
             for x in nodes(node.body):
                 if x.kind == "call" and x.fn.kind == "var" and x.fn.name == "wait" and "wait" not in self.user:
-                    self.problem(x, "wait() freezes the window: nothing redraws or runs until it's over. To do something later, use app:after(seconds, fn).")
+                    self.problem(x, "wait() freezes the game: nothing moves or redraws until it's over. To do something later, use game:after(seconds, fn)."
+                                 if self.makes_game else
+                                 "wait() freezes the window: nothing redraws or runs until it's over. To do something later, use app:after(seconds, fn).")
                 elif x.kind == "input":
-                    self.problem(x, "input reads from the console and freezes the window while it waits. In a window app, ask with app:ask \"...\" instead.")
+                    self.problem(x, "input reads from the console and freezes the game while it waits. To ask for text, put a text box on a screen: name_box = shop:input(\"Your name\")."
+                                 if self.makes_game else
+                                 "input reads from the console and freezes the window while it waits. In a window app, ask with app:ask \"...\" instead.")
 
 
 # atgui's event methods too, so a missing event function gets "Make it with func" (atgui's checks are just above).

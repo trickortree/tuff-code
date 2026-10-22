@@ -1,0 +1,108 @@
+mention tgame
+
+# Menus on a 2D game: a start screen to click, a panel with the score and its buttons, a shop that pauses the game,
+# a name box whose keys don't move the player, and a game over screen with Play again.
+game = tgame.window("Star Catcher", 800, 500)
+game:background "#151a2e"
+player = game:box(400, 380, 44, 44, "teal")
+star = game:circle(560, 200, 14, "gold")
+stars = 0
+speed = 240
+game_clicks = 0
+starts = 0
+
+start = game:start_screen("Star Catcher", "Click to play")
+start:text "Catch the falling stars, then spend them in the shop."
+start:small "Arrow keys or WASD to move"
+start:clicked began
+
+bar = game:panel("top left")
+score_label = bar:heading "Stars: 0"
+row = bar:row()
+row:button("+1", add_one)
+row:button("Shop", open_shop, "secondary")
+energy = bar:progress(100)
+lives = game:panel("top left")
+lives:small "Lives: 3"
+best = game:panel("top right")
+best:badge("Best: 12", "warning")
+
+corner = game:panel("bottom left")
+name_box = corner:input("Your name")
+
+shop = game:screen("Shop")
+shop:text "Spend your stars on upgrades."
+items = shop:row()
+items:button("Faster (2)", buy_speed)
+items:button("Magnet (3)", buy_magnet, "secondary")
+volume = shop:slider(0, 100, 50, volume_changed)
+shop:switch("Music", true)
+shop:button("Close", close_shop, "ghost")
+shop:hide()
+
+over = game:screen("Game over")
+final = over:text "Stars caught: 0"
+over:button("Play again", again)
+over:button("Main menu", to_menu, "secondary")
+over:hide()
+
+func began():
+    starts += 1
+
+func add_one():
+    stars += 1
+    score_label:set "Stars: " + stars
+
+func open_shop():
+    shop:show()
+
+func close_shop():
+    shop:hide()
+
+func volume_changed(value):
+    game:volume(value)
+
+func buy_speed():
+    if stars >= 2:
+        stars -= 2
+        speed += 80
+        score_label:set "Stars: " + stars
+
+func buy_magnet():
+    if stars >= 3:
+        stars -= 3
+        score_label:set "Stars: " + stars
+
+func lose():
+    final:set "Stars caught: " + stars
+    over:show()
+
+func report():
+    say "stars " + stars + ", game clicks " + game_clicks + ", starts " + starts
+
+func again():
+    stars = 0
+    speed = 240
+    score_label:set "Stars: 0"
+    player:move_to(400, 380)
+    energy:set 100
+    over:hide()
+
+func to_menu():
+    over:hide()
+    start:show()
+
+func clicked_game(x, y):
+    game_clicks += 1
+
+func step(dt):
+    if game:held("left") or game:held("a"):
+        player:move(-speed * dt, 0)
+    if game:held("right") or game:held("d"):
+        player:move(speed * dt, 0)
+    if star:touches(player):
+        add_one()
+        star:move_to(game:random_spot())
+
+game:clicked clicked_game
+game:every_frame step
