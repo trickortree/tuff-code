@@ -219,6 +219,10 @@ CSS = """
 .at-fill{align-self:stretch!important}
 .at-row>.at-fill{flex:1 1 0}
 .at-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:2px}
+::-webkit-scrollbar{width:10px;height:10px;background:transparent}::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
+::-webkit-scrollbar-thumb{background:color-mix(in srgb,currentColor 20%%,transparent);border-radius:10px;border:2.5px solid transparent;background-clip:padding-box;min-height:28px}
+::-webkit-scrollbar-thumb:hover{background-color:color-mix(in srgb,currentColor 34%%,transparent)}
+::-webkit-scrollbar-thumb:active{background-color:color-mix(in srgb,var(--accent,#3b82f6) 70%%,transparent)}::-webkit-scrollbar-button{display:none}
 .at-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;box-shadow:var(--shadow)}
 .at-card.at-clickable{cursor:pointer}
 .at-card.at-clickable:hover{border-color:var(--border-strong)}

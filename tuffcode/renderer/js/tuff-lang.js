@@ -812,8 +812,10 @@ window.defineTuffTheme = function defineTuffTheme(monaco, accent) {
       'editorBracketMatch.background': '#3b514d',
       'editorBracketMatch.border': '#00000000',
       'editorError.foreground': '#f75464',
-      'scrollbarSlider.background': '#ffffff1a',
-      'scrollbarSlider.hoverBackground': '#ffffff2e',
+      'scrollbarSlider.background': '#ffffff21',
+      'scrollbarSlider.hoverBackground': '#ffffff42',
+      'scrollbarSlider.activeBackground': '#' + a + 'b3',
+      'scrollbar.shadow': '#00000000',
       'focusBorder': '#' + a,
     },
   });

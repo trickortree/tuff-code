@@ -687,11 +687,21 @@ body.sd-dragging, body.sd-dragging * { cursor: grabbing !important; user-select:
 .switch input:focus-visible + span { box-shadow: 0 0 0 2px var(--accent-soft); }
 .st-foot { flex: none; display: flex; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--border); }
 
-/* ---------- Scrollbars ---------- */
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
-::-webkit-scrollbar-thumb:hover { background-color: rgba(255,255,255,.22); }
+/* ---------- Scrollbars ----------
+   One look everywhere (panels, the AI chat, plugins, dialogs): a rounded thumb on a clear track, brighter when
+   hovered and the accent colour while dragged, no arrow buttons. Nothing sets scrollbar-width or scrollbar-color
+   (except to hide a bar): Chromium then draws its plain bars on that element instead of these. The editor's own
+   bars match (tuff-lang.js's theme, and .monaco-scrollable-element below). */
+::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,.13); border-radius: 10px; border: 2.5px solid transparent; background-clip: padding-box; min-height: 28px; min-width: 28px; }
+::-webkit-scrollbar-thumb:hover { background-color: rgba(255,255,255,.26); }
+::-webkit-scrollbar-thumb:active { background-color: color-mix(in srgb, var(--accent) 70%, transparent); }
+::-webkit-scrollbar-button { display: none; }
 ::-webkit-scrollbar-corner { background: transparent; }
+.monaco-scrollable-element > .scrollbar > .slider { border-radius: 10px; }
+.monaco-scrollable-element > .scrollbar.vertical > .slider { left: 2px !important; width: 6px !important; }
+.monaco-scrollable-element > .scrollbar.horizontal > .slider { top: 2px !important; height: 6px !important; }
 
 /* ---------- Entrance animation ---------- */
 body.booting #app { opacity: 0; }

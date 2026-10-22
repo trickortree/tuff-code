@@ -50,7 +50,7 @@
 .ta-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 
 /* ---------------------------------------------------------------- the chat */
-.ta-msgs { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 16px; display: flex; flex-direction: column; gap: 18px; user-select: text; scrollbar-width: thin; }
+.ta-msgs { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 16px; display: flex; flex-direction: column; gap: 18px; user-select: text; }
 .ta-empty { margin: auto 0; padding: 18px 4px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; color: var(--text-dim); animation: ta-rise .3s ease-out; }
 .ta-empty > b { margin-top: 4px; color: var(--text); font-size: 14px; }
 .ta-empty > span { font-size: 12.5px; line-height: 1.5; max-width: 300px; }
@@ -130,7 +130,7 @@
 .ta-code-h button:hover { background: var(--bg-hover); color: var(--text); }
 .ta-code-h button.ta-apply { color: var(--text); }
 .ta-code-h button.ta-apply:hover { background: var(--accent); color: #fff; }
-.ta-code pre { margin: 0; padding: 10px 12px; max-height: 380px; overflow: auto; scrollbar-width: thin; }
+.ta-code pre { margin: 0; padding: 10px 12px; max-height: 380px; overflow: auto; }
 .ta-code pre code { padding: 0; background: none; color: var(--text); font: 12.5px/1.55 var(--font-code); white-space: pre; }
 
 /* waiting, notes, errors */
@@ -152,7 +152,7 @@
 .ta-fold > summary .ta-ic { width: 13px; height: 13px; color: var(--text-muted); }
 .ta-fold > summary .ta-typing { padding: 0; }
 .ta-fold-b { margin: 4px 0 2px; padding: 2px 0 2px 10px; border-left: 2px solid var(--ta-line); line-height: 1.5; overflow-wrap: anywhere; }
-.ta-thought .ta-fold-b { max-height: 220px; overflow-y: auto; white-space: pre-wrap; scrollbar-width: thin; }
+.ta-thought .ta-fold-b { max-height: 220px; overflow-y: auto; white-space: pre-wrap; }
 .ta-fold-b p, .ta-fold-b ul { margin: 0 0 4px; }
 .ta-fold-b ul { padding-left: 16px; }
 .ta-fold-b code { padding: 0 4px; border-radius: 4px; background: var(--bg-active); font: 11.5px var(--font-code); color: var(--text-dim); }
@@ -231,7 +231,7 @@
 .ta-dd-lv i.on { background: var(--accent); }
 
 /* ---------------------------------------------------------------- Agent tools: set up and check */
-.ta-setup { flex: 1; min-height: 0; overflow-y: auto; padding: 0 12px 14px; display: flex; flex-direction: column; gap: 10px; user-select: text; scrollbar-width: thin; }
+.ta-setup { flex: 1; min-height: 0; overflow-y: auto; padding: 0 12px 14px; display: flex; flex-direction: column; gap: 10px; user-select: text; }
 .ta-setup.hidden { display: none; }
 .tas-head { display: flex; align-items: center; gap: 4px; margin-left: -6px; }
 .tas-head b { font-size: 14px; }
@@ -301,3 +301,5 @@
 .ta-row .ta-dd { flex: 0 1 auto; min-width: 34px; }
 .ta-row .ta-dd-btn { max-width: 100%; min-width: 0; }
 .ta-row .ta-dd-v { min-width: 0; }
+/* Smaller bars inside a message (code blocks, the thinking); the look itself is the IDE's (ide.css). */
+.ta-code pre::-webkit-scrollbar, .ta-thought .ta-fold-b::-webkit-scrollbar { width: 8px; height: 8px; }

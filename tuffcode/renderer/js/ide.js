@@ -248,6 +248,7 @@
           fontSize: state.fontSize,
           lineHeight: Math.round(state.fontSize * 1.6),
           minimap: { enabled: !!state.settings.minimap },
+          scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
           wordWrap: state.settings.wordWrap ? 'on' : 'off',
           automaticLayout: true,
           smoothScrolling: true,
