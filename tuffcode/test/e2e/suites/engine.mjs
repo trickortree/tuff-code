@@ -447,8 +447,10 @@ export default async (t, ctx) => {
   await t.shot('engine_templates.png');
   await ev(`document.querySelector('.sd-tcard[data-id="island_walk"] [data-a="new"]').click()`);
   const island = path.join(ctx.root, 'island_walk.tuf');
-  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(island)}`, 6000);
-  check(fs.existsSync(island) && fs.readFileSync(island, 'utf8') === repoGame('island_walk.tuf') && await ev(`document.querySelector('#en-file').value`) === island,
+  // (On a Mac the temp folder is reached through /var, a link to /private/var: compare the real paths.)
+  const samePath = (x, y) => { try { return fs.realpathSync(x) === fs.realpathSync(y); } catch { return x === y; } };
+  await waitFor(`(window.TuffEngine.debug().file || '').endsWith('island_walk.tuf')`, 6000);
+  check(fs.existsSync(island) && fs.readFileSync(island, 'utf8') === repoGame('island_walk.tuf') && samePath(await ev(`document.querySelector('#en-file').value`), island),
     'New file makes island_walk.tuf with the template and opens it in Tuff Engine', await ev(`document.querySelector('#en-file').value`));
   check(await settle(25000), 'the 3D world loads', await dbg());
   // GitHub's Intel Macs have no WebGL: there Tuff Engine says it can't show 3D, and only the code is checked.
