@@ -37,6 +37,9 @@ const methodDocs = (await tool('tuff_reference', { topic: 'widgets' })).content[
 check('the methods list has list and text methods', ['items:add value', 'thing:has value', 'text:trim'].every((s) => methodDocs.includes(s)), null);
 const ex = (await tool('tuff_examples')).content[0].text;
 check('tuff_examples has the templates (at least 8)', (ex.match(/^## /gm) || []).length >= 8 && /func add_task\(\):/.test(ex), ex.slice(0, 200));
+const land = /## Hills and lake \(3D\)[^\n]*\n[^\n]*\n\n```tuff\n([\s\S]*?)```/.exec(ex);
+check('... and a tgame world with land (terrain) and modern lighting, which tuff_check accepts', land && /:terrain\(/.test(land[1]) && /:lighting "modern"/.test(land[1]) && /^OK/.test((await tool('tuff_check', { code: land[1] })).content[0].text), land ? land[1].slice(0, 200) : ex.slice(-300));
+check('the guide has the land and lighting section, with "y is the height above the land"', guide.includes('#### Land and lighting (3D)') && guide.includes('**y is the height above the land.**'), null);
 const good = await tool('tuff_check', { code: 'say "hi"\nfunc f(x):\n    x * 2\n' });
 check('tuff_check OK on good code', !good.isError && /OK/.test(good.content[0].text), good);
 const bad = await tool('tuff_check', { code: 'if x is 1\n    say 1\n' });

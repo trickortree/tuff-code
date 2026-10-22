@@ -236,3 +236,42 @@ func order():
         home:open
 ` },
 ];
+
+// tgame games, only for AI agents (the MCP server's tuff_examples puts them after the apps above). The Design
+// Studio shows the apps; games start from Tuff Engine's own templates. Keep them runnable too.
+window.TUFF_GAME_EXAMPLES = [
+    { id: 'hills_and_lake', name: 'Hills and lake (3D)', desc: 'A tgame 3D world with modern lighting and land made in code (world:terrain): a hill, a mountain, a lake, a valley and a brush stroke, trees standing on the land, and a player who chops them.', code: `mention tgame
+
+game = tgame.world("Hills and Lake")
+game:sky "day"
+game:lighting "modern"                     # soft light from the sky and sharper shadows
+land = game:terrain(200)                   # flat land 200 wide, around 0, 0
+land:style "grass"                         # grass, desert, snow, rocky or autumn
+land:hill(30, -20, 40, 10)                 # x, z, size (how wide), height
+land:mountain(-55, -55, 70, 40)            # rocky, with a snowy top
+land:lake(-30, 35, 40, 4)                  # x, z, size, depth: a hollow with water in it
+land:valley(20, 30, 90, 70, 18, 6)         # from x1, z1 to x2, z2, then width and depth
+land:raise([[60, -60], [70, -55], [80, -45]], 10, 2)   # a brush stroke: a ridge
+
+player = game:player("third person")       # walks over the hills, but not into the lake
+game:spawn("hut", 6, 0, -6)                # y 0 is on the land
+game:spawn("tree", 30, 0, -20)             # on the hilltop
+for i in range(1, 25):
+    tree = game:spawn("pine")              # somewhere random on dry land
+    tree:clicked chop
+
+logs = 0
+logs_label = game:hud():text("Logs: 0", 90, 30)
+
+func chop(tree):
+    if tree:distance(player) < 4 and not tree:fallen():
+        tree:shake()
+        tree:fall()
+        tree:regrow(8)
+        logs += 1
+        logs_label:set "Logs: " + logs
+
+while game:open():
+    game:frame()
+` },
+];

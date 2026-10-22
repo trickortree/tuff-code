@@ -1,0 +1,26 @@
+mention tgame
+
+# How the land looks: hills, mountains, a lake, a valley and a sea, trees standing on it, seen from up high.
+# The test switches its style and lighting and takes a picture of each.
+world = tgame.world("Terrain Look", 960, 600)
+world:sky "day"
+world:lighting "modern"
+land = world:terrain(200, "grass")
+land:hill(10, -20, 40, 9)
+land:hill(-25, 5, 30, 5)
+land:mountain(-45, -60, 70, 38)
+land:mountain(40, -70, 50, 26)
+land:lake(25, 15, 36, 4)
+land:valley(-80, 40, 60, 70, 16, 5)
+land:dip(-10, 35, 14, 2)
+land:water(-1.5)
+for i in range(1, 40):
+    world:spawn("tree")
+for i in range(1, 15):
+    world:spawn("pine")
+for i in range(1, 10):
+    world:spawn("rock")
+world:spawn("house", 0, 0, 10)
+world:spawn("hut", -8, 0, 14)
+world:camera_at(55, 30, 75)
+world:look_at(0, 0, -10)

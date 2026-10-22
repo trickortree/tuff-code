@@ -583,7 +583,6 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (cmd === '/new' || cmd === '/clear') return newChat();
     if (cmd === '/compact') return compact();
     if (['/ask', '/plan', '/edit'].includes(cmd)) {
-      if (current()?.local && cmd !== '/ask') return note("Tuff AI only answers. Click Apply on its code to use it, or switch to another agent to plan or edit.");
       S.mode = cmd.slice(1);
       t.storage.set('mode', S.mode);
       renderMode();
@@ -634,13 +633,12 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
 
   function renderMode() {
-    // Tuff AI only answers: it doesn't change files itself (its code gets an Apply button).
-    const local = !!current()?.local;
-    const mode = local ? 'ask' : S.mode;
+    // Every agent has all three. Tuff AI's Edit puts its checked program into the open file (applyEdit).
+    const mode = S.mode;
     $$('.ta-mode button', root).forEach((b) => {
       b.classList.toggle('on', b.dataset.m === mode);
       b.setAttribute('aria-checked', b.dataset.m === mode);
-      b.disabled = local && b.dataset.m !== 'ask';
+      b.disabled = false;
     });
     $('.ta-hint', root).textContent = mode === 'edit' ? 'Can change your files' : mode === 'plan' ? 'Plans first, changes nothing yet' : "Won't change your files";
     $('textarea', root).placeholder = mode === 'edit' ? 'Tell the agent what to change…' : mode === 'plan' ? 'What should the agent plan?' : 'Ask about your code…';
@@ -931,7 +929,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       box.innerHTML = `<div class="ta-empty">
         <div class="ta-empty-ic"></div>
         <b>Ask ${esc(a?.name || 'an agent')} anything about your Tuff code</b>
-        <span>${a?.local ? 'It runs on this computer and checks the code it writes. Its code gets an <b>Apply</b> button.' : 'It can see the file you have open. Switch to <b>Edit</b> to let it change files for you.'}</span>
+        <span>${a?.local ? 'It runs on this computer and checks the code it writes. In <b>Edit</b> it changes your open file (Ctrl+Z undoes it); otherwise its code gets an <b>Apply</b> button.' : 'It can see the file you have open. Switch to <b>Edit</b> to let it change files for you.'}</span>
         <div class="ta-sugg">${SUGGEST.map(([label, , ic, sub], i) => `<button data-s="${i}">${icon(ic)}<span><b>${esc(label)}</b><small>${esc(sub)}</small></span></button>`).join('')}</div>
         <button class="ta-link" data-setup>${PLUG}Set up and check agent tools</button>
       </div>`;
@@ -1415,20 +1413,19 @@ TuffPlugins.register('tuff-agents', (t) => {
     if (S.auth[a.id] === false) { showSetup(false); renderStatus(); t.toast(`Sign in to ${a.name} first (the card at the top).`, 'error'); return; }
     const test = !!opts.test;
     const compacting = !!opts.compact;
-    // Tuff AI never edits files itself: its code gets an Apply button instead.
-    const mode = test || compacting || a.local ? 'ask' : opts.mode || S.mode;
+    const mode = test || compacting ? 'ask' : opts.mode || S.mode;
     const file = t.editor.file();
     const lines = t.editor.selectionLines();
     const ctx = test || compacting ? '' : [file && S.useFile ? short(file) : '', lines && S.useSel ? `lines ${lines[0]}–${lines[1]}` : ''].filter(Boolean).join(', ');
     if (compacting) S.msgs.push({ role: 'note', text: `${a.name} is summing up the chat (/compact)…` });
     else S.msgs.push({ role: 'user', text: test ? `Test ${a.name}'s TuffCode tools` : text, ctx: ctx ? `with ${ctx}` : '', test });
     const prompt = buildPrompt(text, { mode, bare: test, full: compacting, note: opts.note });
-    const parts = a.local ? aiParts(text) : null;
+    const parts = a.local ? { ...aiParts(text), mode } : null;
     const { model, effort } = picked();
     // Pumice 1 with thinking off is just "Pumice 1".
     const level = a.local && effort?.id === 'off' ? null : effort;
     // model: what the reply header shows ('Opus 5.5 · High'); name: just the model, for other agents.
-    const msg = { role: 'agent', agent: S.agent, mode, text: '', tools: [], status: 'running', model: [model?.name, level?.name].filter(Boolean).join(' · '), name: model?.name || '', picked: !!model, effort: level?.name || '', test, compacting };
+    const msg = { role: 'agent', agent: S.agent, mode, file: a.local && mode === 'edit' ? file : null, text: '', tools: [], status: 'running', model: [model?.name, level?.name].filter(Boolean).join(' · '), name: model?.name || '', picked: !!model, effort: level?.name || '', test, compacting };
     S.msgs.push(msg);
     const runId = `run-${Date.now()}`;
     S.run = { id: runId, msg, changed: false, test, mcp: new Set() };
@@ -1485,10 +1482,12 @@ TuffPlugins.register('tuff-agents', (t) => {
       case 'thought': m.thinkMs = (m.thinkMs || 0) + (ev.ms || 0); m.thinkFrom = 0; m.thinkGap = true; break;
       case 'improved': m.improved = ev.text; break;
       case 'plan': m.plan = (m.plan || '') + ev.text; break;
+      case 'code': m.final = { code: ev.code, ok: ev.ok }; break;
       case 'done':
         endThinking(m);
         m.status = ev.ok ? 'done' : 'error';
         if (!ev.ok) m.error = m.error || ev.error || 'Something went wrong.';
+        if (ev.ok && m.mode === 'edit' && isLocal(m.agent)) applyEdit(m);
         if (ev.session && !S.run.test && !m.compacting) { S.sessions[m.agent] = ev.session; m.inSession = true; }
         for (const x of m.tools) if (x.ok === null) x.ok = ev.ok;
         finish();
@@ -1498,9 +1497,29 @@ TuffPlugins.register('tuff-agents', (t) => {
     rerender(m);
   }
 
+  // Tuff AI in Edit: its checked program goes into the file it was asked about, as one Ctrl+Z step. Not when it
+  // still has a mistake, or came out much shorter than the file (a small model sometimes stops halfway).
+  function applyEdit(m) {
+    const f = m.final;
+    const say = (text) => { m.notes = [...(m.notes || []), text]; };
+    if (!f?.code || !m.file || !t.editor.replaceAll) return;
+    if (t.editor.file() !== m.file) { say(`${short(m.file)} isn't the open file any more, so it wasn't changed. Open it and click Apply to use this code.`); return; }
+    const before = String(t.editor.code() ?? '');
+    const lines = (x) => x.replace(/\n$/, '').split('\n').length;
+    if (!f.ok) { say(`Its program still has a mistake, so ${short(m.file)} wasn't changed. Click Apply to use it anyway.`); return; }
+    if (lines(before) >= 20 && lines(f.code) < lines(before) * 0.6) {
+      say(`Its program came out much shorter than ${short(m.file)} (${lines(f.code)} of ${lines(before)} lines), so your file wasn't changed. Click Apply to use it anyway.`);
+      return;
+    }
+    if (f.code.trim() === before.trim()) { say('Its program is the same as yours, so nothing changed.'); return; }
+    t.editor.replaceAll(f.code);
+    say(`Changed ${short(m.file)}. Ctrl+Z undoes it.`);
+  }
+
   function finish() {
     const r = S.run;
-    const changed = r.changed || r.msg.mode === 'edit';
+    // Tuff AI's Edit changes the editor, not the disk: nothing to reload.
+    const changed = r.changed || (r.msg.mode === 'edit' && !isLocal(r.msg.agent));
     S.run = null;
     updateSend();
     // A finished /compact: its reply becomes the summary every agent gets instead of the chat before it, and

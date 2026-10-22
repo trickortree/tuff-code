@@ -1,0 +1,48 @@
+mention tgame
+
+# The land: hills, a mountain, a lake, a valley and the brushes; the player walking on it; things standing on it.
+world = tgame.world("Terrain Walk", 900, 560)
+world:sky "day"
+world:lighting "modern"
+land = world:terrain(200)
+land:style "grass"
+land:hill(0, -14, 30, 6)
+land:mountain(-45, -60, 60, 35)
+land:dip(30, -30, 16, 3)
+land:lake(30, 0, 20, 3)
+land:valley(-70, 30, 70, 60, 14, 5)
+land:raise(-20, 10, 10, 2)
+land:raise([[-30, 30], [-26, 32], [-22, 35]], 8, 1.5)
+land:lower(-40, 10, 8, 1)
+land:smooth(-26, 32, 10)
+land:flatten(20, 30, 10, 1)
+player = world:player("first person")
+on_hill = world:box(0, 0, -14, 1, "red")
+floating = world:sphere(-10, 3, -14, 1, "blue")
+tree = world:spawn("tree", 8, 0, -12)
+later = world:box(-20, 0, 10, 1, "gold")
+land:raise(-20, 10, 10, 2)
+glider = world:box(-6, 0, -2, 1, "white")
+glider:glide(6, 0, -26, 1)
+
+func report():
+    say "hill top " + land:height_at(0, -14)
+    say "at the box " + land:height_at([0, -14])
+    say "box y " + on_hill:y() + " spot " + on_hill:spot()
+    say "ball y " + floating:y()
+    say "tree y " + tree:y()
+    say "later y " + later:y()
+    say "lake bottom " + land:height_at(30, 0)
+    say "player y " + player:y()
+
+func moved():
+    on_hill:move_to(4, 0, -10)
+    say "moved y " + on_hill:y() + " ground " + land:height_at(4, -10)
+    on_hill:move(2, 0, 0)
+    say "slid y " + on_hill:y()
+
+func glided():
+    say "glided y " + glider:y() + " at " + glider:z()
+
+func where():
+    say "player " + player:spot()

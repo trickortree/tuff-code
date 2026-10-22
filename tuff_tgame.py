@@ -82,6 +82,8 @@ HOLDABLE = ("axe", "pickaxe", "sword", "torch", "hammer")
 EDGE_MODES = ("bounce", "wrap", "stop", "none")
 PLAYER_MODES = ("first person", "third person")
 ALIGNS = ("left", "center", "centre", "right")
+TERRAIN_STYLES = ("grass", "desert", "snow", "rocky", "autumn")
+LIGHTINGS = ("simple", "modern")
 
 # Methods people coming from other engines guess, and the tgame name (for "Use :box instead").
 HINTS = {
@@ -93,7 +95,13 @@ HINTS = {
     "world": {"cube": "box", "ball": "sphere", "add": "spawn", "model": "spawn", "make": "spawn", "floor": "ground",
               "camera": "camera_at", "is_open": "open", "running": "open", "update": "frame", "key_down": "held",
               "on_click": "clicked", "play": "sound", "quit": "close", "rect": "box", "text": "hud", "label": "hud",
-              "keydown": "on_key", "raycast": "looking_at", "ray": "looking_at", "pick": "looking_at"},
+              "keydown": "on_key", "raycast": "looking_at", "ray": "looking_at", "pick": "looking_at",
+              "land": "terrain", "landscape": "terrain", "heightmap": "terrain", "lights": "lighting", "shading": "lighting"},
+    "terrain": {"height": "height_at", "get_height": "height_at", "ground_at": "height_at", "texture": "style",
+                "theme": "style", "biome": "style", "mound": "hill", "bump": "hill", "peak": "mountain", "hole": "dip",
+                "pit": "dip", "crater": "dip", "pond": "lake", "sea": "water", "ocean": "water", "trench": "valley",
+                "canyon": "valley", "river": "valley", "dig": "lower", "sculpt": "raise", "paint": "raise", "up": "raise",
+                "down": "lower", "level": "flatten", "flat": "flatten", "soften": "smooth", "blur": "smooth"},
     "sprite": {"goto": "move_to", "go_to": "move_to", "position": "move_to", "rotate": "turn", "rotation": "angle",
                "collide": "touches", "collides": "touches", "colliding": "touches", "hits": "touches", "touching": "touches",
                "velocity": "speed", "fill": "color", "colour": "color", "text": "set", "on_click": "clicked", "delete": "remove",
@@ -168,6 +176,22 @@ def clamp(v, lo, hi):
 
 def ease(t):
     return t * t * (3 - 2 * t)
+
+
+def did_you_mean(word, options):
+    """' Did you mean "grass"?' for a name close to one of the options, or ''."""
+    import difflib
+    close = difflib.get_close_matches(word, options, 1, 0.6)
+    return f" Did you mean \"{close[0]}\"?" if close else ""
+
+
+def style_problem(name):
+    return (f"The land's style can be {', '.join(TERRAIN_STYLES[:-1])} or {TERRAIN_STYLES[-1]}, not \"{name}\"."
+            + did_you_mean(name, TERRAIN_STYLES))
+
+
+def lighting_problem(name):
+    return f"The lighting can be \"simple\" or \"modern\", not \"{name}\".{did_you_mean(name, LIGHTINGS)}"
 
 
 def image_size(path):
@@ -456,6 +480,7 @@ class Game:
         now = time.perf_counter()
         if self.work_from is not None:
             self.work.append(now - self.work_from)
+        self.before_frame()
         try:
             self.view.frame()
         except self.tv.ViewClosed:
@@ -504,6 +529,9 @@ class Game:
 
     def update(self, dt, real):
         """What a 2D game or a 3D world does every frame besides moving things (the camera, the player)."""
+
+    def before_frame(self):
+        """Changes kept back until the frame is sent (a 3D world's land, which many edits can change at once)."""
 
     def every_frame(self, fn):
         self.ticks.append(self.lib.check_fn(fn, ":every_frame"))
@@ -1404,6 +1432,7 @@ class World3D(Game):
         ("island", "island"), ("box", "box"), ("sphere", "sphere"), ("cylinder", "cylinder"), ("cone", "cone"),
         ("plane", "plane"), ("spawn", "spawn"), ("player", "player"), ("camera_at", "camera_at"),
         ("look_at", "look_at"), ("follow", "follow"), ("orbit", "orbit"), ("looking_at", "looking_at"),
+        ("terrain", "terrain"), ("lighting", "lighting"),
     ]
 
     def setup(self):
@@ -1421,6 +1450,8 @@ class World3D(Game):
         self.orbit_state = None
         self.the_player = None
         self.island_r = None
+        self.land = None  # the Terrain, once world:terrain made it
+        self.lighting_name = "simple"
         self.fog_far = None
         self.sky_name = "day"
         self.scene = v.scene(0, fov=70, near=0.1, far=900, shadows=True, cx=0, cy=1.7, cz=8, yaw=0, pitch=-8)
@@ -1440,11 +1471,17 @@ class World3D(Game):
     def apply_sky(self, name):
         s = SKIES[name]
         self.sky_name = name
-        far = self.fog_far if self.fog_far is not None else s["far"]
+        far = self.fog_far if self.fog_far is not None else self.sky_far(s)
         self.view.set(self.scene, sky=s["sky"], bg=s["sky"][1], fog=[s["fog"], far * 0.3, far] if (s["fog"] and far) else None)
         self.view.set(self.hemi, color=s["hemi"][0], ground=s["hemi"][1], intensity=s["hemi"][2])
         x, y, z = s["at"]
         self.view.set(self.sun_node, color=s["sun"][0], intensity=s["sun"][1] * self.sun_strength, x=x, y=y, z=z)
+
+    def sky_far(self, s):
+        """How far a sky's fog lets you see: further on a big land, so its hills don't vanish in the fog."""
+        if self.land is not None and s["far"]:
+            return max(s["far"], self.land.size * 1.5)
+        return s["far"]
 
     # ---- sky, light, ground
     def sky(self, preset):
@@ -1467,8 +1504,16 @@ class World3D(Game):
         self.sun_strength = max(0.0, self.num(brightness, ":sun"))
         self.view.set(self.sun_node, intensity=SKIES[self.sky_name]["sun"][1] * self.sun_strength)
 
+    def lighting(self, name):
+        n = self.rt.text(name).strip().lower()
+        if n not in LIGHTINGS:
+            raise self.rt.error(lighting_problem(n))
+        self.lighting_name = n
+        self.view.set(self.scene, lighting=n)
+
     def light(self, x=MISSING, y=MISSING, z=MISSING, color=MISSING):
         x, y, z, (color,) = self.where([x, y, z, color], ("white",), "light")
+        y = self.above(x, y, z)
         t = Thing(self, "light", x, y, z, (0.3, 0.3, 0.3), [("sphere", {"r": 0.15, "color": self.color(color),
                                                                          "emissive": self.color(color), "mat": "basic"}, True)])
         t.solid_ = False
@@ -1495,6 +1540,37 @@ class World3D(Game):
         t.solid_ = False
         t.floor = True
         return t.native
+
+    def terrain(self, size=200, style="grass"):
+        if self.land is not None:
+            raise self.rt.error("A world has one terrain. Change it with land:hill, land:raise and so on.")
+        sz = self.num(size, ":terrain")
+        if not 10 <= sz <= 1000:
+            raise self.rt.error(":terrain needs a size from 10 to 1000 (how wide the land is), like world:terrain(200).")
+        name = self.rt.text(style).strip().lower()
+        if name not in TERRAIN_STYLES:
+            raise self.rt.error(style_problem(name))
+        self.land = Terrain(self, sz, name)
+        s = SKIES[self.sky_name]
+        if self.fog_far is None and s["fog"] and s["far"]:
+            far = self.sky_far(s)
+            self.view.set(self.scene, fog=[s["fog"], far * 0.3, far])
+        # Sun shadows over the land, not only near its middle (modern lighting moves them with the camera instead).
+        self.view.set(self.sun_node, area=max(45, min(150, sz / 2 + 10)))
+        return self.land.native
+
+    # ---- the land under things: every y a program gives or reads is the height above it
+    def ground_y(self, x, z):
+        """The land's height at x, z: 0 without a terrain."""
+        return self.land.at(x, z) if self.land is not None else 0.0
+
+    def above(self, x, y, z):
+        """Where a y the program gave (the height above the land) really is."""
+        return y + self.land.at(x, z) if self.land is not None else y
+
+    def before_frame(self):
+        if self.land is not None and self.land.dirty:
+            self.land.push()
 
     # ---- making objects
     def where(self, args, defaults, what):
@@ -1552,7 +1628,7 @@ class World3D(Game):
             props = {"h": h, "y": h / 2, "seg": 20, "color": c, "shadow": True}
             props.update({"r": w / 2} if kind == "cylinder" else {"r": w / 2})
             part = (kind, props, True)
-        t = Thing(self, kind, x, y, z, (w, h, d), [part])
+        t = Thing(self, kind, x, self.above(x, y, z), z, (w, h, d), [part])
         if kind == "plane":
             t.solid_ = False
         return t.native
@@ -1578,6 +1654,7 @@ class World3D(Game):
         if x is MISSING:
             x = self.random_spot()
         x, y, z, _ = self.where([x, y, z], (), "spawn")
+        y = self.above(x, y, z)
         if low.endswith(MODEL_FILES):
             url, _ = self.file_url(n, "model", MODEL_FILES)
             t = Thing(self, "model", x, y, z, (1, 1, 1), [("model", {"src": url}, True)])
@@ -1614,7 +1691,7 @@ class World3D(Game):
         if self.cam_mode == "player":
             raise self.rt.error("The player has the camera. Use player:move_to to move the player instead.")
         self.cam_mode = "fixed"
-        self.cam = [x, y, z]
+        self.cam = [x, self.above(x, y, z), z]
         if self.cam_look is not None:
             self.aim(*self.cam_look)
         self.camera_dirty = True
@@ -1625,6 +1702,7 @@ class World3D(Game):
             tx, ty, tz = t.x, t.y + t.height() * 0.5, t.z
         else:
             tx, ty, tz, _ = self.where([x, y, z], (), "look_at")
+            ty = self.above(tx, ty, tz)
         self.cam_look = (tx, ty, tz)
         if self.cam_mode in ("fixed", "follow"):
             self.cam_mode = "fixed"
@@ -1655,7 +1733,8 @@ class World3D(Game):
         if isinstance(t, (Thing, Player)):
             target = t
         else:
-            target = tuple(self.where([x, y, z], (), "orbit")[:3])
+            tx, ty, tz, _ = self.where([x, y, z], (), "orbit")
+            target = (tx, self.above(tx, ty, tz), tz)
         dist = max(4.0, math.dist(self.cam, self.point_of(target)))
         self.cam_mode = "orbit"
         self.orbit_state = {"target": target, "yaw": self.cam_yaw + 180, "elev": 25.0, "dist": dist}
@@ -1669,6 +1748,7 @@ class World3D(Game):
     def looking_at(self, reach=None):
         if self.closed:
             return None
+        self.before_frame()  # the land as it is now, so it hides what's behind a hill
         hit = self.view.ask(self.scene, "pick")
         if not hit or hit.get("id") is None:
             return None
@@ -1697,12 +1777,21 @@ class World3D(Game):
             r = self.island_r * 0.85
         else:
             r = 30.0
+        land = self.land
+        if land is not None and radius is None:
+            r = land.size / 2 * 0.85
         solid = [t for t in self.things if isinstance(t, Thing) and t.alive and t.solid_ and not getattr(t, "floor", False)]
         p = self.the_player
         best = None
         for _ in range(40):
-            ang, dist = random.uniform(0, math.tau), r * math.sqrt(random.random())
-            x, z = math.cos(ang) * dist, math.sin(ang) * dist
+            if land is not None:  # on the land (a square), and not in its water
+                half = min(r, land.size / 2 * 0.95)
+                x, z = random.uniform(-half, half), random.uniform(-half, half)
+                if (radius is not None and math.hypot(x, z) > r) or land.water_at(x, z) is not None:
+                    continue
+            else:
+                ang, dist = random.uniform(0, math.tau), r * math.sqrt(random.random())
+                x, z = math.cos(ang) * dist, math.sin(ang) * dist
             if p is not None and math.hypot(x - p.x, z - p.z) < 3:
                 continue
             if all(math.hypot(x - t.x, z - t.z) > 1.2 + max(t.dims[0], t.dims[2]) * 0.5 * max(t.k) for t in solid):
@@ -1733,6 +1822,8 @@ class World3D(Game):
                     self.fire(fn, t.native)
         if self.click_fns:
             pt = e.get("point")
+            if pt and self.land is not None:  # the height above the land, like every y a program reads
+                pt = [pt[0], pt[1] - self.land.at(pt[0], pt[2]), pt[2]]
             args = [tidy(v) for v in pt] if pt else [None, None, None]
             for fn in list(self.click_fns):
                 self.fire(fn, *args)
@@ -1790,6 +1881,335 @@ class World3D(Game):
         if p is not None:
             out["player"] = [round(p.x, 3), round(p.y, 3), round(p.z, 3), round(p.heading, 2), round(p.pitch, 2)]
         return out
+
+
+def _noise(x, z, seed):
+    """Smooth value noise from 0 to 1 at (x, z): the same every run for the same seed."""
+    ix, iz = math.floor(x), math.floor(z)
+    fx, fz = ease(x - ix), ease(z - iz)
+
+    def corner(i, j):
+        h = (i * 374761393 + j * 668265263 + seed * 1442695041) & 0xFFFFFFFF
+        h = ((h ^ (h >> 13)) * 1274126177) & 0xFFFFFFFF
+        return ((h ^ (h >> 16)) & 0xFFFF) / 65535
+
+    a, b, c, d = corner(ix, iz), corner(ix + 1, iz), corner(ix, iz + 1), corner(ix + 1, iz + 1)
+    return a + (b - a) * fx + (c - a) * fz + (a - b - c + d) * fx * fz
+
+
+class Terrain:
+    """The land of a 3D world: a square of heights centred on 0, 0, that hills, lakes and brushes change.
+
+    The heights live here (the player walks on them, things stand on them) and go to the page once per frame when
+    they changed. Every edit uses the same smooth falloff, weight (1 - (d / r)²)² within r of its middle, so Tuff
+    Engine's brush can do the same maths on its own copy while someone paints."""
+    NAMES = [("style", "set_style"), ("hill", "hill"), ("mountain", "mountain"), ("dip", "dip"), ("lake", "lake"),
+             ("valley", "valley"), ("raise", "raise_land"), ("lower", "lower_land"), ("smooth", "smooth"),
+             ("flatten", "flatten"), ("water", "water"), ("height_at", "height_at")]
+    WET = 0.15  # water this deep stops the player (the shore's edge is fine to stand in)
+
+    def __init__(self, world, size, style):
+        self.world, self.rt = world, world.rt
+        self.size = float(size)
+        self.n = n = clamp(int(math.floor(size / 1.5 + 0.5)) + 1, 65, 257)
+        self.step = self.size / (n - 1)
+        self.h = [0.0] * (n * n)  # row by row from -z to +z, each row from -x to +x
+        self.sent = [0] * (n * n)  # the same, as the page gets them: kept up to date point by point as edits go
+        self.style_name = style
+        self.lakes = []  # [x, z, r, level, water node]
+        self.sea = None  # [level, water node]
+        self.edits = []  # for Tuff Engine (tuff.py --scene): each edit and the lines that made it
+        self.alive = True
+        self.dirty = True  # the heights go with the first frame, after the setup's edits
+        self.node = world.view.obj(world.scene, "terrain", size=self.size, n=n, style=style, shadow=True)
+        self.native = world.rt.native("terrain", methods(self, "terrain", self.NAMES, world.rt), self.show_text)
+        self.native.tg = self
+
+    def show_text(self, nested=False):
+        return f"<terrain {tidy(self.size)} wide>"
+
+    def heights(self):
+        """The heights to the hundredth of a metre (whole ones as 0, not 0.0: most of the land is often flat)."""
+        return list(self.sent)
+
+    def changed(self, k):
+        v = round(self.h[k], 2)
+        self.sent[k] = int(v) if v == int(v) else v
+
+    def push(self):
+        self.dirty = False
+        self.world.view.set(self.node, heights=self.heights())
+
+    # ---- the land's height
+    def at(self, x, z):
+        """The height at x, z, between the four points around it (bilinear); outside the square, the edge's."""
+        n, half = self.n, self.size / 2
+        fx = clamp((x + half) / self.step, 0.0, n - 1.0)
+        fz = clamp((z + half) / self.step, 0.0, n - 1.0)
+        i, j = min(int(fx), n - 2), min(int(fz), n - 2)
+        tx, tz = fx - i, fz - j
+        h, k = self.h, j * n + i
+        a, b, c, d = h[k], h[k + 1], h[k + n], h[k + n + 1]
+        return a + (b - a) * tx + (c - a) * tz + (a - b - c + d) * tx * tz
+
+    def water_at(self, x, z):
+        """The level of the water over the land at x, z (a lake's or the sea's), or None where it's dry."""
+        g = self.at(x, z)
+        level = self.sea[0] if self.sea is not None and g < self.sea[0] else None
+        for lx, lz, r, lv, _ in self.lakes:
+            if g < lv and (x - lx) ** 2 + (z - lz) ** 2 < (r * 1.04) ** 2 and (level is None or lv > level):
+                level = lv
+        return level
+
+    def height_at(self, x, z=MISSING):
+        x, z, _ = self.point([x, z], (), "height_at", "land:height_at(12, 4)")
+        return tidy(self.at(x, z))
+
+    # ---- reading an edit's inputs
+    def point(self, args, defaults, what, example):
+        """x, z (or one spot [x, z], or [x, y, z] from :random_spot) and the numbers after them, with the defaults
+        for the ones left out. Gives (x, z, [numbers])."""
+        rt = self.rt
+        given = [a for a in args if a is not MISSING]
+        first = rt.plain(given[0]) if given else None
+        if isinstance(first, list):
+            if len(first) not in (2, 3):
+                raise rt.error(f":{what} needs a spot like [10, -5] (x and z), like {example}.")
+            x, z, rest = first[0], first[-1], given[1:]
+        elif len(given) < 2:
+            raise rt.error(f":{what} needs x and z (where on the land), like {example}.")
+        else:
+            x, z, rest = given[0], given[1], given[2:]
+        if len(rest) > len(defaults):
+            raise rt.error(f":{what} got too many inputs.")
+        nums = [rt.number(v, f":{what}") for v in list(rest) + list(defaults[len(rest):])]
+        return rt.number(x, f":{what}"), rt.number(z, f":{what}"), nums
+
+    def stroke(self, args, defaults, what, example):
+        """A brush's inputs: one spot (x, z or [x, z]), or a stroke (a list of [x, z] spots), then the numbers.
+        Gives ([(x, z), ...], [numbers])."""
+        rt = self.rt
+        first = rt.plain(args[0])
+        if isinstance(first, list) and first and all(isinstance(rt.plain(p), list) for p in first):
+            spots = []
+            for p in first:
+                p = rt.plain(p)
+                if len(p) not in (2, 3):
+                    raise rt.error(f":{what} needs spots like [[1, 2], [3, 2]] (each one x and z), like {example}.")
+                spots.append((rt.number(p[0], f":{what}"), rt.number(p[-1], f":{what}")))
+            rest = [a for a in args[1:] if a is not MISSING]
+            if len(rest) > len(defaults):
+                raise rt.error(f":{what} got too many inputs.")
+            return spots, [rt.number(v, f":{what}") for v in rest + list(defaults[len(rest):])]
+        x, z, nums = self.point(args, defaults, what, example)
+        return [(x, z)], nums
+
+    def radius(self, size, what, example):
+        if size <= 0:
+            raise self.rt.error(f":{what} needs a size above 0 (how wide it is), like {example}.")
+        return size / 2
+
+    # ---- changing the heights
+    def points(self, x0, z0, x1, z1):
+        """The grid's points inside a box: (index, x, z)."""
+        n, step, half = self.n, self.step, self.size / 2
+        i0, i1 = max(0, math.ceil((x0 + half) / step)), min(n - 1, math.floor((x1 + half) / step))
+        j0, j1 = max(0, math.ceil((z0 + half) / step)), min(n - 1, math.floor((z1 + half) / step))
+        for j in range(j0, j1 + 1):
+            pz, row = j * step - half, j * n
+            for i in range(i0, i1 + 1):
+                yield row + i, i * step - half, pz
+
+    def dab(self, x, z, r, fn):
+        """Every point within r of (x, z) changes by fn(weight, index, x, z), the weight (1 - (d / r)²)²."""
+        h, rr = self.h, r * r
+        for k, px, pz in self.points(x - r, z - r, x + r, z + r):
+            d2 = (px - x) ** 2 + (pz - z) ** 2
+            if d2 < rr:
+                q = 1 - d2 / rr
+                h[k] += fn(q * q, k, px, pz)
+                self.changed(k)
+
+    def smooth_dab(self, x, z, r):
+        """Each point moves toward the average of its 4 neighbours (as they were before this dab), by its weight."""
+        old, n = self.h[:], self.n
+
+        def toward(w, k, _px, _pz):
+            i, j = k % n, k // n
+            avg = (old[k - 1 if i > 0 else k] + old[k + 1 if i < n - 1 else k]
+                   + old[k - n if j > 0 else k] + old[k + n if j < n - 1 else k]) / 4
+            return (avg - old[k]) * w
+        self.dab(x, z, r, toward)
+
+    def riders(self, x0, z0, x1, z1):
+        """What stands in this part of the land (objects and the player), with the land's height under each."""
+        w = self.world
+        out = [(t, self.at(t.x, t.z)) for t in w.things if isinstance(t, Thing) and t.alive and t.on_land
+               and not getattr(t, "floor", False) and x0 <= t.x <= x1 and z0 <= t.z <= z1]
+        p = w.the_player
+        if p is not None and x0 <= p.x <= x1 and z0 <= p.z <= z1:
+            out.append((p, self.at(p.x, p.z)))
+        return out
+
+    def edit(self, op, args, box, change):
+        """One edit: change() changes the heights inside box (x0, z0, x1, z1). Things standing there go up and
+        down with the land, so their height above it stays what the program said."""
+        riders = self.riders(*box)
+        change()
+        for t, before in riders:
+            d = self.at(t.x, t.z) - before
+            if d:
+                t.y += d
+                if isinstance(t, Player):
+                    if t.body is not None:
+                        t.body.y = t.y
+                        t.body.push()
+                    t.place_camera(1)
+                else:
+                    t.push()
+        self.dirty = True
+        if SCENE is not None:
+            self.edits.append({"op": op, "args": [self.rt.plain(a) for a in args if a is not MISSING],
+                               "made": list(SCENE.interp.lines)})
+        return self.native
+
+    def bump(self, op, args, x, z, r, fn):
+        return self.edit(op, args, (x - r, z - r, x + r, z + r), lambda: self.dab(x, z, r, fn))
+
+    def hill(self, x, z=MISSING, size=MISSING, height=MISSING):
+        args, ex = [x, z, size, height], "land:hill(20, -10, 30, 8)"
+        cx, cz, (sz, tall) = self.point(args, (30, 8), "hill", ex)
+        return self.bump("hill", args, cx, cz, self.radius(sz, "hill", ex), lambda w, *_: tall * w)
+
+    def dip(self, x, z=MISSING, size=MISSING, depth=MISSING):
+        args, ex = [x, z, size, depth], "land:dip(10, 25, 16, 3)"
+        cx, cz, (sz, deep) = self.point(args, (16, 3), "dip", ex)
+        return self.bump("dip", args, cx, cz, self.radius(sz, "dip", ex), lambda w, *_: -deep * w)
+
+    def mountain(self, x, z=MISSING, size=MISSING, height=MISSING):
+        args, ex = [x, z, size, height], "land:mountain(-40, -50, 60, 35)"
+        cx, cz, (sz, tall) = self.point(args, (60, 30), "mountain", ex)
+        r = self.radius(sz, "mountain", ex)
+        seed = (round(cx * 10) * 73856093 ^ round(cz * 10) * 19349663 ^ round(sz * 10) * 83492791) & 0x7FFFFFFF
+        cell = max(2.0, sz / 8)
+
+        def ridge(x, z, s):
+            return 1 - abs(2 * _noise(x, z, s) - 1)
+
+        def peak(w, _k, px, pz):  # a sharper top than a hill's, and rough: ridges in two sizes, and bumps
+            fx, fz = px / cell, pz / cell
+            rough = 0.5 * ridge(fx, fz, seed) + 0.3 * ridge(fx * 2.1, fz * 2.1, seed + 1) + 0.2 * _noise(fx * 4.3, fz * 4.3, seed + 2)
+            return tall * w ** 1.5 * (0.75 + 0.25 * rough)
+        return self.bump("mountain", args, cx, cz, r, peak)
+
+    def lake(self, x, z=MISSING, size=MISSING, depth=MISSING):
+        args, ex = [x, z, size, depth], "land:lake(-20, 30, 36, 4)"
+        cx, cz, (sz, deep) = self.point(args, (30, 4), "lake", ex)
+        r = self.radius(sz, "lake", ex)
+        if deep <= 0:
+            raise self.rt.error(f":lake needs a depth above 0 (how deep the water is), like {ex}.")
+        level = self.at(cx, cz) - 0.2  # the water sits just below the ground that was there
+
+        def dig():
+            self.dab(cx, cz, r, lambda w, *_: -deep * w)
+            w = self.world
+            self.lakes.append([cx, cz, r, level, w.view.obj(w.scene, "water", x=cx, z=cz, y=level, r=r)])
+        return self.edit("lake", args, (cx - r, cz - r, cx + r, cz + r), dig)
+
+    def valley(self, x1, z1=MISSING, x2=MISSING, z2=MISSING, width=MISSING, depth=MISSING):
+        ex = "land:valley(-60, 0, 60, 10, 18, 6)"
+        rt = self.rt
+        args = [x1, z1, x2, z2, width, depth]
+        given = [a for a in args if a is not MISSING]
+        if given and isinstance(rt.plain(given[0]), list):  # two spots: valley([x1, z1], [x2, z2], width, depth)
+            ax, az, _ = self.point(given[:1], (), "valley", ex)
+            if len(given) < 2 or not isinstance(rt.plain(given[1]), list):
+                raise rt.error(f":valley needs where it starts and where it ends, like {ex}.")
+            bx, bz, _ = self.point(given[1:2], (), "valley", ex)
+            rest = given[2:]
+        elif len(given) < 4:
+            raise rt.error(f":valley needs where it starts (x1, z1) and where it ends (x2, z2), like {ex}.")
+        else:
+            ax, az, bx, bz = (rt.number(v, ":valley") for v in given[:4])
+            rest = given[4:]
+        if len(rest) > 2:
+            raise rt.error(":valley got too many inputs.")
+        width, depth = [rt.number(v, ":valley") for v in list(rest) + [12, 5][len(rest):]]
+        r = self.radius(width, "valley", ex)
+        dx, dz = bx - ax, bz - az
+        ll = dx * dx + dz * dz
+
+        def carve():
+            h, rr = self.h, r * r
+            for k, px, pz in self.points(min(ax, bx) - r, min(az, bz) - r, max(ax, bx) + r, max(az, bz) + r):
+                t = clamp(((px - ax) * dx + (pz - az) * dz) / ll, 0.0, 1.0) if ll else 0.0
+                d2 = (px - ax - dx * t) ** 2 + (pz - az - dz * t) ** 2
+                if d2 < rr:
+                    q = 1 - d2 / rr
+                    h[k] -= depth * q * q
+                    self.changed(k)
+        return self.edit("valley", args, (min(ax, bx) - r, min(az, bz) - r, max(ax, bx) + r, max(az, bz) + r), carve)
+
+    def brush(self, op, args, defaults, example, fn):
+        """raise, lower, smooth and flatten: one dab, or a stroke (a dab at each spot, in order)."""
+        spots, nums = self.stroke(args, defaults, op, example)
+        r = self.radius(nums[0], op, example)
+
+        def paint():
+            for x, z in spots:
+                fn(x, z, r, *nums[1:])
+        xs, zs = [s[0] for s in spots], [s[1] for s in spots]
+        return self.edit(op, args, (min(xs) - r, min(zs) - r, max(xs) + r, max(zs) + r), paint)
+
+    def raise_land(self, x, z=MISSING, size=MISSING, amount=MISSING):
+        return self.brush("raise", [x, z, size, amount], (8, 1), "land:raise(5, 5, 8, 1.5)",
+                          lambda x, z, r, a: self.dab(x, z, r, lambda w, *_: a * w))
+
+    def lower_land(self, x, z=MISSING, size=MISSING, amount=MISSING):
+        return self.brush("lower", [x, z, size, amount], (8, 1), "land:lower(5, 5, 8, 1.5)",
+                          lambda x, z, r, a: self.dab(x, z, r, lambda w, *_: -a * w))
+
+    def smooth(self, x, z=MISSING, size=MISSING):
+        return self.brush("smooth", [x, z, size], (8,), "land:smooth(5, 5, 8)", lambda x, z, r: self.smooth_dab(x, z, r))
+
+    def flatten(self, x, z=MISSING, size=MISSING, height=MISSING):
+        h = self.h
+        return self.brush("flatten", [x, z, size, height], (8, 0), "land:flatten(5, 5, 8, 2)",
+                          lambda x, z, r, to: self.dab(x, z, r, lambda w, k, *_: (to - h[k]) * w))
+
+    # ---- how it looks, and its water
+    def set_style(self, name):
+        n = self.rt.text(name).strip().lower()
+        if n not in TERRAIN_STYLES:
+            raise self.rt.error(style_problem(n))
+        self.style_name = n
+        self.world.view.set(self.node, style=n)
+        if SCENE is not None:
+            self.edits.append({"op": "style", "args": [n], "made": list(SCENE.interp.lines)})
+        return self.native
+
+    def water(self, level):
+        lv = self.rt.number(level, ":water")
+        w = self.world
+        if self.sea is None:  # the sea reaches past the land's edges, out to the fog
+            self.sea = [lv, w.view.obj(w.scene, "water", x=0, z=0, y=lv, r=0, size=self.size * 4)]
+        else:
+            self.sea[0] = lv
+            w.view.set(self.sea[1], y=lv)
+        if SCENE is not None:
+            self.edits.append({"op": "water", "args": [self.rt.plain(level)], "made": list(SCENE.interp.lines)})
+        return self.native
+
+    def node_ids(self):
+        return [int(self.node)] + [int(lake[4]) for lake in self.lakes] + ([int(self.sea[1])] if self.sea else [])
+
+    def dump(self, var, made):
+        """What Tuff Engine's preview knows about the land (tuff.py --scene)."""
+        hs = self.heights()
+        return {"var": var, "ids": self.node_ids(), "made": made, "size": tidy(self.size), "n": self.n,
+                "style": self.style_name, "heights": hs, "low": min(hs), "high": max(hs),
+                "lakes": [{"x": tidy(x), "z": tidy(z), "r": tidy(r), "level": tidy(lv)} for x, z, r, lv, _ in self.lakes],
+                "sea": tidy(self.sea[0]) if self.sea is not None else None, "edits": self.edits}
 
 
 def kit(name):
@@ -1934,6 +2354,7 @@ class Thing:
         self.click_fns = []
         self.label_node = None
         self.label_text = ""
+        self.on_land = parent is None and not camera  # held things have their own x, y, z (in the hand)
         v = world.view
         props = {"x": self.x, "y": self.y, "z": self.z}
         if camera:
@@ -1963,6 +2384,11 @@ class Thing:
 
     def height(self):
         return self.dims[1] * self.k[1]
+
+    def ground(self):
+        """The land's height under it (0 without a terrain). Its y, for the program, is how far above that it is."""
+        land = self.world.land
+        return land.at(self.x, self.z) if land is not None and self.on_land else 0.0
 
     # ---- sending changes
     def send(self, node, **props):
@@ -1994,23 +2420,26 @@ class Thing:
         return tidy(self.x)
 
     def get_y(self):
-        return tidy(self.y)
+        return tidy(self.y - self.ground())
 
     def get_z(self):
         return tidy(self.z)
 
     def spot(self):
-        return [tidy(self.x), tidy(self.y), tidy(self.z)]
+        return [tidy(self.x), tidy(self.y - self.ground()), tidy(self.z)]
 
     def move(self, dx, dy=0, dz=0):
-        self.x += self.num(dx, ":move")
-        self.y += self.num(dy, ":move")
-        self.z += self.num(dz, ":move")
+        dx, dy, dz = self.num(dx, ":move"), self.num(dy, ":move"), self.num(dz, ":move")
+        g = self.ground()
+        self.x += dx
+        self.z += dz
+        self.y += dy + self.ground() - g  # over a hill, it keeps its height above the land
         self.push()
         return self.native
 
     def move_to(self, x, y=MISSING, z=MISSING):
         self.x, self.y, self.z, _ = self.world.where([x, y, z], (), "move_to")
+        self.y += self.ground()
         self.anims = [a for a in self.anims if a[0] != "glide"]
         self.push()
         return self.native
@@ -2019,15 +2448,18 @@ class Thing:
         tx, ty, tz, (secs,) = self.world.where([x, y, z, seconds], (1.0,), "glide")
         secs = max(0.01, self.num(secs, ":glide"))
         self.anims = [a for a in self.anims if a[0] != "glide"]
-        self.anims.append(["glide", 0.0, secs, (self.x, self.y, self.z), (tx, ty, tz)])
+        # Heights above the land: a glide over a hill goes over it.
+        self.anims.append(["glide", 0.0, secs, (self.x, self.y - self.ground(), self.z), (tx, ty, tz)])
         self.busy()
         return self.native
 
     def forward(self, distance):
         d = self.num(distance, ":forward")
         h = math.radians(self.heading)
+        g = self.ground()
         self.x += math.sin(h) * d
         self.z -= math.cos(h) * d
+        self.y += self.ground() - g
         self.push()
         return self.native
 
@@ -2136,9 +2568,12 @@ class Thing:
     def tick(self, dt):
         moved = rotated = False
         if self.vx or self.vy or self.vz:
+            g = self.ground()
             self.x += self.vx * dt
             self.y += self.vy * dt
             self.z += self.vz * dt
+            if self.world.land is not None:
+                self.y += self.ground() - g
             moved = True
         if self.spin_speed:
             self.heading = (self.heading + self.spin_speed * dt) % 360
@@ -2151,6 +2586,7 @@ class Thing:
                 e = ease(t)
                 (x0, y0, z0), (x1, y1, z1) = a[3], a[4]
                 self.x, self.y, self.z = x0 + (x1 - x0) * e, y0 + (y1 - y0) * e, z0 + (z1 - z0) * e
+                self.y += self.ground()
                 moved = True
             elif kind == "shake":
                 self.tilt_axis = a[3]
@@ -2291,6 +2727,7 @@ class Thing:
             tx, ty, tz = t.x, t.y, t.z
         else:
             tx, ty, tz, _ = self.world.where([other, y, z], (), "distance")
+            ty = self.world.above(tx, ty, tz)
         return tidy(math.dist((self.x, self.y, self.z), (tx, ty, tz)))
 
     def label(self, text):
@@ -2381,6 +2818,11 @@ class Player:
             world.hint.hide()
         if SCENE is not None and world.crosshair is not None:
             world.crosshair.hide()
+        if world.land is not None:  # it starts standing on the land
+            self.y = world.land.at(0, 0)
+            if self.body is not None:
+                self.body.y = self.y
+                self.body.push()
         self.place_camera(1)
 
     def height(self):
@@ -2395,16 +2837,17 @@ class Player:
         return tidy(self.x)
 
     def get_y(self):
-        return tidy(self.y)
+        return tidy(self.y - self.world.ground_y(self.x, self.z))
 
     def get_z(self):
         return tidy(self.z)
 
     def spot(self):
-        return [tidy(self.x), tidy(self.y), tidy(self.z)]
+        return [tidy(self.x), tidy(self.y - self.world.ground_y(self.x, self.z)), tidy(self.z)]
 
     def move_to(self, x, y=MISSING, z=MISSING):
         self.x, self.y, self.z, _ = self.world.where([x, y, z], (), "move_to")
+        self.y = self.world.above(self.x, self.y, self.z)
         self.vy = 0.0
         self.place_camera(1)
         return self.native
@@ -2474,6 +2917,7 @@ class Player:
             tx, ty, tz = t.x, t.y, t.z
         else:
             tx, ty, tz, _ = self.world.where([other, y, z], (), "distance")
+            ty = self.world.above(tx, ty, tz)
         return tidy(math.dist((self.x, self.y, self.z), (tx, ty, tz)))
 
     def hide(self):
@@ -2500,9 +2944,20 @@ class Player:
                 return True
         return False
 
+    def wet(self, x, z, solids):
+        """Would the player be standing in water here (a lake or the sea, deeper than the shore's edge)? Something
+        solid over the water, like a bridge, is dry."""
+        land = self.world.land
+        if land is None:
+            return False
+        level = land.water_at(x, z)
+        return level is not None and self.floor_at(x, z, self.y, solids) < level - land.WET
+
     def floor_at(self, x, z, y, solids):
-        """The highest floor under the player's feet: the ground (0), or the top of something solid."""
-        best = 0.0
+        """The highest floor under the player's feet: the ground (0, or the land's height), or the top of something
+        solid."""
+        land = self.world.land
+        best = land.at(x, z) if land is not None else 0.0
         r = self.RADIUS * 0.8
         for t in solids:
             b = t.box3(body=True)
@@ -2541,14 +2996,21 @@ class Player:
         mx, mz = fx * fwd + rx * side, fz * fwd + rz * side
         n = math.hypot(mx, mz)
         solids = self.solids()
+        x0, z0 = self.x, self.z
         if n:
             sp = self.speed * (1.7 if "shift" in down else 1.0) * dt / n
             nx, nz = self.x + mx * sp, self.z + mz * sp
-            if not self.blocked(nx, self.z, self.y, solids):
+            # The shore stops the player like a wall (unless it's in the water already: then it can walk out).
+            dry = w.land is None or not self.wet(self.x, self.z, solids)
+            if dry and self.wet(nx, self.z, solids):
+                pass
+            elif not self.blocked(nx, self.z, self.y, solids):
                 self.x = nx
             elif self.try_step(nx, self.z, solids):
                 pass
-            if not self.blocked(self.x, nz, self.y, solids):
+            if dry and self.wet(self.x, nz, solids):
+                pass
+            elif not self.blocked(self.x, nz, self.y, solids):
                 self.z = nz
             else:
                 self.try_step(self.x, nz, solids)
@@ -2561,6 +3023,9 @@ class Player:
         floor = self.floor_at(self.x, self.z, max(self.y, ny), solids)
         if ny <= floor:
             ny, self.vy, self.on_ground = floor, 0.0, True
+        elif (w.land is not None and self.on_ground and self.vy <= 0
+              and ny - floor <= math.hypot(self.x - x0, self.z - z0) * 1.5 + 0.02):
+            ny, self.vy = floor, 0.0  # walking downhill: stay on the land instead of hopping down it
         else:
             self.on_ground = False
             if self.vy > 0 and self.blocked(self.x, self.z, ny, solids):
@@ -2584,6 +3049,10 @@ class Player:
 
     def keep_inside(self):
         w = self.world
+        if w.land is not None:  # the land's square: no walking off its edge
+            half = w.land.size / 2 - 0.6
+            self.x, self.z = clamp(self.x, -half, half), clamp(self.z, -half, half)
+            return
         edge = (w.island_r + 2.5) if w.island_r else 300.0
         d = math.hypot(self.x, self.z)
         if d > edge:
@@ -2638,8 +3107,10 @@ class Scene:
         g = self.game
         if g is None:
             return {"stopped": "error" if error else "nowindow", "error": error}
+        land = getattr(g, "land", None)
         if g.three_d:
             try:
+                g.before_frame()  # the land's heights, after every edit the setup made
                 g.push_camera()  # the starting camera, as the first frame would send it
             except Exception:
                 pass
@@ -2659,11 +3130,18 @@ class Scene:
                         "ids": [int(t.node)], "x": tidy(t.x), "y": tidy(t.y), "z": 0, "dims": None, "k": None,
                         "heading": tidy(t.rot), "drag": "xy"}
             else:
-                item = {"kind": t.kind, "layer": "world", "ids": ids_of(t), "x": tidy(t.x), "y": tidy(t.y), "z": tidy(t.z),
-                        "dims": [tidy(v) for v in t.dims], "k": [tidy(v) for v in t.k], "heading": tidy(t.heading),
-                        "drag": None if getattr(t, "floor", False) else "xz"}
+                # y is the height above the land, as the program wrote it; "ground" is the land's height there.
+                item = {"kind": t.kind, "layer": "world", "ids": ids_of(t), "x": tidy(t.x), "y": tidy(t.y - t.ground()),
+                        "z": tidy(t.z), "dims": [tidy(v) for v in t.dims], "k": [tidy(v) for v in t.k],
+                        "heading": tidy(t.heading), "drag": None if getattr(t, "floor", False) else "xz"}
+                if land is not None:
+                    item["ground"] = tidy(t.ground())
+            if land is not None and int(land.node) < item["ids"][0] and not any(x["kind"] == "terrain" for x in things):
+                things.append(self.land_item(land, names, len(things)))  # in the order things were made
             item.update(i=len(things), hidden=bool(t.hidden), made=self.made.get(int(t.node), []), var=names.get(id(t)))
             things.append(item)
+        if land is not None and not any(x["kind"] == "terrain" for x in things):
+            things.append(self.land_item(land, names, len(things)))
         out = {"mode": "3d" if g.three_d else "2d", "title": g.view.title, "size": [g.W, g.H],
                "stopped": "error" if error else (self.stopped or "end"), "error": error, "batch": batch,
                "roots": {"view": int(g.scene) if g.three_d else int(g.node),
@@ -2676,14 +3154,28 @@ class Scene:
                 held = None
                 if p.held is not None:
                     held = {"name": p.held.kind, "ids": ids_of(p.held), "made": self.held_made or []}
-                out["player"] = {"mode": p.mode, "x": tidy(p.x), "y": tidy(p.y), "z": tidy(p.z), "heading": tidy(p.heading),
-                                 "made": self.player_made or [], "ids": ids_of(p.body) if p.body is not None else [],
-                                 "held": held}
+                out["player"] = {"mode": p.mode, "x": tidy(p.x), "y": tidy(p.y - g.ground_y(p.x, p.z)), "z": tidy(p.z),
+                                 "heading": tidy(p.heading), "made": self.player_made or [],
+                                 "ids": ids_of(p.body) if p.body is not None else [], "held": held}
+                if land is not None:
+                    out["player"]["ground"] = tidy(land.at(p.x, p.z))
             out["camera"] = {"cx": tidy(g.cam[0]), "cy": tidy(g.cam[1]), "cz": tidy(g.cam[2]), "yaw": tidy(-g.cam_yaw),
                              "pitch": tidy(g.cam_pitch)}
+            if land is not None:
+                out["terrain"] = land.dump(names.get(id(land)), self.made.get(int(land.node), []))
+            out["lighting"] = g.lighting_name
         if self.stopped == "too-big" or len(things) > self.MAX_THINGS or len(batch) > self.MAX_CMDS:
             out.update(stopped="too-big", batch=[], things=[], player=None)
+            if "terrain" in out:
+                out["terrain"] = None
         return out
+
+    def land_item(self, land, names, i):
+        """The land as one of the things (it can't be dragged); out["terrain"] has its heights and edits."""
+        hs = land.h
+        return {"kind": "terrain", "layer": "world", "ids": land.node_ids(), "x": 0, "y": 0, "z": 0,
+                "dims": [tidy(land.size), tidy(max(hs) - min(hs)), tidy(land.size)], "k": [1, 1, 1], "heading": 0,
+                "drag": None, "i": i, "hidden": False, "made": self.made.get(int(land.node), []), "var": names.get(id(land))}
 
 
 def start_scene(interp):
@@ -2695,7 +3187,8 @@ def start_scene(interp):
 def editor_tables():
     """The names Tuff Engine offers in its menus, from the same tables a run uses."""
     return {"colors": COLORS, "skies": list(SKIES), "kit": list(KIT), "hold": list(HOLDABLE), "sounds": list(SOUNDS),
-            "edges": list(EDGE_MODES), "players": list(PLAYER_MODES)}
+            "edges": list(EDGE_MODES), "players": list(PLAYER_MODES), "terrain_styles": list(TERRAIN_STYLES),
+            "lightings": list(LIGHTINGS)}
 
 
 # ---------------------------------------------------------------- the autopilot (tests)
@@ -2886,7 +3379,8 @@ GIVES = {
               "mouse_y": "$number", "time": "$number", "fps": "$number", "paused": "$bool", "width": "$number",
               "height": "$number", "random_spot": "$list", "group": "group", "hud": "hud", "light": "object",
               "ground": "object", "island": "object", "box": "object", "sphere": "object", "cylinder": "object",
-              "cone": "object", "plane": "object", "spawn": "object", "player": "player"},
+              "cone": "object", "plane": "object", "spawn": "object", "player": "player", "terrain": "terrain"},
+    "terrain": {"height_at": "$number", **{m: "terrain" for m, _ in Terrain.NAMES if m != "height_at"}},
     "sprite": {"x": "$number", "y": "$number", "spot": "$list", "angle": "$number", "on_screen": "$bool",
                "distance": "$number", "value": "$text", **{m: "sprite" for m in _SETTERS}},
     "object": {"x": "$number", "y": "$number", "z": "$number", "spot": "$list", "angle": "$number",
@@ -2916,7 +3410,8 @@ VALUES = {
     ("world", "light"): {1: "color", 3: "color"}, ("world", "sky"): {0: "sky"}, ("world", "spawn"): {0: "spawn"},
     ("world", "player"): {0: "player"}, ("sprite", "color"): {0: "color"}, ("object", "color"): {0: "color"},
     ("object", "glow"): {0: "glow"}, ("group", "color"): {0: "color"}, ("sprite", "on_edge"): {0: "edge"},
-    ("sprite", "align"): {0: "align"}, ("player", "hold"): {0: "hold"},
+    ("sprite", "align"): {0: "align"}, ("player", "hold"): {0: "hold"}, ("world", "terrain"): {1: "terrain style"},
+    ("terrain", "style"): {0: "terrain style"}, ("world", "lighting"): {0: "lighting"},
     **{(k, m): {0: "key"} for k in ("game", "world") for m in ("held", "pressed")},
     **{(k, "on_key"): {0: "anykey"} for k in ("game", "world")},
     **{(k, "sound"): {0: "sound"} for k in ("game", "world")},
@@ -2957,6 +3452,10 @@ def check_value(kind, method, index, value, base_dir=None):
         return None if ok else f"'{value}' isn't a color tgame knows. Try {COLOR_HELP}, or a hex code like \"#ff8800\"."
     if what == "sky":
         return None if low in SKIES else f"The sky can be {', '.join(SKIES)}, not \"{value}\"."
+    if what == "terrain style":
+        return None if low in TERRAIN_STYLES else style_problem(low)
+    if what == "lighting":
+        return None if low in LIGHTINGS else lighting_problem(low)
     if what == "edge":
         return None if low in EDGE_MODES else ":on_edge can be \"bounce\", \"wrap\", \"stop\" (stay on screen) or \"none\"."
     if what == "align":
@@ -3002,7 +3501,7 @@ def tables():
 
     kinds = {}
     for kind, cls in (("game", Game2D), ("world", World3D), ("sprite", Sprite), ("object", Thing),
-                      ("player", Player), ("hud", Hud), ("group", Group)):
+                      ("player", Player), ("hud", Hud), ("group", Group), ("terrain", Terrain)):
         obj = probe(cls)
         kinds[kind] = {name: getattr(obj, attr) for name, attr in cls.NAMES}
     return {"lib": make_library(FakeRt()), "kinds": kinds, "gives": GIVES, "handlers": HANDLERS, "hints": HINTS,

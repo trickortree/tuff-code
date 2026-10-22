@@ -127,8 +127,23 @@ function create(id, kind, type, parentId, props) {
   if (n.obj) n.obj.userData.tv = id;
   const parent = parentId ? node(parentId) : null;
   attach(n, parent, props && props.before);
+  if (n.kind === 'obj') track(n, true);
   objs.set(id, n);
   if (props) setProps(n, props);
+}
+
+// A scene keeps its land, water and sunlight close at hand: the land's colours depend on the water near it, and
+// modern lighting changes the lights.
+const TRACKED = { terrain: 'lands', water: 'waters', sun: 'suns', hemi: 'hemis' };
+
+function track(n, on) {
+  const key = TRACKED[n.type];
+  if (!key) return;
+  const h = n.host;
+  if (!h[key]) h[key] = new Set();
+  if (on) h[key].add(n);
+  else h[key].delete(n);
+  if (n.type === 'water') h.recolor = true;
 }
 
 function attach(n, parent, before) {
@@ -166,14 +181,20 @@ function remove(id) {
     case 'obj':
       n.obj.removeFromParent();
       labels.delete(n);
+      track(n, false);
       if (n.type === 'label' && n.obj.material.map) n.obj.material.map.dispose();
       if (n.obj.material) n.obj.material.dispose();
+      if (n.land || n.water) n.obj.geometry.dispose();  // their own, not shared like a box's
+      if (n.skirt) { n.skirt.geometry.dispose(); n.skirt.material.dispose(); }
+      if (n.apron) n.apron.geometry.dispose();  // its material is the land's
       if (n.obj.dispose) n.obj.dispose();
       n.host.dirty = true;
       break;
     case 'scene':
       scenes.delete(n);
       n.ro.disconnect();
+      if (n.envRT) n.envRT.dispose();
+      if (n.pmrem) n.pmrem.dispose();
       n.renderer.dispose();
       n.el.remove();
       break;
@@ -562,7 +583,7 @@ function setScene(n, props) {
   for (const k in props) {
     const v = props[k];
     switch (k) {
-      case 'bg': n.scene.background = v == null ? null : color(v); break;
+      case 'bg': n.scene.background = v == null ? null : color(v); n.envDirty = true; break;
       case 'fog': n.scene.fog = v ? new THREE.Fog(color(v[0]), v[1], v[2]) : null; break;
       case 'fov': cam.fov = v; lens = true; break;
       case 'near': cam.near = v; lens = true; break;
@@ -586,6 +607,7 @@ function setScene(n, props) {
         break;
       case 'sky': setSky(n, v); break;
       case 'clicklock': n.clicklock = !!v; break;
+      case 'lighting': setLighting(n, v); break;
       default: rest[k] = v;
     }
   }
@@ -596,6 +618,7 @@ function setScene(n, props) {
 
 // A gradient sky: a dome around the camera, [top, horizon] or [top, horizon, below], drawn behind everything.
 function setSky(n, v) {
+  n.envDirty = true;  // modern lighting's light from the sky changes with it
   if (!v) {
     if (n.sky) { n.sky.removeFromParent(); n.sky.material.dispose(); n.sky = null; }
     return;
@@ -619,6 +642,132 @@ function setSky(n, v) {
   u.top.value.set(v[0]);
   u.mid.value.set(v[1] || v[0]);
   u.low.value.set(v[2] || v[1] || v[0]);
+}
+
+// Lighting: 'simple' (the default: worlds look the way they always have) or 'modern': ACES filmic tone mapping, soft
+// light from the sky itself (an environment map made from the gradient sky, which shiny things like water also
+// reflect), a softer hemisphere light, and sun shadows that follow the camera, sized to what it looks at. If the
+// graphics can't do part of it, the scene quietly stays simple.
+const MODERN = { exposure: 0.78, hemi: 0.35, sun: 1.3, env: 0.6 };
+
+function setLighting(n, v) {
+  n.modern = v === 'modern';
+  try {
+    applyLighting(n);
+  } catch {
+    n.modern = false;
+    applyLighting(n);
+  }
+}
+
+function lightScale(l) {
+  if (!l.host || !l.host.modern) return 1;
+  return l.type === 'hemi' ? MODERN.hemi : l.type === 'sun' ? MODERN.sun : 1;
+}
+
+function applyLighting(n) {
+  const r = n.renderer;
+  r.toneMapping = n.modern ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+  r.toneMappingExposure = n.modern ? MODERN.exposure : 1;
+  if (!n.modern) {
+    n.scene.environment = null;
+    if (n.envRT) { n.envRT.dispose(); n.envRT = null; }
+  }
+  n.envDirty = n.modern;
+  for (const l of n.hemis || []) l.obj.intensity = l.p.intensity * lightScale(l);
+  for (const l of n.suns || []) {
+    l.obj.intensity = l.p.intensity * lightScale(l);
+    if (!n.modern) simpleSun(l);
+  }
+  n.dirty = true;
+}
+
+// The environment map: the sky dome (or the plain background colour) seen from the middle, blurred by PMREM.
+function makeEnvironment(n) {
+  n.envDirty = false;
+  const env = new THREE.Scene();
+  if (n.sky) env.add(new THREE.Mesh(n.sky.geometry, n.sky.material));
+  else if (n.scene.background && n.scene.background.isColor) env.background = n.scene.background.clone();
+  else {
+    n.scene.environment = null;
+    return;
+  }
+  if (!n.pmrem) n.pmrem = new THREE.PMREMGenerator(n.renderer);
+  const rt = n.pmrem.fromScene(env, 0.04, 0.1, 100);
+  if (n.envRT) n.envRT.dispose();
+  n.envRT = rt;
+  n.scene.environment = rt.texture;
+  n.scene.environmentIntensity = MODERN.env;
+}
+
+// The sun as Python put it: where it is (`at`), aimed at the middle of the world, its shadows `area` around that.
+function simpleSun(l) {
+  const o = l.obj;
+  o.position.fromArray(l.at);
+  o.target.position.set(0, 0, 0);
+  o.target.updateMatrixWorld();
+  const c = o.shadow.camera;
+  const a = l.p.area || 5;
+  c.left = c.bottom = -a;
+  c.right = c.top = a;
+  c.near = 0.5;
+  c.far = 500;
+  c.updateProjectionMatrix();
+  o.shadow.normalBias = 0.03;
+}
+
+// Modern: the sun's shadows cover what the camera looks at. Its light keeps the direction Python gave it, and its
+// shadow box moves with the camera, bigger the further away the camera looks (an editor's view from high up gets
+// the whole land; a player's eye gets sharp shadows close by). Moves snap to the shadow map's pixels, so the
+// shadows' edges don't crawl while the camera moves.
+const sunWork = {};
+
+function followSun(n, l) {
+  const o = l.obj;
+  const cam = n.camera;
+  const fwd = sunWork.fwd || (sunWork.fwd = new THREE.Vector3());
+  const dir = sunWork.dir || (sunWork.dir = new THREE.Vector3());
+  cam.updateMatrixWorld();
+  cam.getWorldDirection(fwd);
+  const hit = landHit(n, cam.position, fwd);
+  const flat = Math.hypot(fwd.x, fwd.z) || 1;
+  let area = 45;
+  let ahead = area * 0.5;
+  if (hit != null) {
+    area = Math.min(180, Math.max(area, Math.ceil(hit * 0.9 / 15) * 15));
+    ahead = Math.min(hit * flat, area * 0.5);
+  }
+  const texel = (2 * area) / o.shadow.mapSize.x;
+  const cx = Math.round((cam.position.x + (fwd.x / flat) * ahead) / texel) * texel;
+  const cz = Math.round((cam.position.z + (fwd.z / flat) * ahead) / texel) * texel;
+  const cy = groundAt(n, cx, cz);
+  dir.fromArray(l.at).normalize();
+  o.target.position.set(cx, cy, cz);
+  o.target.updateMatrixWorld();
+  o.position.set(cx + dir.x * 250, cy + dir.y * 250, cz + dir.z * 250);
+  const c = o.shadow.camera;
+  if (c.right !== area || c.far !== 600) {
+    c.left = c.bottom = -area;
+    c.right = c.top = area;
+    c.near = 1;
+    c.far = 600;
+    c.updateProjectionMatrix();
+  }
+  o.shadow.normalBias = Math.max(0.03, texel * 0.8);
+}
+
+// How far along a ray (from o, direction d) the land is, or null when it doesn't reach the land within 400 m.
+function landHit(n, o, d) {
+  if (o.y <= groundAt(n, o.x, o.z)) return 0;
+  for (let t = 0.3; t < 400; t += Math.max(0.5, t * 0.05)) {
+    if (o.y + d.y * t <= groundAt(n, o.x + d.x * t, o.z + d.z * t)) return t;
+  }
+  return null;
+}
+
+function groundAt(n, x, z) {
+  if (n.lands) for (const t of n.lands) return landHeight(t, x, z);
+  return 0;
 }
 
 const MESHES = new Set(['box', 'sphere', 'plane', 'cylinder', 'cone', 'torus', 'capsule']);
@@ -650,10 +799,14 @@ function makeObj(type) {
     case 'point': obj = new THREE.PointLight(0xffffff, 10, 0, 2); break;
     case 'label': return makeLabel(p);
     case 'model': obj = new THREE.Group(); break;
+    case 'terrain': return makeLand();
+    case 'water': return makeWater();
     default: throw new Error(`there's no 3D object called '${type}'`);
   }
   const n = { obj, p, pick: true };
   if (obj.isMesh) material(n);
+  if (obj.isLight) p.intensity = obj.intensity;  // what Python asked for: modern lighting scales some lights
+  if (type === 'sun') n.at = [5, 10, 4];          // where Python put the sun (modern lighting moves the light itself)
   return n;
 }
 
@@ -717,6 +870,504 @@ function drawLabel(n) {
   m.needsUpdate = true;
   n.aspect = c.width / c.height;
   n.obj.scale.set(p.h * n.aspect, p.h, 1);
+}
+
+// ---------------------------------------------------------------- the land (tgame's world:terrain) and water
+
+// A 'terrain' is a square of land centred on its position: `size` (metres across), `n` (points along each side),
+// `heights` (n * n of them, row by row from -z to +z, each row from -x to +x; left out, it's flat) and `style`.
+// Each point gets its colour from the style by its height and slope: sand by the water, rock on steep slopes and
+// high up, snow on the peaks, the style's own colours in soft patches everywhere else, a little darker in hollows.
+// A soft noise texture over all of it gives it grain. It casts and catches shadows, and can be picked.
+const LAND_KEYS = new Set(['size', 'n', 'heights', 'style']);
+const LAND_STYLES = {
+  // main: three colours, in big and small patches; shore: by the water; bed: under it; rock: on steep slopes, and
+  // more of it from `rockline` up; snow: from `snowline` up (none for desert and autumn; the snow style is all snow)
+  grass: { main: ['#5a9838', '#7aa843', '#477f30'], shore: '#d8c58e', bed: '#77694c', rock: '#8a847a', rockline: 10, snow: '#f2f5f8', snowline: 17 },
+  desert: { main: ['#dcb57a', '#cfa266', '#e6c793'], shore: '#8aa14e', bed: '#9b845a', rock: '#ad7250', rockline: 14, snow: null, snowline: 0 },
+  snow: { main: ['#eef2f6', '#dde5ed', '#f8fafc'], shore: '#c7d1d9', bed: '#5d6970', rock: '#7b7e85', rockline: 1e9, snow: null, snowline: 0 },
+  rocky: { main: ['#8a867c', '#9b968a', '#6b8146'], shore: '#c4b48c', bed: '#5f5a50', rock: '#6c675f', rockline: 4, snow: '#f2f5f8', snowline: 13 },
+  autumn: { main: ['#b9893a', '#c77537', '#8e7d39'], shore: '#d8c58e', bed: '#77694c', rock: '#857b6e', rockline: 12, snow: null, snowline: 0 },
+};
+const palettes = new Map(); // style -> its colours as THREE.Colors
+let landGrain = null;       // the detail texture, made once
+
+function makeLand() {
+  const p = { size: 100, n: 2, heights: null, style: 'grass' };
+  const m = new THREE.MeshStandardMaterial({ vertexColors: true, map: landTexture(), roughness: 0.93, metalness: 0 });
+  m.color.setScalar(1.22);  // the grain darkens a little on average: this evens it out
+  const obj = new THREE.Mesh(new THREE.BufferGeometry(), m);
+  obj.castShadow = obj.receiveShadow = true;
+  const n = { obj, p, pick: true, land: true, grid: null };
+  obj.raycast = (rc, hits) => rayLand(n, rc, hits);
+  buildLand(n);
+  return n;
+}
+
+// New heights: only the rows and columns between the first and last point that changed are worked out again (their
+// normals and colours) and sent to the GPU, so a brush that paints, or a game that digs, stays quick on a big land.
+function buildLand(n) {
+  const p = n.p;
+  const N = Math.max(2, Math.min(1025, Math.round(+p.n) || 2));
+  const size = Math.max(0.01, +p.size || 1);
+  let g = n.obj.geometry;
+  const fresh = !n.grid || n.grid.N !== N || n.grid.size !== size;
+  if (fresh) {
+    g.dispose();
+    g = new THREE.PlaneGeometry(size, size, N - 1, N - 1);
+    g.rotateX(-Math.PI / 2);  // rows now go from -z to +z, each from -x to +x, like the heights
+    const uv = g.attributes.uv.array;
+    for (let i = 0; i < uv.length; i++) uv[i] *= size / 8;  // the grain repeats every 8 m
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(N * N * 3), 3));
+    n.obj.geometry = g;
+    n.grid = { N, size, step: size / (N - 1), lo: 0, hi: 0, bottom: null };
+    const pos = g.attributes.position.array;
+    n.grid.noise = new Float32Array(N * N * 2);  // each point's two patch noises: they never change
+    for (let k = 0; k < N * N; k++) {
+      n.grid.noise[k * 2] = bigPatches(pos[k * 3], pos[k * 3 + 2]);
+      n.grid.noise[k * 2 + 1] = smallPatches(pos[k * 3], pos[k * 3 + 2]);
+    }
+  }
+  const pos = g.attributes.position.array;
+  const hs = p.heights;
+  let i0 = N;
+  let i1 = -1;
+  let j0 = N;
+  let j1 = -1;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let j = 0, k = 0; j < N; j++) {
+    for (let i = 0; i < N; i++, k++) {
+      const h = Math.fround(hs ? +hs[k] || 0 : 0);
+      if (h < lo) lo = h;
+      if (h > hi) hi = h;
+      if (fresh || pos[k * 3 + 1] !== h) {
+        pos[k * 3 + 1] = h;
+        if (i < i0) i0 = i;
+        if (i > i1) i1 = i;
+        if (j < j0) j0 = j;
+        if (j > j1) j1 = j;
+      }
+    }
+  }
+  const restyle = n.restyle;
+  n.restyle = false;
+  if (i1 < 0) {  // the same heights: maybe a new style
+    if (restyle) colorLand(n, 0, N - 1, 0, N - 1);
+    return;
+  }
+  const grid = n.grid;
+  grid.lo = lo;
+  grid.hi = hi;
+  const half = size / 2;
+  g.boundingBox = new THREE.Box3(new THREE.Vector3(-half, lo, -half), new THREE.Vector3(half, hi, half));
+  g.boundingSphere = g.boundingBox.getBoundingSphere(new THREE.Sphere());
+  const a = Math.max(0, i0 - 1);
+  const b = Math.min(N - 1, i1 + 1);
+  const c = Math.max(0, j0 - 1);
+  const d = Math.min(N - 1, j1 + 1);
+  landNormals(n, a, b, c, d);
+  for (const name of ['position', 'normal']) {
+    if (!fresh) g.attributes[name].addUpdateRange(c * N * 3, (d - c + 1) * N * 3);
+    g.attributes[name].needsUpdate = true;
+  }
+  if (restyle) colorLand(n, 0, N - 1, 0, N - 1);
+  else colorLand(n, Math.max(0, i0 - 3), Math.min(N - 1, i1 + 3), Math.max(0, j0 - 3), Math.min(N - 1, j1 + 3));
+  const bottom = lo - Math.max(2, size * 0.04);
+  if (fresh || grid.bottom !== bottom || i0 === 0 || j0 === 0 || i1 === N - 1 || j1 === N - 1) {
+    grid.bottom = bottom;
+    buildSkirt(n, pos, N, bottom);
+  }
+}
+
+// Each point's normal, from the slope of the land around it.
+function landNormals(n, i0, i1, j0, j1) {
+  const { N, step } = n.grid;
+  const g = n.obj.geometry;
+  const pos = g.attributes.position.array;
+  const nor = g.attributes.normal.array;
+  for (let j = j0; j <= j1; j++) {
+    const ja = j > 0 ? j - 1 : j;
+    const jb = j < N - 1 ? j + 1 : j;
+    for (let i = i0; i <= i1; i++) {
+      const ia = i > 0 ? i - 1 : i;
+      const ib = i < N - 1 ? i + 1 : i;
+      const dx = (pos[(j * N + ib) * 3 + 1] - pos[(j * N + ia) * 3 + 1]) / ((ib - ia) * step);
+      const dz = (pos[(jb * N + i) * 3 + 1] - pos[(ja * N + i) * 3 + 1]) / ((jb - ja) * step);
+      const l = Math.sqrt(dx * dx + 1 + dz * dz);
+      const k = (j * N + i) * 3;
+      nor[k] = -dx / l;
+      nor[k + 1] = 1 / l;
+      nor[k + 2] = -dz / l;
+    }
+  }
+}
+
+// The land's height at x, z in its own space (between its four nearest points), from its positions.
+function gridHeight(grid, pos, x, z) {
+  const { N, size, step } = grid;
+  const fx = Math.min(N - 1, Math.max(0, (x + size / 2) / step));
+  const fz = Math.min(N - 1, Math.max(0, (z + size / 2) / step));
+  const i = Math.min(Math.floor(fx), N - 2);
+  const j = Math.min(Math.floor(fz), N - 2);
+  const tx = fx - i;
+  const tz = fz - j;
+  const k = j * N + i;
+  const a = pos[k * 3 + 1];
+  const b = pos[(k + 1) * 3 + 1];
+  const c = pos[(k + N) * 3 + 1];
+  const d = pos[(k + N + 1) * 3 + 1];
+  return a + (b - a) * tx + (c - a) * tz + (a - b - c + d) * tx * tz;
+}
+
+// Picking the land: walk along the ray over the heights (half a grid step at a time) instead of testing every
+// triangle, then home in on where it crosses. Quick enough for a brush that picks on every mouse move.
+function rayLand(n, rc, hits) {
+  const grid = n.grid;
+  if (!grid) return;
+  const pos = n.obj.geometry.attributes.position.array;
+  const half = grid.size / 2;
+  const o = n.obj.position;  // the land moves, but never turns or grows
+  const ray = rc.ray;
+  const ox = ray.origin.x - o.x;
+  const oy = ray.origin.y - o.y;
+  const oz = ray.origin.z - o.z;
+  const { x: dx, y: dy, z: dz } = ray.direction;
+  let t0 = rc.near;
+  let t1 = rc.far;
+  for (const [org, dir, a, b] of [[ox, dx, -half, half], [oy, dy, grid.lo - 0.01, grid.hi + 0.01], [oz, dz, -half, half]]) {
+    if (Math.abs(dir) < 1e-12) {
+      if (org < a || org > b) return;
+      continue;
+    }
+    const ta = (a - org) / dir;
+    const tb = (b - org) / dir;
+    t0 = Math.max(t0, Math.min(ta, tb));
+    t1 = Math.min(t1, Math.max(ta, tb));
+    if (t0 > t1) return;
+  }
+  const above = (t) => oy + dy * t - gridHeight(grid, pos, ox + dx * t, oz + dz * t);
+  if (above(t0) < 0) return;  // it starts under the land
+  const st = grid.step * 0.5;
+  for (let ta = t0; ta < t1;) {
+    const tb = Math.min(ta + st, t1);
+    if (above(tb) <= 0) {
+      let a = ta;
+      let b = tb;
+      for (let q = 0; q < 14; q++) {
+        const m = (a + b) / 2;
+        if (above(m) > 0) a = m;
+        else b = m;
+      }
+      hits.push({ distance: b, point: new THREE.Vector3(ray.origin.x + dx * b, ray.origin.y + dy * b, ray.origin.z + dz * b),
+        object: n.obj, face: null, faceIndex: null });
+      return;
+    }
+    ta = tb;
+  }
+}
+
+// The land's sides: earth going down from its edges, so from afar it's a solid piece of land, not a sheet.
+function buildSkirt(n, pos, N, bottom) {
+  if (!n.skirt) {
+    n.skirt = new THREE.Mesh(new THREE.BufferGeometry(),
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: THREE.DoubleSide }));
+    n.skirt.castShadow = n.skirt.receiveShadow = true;
+    n.obj.add(n.skirt);
+  }
+  let g = n.skirt.geometry;
+  const count = (N - 1) * 4 * 6;
+  if (!g.attributes.position || g.attributes.position.count !== count) {  // a new size: a new geometry (no stale buffers)
+    g.dispose();
+    g = n.skirt.geometry = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+  }
+  const out = g.attributes.position.array;
+  const col = g.attributes.color.array;
+  const top = new THREE.Color('#6e5436');
+  const low = new THREE.Color('#33281d');
+  let at = 0;
+  const corner = (k, y, c) => {
+    out[at] = pos[k * 3]; out[at + 1] = y; out[at + 2] = pos[k * 3 + 2];
+    col[at] = c.r; col[at + 1] = c.g; col[at + 2] = c.b;
+    at += 3;
+  };
+  for (let side = 0; side < 4; side++) {
+    for (let q = 0; q + 1 < N; q++) {
+      const a = side === 0 ? q : side === 1 ? (N - 1) * N + q : side === 2 ? q * N : q * N + N - 1;
+      const b = side === 0 ? q + 1 : side === 1 ? (N - 1) * N + q + 1 : side === 2 ? (q + 1) * N : (q + 1) * N + N - 1;
+      corner(a, pos[a * 3 + 1], top); corner(b, pos[b * 3 + 1], top); corner(b, bottom, low);
+      corner(a, pos[a * 3 + 1], top); corner(b, bottom, low); corner(a, bottom, low);
+    }
+  }
+  g.attributes.position.needsUpdate = true;
+  g.attributes.color.needsUpdate = true;
+  g.computeVertexNormals();
+  g.computeBoundingSphere();
+}
+
+function palette(style) {
+  let pal = palettes.get(style);
+  if (!pal) {
+    const s = LAND_STYLES[style] || LAND_STYLES.grass;
+    const c = (hex) => (hex ? new THREE.Color(hex) : null);
+    pal = { ...s, main: s.main.map(c), shore: c(s.shore), bed: c(s.bed), rock: c(s.rock), snow: c(s.snow) };
+    palettes.set(style, pal);
+  }
+  return pal;
+}
+
+function smooth01(a, b, x) {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
+// The water near the land: [x, z, level, r (0: a sea)], in the land's own space.
+function landWaters(n) {
+  const o = n.obj.position;
+  const waters = [];
+  for (const w of (n.host && n.host.waters) || []) {
+    if (w.obj.visible) waters.push([w.obj.position.x - o.x, w.obj.position.z - o.z, w.obj.position.y - o.y, +w.p.r || 0]);
+  }
+  return waters;
+}
+
+// Colours the points from k0 to k1 in the style s, by where they are (pos), how steep (their normals) and how they
+// curve (curveOf(k): above or below the land around it). `noise`, if given, has each point's two patch noises.
+function paintLand(s, pos, nor, k0, k1, curveOf, waters, out, noise) {
+  const [m0, m1, m2] = s.main;
+  let r = 0;
+  let gr = 0;
+  let b = 0;
+  const mix = (c, t) => { if (t > 0) { r += (c.r - r) * t; gr += (c.g - gr) * t; b += (c.b - b) * t; } };
+  for (let k = k0; k <= k1; k++) {
+    const x = pos[k * 3];
+    const h = pos[k * 3 + 1];
+    const z = pos[k * 3 + 2];
+    const slope = 1 - nor[k * 3 + 1];  // 0 flat, 1 a wall
+    const big = noise ? noise[k * 2] : bigPatches(x, z);
+    const small = noise ? noise[k * 2 + 1] : smallPatches(x, z);
+    r = m0.r; gr = m0.g; b = m0.b;
+    mix(m1, smooth01(0.3, 0.75, big));
+    mix(m2, smooth01(0.5, 0.9, small) * 0.55);
+    let shore = 0;
+    let bed = 0;
+    for (const [wx, wz, wy, wr] of waters) {
+      const near = wr > 0 ? 1 - smooth01(wr * 1.02, wr * 1.15, Math.hypot(x - wx, z - wz) + (small - 0.5) * wr * 0.12) : 1;
+      if (near <= 0) continue;
+      shore = Math.max(shore, near * (1 - smooth01(wy + 0.12, wy + 0.45 + small * 0.5, h)));
+      bed = Math.max(bed, near * smooth01(wy - 0.2, wy - 1.8, h));
+    }
+    mix(s.shore, shore);
+    mix(s.bed, bed);
+    // Rock in layers: bands of lighter and darker stone up the slope.
+    const rock = Math.max(smooth01(0.2, 0.36, slope + (small - 0.5) * 0.12),
+      smooth01(s.rockline, s.rockline + 5, h + (big - 0.5) * 6) * 0.85);
+    mix(s.rock, rock);
+    if (rock > 0) {
+      const band = 0.84 + 0.2 * (0.5 + 0.5 * Math.sin(h * 1.1 + big * 7)) * (0.6 + 0.4 * small);
+      const f = 1 + (band - 1) * rock;
+      r *= f; gr *= f; b *= f;
+    }
+    if (s.snow) mix(s.snow, smooth01(s.snowline - 1.5, s.snowline + 1.5, h + (big - 0.5) * 5) * (1 - smooth01(0.45, 0.65, slope)));
+    const shade = Math.min(1.14, Math.max(0.72, 1 + curveOf(k) * 0.22)) * (0.94 + small * 0.12);
+    out[k * 3] = r * shade;
+    out[k * 3 + 1] = gr * shade;
+    out[k * 3 + 2] = b * shade;
+  }
+}
+
+// Colours the land's points from column i0 to i1 in rows j0 to j1 (and the land around it, when that changed).
+function colorLand(n, i0, i1, j0, j1) {
+  const g = n.obj.geometry;
+  const { N, size, noise } = n.grid;
+  const pos = g.attributes.position.array;
+  const H = (i, j) => pos[((j < 0 ? 0 : j >= N ? N - 1 : j) * N + (i < 0 ? 0 : i >= N ? N - 1 : i)) * 3 + 1];
+  const curve = (k) => {
+    const i = k % N;
+    const j = (k - i) / N;
+    return pos[k * 3 + 1] - (H(i - 2, j) + H(i + 2, j) + H(i, j - 2) + H(i, j + 2)) / 4;
+  };
+  const s = palette(n.p.style);
+  const waters = landWaters(n);
+  const color = g.attributes.color;
+  for (let j = j0; j <= j1; j++) paintLand(s, pos, g.attributes.normal.array, j * N + i0, j * N + i1, curve, waters, color.array, noise);
+  color.addUpdateRange(j0 * N * 3, (j1 - j0 + 1) * N * 3);
+  color.needsUpdate = true;
+  buildApron(n, pos, N, size, s, waters);
+  if (n.host) n.host.dirty = true;
+}
+
+// Beyond the land's edges: more land, out to the fog, so nobody looks over the edge into nothing. It starts at the
+// edge's own heights, levels out, and rolls into low hills further off. It's only scenery: nothing stands on it,
+// the player can't walk there, and picking goes through it.
+function buildApron(n, pos, N, size, s, waters) {
+  let sum = 0;
+  for (let q = 0; q < N; q++) sum += pos[q * 3 + 1] + pos[((N - 1) * N + q) * 3 + 1] + pos[q * N * 3 + 1] + pos[(q * N + N - 1) * 3 + 1];
+  const key = `${N} ${size} ${n.p.style} ${sum.toFixed(3)} ${JSON.stringify(waters)}`;
+  if (n.apronKey === key) return;  // painting inside the land doesn't change it
+  n.apronKey = key;
+  const C = 16;          // cells per land width
+  const reach = 3.5;     // land widths from the middle
+  const cells = Math.round(2 * reach * C);
+  const K = cells + 1;
+  const step = size / C;
+  const half = size / 2;
+  const base = sum / (4 * N);
+  if (n.apron && n.apron.userData.size !== size) {  // its texture coordinates are for the old size
+    n.obj.remove(n.apron);
+    n.apron.geometry.dispose();
+    n.apron = null;
+  }
+  if (!n.apron) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(K * K * 3), 3));
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(K * K * 3), 3));
+    const uv = new Float32Array(K * K * 2);
+    const index = [];
+    for (let j = 0; j < K; j++) {
+      for (let i = 0; i < K; i++) {
+        const x = -reach * size + i * step;
+        const z = -reach * size + j * step;
+        uv[(j * K + i) * 2] = (x + half) / 8;
+        uv[(j * K + i) * 2 + 1] = (half - z) / 8;
+        const cx = x + step / 2;
+        const cz = z + step / 2;
+        if (i < cells && j < cells && (Math.abs(cx) > half || Math.abs(cz) > half)) {
+          const a = j * K + i;
+          index.push(a, a + K, a + 1, a + 1, a + K, a + K + 1);
+        }
+      }
+    }
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    g.setIndex(index);
+    n.apron = new THREE.Mesh(g, n.obj.material);
+    n.apron.userData.size = size;
+    n.apron.receiveShadow = true;
+    n.apron.raycast = () => {};
+    n.obj.add(n.apron);
+  }
+  const g = n.apron.geometry;
+  const out = g.attributes.position.array;
+  for (let j = 0, k = 0; j < K; j++) {
+    for (let i = 0; i < K; i++, k++) {
+      const x = -reach * size + i * step;
+      const z = -reach * size + j * step;
+      const away = Math.max(Math.abs(x), Math.abs(z)) - half;  // how far outside the land
+      const e = gridHeight(n.grid, pos, x, z);  // the land's height at the nearest point of its edge
+      let h = e;
+      if (away > 0) {
+        const hills = size * 0.12 * Math.max(0, noise2(x / (size * 0.3) + 3.1, z / (size * 0.3) - 7.7) - 0.35);
+        h = e + (base - e) * smooth01(0, size * 0.25, away) + hills * smooth01(size * 0.2, size * 1.2, away);
+      }
+      out[k * 3] = x;
+      out[k * 3 + 1] = h;
+      out[k * 3 + 2] = z;
+    }
+  }
+  g.attributes.position.needsUpdate = true;
+  g.computeVertexNormals();
+  g.computeBoundingSphere();
+  paintLand(s, out, g.attributes.normal.array, 0, K * K - 1, () => 0, waters, g.attributes.color.array, null);
+  g.attributes.color.needsUpdate = true;
+}
+
+// Smooth value noise from 0 to 1 (the same every time for the same x, z), and its lattice: `wrap` makes it repeat.
+function hash2(i, j) {
+  let h = (Math.imul(i, 374761393) + Math.imul(j, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) & 0xffff) / 65535;
+}
+
+// The land's colour patches: big soft ones (~30 m) and small ones (~6 m), turned off the grid so they don't line up.
+function bigPatches(x, z) {
+  return noise2(x * 0.03 + z * 0.018 + 17.3, z * 0.03 - x * 0.018 - 5.1);
+}
+
+function smallPatches(x, z) {
+  const u = x * 0.87 + z * 0.5;
+  const v = z * 0.87 - x * 0.5;
+  return 0.65 * noise2(u * 0.16 - 3.7, v * 0.16 + 8.9) + 0.35 * noise2(u * 0.41 + 1.3, v * 0.41 - 2.2);
+}
+
+function noise2(x, z, wrap = 0) {
+  const i = Math.floor(x);
+  const j = Math.floor(z);
+  const fx = x - i;
+  const fz = z - j;
+  const sx = fx * fx * (3 - 2 * fx);
+  const sz = fz * fz * (3 - 2 * fz);
+  const at = wrap ? (a, c) => hash2(((a % wrap) + wrap) % wrap, ((c % wrap) + wrap) % wrap) : hash2;
+  const a = at(i, j);
+  const bb = at(i + 1, j);
+  const c = at(i, j + 1);
+  const d = at(i + 1, j + 1);
+  return a + (bb - a) * sx + (c - a) * sz + (a - bb - c + d) * sx * sz;
+}
+
+// The land's grain: soft grey noise in three sizes and a few specks (it multiplies the colours), repeating every 8 m
+// without a seam. Up close it's tufts and grit; further off it fades into the land's own colours.
+function landTexture() {
+  if (landGrain) return landGrain;
+  const S = 512;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d');
+  const img = g.createImageData(S, S);
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const speck = hash2(x * 3 + 11, y * 5 + 3);
+      // No blobs bigger than half a metre: bigger ones would show the 8 m repeat from up high.
+      let v = 0.38 * noise2(x / 32, y / 32, 16) + 0.3 * noise2(x / 10.24, y / 10.24, 50) + 0.2 * noise2(x / 4, y / 4, 128)
+        + 0.12 * hash2(x + 1013, y + 7);
+      if (speck < 0.05) v -= 0.22;
+      else if (speck > 0.975) v += 0.14;
+      const k = Math.round(255 * Math.max(0, Math.min(1, 0.45 + 0.75 * v)));
+      const at = (y * S + x) * 4;
+      img.data[at] = img.data[at + 1] = img.data[at + 2] = k;
+      img.data[at + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  landGrain = new THREE.CanvasTexture(c);
+  landGrain.wrapS = landGrain.wrapT = THREE.RepeatWrapping;
+  landGrain.anisotropy = 8;
+  return landGrain;
+}
+
+// 'water': a lake's (a circle of radius `r` around its position, a little wider than the hollow under it) or, with
+// r 0, a sea (a square `size` across). Its height is its level. With modern lighting it reflects the sky.
+const WATER_KEYS = new Set(['r', 'size', 'color', 'opacity']);
+
+function makeWater() {
+  const p = { r: 10, size: 800, color: '#1f6f98', opacity: 0.82 };
+  const m = new THREE.MeshStandardMaterial({ color: p.color, roughness: 0.15, metalness: 0.1, transparent: true, opacity: p.opacity,
+    envMapIntensity: 0.65 });
+  const obj = new THREE.Mesh(new THREE.BufferGeometry(), m);
+  obj.receiveShadow = true;
+  const n = { obj, p, pick: true, water: true };
+  buildWater(n);
+  return n;
+}
+
+function buildWater(n) {
+  const p = n.p;
+  const r = +p.r || 0;
+  const g = r > 0 ? new THREE.CircleGeometry(r * 1.04, Math.max(24, Math.min(96, Math.round(r * 4))))
+    : new THREE.PlaneGeometry(+p.size || 800, +p.size || 800);
+  g.rotateX(-Math.PI / 2);
+  n.obj.geometry.dispose();
+  n.obj.geometry = g;
+  n.obj.material.color.set(p.color);
+  n.obj.material.opacity = p.opacity;
+}
+
+// The land's height at x, z in the world (between its four nearest points), as Python works it out too.
+function landHeight(t, x, z) {
+  const o = t.obj.position;
+  if (!t.grid) return o.y;
+  return o.y + gridHeight(t.grid, t.obj.geometry.attributes.position.array, x - o.x, z - o.z);
 }
 
 function geometry(type, p) {
@@ -783,6 +1434,8 @@ function setObj(n, props) {
   let geo = false;
   let mat = false;
   let relabel = false;
+  let land = false;
+  let water = false;
   for (const k in props) {
     const v = props[k];
     switch (k) {
@@ -794,9 +1447,9 @@ function setObj(n, props) {
         if (n.type === 'model') loadModel(n, v);
         else p[k] = v;
         break;
-      case 'x': o.position.x = v; break;
-      case 'y': o.position.y = v; break;
-      case 'z': o.position.z = v; break;
+      case 'x': o.position.x = v; if (n.at) n.at[0] = v; break;
+      case 'y': o.position.y = v; if (n.at) n.at[1] = v; break;
+      case 'z': o.position.z = v; if (n.at) n.at[2] = v; break;
       case 'rx': o.rotation.x = v * DEG; break;
       case 'ry': o.rotation.y = v * DEG; break;
       case 'rz': o.rotation.z = v * DEG; break;
@@ -812,11 +1465,12 @@ function setObj(n, props) {
         o.castShadow = !!v;
         if (o.isMesh) o.receiveShadow = !!v;
         break;
-      case 'intensity': if (o.isLight) o.intensity = v; break;
+      case 'intensity': if (o.isLight) { p.intensity = v; o.intensity = v * lightScale(n); } break;
       case 'distance': if (o.isLight) o.distance = v; break;
       case 'ground': if (o.groundColor) o.groundColor.set(v); break;
       case 'area':
-        if (o.shadow && o.shadow.camera.isOrthographicCamera) {
+        p.area = v;
+        if (o.shadow && o.shadow.camera.isOrthographicCamera && !n.host.modern) {
           const c = o.shadow.camera;
           c.left = c.bottom = -v;
           c.right = c.top = v;
@@ -824,6 +1478,12 @@ function setObj(n, props) {
         }
         break;
       default:
+        if (n.land) {
+          if (LAND_KEYS.has(k)) { p[k] = v; land = true; }
+          if (k === 'style') n.restyle = true;
+          break;
+        }
+        if (n.water) { if (WATER_KEYS.has(k)) { p[k] = v; water = true; } break; }
         if (k === 'r' && n.type === 'cylinder') { p.rt = p.rb = v; geo = true; break; }
         if (k === 'color' && o.isLight) { o.color.set(v); break; }
         p[k] = v;
@@ -835,6 +1495,9 @@ function setObj(n, props) {
   if (geo && o.isMesh) o.geometry = geometry(n.type, p);
   if (mat && o.isMesh) material(n);
   if (relabel) drawLabel(n);
+  if (land) buildLand(n);
+  if (water) buildWater(n);
+  if (n.water) n.host.recolor = true;  // the land by it gets its sand where the water is now
   n.host.dirty = true;
 }
 
@@ -851,6 +1514,18 @@ function draw3d(n) {
   if (n.sky) {
     n.sky.position.copy(n.camera.position);
     n.sky.scale.setScalar(n.camera.far * 0.9);
+  }
+  if (n.recolor) {
+    n.recolor = false;
+    for (const t of n.lands || []) if (t.grid) colorLand(t, 0, t.grid.N - 1, 0, t.grid.N - 1);
+  }
+  if (n.modern) {
+    try {
+      if (n.envDirty) makeEnvironment(n);
+      for (const l of n.suns || []) followSun(n, l);
+    } catch {
+      setLighting(n, 'simple');  // the graphics couldn't: this scene stays simple, without an error
+    }
   }
   sizeLabels(n);
   n.renderer.render(n.scene, n.camera);
