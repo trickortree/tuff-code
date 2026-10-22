@@ -537,11 +537,24 @@ try {
   const hillsMsg = ai.buildMessage(hills, ai.improve(hills));
   check('A world with hills and a lake is a tgame 3D world: the tgame and land sections, and tgame.world and :terrain in the card', ai.improve(hills).target === 'game' && /^### tgame/m.test(hillsMsg) && /^#### Land and lighting \(3D\)/m.test(hillsMsg) && /It's a tgame 3D world: .*tgame\.world\("Title"\).*game:terrain\(200\)/.test(hillsMsg), hillsMsg.match(/^#+ .*|^- It's .*/gm));
   check('... but "Hello world" and a 3D printer are still console programs', ai.improve({ question: 'Make a hello world program' }).target === 'console' && ai.improve({ question: 'Make a program that works out what a 3D print costs' }).target === 'console', null);
+  // Menus, buttons and screens in a game are tgame's panels and screens: "Add a Shop button" with a game open is
+  // game UI, not an app window, and the message has the guide's section on them and the card says how.
+  const uiAsks = [{ question: 'Add a Shop button that opens a shop', file: 'catch.tuf', code: game },
+    { question: 'Make a game with a start screen where you catch apples' },
+    { question: 'Add a pause menu with a volume slider', file: 'catch.tuf', code: game },
+    { question: 'Make a 3D world with hills and a lake, and a title screen with click to play' }];
+  const uiMsgs = uiAsks.map((q) => ai.buildMessage(q, ai.improve(q)));
+  check('A game request about buttons, menus or screens is a game, with the "Menus, buttons and screens in games" section and game:panel / game:screen in the card',
+    uiAsks.every((q) => ai.improve(q).target === 'game') && uiMsgs.every((t) => /^#### Menus, buttons and screens in games/m.test(t) && /^### tgame/m.test(t) && /bar = game:panel\("top left"\).*shop = game:screen\("Shop"\).*game:start_screen/.test(t)),
+    uiMsgs.map((t) => t.match(/^#+ .*|^- Buttons.*/gm)));
+  const hillsUi = uiMsgs[3];
+  check('... with room for the land section too in a 3D world', /^#### Land and lighting \(3D\)/m.test(hillsUi), hillsUi.match(/^#+ .*/gm));
+  check('... but an mtgui app with a button is still a window, even with a game open', ai.improve({ question: 'Make an mtgui app with a button', file: 'catch.tuf', code: game }).target === 'window' && ai.improve({ question: 'Make an mtgui number guessing game with a Guess button' }).target === 'window', null);
   // The guide splits at every heading, so "Games Tuff Engine can edit" (under tgame) is its own section. It
   // went into a quarter of Tuff Bench's console messages. "Land and lighting (3D)" is under tgame too.
   const consoleMsgs = ['Make a program that shows these three lines:\nGood morning, campers!\nBreakfast is at 8', 'Make a program that adds up the numbers in a list and shows the total.', 'Make a guessing game where the secret number is 42.'].map((q) => ai.buildMessage({ question: q }, ai.improve({ question: q })));
   const windowMsg = ai.buildMessage({ question: 'Make an mtgui window with a heading and a button' }, ai.improve({ question: 'Make an mtgui window with a heading and a button' }));
-  check('A console or window request never gets the guide\'s tgame sections', [...consoleMsgs, windowMsg].every((t) => !/^#+ (tgame|Land and lighting \(3D\)|Games Tuff Engine can edit)/m.test(t)), [...consoleMsgs, windowMsg].map((t) => t.match(/^#+ .*/gm)));
+  check('A console or window request never gets the guide\'s tgame sections', [...consoleMsgs, windowMsg].every((t) => !/^#+ (tgame|Menus, buttons and screens in games|Land and lighting \(3D\)|Games Tuff Engine can edit)/m.test(t)), [...consoleMsgs, windowMsg].map((t) => t.match(/^#+ .*/gm)));
   const fixIn = { question: 'It should count to 3. Can you fix it?', file: 'C:\\p\\count.tuf', code: 'say "Counting"\nfor n in range(1, 3)\n    say n\n', runError: 'Tuff error on line 2: expected ":"\n  2 | for n in range(1, 3)\n                       ^' };
   const card = ai.improve(fixIn);
   check('A fix: the card names the file, the error\'s line and what it says, and what a good answer has', card.kind === 'fix' && /count\.tuf \(3 lines\)/.test(card.text) && /stopped at line 2 \(for n in range\(1, 3\)\): Tuff error on line 2: expected ":"/.test(card.text) && /naming the mistake and the line/.test(card.text), card.text);
