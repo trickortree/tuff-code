@@ -1275,7 +1275,7 @@ try { window.registerTuff(monaco, '#3574f0'); } catch (e) { console.error(e); }
 const after = (src) => provider.provideCompletionItems({ getWordUntilPosition: () => ({ startColumn: 5, endColumn: 5 }),
   getLineContent: () => 'app:', getValue: () => src, getLinesContent: () => src.split('\\n') }, { lineNumber: 1, column: 5 }).suggestions.map((s) => s.label);
 console.log(JSON.stringify({ libs: window.TUFF_LIBS, docs: window.TUFF_DOCS, methods: window.TUFF_METHOD_DOCS, snippets,
-  plain: after('app = tgui.window()\\n'), games: after('mention tgame\\n') }));
+  plain: after('app = tgui.window()\\n'), games: after('mention tgame\\n'), ui: after('mention tgame\\nbar = game:panel("top left")\\n') }));
 """
 
 
@@ -1299,6 +1299,12 @@ def t_editor(c):
     c.check("button" in t["plain"] and "frame" not in t["plain"] and "spawn" not in t["plain"],
             "after app: in a file without tgame, the list leaves out tgame's own methods", [m for m in t["plain"] if m in ("frame", "spawn", "button")])
     c.check("frame" in t["games"] and "spawn" in t["games"] and "button" in t["games"], "in a tgame file it offers them all", len(t["games"]))
+    ui = ("panel", "screen", "start_screen", "shown")
+    c.check(all(m in t["methods"] and "tgame" in t["methods"][m][1] for m in ui), "game:panel, :screen, :start_screen and :shown have tgame hover docs",
+            [m for m in ui if m not in t["methods"]])
+    c.check(all(m in t["games"] for m in ui), "a tgame file offers them after a ':'", [m for m in ui if m not in t["games"]])
+    c.check("textarea" in t["ui"] and "switch" in t["ui"] and "textarea" not in t["games"],
+            "with a panel or screen in it, a tgame file offers atgui's widgets too (and only then)", [m for m in ("textarea", "switch") if m not in t["ui"]])
     games = [(label, text) for label, text in t["snippets"] if label.startswith("tgame")]
     c.check(len(games) == 2, "there are 2D and 3D starter snippets", [g[0] for g in games])
     import re
@@ -1419,9 +1425,45 @@ BAD = [
     ('w = tgame.world("x")\nw:terrain(100, "grass", 3)\n', "world:terrain got the wrong number of inputs (3)."),
     ('game = tgame.window("x")\ngame:terrain(100)\n', "A game doesn't have :terrain."),
     ('game = tgame.window("x")\ngame:panel "top lft"\n', 'not "top lft". Did you mean "top left"?'),
-    ('w = tgame.world("x")\nw:panel("middle", 3)\n', "world:panel got the wrong number of inputs (2)."),
+    ('w = tgame.world("x")\nw:panel("middle", 3)\n', "w:panel got the wrong number of inputs (2)."),
     ('game = tgame.window("x")\ngame:menu "Shop"\n', "A game doesn't have :menu. Use :screen instead."),
     ('w = tgame.world("x")\nw:title_screen "Go"\n', "A world doesn't have :title_screen. Use :start_screen instead."),
+    # Menus, buttons and screens: where a panel goes (with "did you mean"), the inputs of game:panel, game:screen
+    # and game:start_screen, the widgets on them (checked like atgui's), and widgets asked of the game or the HUD.
+    ('game = tgame.window("x")\nbar = game:panel("top-centre")\n',
+     'A panel can go at "top left", "top", "top right", "left", "center", "right", "bottom left", "bottom" or "bottom right", '
+     'not "top-centre". Did you mean "top"?'),
+    ('game = tgame.window("x")\nbar = game:panel("middel")\n', 'not "middel". Did you mean "center"?'),
+    ('w = tgame.world("x")\nbar = w:panel("upper right")\n', 'not "upper right". Did you mean "top right"?'),
+    ('game = tgame.window("x")\nbar = game:panel("sideways")\n', 'A panel can go at "top left"'),
+    ('game = tgame.window("x")\nbar = game:panel("top", "left")\n', "game:panel got the wrong number of inputs (2)."),
+    ('game = tgame.window("x")\nbar = game:panel(10)\n', "A panel's input is where it goes, written as text"),
+    ('game = tgame.window("x")\nshop = game:screen("Shop", "no")\n', "A screen's second input is whether it pauses the game while it shows: true or false"),
+    ('game = tgame.window("x")\nshop = game:screen("Shop", true, 3)\n', "game:screen got the wrong number of inputs (3)."),
+    ('game = tgame.window("x")\nfunc go():\n    nil\nshop = game:screen(go)\n', "A screen's first input is its title"),
+    ('w = tgame.world("x")\nfunc go():\n    nil\nstart = w:start_screen("Go", go)\n',
+     "A start screen takes a title and a hint, both text, like: start = w:start_screen(\"My Game\", \"Click to play\")."),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nbar:buton("Shop")\n', "A panel doesn't have :buton. Did you mean :button?"),
+    ('game = tgame.window("x")\nshop = game:screen("Shop")\nshop:shwo()\n', "A screen doesn't have :shwo. Did you mean :show?"),
+    ('w = tgame.world("x")\nstart = w:start_screen("Go")\nstart:opn()\n', "A screen doesn't have :opn."),
+    ('game = tgame.window("x")\nshop = game:screen("Shop")\nshop:close()\n', "A screen doesn't have :close. Use :hide instead."),
+    ('game = tgame.window("x")\nshop = game:screen("Shop")\nif shop:visible():\n    nil\n', "A screen doesn't have :visible. Use :shown instead."),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nb = bar:button("Shop")\nb:wobble()\n', "A button doesn't have :wobble."),
+    ('game = tgame.window("x")\nshop = game:screen("Shop")\nbox = shop:input("Name")\nbox:set(1, 2)\n', "input:set got the wrong number of inputs (2)."),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nbar:button("Shop", go, "shiny")\nfunc go():\n    nil\n', "'shiny' isn't a button style."),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nbar:button("Shop", go)\nfunc go(a, b):\n    nil\n',
+     "go() needs 2 inputs, but a button click only gives it 1"),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nbar:button("Shop", go())\nfunc go():\n    nil\n',
+     "Pass the function's name without brackets: go, not go()."),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nbar:button("Shop", go)\nfunc go():\n    wait(1)\n',
+     "wait() freezes the game: nothing moves or redraws until it's over. To do something later, use game:after(seconds, fn)."),
+    ('game = tgame.window("x")\nbar = game:panel("top left")\nbar:icon "hom"\n', "There's no icon called 'hom'. Did you mean \"home\"?"),
+    ('game = tgame.window("x")\ngame:button("Shop")\n',
+     "A game doesn't have :button. Buttons, text boxes and other widgets go on a panel or a screen: bar = game:panel(\"top left\"), then bar:button(...)"),
+    ('w = tgame.world("x")\nw:slider(0, 10, 5)\n', "A world doesn't have :slider. Buttons, text boxes and other widgets go on a panel or a screen"),
+    ('game = tgame.window("x")\nhud = game:hud()\nhud:button("Shop")\n', "A hud doesn't have :button. The HUD only draws."),
+    ('game = tgame.window("x")\ngame:menu("Shop")\n', "A game doesn't have :menu. Use :screen instead."),
+    ('w = tgame.world("x")\nw:title_screen("Go")\n', "A world doesn't have :title_screen. Use :start_screen instead."),
 ]
 
 
@@ -1453,6 +1495,25 @@ GOOD_SNIPPETS = [
     'land:lower(stroke, 6, 1)\nfunc dig(x, y, z):\n    land:lower(x, z, 4, 0.5)\nw:clicked dig\np = w:player()\n'
     'say land:height_at(p:x(), p:z())\n',
     'w = tgame.world("x")\nw:terrain(80, "autumn"):hill(0, 0, 20, 4)\nw:island(60)\n',
+    # Menus, buttons and screens: a panel at every place (in any case, with - or _), chained widgets, a start screen
+    # with only a title, screens that pause or not, and :shown as true or false.
+    'game = tgame.window("x")\nfor place in ["top left", "top", "top right", "left", "center", "right", "bottom left", "bottom", "bottom right"]:\n'
+    '    game:panel(place):small place\ngame:panel "Top-Left"\ngame:panel("bottom_right"):card():text "Hi"\n'
+    'start = game:start_screen("Go!")\nstart:text "Dodge the rocks."\nshop = game:screen()\nquiet = game:screen("Map", false)\n'
+    'quiet:hide()\nif shop:shown() and not quiet:shown():\n    say "shop"\nstart:show()\n',
+    # A whole game's UI: a click-to-play start screen, a HUD panel with a button and a progress bar, a pausing shop
+    # with a row, a text box, a slider (its :change), a dropdown, a switch and tabs, and a game over screen.
+    'game = tgame.world("Chop! Chop!", 960, 600)\nplayer = game:player("first person")\n'
+    'start = game:start_screen("Chop! Chop!", "Click to play")\nstart:text "Chop trees for coins, buy better axes."\n'
+    'bar = game:panel("top left")\ncoins_label = bar:heading "Coins: 0"\nbar:button("Shop", open_shop):icon "cart"\nhp = bar:progress(100)\n'
+    'shop = game:screen("Shop")\nrow = shop:row()\nrow:button("Stone Axe (15)", buy_stone)\nrow:badge("New", "success")\n'
+    'name_box = shop:input("Your name")\nname_box:enter named\nvolume = shop:slider(0, 100, 50)\nvolume:change volume_changed\n'
+    'size = shop:dropdown(["Small", "Big"], "Small")\nmusic = shop:switch("Music", true)\ntabs = shop:tabs()\ntabs:tab("Axes"):text "Sharp"\n'
+    'shop:button("Close", close_shop, "secondary")\nshop:hide()\nover = game:screen("Game over")\nover:hide()\n'
+    'over:button("Play again", again):style("radius", 20)\ncoins = 0\n'
+    'func open_shop():\n    shop:show()\nfunc close_shop():\n    shop:hide()\nfunc buy_stone(text):\n    coins_label:set "Coins: " + coins\n'
+    '    hp:set 50\nfunc named(text):\n    say text\nfunc volume_changed(v):\n    game:volume v\nfunc again():\n    over:hide()\n    start:show()\n'
+    'func step(dt):\n    if shop:shown() and size:value() is "Big" and music:value():\n        say name_box:value()\ngame:every_frame step\n',
 ]
 
 
@@ -1481,6 +1542,8 @@ def t_checker(c):
         c.check(True, "Node isn't installed: skipped the MCP's game examples")
     if games is not None:
         c.check(any("terrain(" in g["code"] for g in games), "the MCP's game examples have a world with land (terrain)", [g["id"] for g in games])
+        c.check(any(all(m in g["code"] for m in (":start_screen(", ":panel(", ":button(", ":screen(")) for g in games),
+                "... and a game with a start screen, a panel with a button and a screen", [g["id"] for g in games])
     for g in games or []:
         path = os.path.join(folder, f"example_{g['id']}.tuf")
         with open(path, "w", encoding="utf-8") as f:

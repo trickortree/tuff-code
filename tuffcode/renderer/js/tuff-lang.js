@@ -55,10 +55,10 @@ window.TUFF_METHOD_DOCS = {
   color: ['label:color "red"', 'Changes the text color: blue, purple, pink, red, orange, yellow, green, teal, white, black, gray or "#rrggbb". "text" puts it back to normal. A tgame sprite, object or group takes any of those colors, plus brown, gold, lime, cyan, navy, sky, sand, grass, leaf, wood, stone, water, snow, silver.'],
   disable: ['button:disable', 'Greys out a button so it can\'t be clicked.'],
   enable: ['button:enable', 'Makes a disabled button clickable again.'],
-  hide: ['thing:hide', 'Hides it. Works on tgame sprites, objects and groups too.'],
-  show: ['thing:show', 'Shows it again after :hide. Works on tgame sprites, objects and groups too.'],
+  hide: ['thing:hide', 'Hides it. Works on tgame sprites, objects, groups, panels and screens too.'],
+  show: ['thing:show', 'Shows it again after :hide. Works on tgame sprites, objects, groups, panels and screens too (a screen that pauses pauses the game again).'],
   remove: ['thing:remove', 'Removes a widget for good. On a list, items:remove value takes that value out (by value, not by position). In tgame, it takes a sprite or object out of the game; on a group, group:remove(thing) only takes it out of the group.'],
-  clear: ['thing:clear', 'Empties a text box, or a line you already said. On a row, card or page, removes everything inside it. In tgame, game:clear() removes everything the program made, and group:clear() everything in a group.'],
+  clear: ['thing:clear', 'Empties a text box, or a line you already said. On a row, card or page, removes everything inside it. In tgame, game:clear() removes everything the program made, group:clear() everything in a group, and panel:clear() the widgets on a panel or screen.'],
   rewrite: ['line:rewrite value', 'Replaces the text of a line you already said.'],
   append: ['line:append value', 'Adds text to the end of a line you already said.'],
   add: ['items:add value', 'Lists: adds value to the end of the list. A tgame group adds a sprite or object.'],
@@ -97,6 +97,10 @@ window.TUFF_METHOD_DOCS = {
   random_spot: ['game:random_spot()', 'tgame: a random spot on the screen, [x, y] (or [x, 0, z] on the ground in 3D). random_spot(20) keeps to a grid of 20. Use it anywhere x and y go: food:move_to(game:random_spot())'],
   group: ['things = game:group()', 'tgame: a group of sprites or objects: :add, :remove, :has, :items, :count, and :move, :hide, :show, :color, :clear for all of them at once.'],
   hud: ['hud = game:hud()', 'tgame: a layer on top of the game that the camera doesn\'t move, for scores and messages: hud:text("Score: 0", 80, 30).'],
+  panel: ['bar = game:panel("top left")', 'tgame: real buttons, text boxes and every other atgui widget, pinned to a place on the game: "top left", "top", "top right", "left", "center", "right", "bottom left", "bottom" or "bottom right". bar:button("Shop", open_shop), bar:heading "Coins: 0", bar:progress(100)... Clicks on its widgets go to them; clicks anywhere else reach the game. bar:hide, bar:show, bar:clear.'],
+  screen: ['shop = game:screen("Shop")', 'tgame: a layer over the whole game for a menu, a shop, a pause menu or game over, with the title on top. Add any atgui widget to it (shop:button, shop:input, shop:slider...). It pauses the game while it shows (game:screen("Map", false) doesn\'t). shop:show, shop:hide, shop:shown().'],
+  start_screen: ['start = game:start_screen("My Game", "Click to play")', 'tgame: a title screen over the game, which waits until it\'s clicked (or Enter or Space). In a 3D world with a player, that click also locks the mouse for looking around. Add more to it like a screen (start:text "..."), and start:show() brings it back, like after game over.'],
+  shown: ['shop:shown()', 'tgame: true while a screen (game:screen or game:start_screen) is showing.'],
   box: ['game:box(x, y, width, height, color)', 'tgame: a rectangle. x and y are its middle. In 3D: world:box(x, y, z, size, color), with its bottom at y (0 is the ground); size is a number or [width, height, depth].'],
   circle: ['game:circle(x, y, radius, color)', 'tgame: a circle.'],
   line: ['game:line(x1, y1, x2, y2, color)', 'tgame: a line. :size changes how thick it is.'],
@@ -476,10 +480,10 @@ window.registerTuff = function registerTuff(monaco, accent) {
       }
       if (/\w:$/.test(before)) {
         // atgui's and tgame's own methods (their docs start with "atgui" or "tgame") only crowd the list in files
-        // that use that library.
+        // that use that library. A game with a panel or a screen uses atgui's widgets too.
         const src = model.getValue();
         const games = /^\s*(import|mention)\s+tgame\b/m.test(src);
-        const modern = /^\s*(import|mention)\s+atgui\b/m.test(src);
+        const modern = /^\s*(import|mention)\s+atgui\b/m.test(src) || (games && /:\s*(panel|screen|start_screen)\b/.test(src));
         const names = Object.keys(window.TUFF_METHOD_DOCS).filter((m) => {
           const doc = window.TUFF_METHOD_DOCS[m][1] || '';
           return (games || !/^tgame\b/.test(doc)) && (modern || !/^atgui\b/.test(doc));

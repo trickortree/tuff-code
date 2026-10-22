@@ -40,6 +40,11 @@ check('tuff_examples has the templates (at least 8)', (ex.match(/^## /gm) || [])
 const land = /## Hills and lake \(3D\)[^\n]*\n[^\n]*\n\n```tuff\n([\s\S]*?)```/.exec(ex);
 check('... and a tgame world with land (terrain) and modern lighting, which tuff_check accepts', land && /:terrain\(/.test(land[1]) && /:lighting "modern"/.test(land[1]) && /^OK/.test((await tool('tuff_check', { code: land[1] })).content[0].text), land ? land[1].slice(0, 200) : ex.slice(-300));
 check('the guide has the land and lighting section, with "y is the height above the land"', guide.includes('#### Land and lighting (3D)') && guide.includes('**y is the height above the land.**'), null);
+const shopGame = /## Apple shop \(menus and screens\)[^\n]*\n[^\n]*\n\n```tuff\n([\s\S]*?)```/.exec(ex);
+check('... and a tgame game with a start screen, a panel with a button and a pausing shop screen, which tuff_check accepts', shopGame && /:start_screen\(/.test(shopGame[1]) && /bar = game:panel\("top left"\)/.test(shopGame[1]) && /bar:button\(/.test(shopGame[1]) && /shop = game:screen\("Shop"\)/.test(shopGame[1]) && /^OK/.test((await tool('tuff_check', { code: shopGame[1] })).content[0].text), shopGame ? shopGame[1].slice(0, 200) : ex.slice(-300));
+check('the guide has the menus, buttons and screens section: start screens, panel places, pausing screens, every atgui widget', guide.includes('#### Menus, buttons and screens in games') && ['game:start_screen(', '"bottom right"', 'the game is paused', '**Every atgui widget works on a panel or a screen:**'].every((s) => guide.includes(s)), null);
+const badUi = await tool('tuff_check', { code: 'mention tgame\ngame = tgame.window("x")\nbar = game:panel("middel")\n' });
+check('tuff_check knows where a panel can go, with "did you mean"', badUi.isError && /not "middel"\. Did you mean "center"\?/.test(badUi.content[0].text), badUi.content[0].text);
 const good = await tool('tuff_check', { code: 'say "hi"\nfunc f(x):\n    x * 2\n' });
 check('tuff_check OK on good code', !good.isError && /OK/.test(good.content[0].text), good);
 const bad = await tool('tuff_check', { code: 'if x is 1\n    say 1\n' });

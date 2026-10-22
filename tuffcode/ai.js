@@ -343,13 +343,20 @@ const isGame = (s) => /\bgames?\b/.test(s) && PLAYS.test(s) && !NOT_PLAYED.test(
 // "Make a 3D world with hills and a lake" is a tgame world too, without the word game ("Hello world" isn't).
 const isWorld = (s) => /\bterrain\b|\b3d (worlds?|scenes?|land|maps?)\b/.test(s) || (/\bworlds?\b/.test(s) && /\b(hills?|mountains?|lakes?|valleys?|islands?|forests?)\b/.test(s));
 
+// Menus, buttons and screens in a game: tgame's panels and screens (the guide's "Menus, buttons and screens in
+// games"). "Add a Shop button" with a game open, or "a game with a start screen", is game UI, not an app window.
+const GAME_UI = /\b(menus?|buttons?|panels?|shops?|stores?|inventory|upgrades?|settings|text ?box(es)?|sliders?|dropdowns?|checkbox(es)?|widgets?|ui|gui|(start|title|pause|game ?over|end|win|lose|level|options|main|splash) (screens?|menus?|pages?)|click to (play|start|enter))\b/;
+const SCREEN_WORDS = /\b(start|title|pause|game ?over) (screen|menu)s?\b|\bclick to (play|start|enter)\b/;
+
 // Console, window, game or web: from the words, or else from the library the open file mentions.
 function targetOf(question, code) {
   const s = question.toLowerCase();
   if (/\btgame\b|\bsprites?\b|arrow keys|\bplatformer\b/.test(s) || isGame(s) || isWorld(s)) return 'game';
   if (/\btap\b|\bweb ?(page|site)s?\b|\bwebsite\b|\bapi\b|\burl\b|\binternet\b/.test(s)) return 'web';
-  if (/\b(m?tgui|atgui|windows?|buttons?|sliders?|labels?|gui|clicks?|clicked|text ?box|checkbox|dropdown|toggle|headings?)\b/.test(s)) return 'window';
   const lib = /^\s*(?:mention|import)\s+(\w+)/m.exec(code || '');
+  const inGame = lib?.[1] === 'tgame' || (/\bgames?\b/.test(s) && !NOT_PLAYED.test(s) && SCREEN_WORDS.test(s));
+  if (inGame && GAME_UI.test(s) && !/\b(m?tgui|atgui|apps?)\b/.test(s)) return 'game';
+  if (/\b(m?tgui|atgui|windows?|buttons?|sliders?|labels?|gui|clicks?|clicked|text ?box|checkbox|dropdown|toggle|headings?)\b/.test(s)) return 'window';
   if (lib) return { tgui: 'window', mtgui: 'window', atgui: 'window', tgame: 'game', tap: 'web' }[lib[1]] || 'console';
   return 'console';
 }
@@ -358,15 +365,23 @@ function targetOf(question, code) {
 // them in the message the model answers "ask my name" with a window (37 of Qwen's 105 failed write tasks
 // in Phase 1 did).
 const WINDOW_SECTIONS = ['App windows (tgui / mtgui)', 'Events: what the function gets', 'Timers', 'Pages (several screens in one window)', 'Layout and size', 'Looking good', 'atgui'];
-// The guide splits at every heading, so tgame's "Land and lighting (3D)" and "Games Tuff Engine can edit" are
-// sections of their own.
-const GAME_SECTIONS = ['tgame', 'Land and lighting (3D)', 'Games Tuff Engine can edit'];
+// The guide splits at every heading, so tgame's "Menus, buttons and screens in games", "Land and lighting (3D)"
+// and "Games Tuff Engine can edit" are sections of their own. A game request about menus, buttons or screens
+// always gets the menus one (sectionsFor).
+const GAME_UI_SECTION = 'Menus, buttons and screens in games';
+const GAME_SECTIONS = ['tgame', GAME_UI_SECTION, 'Land and lighting (3D)', 'Games Tuff Engine can edit'];
 const SECTIONS = {
   console: { skip: [...WINDOW_SECTIONS, 'Libraries', ...GAME_SECTIONS, 'tap'] },
   window: { first: ['App windows (tgui / mtgui)'], skip: [...GAME_SECTIONS, 'tap', 'Live lines and clearing (console programs)'] },
   game: { first: ['tgame'], skip: [...WINDOW_SECTIONS, 'tap'] },
   web: { first: ['tap'], skip: [...WINDOW_SECTIONS, ...GAME_SECTIONS] },
 };
+// The sections for a request (and how many): a game's menus, buttons or screens add the guide's section on them,
+// with room left for one more, like the land for a 3D world.
+function sectionsFor(target, question) {
+  if (target !== 'game' || !GAME_UI.test(question.toLowerCase())) return { n: 2, want: SECTIONS[target] };
+  return { n: 3, want: { ...SECTIONS.game, first: [...SECTIONS.game.first, GAME_UI_SECTION] } };
+}
 const WANT = {
   write: 'a Tuff program that does what they describe',
   fix: 'their program fixed, and to know what was wrong',
@@ -393,6 +408,7 @@ const TARGET = {
   game: 'It\'s a tgame game: start with mention tgame, then game = tgame.window("Title", 800, 600).',
   world: 'It\'s a tgame 3D world: start with mention tgame, then game = tgame.world("Title"). Hills, lakes and mountains go on land = game:terrain(200).',
   web: 'It uses the web: start with mention tap, then res = tap.get(url).',
+  gameUi: 'Buttons, text boxes and menus go on the game, not in an app window: bar = game:panel("top left") pins widgets to it (bar:button("Shop", open_shop)), shop = game:screen("Shop") is a screen over it that pauses the game (shop:hide() until it\'s needed), and start = game:start_screen("Title", "Click to play") waits for a click to play.',
 };
 const NOT_PYTHON = 'Tuff, not Python: func (not def), true, false and nil, x is y, items:add(x) (not .append), "Hi " + name (no f-strings), and range(1, 3) gives 1, 2, 3.';
 
@@ -453,7 +469,10 @@ function improve(input) {
     lines.push(`When they last ran it, it stopped${errLine ? ` at line ${errLine}` : ''}${src?.trim() ? ` (${src.trim()})` : ''}: ${err.split('\n')[0].trim()}`);
   }
   const in3d = target === 'game' && (isWorld(question.toLowerCase()) || /\b3d\b/i.test(question) || /\btgame\.world\(/.test(code));
-  if (kind === 'write' || kind === 'edit' || (kind === 'fix' && target !== 'console')) lines.push(TARGET[target === 'console' && ASKS.test(question) ? 'consoleAsks' : in3d ? 'world' : target]);
+  if (kind === 'write' || kind === 'edit' || (kind === 'fix' && target !== 'console')) {
+    lines.push(TARGET[target === 'console' && ASKS.test(question) ? 'consoleAsks' : in3d ? 'world' : target]);
+    if (target === 'game' && GAME_UI.test(question.toLowerCase())) lines.push(TARGET.gameUi);
+  }
   lines.push(`A good answer: ${GOOD[kind]}`);
   if (kind === 'write' || kind === 'fix' || kind === 'edit') lines.push(NOT_PYTHON);
   return { kind, target, focus, text: lines.map((l) => `- ${l}`).join('\n') };
@@ -481,7 +500,8 @@ function buildMessage(input, card, plan = '') {
   if (!card && input.mode === 'edit' && hasFile(input)) parts.push(`Change their program to do what they ask, keep everything else as it is, and give back the whole changed program in one ${fence}tuff block.`);
   if (card) parts.push(`What TuffCode worked out from their question:\n${card.text}${plan ? `\n- The task, as you rewrote it: ${plan.replace(/\s*\n\s*/g, ' ')}` : ''}`);
   const body = parts.join('\n\n');
-  const extra = card ? relevant(`${question}\n${card.focus?.text || ''}\n${input.runError || ''}`, 2, SECTIONS[card.target]) : relevant(body);
+  const sections = card && sectionsFor(card.target, question);
+  const extra = card ? relevant(`${question}\n${card.focus?.text || ''}\n${input.runError || ''}`, sections.n, sections.want) : relevant(body);
   return `${extra.length ? `More of the Tuff guide that may help:\n\n${extra.map((s) => s.text).join('\n\n')}\n\n---\n\n` : ''}${body}`;
 }
 

@@ -330,7 +330,7 @@ while game:open():                            # until the window is closed
 - **Collisions:** `a:touches(b)` is true or false. Given a list or a group, it gives back the one it touches, or nil: `hit = ball:touches(bricks)`. Also `:distance(other)` and `:on_screen()`.
 - **Keys and the mouse:** `game:held("left")` is true while a key is down, and `game:pressed("space")` only in the frame it went down. Keys are letters, numbers, space, enter, escape, shift, up, down, left and right; `"mouse"` is the mouse button. `game:mouse_x()` and `game:mouse_y()`.
 - **Values on things:** `tree:set("hp", 3)` and `tree:get("hp")` (nil if it was never set).
-- **More:** `hud = game:hud()` is a layer on top for scores, `game:group()` holds things that move together (`:add`, `:move`, `:count`, `:clear`), `game:random_spot(20)` keeps to a grid of 20, `game:camera(x, y)` scrolls, `game:time()` and `game:fps()`.
+- **More:** `hud = game:hud()` is a layer on top for drawn scores (real buttons and menus go on a panel or a screen: see "Menus, buttons and screens in games" below), `game:group()` holds things that move together (`:add`, `:move`, `:count`, `:clear`), `game:random_spot(20)` keeps to a grid of 20, `game:camera(x, y)` scrolls, `game:time()` and `game:fps()`.
 - **Sound:** `game:sound "coin"` plays beep, coin, jump, hit, boom, chop, laser, pop, click, step, powerup, win or lose, or a .wav, .mp3 or .ogg file. `game:music "song.mp3"` repeats, and `game:stop_music()`.
 - **Pause and game over:** `game:pause("Paused")`, `game:resume()` and `game:paused()`. `game:game_over("Score: 5", start)` stops the game and shows the message; pressing space then runs `start`, which should put everything back.
 
@@ -367,7 +367,7 @@ game:every(1, drop)
 game:on_key("space", dash)
 ```
 - `game:on_key("any", fn)` runs for every key. `game:clicked fn` gets x and y, and `sprite:clicked fn` gets the sprite. `game:after(seconds, fn)` and `game:every(seconds, fn)` work like an app's, and pause with the game. An every-frame function keeps running while the game is paused, with dt 0, so it can check for the key that resumes it.
-- Don't use `wait` or `input` in a game: they freeze it. A game has one window.
+- Don't use `wait` or `input` in a game: they freeze it. A game has one window: for buttons, text boxes and menus, use a panel or a screen (below), not an atgui or mtgui window.
 
 **3D.** `tgame.world` makes a 3D world. y is height, and an object's y is where its bottom is, so 0 sits on the ground.
 ```tuff
@@ -404,6 +404,99 @@ while game:open():
 - **The player:** `"first person"` or `"third person"`. Solid things block the way and can be stood on. `player:walk_speed 6`, `:jump_height 2`, `:hold "sword"` (axe, pickaxe, sword, torch or hammer), and `game:looking_at()` is the object in the middle of the view, or nil.
 - **Without a player:** `game:camera_at(x, y, z)` with `game:look_at(thing)`, or `game:follow(thing)` (behind it), or `game:orbit(thing)` (drag to turn around it).
 - **Testing a game:** add `game:after(2, selftest)`, call your functions in `func selftest():`, `say` what you find, and end it with `game:close()`.
+
+#### Menus, buttons and screens in games
+Real buttons, text boxes and menus go on a **panel** (pinned to a place on the game) or a **screen** (a layer over the whole game, for a title screen, a shop, a pause menu or game over). They work in 2D and 3D, and they're atgui's own widgets, so they look and work exactly as in the atgui section.
+```tuff
+mention tgame
+
+game = tgame.window("Apple Shop", 600, 400)
+game:background "sky"
+basket = game:box(300, 370, 80, 20, "wood")
+basket:on_edge "stop"
+apple = game:circle(300, 0, 12, "red")
+coins = 0
+speed = 300
+
+start = game:start_screen("Apple Shop", "Click to play")   # the game waits until it's clicked
+start:text "Catch apples with the arrow keys, then spend the coins in the shop."
+
+bar = game:panel("top left")                  # real widgets, pinned to the top left
+coins_label = bar:heading "Coins: 0"
+bar:button("Shop", open_shop):icon "cart"
+
+shop = game:screen("Shop")                    # over the whole game: it pauses the game while it shows
+shop:text "A faster basket catches more apples."
+shop:button("Faster basket (5 coins)", buy_faster)
+shop:button("Back to the game", close_shop, "secondary")
+shop:hide()                                   # screens start shown, so hide it until it's needed
+
+func open_shop():
+    shop:show()
+
+func close_shop():
+    shop:hide()
+
+func buy_faster():
+    if coins >= 5:
+        coins -= 5
+        speed += 150
+        coins_label:set "Coins: " + coins
+        game:sound "powerup"
+
+func step(dt):                                # dt is 0 while a screen pauses the game
+    if game:held("left"):
+        basket:move(-speed * dt, 0)
+    if game:held("right"):
+        basket:move(speed * dt, 0)
+    apple:move(0, 200 * dt)
+    if apple:touches(basket):
+        coins += 1
+        coins_label:set "Coins: " + coins
+        apple:move_to(random(20, 580), 0)
+    elif apple:y() > 400:
+        apple:move_to(random(20, 580), 0)
+
+game:every_frame step
+```
+- **Click to play:** `start = game:start_screen("Title", "Click to play")` (the hint is optional) shows a title screen, and the game waits behind it. A click, Enter or Space hides it and starts the game. In a 3D world with a first- or third-person player, that click also locks the mouse for looking around. Add more to it like any screen (`start:text "..."`), and `start:show()` brings it back, like after game over.
+- **Panels:** `bar = game:panel("top left")` pins a column of widgets to a place on the game: `"top left"`, `"top"`, `"top right"`, `"left"`, `"center"`, `"right"`, `"bottom left"`, `"bottom"` or `"bottom right"`. Clicks on its widgets go to them, and clicks anywhere else reach the game. Panels never pause. `bar:hide`, `bar:show` and `bar:clear` (empties it).
+- **Screens:** `shop = game:screen("Shop")` covers the game with a dimmed layer, with the title on top and its widgets in the middle. It starts shown: `shop:hide()` it until it's needed, then `shop:show()`. `shop:shown()` is true while it shows. While a screen shows, the game is paused like `game:pause()` (dt is 0, nothing moves and timers wait), and it goes on when the screen hides. `game:screen("Map", false)` doesn't pause. A pause menu and a game over screen are screens too: `over = game:screen("Game over")`, then `over:button("Play again", again)`.
+- **Every atgui widget works on a panel or a screen:** `heading`, `text`, `small`, `button(text, fn, style)`, `input`, `textarea`, `checkbox`, `switch`, `slider(low, high, start)`, `dropdown(list, choice)`, `list`, `table`, `tabs`, `card`, `row`, `column`, `grid`, `scroll`, `image`, `icon`, `progress(percent)`, `spinner`, `divider`, `space`, `badge` and `markdown`, with their methods: `:set`, `:value`, `:show`, `:hide`, `:disable`, `:style`, `:animate`, `:change fn`, `:clicked fn`... A slider runs a function with `:change`: `volume = menu:slider(0, 100, 80)`, then `volume:change set_volume`.
+- **Events:** a widget's function runs between frames, like the game's other events, so it can change the game. Keys typed into a text box don't move the player. `game:hud()` stays for drawn scores; use a panel for anything to click.
+```tuff
+mention tgame
+
+game = tgame.world("Forest Walk")
+game:sky "sunset"
+game:island(60)
+player = game:player("first person")
+start = game:start_screen("Forest Walk")      # its click also locks the mouse for looking around
+for i in range(1, 12):
+    game:spawn("pine")
+
+menu = game:screen("Paused")                  # a pause menu: P opens and closes it
+volume = menu:slider(0, 100, 80)
+volume:change set_volume
+menu:button("Resume", close_menu)
+menu:hide()
+game:on_key("p", toggle_menu)
+
+func set_volume(level):
+    game:volume level
+
+func close_menu():
+    menu:hide()
+
+func toggle_menu():
+    if menu:shown():
+        menu:hide()
+    else:
+        menu:show()
+
+while game:open():
+    game:frame()
+```
 
 #### Land and lighting (3D)
 `game:terrain(size)` makes land you shape with hills, mountains, dips, lakes and valleys, or paint with brushes.

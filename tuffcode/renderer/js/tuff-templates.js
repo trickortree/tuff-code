@@ -274,4 +274,95 @@ func chop(tree):
 while game:open():
     game:frame()
 ` },
+    { id: 'apple_shop', name: 'Apple shop (menus and screens)', desc: 'A tgame 2D game with real UI: a click-to-play start screen, a panel pinned to the top left with the coins and a Shop button, a shop screen that pauses the game while it shows, and a game over screen with Play again. Every atgui widget works on a panel or a screen.', code: `mention tgame
+
+game = tgame.window("Apple Shop", 640, 480)
+game:background "sky"
+basket_width = 80
+basket = game:box(320, 450, basket_width, 20, "wood")
+basket:on_edge "stop"
+apple = game:circle(320, 0, 12, "red")
+coins = 0
+speed = 300                                # how fast the basket moves
+misses = 0
+
+# Click to play: a title screen over the game. The game waits behind it until it's clicked.
+start = game:start_screen("Apple Shop", "Click to play")
+start:text "Catch apples with the arrow keys. Miss 3 and it's game over."
+
+# A panel: real widgets pinned to the top left. Clicks on them go to them; clicks anywhere else reach the game.
+bar = game:panel("top left")
+coins_label = bar:heading "Coins: 0"
+lives = bar:progress(100)
+bar:button("Shop", open_shop):icon "cart"
+
+# The shop: a screen over the whole game. It pauses the game while it shows.
+shop = game:screen("Shop")
+shop:text "Spend your coins on a better basket."
+row = shop:row()
+row:button("Wider basket (5)", buy_wider)
+row:button("Faster basket (8)", buy_faster, "gradient")
+shop:button("Back to the game", close_shop, "secondary")
+shop:hide()                                # screens start shown
+
+# Game over is a screen too.
+over = game:screen("Game over")
+caught_text = over:text ""
+over:button("Play again", play_again)
+over:hide()
+
+func open_shop():
+    shop:show()
+
+func close_shop():
+    shop:hide()
+
+func add_coins(n):
+    coins += n
+    coins_label:set "Coins: " + coins
+
+func buy_wider():
+    if coins < 5:
+        game:sound "lose"
+    else:
+        add_coins(-5)
+        basket_width += 30
+        basket:size(basket_width, 20)
+        game:sound "powerup"
+
+func buy_faster():
+    if coins < 8:
+        game:sound "lose"
+    else:
+        add_coins(-8)
+        speed += 150
+        game:sound "powerup"
+
+func play_again():
+    misses = 0
+    lives:set 100
+    add_coins(-coins)
+    over:hide()
+    start:show()                           # back to the title screen
+
+func step(dt):                             # dt is 0 while a screen pauses the game
+    if game:held("left"):
+        basket:move(-speed * dt, 0)
+    if game:held("right"):
+        basket:move(speed * dt, 0)
+    apple:move(0, 220 * dt)
+    if apple:touches(basket):
+        add_coins(1)
+        game:sound "coin"
+        apple:move_to(random(20, 620), 0)
+    elif apple:y() > 480:
+        misses += 1
+        lives:set 100 - misses * 33
+        apple:move_to(random(20, 620), 0)
+        if misses >= 3:
+            caught_text:set "You have " + coins + " coins."
+            over:show()
+
+game:every_frame step
+` },
 ];
