@@ -5,7 +5,7 @@ AI coding agents like Claude Code, Codex and Antigravity don't know Tuff. TuffCo
 | Tool | What it does |
 | --- | --- |
 | `tuff_reference` | The Tuff guide ([tuff-guide.md](tuff-guide.md)), plus every keyword, built-in function, library function and method. The guide covers how Tuff differs from Python, text, lists, events, pages, patterns and what Tuff can't do. |
-| `tuff_examples` | 8 complete, working Tuff apps. |
+| `tuff_examples` | 8 complete, working Tuff apps, and a tgame 3D world with land (hills, a mountain, a lake and a valley) and modern lighting. |
 | `tuff_check` | Checks code without running it. It catches syntax mistakes, names that are never set, wrong input counts, event functions that would crash, and methods that don't exist. |
 | `tuff_run` | Runs a console program with typed answers and returns what it printed. |
 
@@ -73,7 +73,7 @@ If the tools don't start, run the check in Agent tools: the red step says what w
 ## For developers
 - [tuff-mcp.js](tuff-mcp.js) is a small stdio server: one JSON-RPC message per line, with no dependencies.
 - [tuff-guide.md](tuff-guide.md) is the guide agents read first. Every example in it is checked with `tuff.py --check`.
-- It reads the editor's own docs and templates from `../renderer/js/`, so agents see the same help as the editor.
+- It reads the editor's own docs and templates from `../renderer/js/`, so agents see the same help as the editor. Its tgame games are `TUFF_GAME_EXAMPLES` in `tuff-templates.js` (only agents see those); `test/tgame/run_tests.py checker` checks them.
 - To find Tuff it uses, in order:
   1. `TUFF_CMD`, a JSON array like `["py", "-3", "-u", "C:/path/tuff.py"]`;
   2. the bundled `tuff-runtime.exe`;

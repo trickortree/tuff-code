@@ -397,7 +397,7 @@ func chop(tree):
 while game:open():
     game:frame()
 ```
-- **The world:** `:sky`, `:fog(distance)` (0 is off), `:sun(brightness)`, `:light(x, y, z, color)`, `:ground(color)` and `:island(size)`.
+- **The world:** `:sky`, `:fog(distance)` (0 is off), `:sun(brightness)`, `:light(x, y, z, color)`, `:ground(color)` and `:island(size)`, or `:terrain(size)` for land with hills, mountains and lakes, and `:lighting "modern"` (both below).
 - **Shapes:** `game:box(x, y, z, size, color)`, and the same for `sphere`, `cylinder`, `cone` and `plane`. size is a number, or a list: `[width, height, depth]` for a box, `[width, height]` for a cylinder or cone, and `[width, depth]` for a plane.
 - **Ready-made models:** `game:spawn("pine", x, y, z)` makes a tree, pine, rock, bush, flower, house, hut, sign, crate, fence or coin. Without a spot it picks a random one.
 - **Objects** have the sprites' methods with a z added (`:move(dx, dy, dz)`, `:glide(x, y, z, seconds)`...), plus `:shake()`, `:fall()`, `:fallen()`, `:regrow(seconds)`, `:grow()`, `:swing()`, `:glow "gold"`, `:label "Oak"` (text above it) and `:solid false` (the player walks through it).
@@ -405,10 +405,42 @@ while game:open():
 - **Without a player:** `game:camera_at(x, y, z)` with `game:look_at(thing)`, or `game:follow(thing)` (behind it), or `game:orbit(thing)` (drag to turn around it).
 - **Testing a game:** add `game:after(2, selftest)`, call your functions in `func selftest():`, `say` what you find, and end it with `game:close()`.
 
+#### Land and lighting (3D)
+`game:terrain(size)` makes land you shape with hills, mountains, dips, lakes and valleys, or paint with brushes.
+```tuff
+mention tgame
+
+game = tgame.world("Hills and Lake")
+game:sky "day"
+game:lighting "modern"                    # soft light from the sky and sharper shadows
+land = game:terrain(200)                  # flat land 200 wide, around 0, 0
+land:style "grass"                        # grass, desert, snow, rocky or autumn
+land:hill(20, -10, 30, 8)                 # x, z, size (how wide), height
+land:mountain(-40, -50, 60, 35)           # x, z, size, height: rocky, with a snowy top
+land:lake(-20, 30, 36, 4)                 # x, z, size, depth: a hollow with water in it
+land:valley(-60, 0, 60, 10, 18, 6)        # from x1, z1 to x2, z2, then width and depth
+land:raise([[0, -25], [6, -27], [12, -26]], 8, 1.5)   # a brush stroke: spots, size, amount
+game:spawn("pine", 20, 0, -10)            # y 0 is on the land: this pine stands on the hilltop
+player = game:player("third person")
+height = game:hud():text("", 110, 30)
+
+while game:open():
+    game:frame()
+    height:set "Height: " + round(land:height_at(player:x(), player:z()))
+```
+- **The land:** `land = game:terrain(size)` is a flat square of land, size wide, around 0, 0. `game:terrain(200, "snow")` gives it a style too. A world has one terrain: change it with the land's methods. Use it instead of `:ground` or `:island`.
+- **Shapes:** `land:hill(x, z, size, height)`, `land:mountain(x, z, size, height)` (tall and rough, with a snowy top), `land:dip(x, z, size, depth)` (a hollow), `land:lake(x, z, size, depth)` (a hollow with water up to where the ground was) and `land:valley(x1, z1, x2, z2, width, depth)` (a trench from one spot to the other). size is how wide it is, and everything is in metres. Each one fades out smoothly toward its edge, and they happen in order, so a lake dug into a hill sits on the hill. A hill with a negative height is a dip.
+- **Brushes:** `land:raise(x, z, size, amount)` and `land:lower(x, z, size, amount)` push the land up or down, `land:smooth(x, z, size)` evens out bumps, and `land:flatten(x, z, size, height)` moves it toward that height (a flat spot to build on). A list of `[x, z]` spots in place of x and z is a brush stroke: `land:lower([[0, 0], [4, 2], [8, 3]], 6, 1)`.
+- **Water and height:** `land:water(-1)` is a sea everywhere lower than that height. `land:height_at(x, z)` is how high the land is there, as a number.
+- **Styles:** `land:style "desert"`: grass (the default), desert, snow, rocky or autumn. Low ground by the water is sandy, steep slopes are rock, and in grass, rocky and snow, high peaks are snowy.
+- **y is the height above the land.** With a terrain, every y you give (shapes, `:spawn`, `:light`, `:move_to`, `camera_at`, `look_at`, where the player starts) and every y you read (`:y()`, `:spot()`) counts up from the land at that x and z, so 0 stands on it, on a hilltop or at the bottom of a valley. Without a terrain nothing changes. `game:random_spot()` stays on dry land, and the player walks over the hills but can't walk off the edge or into the water.
+- **Modern lighting:** `game:lighting "modern"` lights everything softly from the sky, like newer game engines do (tone mapping, and bigger, sharper shadows), so the land, the water and the models look richer. `"simple"` (the default) is the classic look. It can change while the game runs, and a computer that can't do it stays simple.
+
 #### Games Tuff Engine can edit
 TuffCode's Tuff Engine tab (`Ctrl+Shift+G`) builds tgame games by clicking and dragging, and writes everything as normal Tuff code. It can only show and edit simple top-level lines, so when you change a game someone is building in it:
 - Make each new thing with **one top-level line and plain numbers**, like `coin = game:circle(200, 200, 14, "gold")` or `tree = game:spawn("tree", -5, 0, -10)`. Things made in a loop, a function or a chained line (`game:spawn("sign"):label "Hi"`) still work, but show as "Made by your code" and can't be dragged.
 - Put new lines **above** any `while game:open():` loop.
+- Make the land with one line (`land = game:terrain(200)`) and change it with **one top-level line per edit**, like `land:hill(20, -10, 30, 8)`, so Tuff Engine can list them under the land, change their numbers and remove them.
 - Add behaviour as a **func registered with one line**, like `game:every_frame coin_spin` or `coin:clicked coin_clicked`. Functions under a `# Tuff Engine:` comment were written by Tuff Engine, and it keeps that comment and `play_again` up to date as the game changes. Changing one is fine: Tuff Engine then shows it as the person's own code.
 
 ## App windows (tgui / mtgui)

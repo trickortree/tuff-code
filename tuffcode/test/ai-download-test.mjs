@@ -533,11 +533,15 @@ try {
   const apples = { question: 'Make a game where you catch apples' };
   const applesMsg = ai.buildMessage(apples, ai.improve(apples));
   check('... and its message has the tgame section and the tgame line in the card', /^### tgame/m.test(applesMsg) && /It's a tgame game/.test(applesMsg) && !/It's a console program/.test(applesMsg), applesMsg.slice(-600));
+  const hills = { question: 'Make a world with hills, a mountain and a lake' };
+  const hillsMsg = ai.buildMessage(hills, ai.improve(hills));
+  check('A world with hills and a lake is a tgame 3D world: the tgame and land sections, and tgame.world and :terrain in the card', ai.improve(hills).target === 'game' && /^### tgame/m.test(hillsMsg) && /^#### Land and lighting \(3D\)/m.test(hillsMsg) && /It's a tgame 3D world: .*tgame\.world\("Title"\).*game:terrain\(200\)/.test(hillsMsg), hillsMsg.match(/^#+ .*|^- It's .*/gm));
+  check('... but "Hello world" and a 3D printer are still console programs', ai.improve({ question: 'Make a hello world program' }).target === 'console' && ai.improve({ question: 'Make a program that works out what a 3D print costs' }).target === 'console', null);
   // The guide splits at every heading, so "Games Tuff Engine can edit" (under tgame) is its own section. It
-  // went into a quarter of Tuff Bench's console messages.
+  // went into a quarter of Tuff Bench's console messages. "Land and lighting (3D)" is under tgame too.
   const consoleMsgs = ['Make a program that shows these three lines:\nGood morning, campers!\nBreakfast is at 8', 'Make a program that adds up the numbers in a list and shows the total.', 'Make a guessing game where the secret number is 42.'].map((q) => ai.buildMessage({ question: q }, ai.improve({ question: q })));
   const windowMsg = ai.buildMessage({ question: 'Make an mtgui window with a heading and a button' }, ai.improve({ question: 'Make an mtgui window with a heading and a button' }));
-  check('A console or window request never gets the guide\'s tgame sections', [...consoleMsgs, windowMsg].every((t) => !/^#+ (tgame|Games Tuff Engine can edit)/m.test(t)), [...consoleMsgs, windowMsg].map((t) => t.match(/^#+ .*/gm)));
+  check('A console or window request never gets the guide\'s tgame sections', [...consoleMsgs, windowMsg].every((t) => !/^#+ (tgame|Land and lighting \(3D\)|Games Tuff Engine can edit)/m.test(t)), [...consoleMsgs, windowMsg].map((t) => t.match(/^#+ .*/gm)));
   const fixIn = { question: 'It should count to 3. Can you fix it?', file: 'C:\\p\\count.tuf', code: 'say "Counting"\nfor n in range(1, 3)\n    say n\n', runError: 'Tuff error on line 2: expected ":"\n  2 | for n in range(1, 3)\n                       ^' };
   const card = ai.improve(fixIn);
   check('A fix: the card names the file, the error\'s line and what it says, and what a good answer has', card.kind === 'fix' && /count\.tuf \(3 lines\)/.test(card.text) && /stopped at line 2 \(for n in range\(1, 3\)\): Tuff error on line 2: expected ":"/.test(card.text) && /naming the mistake and the line/.test(card.text), card.text);

@@ -51,7 +51,7 @@ window.TUFF_METHOD_DOCS = {
   enter: ['box:enter fn', 'Runs fn when Enter is pressed in a text box. If fn has an input, it gets the text.'],
   focus: ['box:focus', 'Puts the cursor in a text box, ready for typing.'],
   click: ['button:click fn', 'Changes which function the button runs.'],
-  style: ['button:style "danger"', 'Changes a button\'s style (primary, secondary, outline, ghost, success, danger), or a clock\'s style ("analog" or "digital").'],
+  style: ['button:style "danger"', 'Changes a button\'s style (primary, secondary, outline, ghost, success, danger), or a clock\'s style ("analog" or "digital"). In tgame, land:style "desert" sets how the land looks: grass, desert, snow, rocky or autumn.'],
   color: ['label:color "red"', 'Changes the text color: blue, purple, pink, red, orange, yellow, green, teal, white, black, gray or "#rrggbb". "text" puts it back to normal. A tgame sprite, object or group takes any of those colors, plus brown, gold, lime, cyan, navy, sky, sand, grass, leaf, wood, stone, water, snow, silver.'],
   disable: ['button:disable', 'Greys out a button so it can\'t be clicked.'],
   enable: ['button:enable', 'Makes a disabled button clickable again.'],
@@ -65,7 +65,7 @@ window.TUFF_METHOD_DOCS = {
   pop: ['items:pop', 'Lists: takes the last item off the list and gives it back.'],
   has: ['thing:has value', 'Lists: true if the list holds value. Text: true if the text contains it, like name:has "a". Data objects (tap): true if it has that name, like user:has "email". A tgame group: true if the thing is in it.'],
   upper: ['text:upper', 'Text: gives back the text in CAPITAL letters.'],
-  lower: ['text:lower', 'Text: gives back the text in small letters.'],
+  lower: ['text:lower', 'Text: gives back the text in small letters. In tgame, land:lower(x, z, size, amount) is a brush that pushes the land down.'],
   trim: ['text:trim', 'Text: gives back the text without spaces at the start and end.'],
   status: ['res:status', 'tap responses: the status code, like 200 (it worked) or 404 (not found).'],
   ok: ['res:ok', 'tap responses: true if the request worked (a status from 200 to 299). Errors like 404 don\'t stop the program, so check this.'],
@@ -154,6 +154,18 @@ window.TUFF_METHOD_DOCS = {
   hold: ['axe = player:hold "axe"', 'tgame (3D): the player holds an axe, pickaxe, sword, torch or hammer. It gives back the held thing, so axe:swing() works.'],
   items: ['group:items()', 'tgame: a list of everything in a group.'],
   count: ['group:count()', 'tgame: how many things are in a group.'],
+  terrain: ['land = world:terrain(200)', 'tgame (3D): a square of flat land this wide around 0, 0, to shape with :hill, :mountain, :lake, :valley and the brushes. A style can go second: world:terrain(200, "snow"). A world has one. With it, every y is the height above the land.'],
+  lighting: ['world:lighting "modern"', 'tgame (3D): "modern" lights everything softly from the sky, with tone mapping and sharper shadows. "simple" (the default) is the classic look.'],
+  hill: ['land:hill(x, z, size, height)', 'tgame (3D): a smooth hill on the land, size wide.'],
+  mountain: ['land:mountain(x, z, size, height)', 'tgame (3D): a tall, rough, rocky mountain with a snowy top. The same code always makes the same mountain.'],
+  dip: ['land:dip(x, z, size, depth)', 'tgame (3D): a hollow in the land.'],
+  lake: ['land:lake(x, z, size, depth)', 'tgame (3D): a hollow with water in it, up to where the ground was. The player can\'t walk into it.'],
+  valley: ['land:valley(x1, z1, x2, z2, width, depth)', 'tgame (3D): a trench in the land from one spot to the other.'],
+  raise: ['land:raise(x, z, size, amount)', 'tgame (3D): a brush that pushes the land up. A list of [x, z] spots in place of x and z is a stroke: land:raise([[0, 0], [4, 2]], 8, 1.5)'],
+  smooth: ['land:smooth(x, z, size)', 'tgame (3D): a brush that evens out bumps in the land.'],
+  flatten: ['land:flatten(x, z, size, height)', 'tgame (3D): a brush that moves the land toward that height, for a flat spot.'],
+  water: ['land:water(-1)', 'tgame (3D): a sea everywhere the land is lower than that height.'],
+  height_at: ['land:height_at(x, z)', 'tgame (3D): how high the land is there, as a number.'],
 };
 
 window.TUFF_LIBS = {
@@ -178,7 +190,7 @@ window.TUFF_LIBS = {
   },
   tgame: {
     window: ['tgame.window("Title", width, height)', 'Opens a 2D game window (800 by 600 by default). Make boxes, circles, text and pictures on it, then loop: while game:open(): dt = game:frame()'],
-    world: ['tgame.world("Title", width, height)', 'Opens a 3D game world: a sky, the ground or an island, shapes, ready-made trees and houses (:spawn), and a player who walks around (:player).'],
+    world: ['tgame.world("Title", width, height)', 'Opens a 3D game world: a sky, the ground, an island or land with hills and lakes (:terrain), shapes, ready-made trees and houses (:spawn), and a player who walks around (:player).'],
   },
 };
 

@@ -57,9 +57,10 @@ function reference(topic) {
   return Object.values(parts).join('\n\n');
 }
 
+// The Design Studio's apps, then the tgame games kept for agents.
 function examples() {
   const t = loadTables();
-  return (t.TUFF_TEMPLATES || []).map((x) => `## ${x.name} (${x.id}.tuf)\n${x.desc}\n\n\`\`\`tuff\n${x.code}\`\`\``).join('\n\n') || 'No examples found.';
+  return [...(t.TUFF_TEMPLATES || []), ...(t.TUFF_GAME_EXAMPLES || [])].map((x) => `## ${x.name} (${x.id}.tuf)\n${x.desc}\n\n\`\`\`tuff\n${x.code}\`\`\``).join('\n\n') || 'No examples found.';
 }
 
 // Run the interpreter. Returns { code, out, stdout, stderr, timedOut }.
@@ -148,6 +149,7 @@ function screen(raw) {
   return lines.map((l) => l.text).join('\n');
 }
 const EXAMPLE_NAMES = (loadTables().TUFF_TEMPLATES || []).map((x) => x.name.replace(/^(\w)/, (c) => c.toLowerCase()));
+const GAME_EXAMPLE_NAMES = (loadTables().TUFF_GAME_EXAMPLES || []).map((x) => x.name.replace(/^(\w)/, (c) => c.toLowerCase()));
 
 const TOOLS = [
   {
@@ -159,7 +161,7 @@ const TOOLS = [
   },
   {
     name: 'tuff_examples',
-    description: `Complete, working Tuff apps (${EXAMPLE_NAMES.join(', ')}). Good patterns for tgui/mtgui windows, pages, events and functions.`,
+    description: `Complete, working Tuff apps (${EXAMPLE_NAMES.join(', ')}). Good patterns for tgui/mtgui windows, pages, events and functions.${GAME_EXAMPLE_NAMES.length ? ` Also tgame games: ${GAME_EXAMPLE_NAMES.join(', ')}.` : ''}`,
     inputSchema: { type: 'object', properties: {} },
     annotations: { readOnlyHint: true },
     async run() { return examples(); },
