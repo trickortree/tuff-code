@@ -326,6 +326,8 @@ function kindOf(question, hasCode) {
   // "I don't get what dt means", "I don't understand this": explain their code. ("I don't know how to add a
   // score" goes on to the rules below: a request.)
   if (hasCode && /\bi (don'?t|do not|didn'?t|did not) (get|understand|know|see)\b/.test(s) && /\b(mean(s|ing|t)?|this|that|it|(my|the|this) (code|program)|line \d+)\b/.test(s)) return 'explain';
+  // A word or two with a file open ("what", "?", "huh", "explain this"): they want to know what it does.
+  if (hasCode && !making && s.replace(/[^a-z0-9 ]/g, ' ').trim().split(/\s+/).filter(Boolean).length <= 2 && !/\b(fix|add|make|change|remove)\b/.test(s)) return 'explain';
   if (/\b(explain|walk me through|step by step|what do(es)? (this|it|that|my|the code|the program)|how does (this|it|that|my)|what is this|what's this|mean)\b/.test(s)) return 'explain';
   if (making) return 'write';
   // "Who are you?", "Are you ChatGPT?", "Which model is this?"
@@ -370,6 +372,8 @@ const WANT = {
   explain: 'an explanation of their code in simple words',
   question: 'an answer to their question about Tuff',
   about: 'to know who you are',
+  plan: 'a plan for what they asked, before any code is written',
+  edit: 'their open program changed to do what they asked',
 };
 const GOOD = {
   write: `the whole program in one ${fence}tuff block, then one sentence on how it works. It must show exactly the text they asked for.`,
@@ -377,6 +381,8 @@ const GOOD = {
   explain: 'a short explanation, step by step, in plain words. Quote small bits of their code. No whole new program unless they ask for one.',
   question: `a short, friendly answer in plain words, with a tiny ${fence}tuff example if it helps (only real Tuff code goes in it).`,
   about: `a sentence or two, like: "I'm ${MODELS[0].name}, TuffCode's own AI model, and I run right here on your computer." No code.`,
+  plan: 'a numbered plan of 3 to 6 short steps in plain words: what to add or change, and where in their program. No code.',
+  edit: `one sentence on what you changed, then the whole changed program in one ${fence}tuff block: all of it, not just the new part.`,
 };
 const ASKS = /\b(asks?|asking|types?|typed|typing|enters?|input|answers?|guess(es)?)\b/i;
 const TARGET = {
@@ -414,12 +420,17 @@ function focusOf(code, { line, selection, question }) {
 
 const hasFile = (input) => !!input.file && typeof input.code === 'string';
 
+// mode: the panel's Plan / Ask / Edit. Plan always plans; Edit changes the open file (or writes a program when
+// none is open), and the panel puts the checked program into the file.
 function improve(input) {
   const question = String(input.question || '').trim();
   const code = hasFile(input) ? input.code : '';
-  const kind = kindOf(question, !!code.trim());
+  const guessed = kindOf(question, !!code.trim());
+  const kind = input.mode === 'plan' ? 'plan' : input.mode === 'edit' ? (!code.trim() ? 'write' : guessed === 'fix' ? 'fix' : 'edit') : guessed;
   const target = targetOf(question, code);
-  const lines = [`They want: ${WANT[kind]}.`];
+  // The question itself, when it's short enough to repeat: "an answer to: how do I add a score?"
+  const said = question.replace(/\s+/g, ' ');
+  const lines = [`They want: ${kind === 'question' && said.length <= 120 ? `an answer to: ${said}` : WANT[kind]}.`];
   let focus = null;
   if (hasFile(input)) {
     focus = focusOf(code, { line: errLineOf(input.runError || question), selection: input.selection, question });
@@ -428,7 +439,10 @@ function improve(input) {
     const which = focus.whole ? '' : `, and the part that matters is above (lines ${focus.from} to ${focus.to})`;
     lines.push(kind === 'write'
       ? `Their open file is ${baseName(input.file)} (${size})${which}. Change it if the request is about it; otherwise write a new program.`
-      : `Their program is ${baseName(input.file)} (${size})${which}.`);
+      : kind === 'edit'
+        ? `Their program is ${baseName(input.file)} (${size})${which}. Change it to do what they ask, and keep everything else as it is.`
+        : `Their program is ${baseName(input.file)} (${size})${which}.`);
+    if (kind === 'explain' && said.split(' ').length <= 2) lines.push(`Their message is short, so say what ${baseName(input.file)} does as a whole: what happens when it runs, then its main parts.`);
   }
   const err = input.runError || (/Tuff error on line \d+[^\n]*/.exec(question) || [])[0] || '';
   const errLine = errLineOf(err);
@@ -436,9 +450,9 @@ function improve(input) {
     const src = errLine && code ? code.split('\n')[errLine - 1] : '';
     lines.push(`When they last ran it, it stopped${errLine ? ` at line ${errLine}` : ''}${src?.trim() ? ` (${src.trim()})` : ''}: ${err.split('\n')[0].trim()}`);
   }
-  if (kind === 'write' || (kind === 'fix' && target !== 'console')) lines.push(TARGET[target === 'console' && ASKS.test(question) ? 'consoleAsks' : target]);
+  if (kind === 'write' || kind === 'edit' || (kind === 'fix' && target !== 'console')) lines.push(TARGET[target === 'console' && ASKS.test(question) ? 'consoleAsks' : target]);
   lines.push(`A good answer: ${GOOD[kind]}`);
-  if (kind === 'write' || kind === 'fix') lines.push(NOT_PYTHON);
+  if (kind === 'write' || kind === 'fix' || kind === 'edit') lines.push(NOT_PYTHON);
   return { kind, target, focus, text: lines.map((l) => `- ${l}`).join('\n') };
 }
 
@@ -575,6 +589,7 @@ async function answerRun({ runId, prompt, model, effort, ai: parts, improve: imp
       send({ kind: 'tool', name: 'mcp__tuffcode__tuff_check', input: { code } });
       const c = await checkSource(code);
       send({ kind: 'tool_result', ok: c.ok });
+      let final = { code, ok: c.ok || !!c.unknown };
       if (!c.ok && !c.unknown && !halted()) {
         send({ kind: 'note', text: `The checker found a mistake, so ${m.name} is fixing it.` });
         send({ kind: 'break' });
@@ -588,8 +603,11 @@ async function answerRun({ runId, prompt, model, effort, ai: parts, improve: imp
           const c2 = await checkSource(again);
           send({ kind: 'tool_result', ok: c2.ok });
           if (!c2.ok && !c2.unknown) send({ kind: 'note', text: `The checker still finds a mistake: ${c2.message}` });
+          final = { code: again, ok: c2.ok || !!c2.unknown };
         }
       }
+      // The program it ended with, and whether it passed the checker (the panel's Edit puts it into the file).
+      if (!halted()) send({ kind: 'code', ...final });
     }
   }
   const ok = !!r.ok || !!r.stopped || halted();

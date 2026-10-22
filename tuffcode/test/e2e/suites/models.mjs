@@ -230,6 +230,35 @@ export default async (t, ctx) => {
   const stopped = await ev(`(() => { const m = [...document.querySelectorAll('.ta-msg.agent')].pop(); return { text: m.textContent, summary: m.querySelector('details.ta-thought summary')?.textContent.trim(), typing: !!m.querySelector('.ta-typing') }; })()`);
   check('Stop while it thinks: Stopped, the fold says how long it thought, and the chips unlock', /Stopped\./.test(stopped.text) && /^Thought for \d+ s$/.test(stopped.summary || '') && !stopped.typing && await ev(`!${dd('effort')}.querySelector('.ta-dd-btn').disabled`), stopped);
 
+  // Plan, Ask and Edit all work with Tuff AI. In Edit its checked program goes into the open file (one Ctrl+Z
+  // puts it back), but not when it comes out much shorter than the file (a small model can stop halfway).
+  check('On the Tuff AI tab, Plan, Ask and Edit can all be picked', await ev(`[...document.querySelectorAll('.ta-mode button')].every((b) => !b.disabled)`), null);
+  const lastMsg = (js) => ev(`(() => { const m = [...document.querySelectorAll('.ta-msg.agent')].pop(); return ${js}; })()`);
+  const editFile = path.join(ctx.root, 'edit_me.tuf');
+  fs.writeFileSync(editFile, 'say "Bye"\n');
+  await ev(`(async () => { await window.TuffIDE.openFile(${JSON.stringify(editFile)}); return 1; })()`);
+  await waitFor(`monaco.editor.getEditors()[0].getModel()?.getValue().includes('Bye')`, 6000);
+  await ev(`document.querySelector('.ta-mode button[data-m="edit"]').click()`);
+  await send('make it say hi');
+  await idle();
+  const edited = await t.code();
+  const editCard = await lastMsg(`m.querySelector('details.ta-improved .ta-fold-b')?.textContent || ''`);
+  const editText = await lastMsg('m.textContent');
+  check('Edit: Pumice 1 is asked to change the open program, puts its checked program into the file, and says so', /say "Hi"/.test(edited) && !/Bye/.test(edited) && /their open program changed/.test(editCard) && /Changed .+Ctrl\+Z undoes it/.test(editText), { edited, editCard, end: editText.slice(-160) });
+  await ev(`monaco.editor.getEditors()[0].trigger('test', 'undo')`);
+  check('... and one Ctrl+Z puts the file back', /say "Bye"/.test(await t.code()), await t.code());
+  const long = Array.from({ length: 30 }, (_, i) => `say "Line ${i + 1}"`).join('\n') + '\n';
+  await t.setCode(long);
+  await send('change line 3');
+  await idle();
+  check('Edit: a program much shorter than the file (cut off halfway) is not put in, and it says why', (await t.code()) === long && /much shorter than .+ so your file wasn't changed/.test(await lastMsg('m.textContent')), (await lastMsg('m.textContent')).slice(-200));
+  await ev(`document.querySelector('.ta-mode button[data-m="ask"]').click()`);
+  // A word or two with a file open is a question about that program: explain it.
+  await send('what');
+  await idle();
+  const vague = await lastMsg(`m.querySelector('details.ta-improved .ta-fold-b')?.textContent || ''`);
+  check('"what" with a file open becomes: explain what this program does', /an explanation of their code/.test(vague) && /say what .+ does as a whole/.test(vague), vague);
+
   await choose('effort', 'medium');
   await t.reload();
   await ensurePanel();

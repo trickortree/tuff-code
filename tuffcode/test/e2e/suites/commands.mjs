@@ -109,9 +109,9 @@ export default async (t, ctx) => {
   const after = last('claude');
   check('After /compact, an agent gets the summary instead of the old messages', /Summary of the chat before this point/.test(after.prompt || '') && !/Make my greeting friendlier/.test(after.prompt || '') && !(after.args || []).includes('--resume'), { sum: (after.prompt || '').indexOf('Summary of the chat'), earlier: (after.prompt || '').indexOf('Earlier in this chat'), old: (after.prompt || '').indexOf('Make my greeting'), msg: (after.prompt || '').indexOf('what did we do'), len: (after.prompt || '').length, resume: (after.args || []).includes('--resume'), tail: (after.prompt || '').slice(-300) });
 
-  // Tuff AI only answers: Plan and Edit are off on its tab.
+  // Tuff AI has Plan, Ask and Edit too (Edit puts its checked program into the open file).
   await ev(`document.querySelector('.ta-agents button[data-id="tuffai"]').click()`);
-  check('On the Tuff AI tab, Plan and Edit are switched off', await ev(`(() => { const b = [...document.querySelectorAll('.ta-mode button')]; return b.find(x => x.dataset.m === 'plan').disabled && b.find(x => x.dataset.m === 'edit').disabled && b.find(x => x.dataset.m === 'ask').classList.contains('on'); })()`), null);
+  check('On the Tuff AI tab, Plan, Ask and Edit are all on offer', await ev(`(() => { const b = [...document.querySelectorAll('.ta-mode button')]; return b.length === 3 && b.every(x => !x.disabled) && !!b.find(x => x.dataset.m === 'ask'); })()`), null);
   // Without its model: the download card names Pumice 1 (and never the base model), and the Model and
   // Thinking chips wait until it's downloaded.
   await waitFor(`!!document.querySelector('.ta-status .ta-card, .ta-status .ta-note:not(:empty)') && !/Checking Tuff AI/.test(document.querySelector('.ta-status').textContent)`, 10000);
