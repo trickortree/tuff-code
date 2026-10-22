@@ -473,6 +473,7 @@ class View:
             self._win = webview.create_window(self.title, self._base + "index.html", js_api=_Api(self), **self._window_args)
             self._win.events.initialized += self._on_initialized
             self._win.events.before_show += self._on_before_show
+            self._win.events.shown += self._on_shown
             if not self._window_args.get("confirm_close"):  # with a "Quit?" question, closing can still be cancelled
                 self._win.events.closing += self._on_closing
             self._win.events.closed += self._on_closed
@@ -502,6 +503,22 @@ class View:
                 window.native.Icon = Icon(self._icon)
             else:
                 window.native.Icon = Icon.FromHandle(Bitmap(self._icon).GetHicon())
+        except Exception:
+            pass
+
+    def _on_shown(self, window=None):
+        # TuffCode's Run button starts programs with no console window (SW_HIDE in their start-up info), and
+        # Windows applies that to a program's first shown window too: the window was there but invisible. Only
+        # the first show is overridden, so showing it again makes it appear.
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            hwnd = int((window or self._win).native.Handle.ToInt64())
+            user32 = ctypes.windll.user32
+            if not user32.IsWindowVisible(hwnd):
+                user32.ShowWindow(hwnd, 5)  # SW_SHOW
+                user32.SetForegroundWindow(hwnd)
         except Exception:
             pass
 
