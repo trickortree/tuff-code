@@ -397,10 +397,13 @@ ipcMain.handle('update:restart', () => updater.restart());
 ipcMain.handle('update:reschedule', () => updater.reschedule());
 
 // Checks Tuff source with tuff.py --check. Used by live error checking and by Tuff AI.
+// Every check gets its own temp file: checks that start in the same millisecond (several tabs at startup, Auto
+// code sort's before and after) used to share one, so a file could be shown another's mistakes.
+let checkSeq = 0;
 async function checkSource(source) {
   const dir = path.join(app.getPath('temp'), 'tuffcode-check');
   await fsp.mkdir(dir, { recursive: true });
-  const file = path.join(dir, `check-${process.pid}-${Date.now()}.tuf`);
+  const file = path.join(dir, `check-${process.pid}-${++checkSeq}-${Date.now()}.tuf`);
   await fsp.writeFile(file, source, 'utf8');
   const { cmd, args } = tuffCommand(['--check', file]);
   const result = await new Promise((resolve) => {

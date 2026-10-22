@@ -147,4 +147,13 @@ export default async (t, ctx) => {
   // 11. menus have the new commands
   const goMenu = await ev(`(() => { const b = [...document.querySelectorAll('.menu-root > button')].find(x => x.textContent === 'Go'); b.click(); const items = [...document.querySelectorAll('.menu-root.open .mi')].map(m => m.innerText.split(String.fromCharCode(10))[0]); b.click(); return items; })()`);
   check('A new Go menu lists the navigation commands', ['Go to Function or Widget…', 'Go to Definition', 'Find All Uses', 'Reopen Closed Tab'].every((x) => goMenu.includes(x)), goMenu);
+
+  // 12. Checks that start together (several tabs at startup, Auto code sort's before/after) each check their own
+  // code. They used to share a temp file named by the millisecond, so one could get another's mistakes.
+  const together = await ev(`(async () => {
+    const good = 'name = "Sam"\\nsay "Hi " + name\\n', bad = 'say "Hi\\n';
+    const rs = await Promise.all([good, bad, good, bad, good, bad].map((c) => window.tuff.checkSource(c)));
+    return rs.map((r) => r.ok);
+  })()`);
+  check('Checks started at the same moment each get their own answer (good, bad, good, bad, …)', JSON.stringify(together) === JSON.stringify([true, false, true, false, true, false]), together);
 };
