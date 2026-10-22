@@ -28,13 +28,13 @@ const MODELS = [
 ];
 // Thinking levels. budget: how many tokens it may think for before it must answer (node-llama-cpp
 // enforces it, so a thinking loop can't run on). plan: before answering, the model rewrites the request
-// as a clear task in one short pass. Off is exactly what 1.0.4 did. The budgets and the default come from
+// as a clear task in one short pass (off since 1.1.0, with the improver). Off is exactly what 1.0.4 did. The budgets and the default come from
 // Tuff Bench (tuff-ai/bakeoff/RESULTS.md, "Thinking levels").
 const LEVELS = [
   { id: 'off', name: 'Off', sub: 'Answers straight away', budget: 0, plan: false, temperature: 0.2 },
   { id: 'low', name: 'Low', sub: 'Thinks for a moment first', budget: 128, plan: false, temperature: 0.2 },
-  { id: 'medium', name: 'Medium', sub: 'Rewrites your request, then thinks', budget: 256, plan: true, temperature: 0.2 },
-  { id: 'high', name: 'High', sub: 'Plans and thinks longest. Slower, and not always better', budget: 512, plan: true, temperature: 0.2 },
+  { id: 'medium', name: 'Medium', sub: 'Thinks a little longer', budget: 256, plan: false, temperature: 0.2 },
+  { id: 'high', name: 'High', sub: 'Thinks longest. Slower, and not always better', budget: 512, plan: false, temperature: 0.2 },
 ];
 const DEFAULT_LEVEL = 'low';
 const level = (id) => LEVELS.find((l) => l.id === id) || LEVELS.find((l) => l.id === DEFAULT_LEVEL);
@@ -326,8 +326,6 @@ function kindOf(question, hasCode) {
   // "I don't get what dt means", "I don't understand this": explain their code. ("I don't know how to add a
   // score" goes on to the rules below: a request.)
   if (hasCode && /\bi (don'?t|do not|didn'?t|did not) (get|understand|know|see)\b/.test(s) && /\b(mean(s|ing|t)?|this|that|it|(my|the|this) (code|program)|line \d+)\b/.test(s)) return 'explain';
-  // A word or two with a file open ("what", "?", "huh", "explain this"): they want to know what it does.
-  if (hasCode && !making && s.replace(/[^a-z0-9 ]/g, ' ').trim().split(/\s+/).filter(Boolean).length <= 2 && !/\b(fix|add|make|change|remove)\b/.test(s)) return 'explain';
   if (/\b(explain|walk me through|step by step|what do(es)? (this|it|that|my|the code|the program)|how does (this|it|that|my)|what is this|what's this|mean)\b/.test(s)) return 'explain';
   if (making) return 'write';
   // "Who are you?", "Are you ChatGPT?", "Which model is this?"
@@ -478,6 +476,9 @@ function buildMessage(input, card, plan = '') {
   if (card && input.runError && !question.includes(input.runError.split('\n')[0])) parts.push(`When they last ran it, it stopped with this error:\n${fence}\n${trim(input.runError, 1500)}\n${fence}`);
   if (input.history?.length) parts.push(`Earlier in this chat (already answered):\n${input.history.join('\n')}`);
   parts.push(`Their question:\n${question}`);
+  // Plan and Edit, said plainly (the improver's card said more, before it was turned off).
+  if (!card && input.mode === 'plan') parts.push('Answer with a numbered plan of 3 to 6 short steps in plain words: what to add or change, and where. No code yet.');
+  if (!card && input.mode === 'edit' && hasFile(input)) parts.push(`Change their program to do what they ask, keep everything else as it is, and give back the whole changed program in one ${fence}tuff block.`);
   if (card) parts.push(`What TuffCode worked out from their question:\n${card.text}${plan ? `\n- The task, as you rewrote it: ${plan.replace(/\s*\n\s*/g, ' ')}` : ''}`);
   const body = parts.join('\n\n');
   const extra = card ? relevant(`${question}\n${card.focus?.text || ''}\n${input.runError || ''}`, 2, SECTIONS[card.target]) : relevant(body);
@@ -516,7 +517,9 @@ async function run(params, emit) {
 // params.ai: the question's parts (see the improver); without them, prompt is the whole question.
 // params.effort: the thinking level ('' for the default). params.improve: false leaves the question as it
 // is (Tuff Bench measures both).
-async function answerRun({ runId, prompt, model, effort, ai: parts, improve: improving = true }, emit) {
+// The improver (a "Made your request clearer" card, and Medium and High's plan) is off since 1.1.0: people
+// found it got in the way ("hi" became "explain my program"). Tuff Bench can still turn it on (improve: true).
+async function answerRun({ runId, prompt, model, effort, ai: parts, improve: improving = false }, emit) {
   const send = (e) => emit({ runId, ...e });
   const m = find(model);
   const lv = level(effort);

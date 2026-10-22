@@ -389,7 +389,7 @@ try {
 
   const L = Object.fromEntries(ai.LEVELS.map((l) => [l.id, l]));
   check('Four thinking levels: Off, Low, Medium, High', ai.LEVELS.map((l) => l.name).join() === 'Off,Low,Medium,High', ai.LEVELS);
-  check('Off has no budget; each level up has a bigger budget, and Medium and High plan', L.off.budget === 0 && L.low.budget > 0 && L.medium.budget > L.low.budget && L.high.budget > L.medium.budget && !L.off.plan && !L.low.plan && L.medium.plan && L.high.plan, ai.LEVELS);
+  check('Off has no budget; each level up has a bigger budget, and none plans (the improver is off)', L.off.budget === 0 && L.low.budget > 0 && L.medium.budget > L.low.budget && L.high.budget > L.medium.budget && ai.LEVELS.every((l) => !l.plan), ai.LEVELS);
   check('The default level is one of them', !!L[ai.DEFAULT_LEVEL], ai.DEFAULT_LEVEL);
 
   // Off is exactly 1.0.4: no thinking, budget 0, 700 tokens, the "discourage" chat.
@@ -419,20 +419,16 @@ try {
   e1 = await within(a.ended, 5000);
   check('A short thought ends by itself and is not counted as cut', e1.v?.ok && a.events.find((x) => x.kind === 'thought')?.cut === false, a.events.find((x) => x.kind === 'thought'));
 
-  // Medium: the plan first (a chat that doesn't think, stopping at a code block), then a fresh chat that
-  // thinks and answers, with the plan in the card.
-  setLlama({ reply: 'Here:\n```tuff\nsay "hi"\n```', plan: 'Task: show hi.\n```tuff\nsay "hi"\n```', thought: 'Think. '.repeat(30), logPrompts: true });
+  // Medium: no plan and no card since 1.1.0 (the improver is off): one chat that thinks longer, then answers.
+  setLlama({ reply: 'Here:\n```tuff\nsay "hi"\n```', thought: 'Think. '.repeat(30), logPrompts: true });
   k = llamaLog().length;
   a = ask('Q23 make a program that says hi', { effort: 'medium' });
   e1 = await within(a.ended, 10000);
-  const plan = a.events.filter((x) => x.kind === 'plan').map((x) => x.text).join('');
-  check('Medium: it plans first, without thinking, stopping at a code block', since(k).some((l) => /^opts plan thoughts=discourage budget=0 max=\d+ stop=```/.test(l)), since(k).filter((l) => l.startsWith('opts')));
-  check(`... then answers in a fresh chat that thinks, with a budget of ${L.medium.budget}`, since(k).includes(`opts Q23 thoughts=auto budget=${L.medium.budget} max=${700 + L.medium.budget}`) && since(k).filter((l) => l.startsWith('prompt')).join() === 'prompt plan,prompt Q23', since(k).filter((l) => /^(prompt|opts)/.test(l)));
+  check(`Medium: one chat that thinks, with a budget of ${L.medium.budget}, and no plan`, since(k).includes(`opts Q23 thoughts=auto budget=${L.medium.budget} max=${700 + L.medium.budget}`) && since(k).filter((l) => l.startsWith('prompt')).join() === 'prompt Q23' && !a.events.some((x) => x.kind === 'plan'), since(k).filter((l) => /^(prompt|opts)/.test(l)));
   const answerText = since(k).find((l) => l.startsWith('text Q23 '));
-  check('... and its plan is in the card it answers from', !!answerText && JSON.parse(answerText.slice('text Q23 '.length)).includes('- The task, as you rewrote it: show hi.'), answerText?.slice(-300));
-  check('Medium: the plan streams to the panel without its code', /^Task: show hi\./.test(plan) && !/```/.test(plan) && e1.v?.stats?.plan === 'show hi.', { plan, stats: e1.v?.stats });
+  check('... the question as they typed it, with no "Made your request clearer" card', !!answerText && JSON.parse(answerText.slice('text Q23 '.length)).includes('Their question:\nQ23 make a program that says hi') && !JSON.parse(answerText.slice('text Q23 '.length)).includes('What TuffCode worked out') && !a.events.some((x) => x.kind === 'improved'), answerText?.slice(-300));
   setLlama({});
-  check('Medium: the stages go Reading your question, Planning, Thinking, Writing, Checking the code', stages(a.events).join(' > ') === 'Reading your question > Planning > Thinking > Writing > Checking the code', stages(a.events));
+  check('Medium: the stages go Reading your question, Thinking, Writing, Checking the code', stages(a.events).join(' > ') === 'Reading your question > Thinking > Writing > Checking the code', stages(a.events));
   setLlama({ reply: 'Hi!', thought: 'x' });
   k = llamaLog().length;
   a = ask('Q24 make a program', { effort: 'medium', improve: false });
@@ -466,16 +462,6 @@ try {
   e2 = await within(b.ended, 5000);
   check('... and the next question gets its answer', e2.v?.ok && b.events.some((x) => x.kind === 'delta'), { e2, kinds: b.events.map((x) => x.kind) });
 
-  // Stop while it plans: no answer turn at all.
-  setLlama({ reply: 'Answer.', plan: 'Task: '.padEnd(400, 'x'), tokenMs: 15 });
-  k = llamaLog().length;
-  a = ask('Q28 make it', { effort: 'medium' });
-  await until(() => a.events.some((x) => x.kind === 'plan'), 8000);
-  ai.stop(a.runId);
-  e1 = await within(a.ended, 5000);
-  await sleep(200);
-  check('Stop while it plans: it never answers', e1.v?.ok && !since(k).includes('prompt Q28') && !a.events.some((x) => x.kind === 'delta'), { e1, log: since(k) });
-  setLlama({ tokenMs: 1 });
 
   // The improver.
   const kinds = {
@@ -556,14 +542,20 @@ try {
   const bigCard = ai.improve({ question: 'fix it', file: 'big.tuf', code: big, runError: 'Tuff error on line 300: oops' });
   check('A long file: only the part around the error goes in, and the card says which lines', !bigCard.focus.whole && bigCard.focus.from <= 300 && bigCard.focus.to >= 300 && bigCard.focus.text.length <= 6000 && /lines \d+ to \d+/.test(bigCard.text), { from: bigCard.focus.from, to: bigCard.focus.to });
 
-  // The improved request goes to the panel, and the model reads it.
+  // The improver is off (1.1.0): the panel gets no card, the model reads the question as typed, and Plan and Edit
+  // each add one plain line.
   setLlama({ reply: 'Fixed.', logPrompts: true });
   k = llamaLog().length;
   a = ask('fix it', { effort: 'off', ai: fixIn });
   e1 = await within(a.ended, 5000);
-  const imp = a.events.find((x) => x.kind === 'improved');
   const sent = since(k).find((l) => l.startsWith('text '));
-  check('The panel gets the improved request, and the model gets it at the end of the message', e1.v?.ok && imp?.text === card.text && sent && JSON.parse(sent.slice(sent.indexOf(' ', 5) + 1)).includes('What TuffCode worked out from their question'), { imp, sent: sent?.slice(-300) });
+  const said = sent ? JSON.parse(sent.slice(sent.indexOf(' ', 5) + 1)) : '';
+  check('No card: the panel gets no improved request, and the model reads just the file and the question', e1.v?.ok && !a.events.some((x) => x.kind === 'improved') && said.includes(`Their question:\n${fixIn.question}`) && !said.includes('What TuffCode worked out'), said.slice(-300));
+  k = llamaLog().length;
+  a = ask('make it count to 5', { effort: 'off', ai: { ...fixIn, question: 'make it count to 5', mode: 'edit' } });
+  e1 = await within(a.ended, 5000);
+  const editSent = since(k).find((l) => l.startsWith('text '));
+  check('Edit adds one line: change their program and give back all of it', e1.v?.ok && !!editSent && JSON.parse(editSent.slice(editSent.indexOf(' ', 5) + 1)).includes('give back the whole changed program'), editSent?.slice(-300));
   setLlama({});
 
   check('Nothing threw without being caught', !uncaught.length, uncaught);
