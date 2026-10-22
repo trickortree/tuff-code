@@ -1,7 +1,7 @@
 {
   "name": "tuffcode",
   "productName": "TuffCode",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "TuffCode - the IDE for the Tuff language",
   "author": "trickortree",
   "repository": "github:trickortree/tuff-code",
