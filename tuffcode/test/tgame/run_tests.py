@@ -597,6 +597,121 @@ def t_hud_3d(c):
     c.check(shot and color_share(shot, (180, 33, 24), 40, (0.4, 0.4, 0.6, 0.8)) > 0.01, "the shapes with size lists are drawn (the red box)", shot)
 
 
+def t_terrain(c):
+    """The land (world:terrain): the player walks up a hill and stops at a lake's shore and at the land's edge;
+    things made at y 0 stand on it; every y a program gives or reads is the height above the land; and a game that
+    changes the land every frame keeps 60 fps."""
+    r = play("terrain_walk", game("terrain_walk.tuf"), [
+        {"at": 0.3, "call": "report"}, {"at": 0.35, "dump": "tw_start.json"}, {"at": 0.4, "shot": "terrain_walk.png"},
+        {"at": 0.6, "hold": "w", "for": 1.8},
+        {"at": 3.0, "call": "where"}, {"at": 3.05, "dump": "tw_hill.json"}, {"at": 3.1, "shot": "terrain_walk_hill.png"},
+        {"at": 3.3, "tuff": "player:turn_to(90)"}, {"at": 3.35, "tuff": "player:move_to(15, 0, 0)"},
+        {"at": 3.5, "hold": "w", "for": 2.4},
+        {"at": 6.4, "call": "where"}, {"at": 6.45, "dump": "tw_lake.json"}, {"at": 6.5, "shot": "terrain_walk_lake.png"},
+        {"at": 6.7, "tuff": "player:move_to(95, 0, -50)"},
+        {"at": 6.8, "hold": "w", "for": 1.2},
+        {"at": 8.4, "call": "where"}, {"at": 8.45, "dump": "tw_edge.json"}, {"at": 8.5, "shot": "terrain_walk_edge.png"},
+        {"at": 8.6, "call": "moved"}, {"at": 8.7, "call": "glided"},
+        {"at": 8.8, "close": True},
+    ])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    got = r.lines[1:]
+    for line in ["hill top 5.951", "at the box 5.951", "box y 0 spot [0, 0, -14]", "ball y 3", "tree y 0", "later y 0",
+                 "player y 0", "slid y 0", "glided y 0 at -26"]:
+        c.check(line in got, f"says: {line}", [g for g in got if g.split(" ")[0] == line.split(" ")[0]] or got[-5:])
+    c.check(any(g.startswith("moved y 0 ground 4.") for g in got), "move_to(x, 0, z) on a slope puts it on the land there", got[-4:])
+    bottom = [float(g.split()[-1]) for g in got if g.startswith("lake bottom ")]
+    c.check(bottom and -3.1 < bottom[0] < -2.7, "a lake 3 deep digs the land 3 down in its middle", bottom)
+    start = r.dumps.get("tw_start.json", {})
+    objs = {o[0] + str(o[1]): o for o in start.get("objects", [])}
+    box, ball = objs.get("box0.0"), objs.get("sphere-10.0")
+    c.check(box and abs(box[2] - 5.951) < 0.01, "inside, the box at y 0 is at the hill's height (5.95)", box)
+    c.check(ball and ball[2] > 3.5, "the ball at y 3 is 3 above the land, not 3 above 0", ball)
+    p0 = start.get("player") or [0, 0, 0]
+    hill = r.dumps.get("tw_hill.json", {}).get("player") or [0, 0, 0]
+    c.check(hill[2] < -6 and hill[1] > p0[1] + 3.5, f"walking forward climbs the hill (height {p0[1]} -> {hill[1]})", (p0, hill))
+    lake = r.dumps.get("tw_lake.json", {}).get("player") or [0, 0, 0]
+    c.check(19 < lake[0] < 23.5 and abs(lake[2]) < 0.05 and lake[1] > -0.4,
+            f"the lake's shore stops the player (x {lake[0]}, the water starts at about 22)", lake)
+    edge = r.dumps.get("tw_edge.json", {}).get("player") or [0, 0, 0]
+    c.check(98.5 < edge[0] <= 99.41, f"the player can't walk off the land's edge (x {edge[0]} of 100)", edge)
+    shot = r.shots.get("terrain_walk.png")
+    c.check(shot and color_share(shot, (115, 165, 75), 45, (0, 0.55, 1, 1)) > 0.5, "the screenshot shows the grassy hill", shot)
+    c.check(shot and color_share(shot, (180, 50, 55), 50, (0.4, 0.15, 0.6, 0.35)) > 0.01, "and the red box on top of it", shot)
+    shot = r.shots.get("terrain_walk_lake.png")
+    c.check(shot and color_share(shot, (40, 120, 160), 50, (0.2, 0.7, 0.8, 1)) > 0.3, "at the shore, the lake's water is in front", shot)
+    shot = r.shots.get("terrain_walk_edge.png")
+    c.check(shot and color_share(shot, (115, 165, 75), 50, (0, 0.6, 1, 1)) > 0.4,
+            "at the edge the land goes on to the horizon (no looking into nothing)", shot)
+    # A game that digs: a brush raising the land every frame, on the biggest land (254 x 254 points)
+    r = play("terrain_dig", game("terrain_dig.tuf"), [
+        {"at": 1.0, "call": "start"}, {"at": 1.3, "mark": True}, {"at": 4.3, "dump": "terrain_dig.json"},
+        {"at": 4.35, "shot": "terrain_dig.png"}, {"at": 4.5, "close": True}], timeout=90)
+    clean_exit(c, r)
+    d = r.dumps.get("terrain_dig.json", {})
+    page = d.get("page") or {}
+    c.check((d.get("python_fps") or 0) >= 55 and page.get("apply_ms_per_batch", 99) < 4,
+            f"raising the land every frame: {d.get('python_fps')} fps, the page applies each frame's heights in "
+            f"{round(page.get('apply_ms_per_batch', 0), 2)} ms", {k: page.get(k) for k in ("fps", "apply_ms_per_batch", "batches")})
+    shot = r.shots.get("terrain_dig.png")
+    c.check(shot and color_share(shot, (130, 130, 125), 35, (0, 0.5, 0.7, 0.62)) > 0.1, "the ridge it raised is drawn", shot)
+
+
+def t_terrain_look(c):
+    """How the land looks: every style, simple and modern lighting, switching back and forth, at noon and at sunset.
+    The pictures are in out/ (terrain_*.png) to look at."""
+    steps = [{"at": 0.8, "shot": "terrain_modern.png"},
+             {"at": 0.9, "tuff": 'world:lighting "simple"'}, {"at": 1.3, "shot": "terrain_simple.png"},
+             {"at": 1.4, "tuff": 'world:lighting "modern"'}, {"at": 1.8, "shot": "terrain_modern_again.png"}]
+    at = 1.9
+    for style in ("desert", "snow", "rocky", "autumn", "grass"):
+        steps += [{"at": at, "tuff": f'land:style "{style}"'}, {"at": at + 0.4, "shot": f"terrain_{style}.png"}]
+        at += 0.5
+    steps += [{"at": at, "tuff": 'world:sky "sunset"'}, {"at": at + 0.4, "shot": "terrain_sunset_modern.png"},
+              {"at": at + 0.5, "tuff": 'world:lighting "simple"'}, {"at": at + 0.9, "shot": "terrain_sunset_simple.png"},
+              {"at": at + 1.0, "tuff": "world:camera_at(8, 2.2, 40)"}, {"at": at + 1.02, "tuff": "world:look_at(25, 0, 15)"},
+              {"at": at + 1.04, "tuff": 'world:sky "day"'}, {"at": at + 1.06, "tuff": 'world:lighting "modern"'},
+              {"at": at + 1.5, "shot": "terrain_lake.png"}, {"at": at + 1.7, "close": True}]
+    r = play("terrain_look", game("terrain_look.tuf"), steps)
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    shots = r.shots
+    c.check(len(shots) == 11, f"every picture was taken ({len(shots)} of 11)", sorted(shots))
+
+    def mean(name, box=(0.45, 0.72, 1, 1)):  # land only: below the lake, right of the river
+        try:
+            w, h, get = png_rgb(shots[name])
+        except Exception:
+            return (0, 0, 0)
+        px = [get(x, y) for y in range(int(box[1] * h), int(box[3] * h), 4) for x in range(int(box[0] * w), int(box[2] * w), 4)]
+        return tuple(round(sum(p[k] for p in px) / max(1, len(px))) for k in range(3))
+
+    looks = {name: mean(f"terrain_{name}.png") for name in ("modern", "simple", "modern_again", "desert", "snow", "rocky",
+                                                              "autumn", "grass", "sunset_modern", "sunset_simple")}
+    print(f"  COLORS {json.dumps(looks)}", flush=True)
+    g = looks["grass"]
+    c.check(g[1] > g[0] + 30 and g[1] > g[2] + 50, "grass is green", g)
+    d = looks["desert"]
+    c.check(d[0] > 170 and d[0] > d[2] + 40 and d[1] > d[2] + 20, "desert is sandy", d)
+    s = looks["snow"]
+    c.check(min(s) > 185 and max(s) - min(s) < 40, "snow is white", s)
+    k = looks["rocky"]
+    c.check(max(k) - min(k) < 45 and 90 < k[1] < 200, "rocky is grey", k)
+    a = looks["autumn"]
+    c.check(a[0] > a[1] + 25 and a[1] > a[2] + 25, "autumn is orange and gold", a)
+    diff = lambda x, y: sum(abs(p - q) for p, q in zip(looks[x], looks[y]))
+    c.check(diff("modern", "simple") > 15 and diff("modern", "modern_again") < 8,
+            "modern and simple lighting look different, and switching back gives modern again",
+            (looks["modern"], looks["simple"], looks["modern_again"]))
+    c.check(diff("sunset_modern", "sunset_simple") > 15, "at sunset too", (looks["sunset_modern"], looks["sunset_simple"]))
+    shot = shots.get("terrain_lake.png")
+    c.check(shot and color_share(shot, (60, 140, 175), 60, (0.3, 0.4, 0.7, 0.5)) > 0.3, "the lake has water in it", shot)
+    c.check(shot and color_share(shot, (215, 200, 150), 45, (0, 0.38, 1, 0.55)) > 0.03, "with a sandy shore", shot)
+    c.check(shot and color_share(shot, (110, 115, 115), 45, (0.25, 0.15, 0.45, 0.4)) > 0.05,
+            "behind it, the mountain is rocky", shot)
+
+
 def t_no_webgl(c):
     """Without WebGL (as on some school PCs and virtual machines), a 3D world stops with one plain message."""
     if os.name != "nt":
@@ -722,6 +837,53 @@ def t_scene(c):
     cam = d.get("camera") or {}
     c.check(cam.get("cx") == 0 and cam.get("cy") == 2 and cam.get("cz") == 3 and cam.get("pitch", 0) < 0 and d.get("player") is None,
             "features_3d: camera_at and look_at give the starting camera", cam)
+    c.check("terrain" not in d and d.get("lighting") == "simple" and not any("ground" in t for t in d.get("things", []))
+            and not any(cmd[0] == "c" and cmd[3] in ("terrain", "water") for cmd in batch),
+            "features_3d: a world without land has no terrain in its dump, and simple lighting", d.get("lighting"))
+
+    # The land: the terrain and its water in the batch, the land as a thing, its heights and every edit with its line
+    d, batch = run("terrain_walk.tuf", "end", "3d")
+    land = d.get("terrain") or {}
+    c.check(land.get("var") == "land" and land.get("made") == [7] and land.get("size") == 200 and land.get("n") == 134
+            and len(land.get("heights") or []) == 134 * 134 and land.get("style") == "grass" and land.get("sea") is None
+            and land.get("lakes") == [{"x": 30, "z": 0, "r": 10, "level": -0.2}],
+            "terrain_walk: the land (line 7), 200 wide, 134 x 134 heights, its lake", {k: v for k, v in land.items() if k not in ("heights", "edits")})
+    edits = [(e.get("op"), e.get("made")) for e in land.get("edits", [])]
+    c.check(edits == [("style", [8]), ("hill", [9]), ("mountain", [10]), ("dip", [11]), ("lake", [12]), ("valley", [13]),
+                      ("raise", [14]), ("raise", [15]), ("lower", [16]), ("smooth", [17]), ("flatten", [18]), ("raise", [24])],
+            "terrain_walk: every edit, in order, with the line that made it", edits)
+    stroke = (land.get("edits") or [{}] * 8)[7]
+    c.check(stroke.get("args") == [[[-30, 30], [-26, 32], [-22, 35]], 8, 1.5] and land["edits"][1].get("args") == [0, -14, 30, 6],
+            "terrain_walk: an edit's inputs as the code wrote them (a stroke's spots too)", stroke)
+    item = d.get("things", [{}])[0]
+    c.check(item.get("kind") == "terrain" and item.get("drag") is None and item.get("var") == "land" and item.get("made") == [7]
+            and item.get("i") == 0 and item.get("ids") == land.get("ids") and len(item.get("ids", [])) == 2,
+            "terrain_walk: the land is the first thing (not draggable), with its water's id", item)
+    box = thing(d, "on_hill")
+    c.check(box.get("y") == 0 and abs(box.get("ground", 0) - 5.951) < 0.01 and thing(d, "floating").get("y") == 3
+            and thing(d, "later").get("y") == 0, "terrain_walk: things' y is their height above the land, with the land's height", box)
+    made = {cmd[3]: cmd for cmd in batch if cmd[0] == "c" and cmd[3] in ("terrain", "water")}
+    heights = [cmd for cmd in batch if cmd[0] == "s" and "heights" in cmd[2]]
+    c.check(made.get("terrain", [0] * 6)[5] == {"size": 200, "n": 134, "style": "grass", "shadow": True}
+            and made.get("water", [0] * 6)[5] == {"x": 30, "z": 0, "y": -0.2, "r": 10}
+            and len(heights) == 1 and heights[0][2]["heights"] == land.get("heights"),
+            "terrain_walk: the batch makes the terrain and the lake's water, and sends the heights once", (made, len(heights)))
+    c.check(any(cmd[0] == "s" and cmd[1] == 1 and cmd[2].get("lighting") == "modern" for cmd in batch) and d.get("lighting") == "modern",
+            "terrain_walk: modern lighting is on the scene", d.get("lighting"))
+    p = d.get("player") or {}
+    c.check(p.get("y") == 0 and p.get("ground") == 0.145 and (d.get("camera") or {}).get("cy") == 1.745,
+            "terrain_walk: the player starts standing on the land, its eye 1.6 above it", (p, d.get("camera")))
+    for name, code, line, msg in [
+            ("two", 'w = tgame.world("x")\na = w:terrain(100)\nb = w:terrain(100)\n', 4,
+             "A world has one terrain. Change it with land:hill, land:raise and so on."),
+            ("size", 'w = tgame.world("x")\na = w:terrain(5)\n', 3, ":terrain needs a size from 10 to 1000"),
+            ("lake", 'w = tgame.world("x")\na = w:terrain(100)\na:lake(0, 0, 10, 0)\n', 4, ":lake needs a depth above 0"),
+            ("spot", 'w = tgame.world("x")\na = w:terrain(100)\na:hill(5)\n', 4, ":hill needs x and z (where on the land)"),
+            ("stroke", 'w = tgame.world("x")\na = w:terrain(100)\na:raise([[1, 2], [3]], 4, 1)\n', 4, ":raise needs spots like [[1, 2], [3, 2]]"),
+            ("style", 'w = tgame.world("x")\na = w:terrain(100)\na:style "gras"\n', 4, 'Did you mean "grass"?'),
+            ("lighting", 'w = tgame.world("x")\nw:lighting "modren"\n', 3, 'Did you mean "modern"?')]:
+        e = scene(scene_source(f"scene_land_{name}.tuf", "mention tgame\n" + code))[3].get("error") or {}
+        c.check(e.get("line") == line and msg in e.get("message", ""), f"a mistake with the land: {msg}", e)
 
     # The two Tuff Engine templates: every thing is on its own top-level line, named, at its line's numbers
     d, batch = run("coin_dash.tuf", "end", "2d")
@@ -997,7 +1159,7 @@ def t_guide(c):
 
 GOOD = ["snake.tuf", "breakout.tuf", "snake3d.tuf", "axe_sim.tuf", "features_2d.tuf", "features_3d.tuf", "player_3d.tuf",
         "perf_2d.tuf", "perf_2d_speed.tuf", "perf_3d.tuf", "perf_3d_move.tuf", "callback.tuf", "errors.tuf", "top_error.tuf",
-        "churn.tuf", "pause_key.tuf", "hud_3d.tuf"]
+        "churn.tuf", "pause_key.tuf", "hud_3d.tuf", "terrain_walk.tuf", "terrain_look.tuf", "terrain_dig.tuf"]
 BAD = [
     ('game = tgame.window("x")\ngame:rect(1, 2)\n', "A game doesn't have :rect. Use :box instead."),
     ('game = tgame.window("x")\nb = game:box(1, 2)\nb:moov(1, 2)\n', "A sprite doesn't have :moov. Did you mean :move?"),
@@ -1039,6 +1201,16 @@ BAD = [
     ('game = tgame.window("x")\ng = game:group()\ng:append(game:box(1, 2))\n', "A group doesn't have :append."),
     ('game = tgame.windw("x")\n', "tgame doesn't have 'windw'. It has: window, world."),
     ('game = tgame.window(1, 2, 3, 4)\n', "tgame.window() got the wrong number of inputs (4)."),
+    # The land and the lighting
+    ('w = tgame.world("x")\nland = w:terrain(100)\nland:style "gras"\n',
+     "The land's style can be grass, desert, snow, rocky or autumn, not \"gras\". Did you mean \"grass\"?"),
+    ('w = tgame.world("x")\nland = w:terrain(100, "beach")\n', "The land's style can be grass, desert, snow, rocky or autumn"),
+    ('w = tgame.world("x")\nw:lighting "modren"\n', "The lighting can be \"simple\" or \"modern\", not \"modren\". Did you mean \"modern\"?"),
+    ('w = tgame.world("x")\nland = w:terrain()\nland:hil(1, 2)\n', "A terrain doesn't have :hil. Did you mean :hill?"),
+    ('w = tgame.world("x")\nland = w:terrain()\nland:pond(1, 2)\n', "A terrain doesn't have :pond. Use :lake instead."),
+    ('w = tgame.world("x")\nland = w:terrain()\nland:hill(1, 2, 3, 4, 5)\n', "terrain:hill got the wrong number of inputs (5)."),
+    ('w = tgame.world("x")\nland = w:terrain()\nland:water()\n', "terrain:water got the wrong number of inputs (0)."),
+    ('w = tgame.world("x")\nw:land(100)\n', "A world doesn't have :land. Use :terrain instead."),
 ]
 
 
@@ -1055,6 +1227,9 @@ GOOD_SNIPPETS = [
     'game = tgame.window("x")\nsay "hidden breaks in text"\ngame:text("a b\u0085c\x0cd", 10, 10)\n',
     # Pictures in a folder inside the game's folder are fine, even written with a ../ that stays inside.
     'game = tgame.window("x")\ngame:image("art/star.png", 1, 2)\ngame:image("art/../art/star.png", 3, 4)\n',
+    # The land: chained edits, a stroke, a spot from random_spot, the number height_at gives
+    'w = tgame.world("x")\nw:lighting "Modern"\nland = w:terrain(150, "snow"):hill(0, 0, 20, 5)\n'
+    'land:raise([[1, 2], [3, 4]], 6, 1):smooth(1, 2, 6):water(-2)\nh = land:height_at(w:random_spot())\nsay h + 1\n',
 ]
 
 
@@ -1118,7 +1293,8 @@ def t_perf(c):
 
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
-         "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "no_webgl": t_no_webgl,
+         "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "terrain": t_terrain,
+         "terrain_look": t_terrain_look, "no_webgl": t_no_webgl,
          "scene": t_scene, "notice": t_notice, "mcp": t_mcp, "checker": t_checker, "editor": t_editor, "guide": t_guide, "perf": t_perf}
 
 

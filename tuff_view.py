@@ -623,9 +623,13 @@ class View:
         return self.create("shape", type_, canvas, **props)
 
     def scene(self, parent=0, **props):
+        """A three.js scene. Besides its camera, sky and fog, lighting="modern" (tone mapping, light from the sky,
+        shadows that follow the camera) or "simple" (the default)."""
         return self.create("scene", None, parent, **props)
 
     def obj(self, parent, type_, **props):
+        """A 3D object in a scene or a group: a shape, a group, a light, a label, a model, "terrain" (a square of
+        land: size, n, heights (n * n, row by row from -z to +z), style) or "water" (a lake: r; a sea: r=0, size)."""
         return self.create("obj", type_, parent, **props)
 
     def set(self, id_, **props):
