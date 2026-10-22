@@ -965,6 +965,37 @@ class View:
         """The page's own numbers: frames drawn per second, frame gaps, time spent applying and drawing."""
         return self.ask(0, "stats", bool(reset))
 
+    def page_png(self, timeout=15.0):
+        """A PNG of the whole page as the window shows it, elements included (the page's own snapshot has only its
+        canvases and 3D scenes): WebView2's DevTools screenshot, for tests. None where it can't be taken (not on
+        Windows, or the window is closing)."""
+        if sys.platform != "win32":
+            return None
+        with self._cond:
+            if self._closed or self._win is None:
+                return None
+            self._in_call += 1  # like _window_call: a closing window doesn't wait for the GUI thread meanwhile
+        try:
+            import base64
+            from System import Func, Object  # pythonnet, which pywebview loads on Windows
+            form = self._win.native
+            web = form.browser.webview
+            box = {}
+
+            def start():
+                box["task"] = web.CoreWebView2.CallDevToolsProtocolMethodAsync("Page.captureScreenshot", '{"format":"png"}')
+                return None
+            form.Invoke(Func[Object](start))
+            if not box["task"].Wait(int(timeout * 1000)):
+                return None
+            return base64.b64decode(json.loads(str(box["task"].Result))["data"])
+        except Exception:
+            return None
+        finally:
+            with self._cond:
+                self._in_call -= 1
+                self._cond.notify_all()
+
     def _window_call(self, method, *args):
         """Call a method of pywebview's window, unless the window has closed (or started to).
 
@@ -1072,6 +1103,7 @@ class Recorder(View):
     def frame(self): return 0.0
     def loop(self): pass
     def page_stats(self, reset=False): return {}
+    def page_png(self, timeout=15.0): return None
     def set_title(self, title): self.title = str(title)
     def resize(self, width, height): pass
     def move(self, x, y): pass

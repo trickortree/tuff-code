@@ -176,7 +176,7 @@ Methods (`call`/`ask`):
 | `click` `dblclick` `mousedown` `mouseup` | `id` (the nearest object), `path` (that object, then its parents), `x y` (window CSS px), `button`, `shift ctrl alt meta`. Over a canvas also `cx cy` (world). Over a scene, the hit object leads `path`, plus `point dist`. |
 | `mousemove` | `x y dx dy` (merged per animation frame) |
 | `wheel` | `dx dy x y path` |
-| `keydown` / `keyup` | `key code` (+ `repeat` on keydown), `shift ctrl alt meta` |
+| `keydown` / `keyup` | `key code` (+ `repeat` and `typing` on keydown: true when the key went to a text box, not a checkbox or slider), `shift ctrl alt meta` |
 | `input` / `change` | `id path value` (checkboxes: true/false) |
 | `submit` | `id path` |
 | `resize` | `w h` |
@@ -228,6 +228,7 @@ view.fps = 30        # 0 = unpaced;  view.max_ahead = 2
 # window
 view.is_open  view.set_title(t)  view.resize(w, h)  view.move(x, y)  view.minimize()  view.maximize()
 view.restore()  view.fullscreen()  view.close()  view.page_stats(reset=False)  view.stats
+view.page_png()      # tests: a PNG of the whole page, elements too (WebView2's DevTools screenshot; None elsewhere)
 tv.ViewError, tv.ViewClosed (a BaseException), tv.FAILED, tv.WEB_DIR
 ```
 
