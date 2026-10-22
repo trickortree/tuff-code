@@ -1,0 +1,82 @@
+mention tgame
+
+# Menus in a first-person 3D world: click to play (that click locks the mouse), a panel with coins and a Shop
+# button, a shop that pauses the world, a pause menu on Escape, and a chat box whose W doesn't walk.
+game = tgame.world("Chop! Chop!", 960, 600)
+game:sky "day"
+game:ground "grass"
+for i in range(0, 10):
+    game:spawn("pine", -12 + i * 2.6, 0, -14 - (i % 3) * 3)
+game:spawn("house", 7, 0, -8)
+game:spawn("rock", -4, 0, -5)
+player = game:player("first person")
+player:hold "axe"
+coins = 0
+axe = "Wooden axe"
+
+start = game:start_screen("Chop! Chop!")
+start:text "Chop trees for coins, buy better axes."
+start:small "WASD to walk, the mouse to look around. B opens the shop, Esc pauses."
+
+bar = game:panel("top left")
+coins_label = bar:heading "Coins: 0"
+axe_badge = bar:badge("Wooden axe", "gray")
+row = bar:row()
+row:button("Chop", chop)
+row:button("Shop", open_shop, "secondary")
+energy = bar:progress(80)
+
+tips = game:panel("bottom right")
+tips:small "B: shop   Esc: pause"
+
+chat = game:panel("bottom left")
+chat_box = chat:input("Say something")
+
+shop = game:screen("Shop")
+shop:text "Better axes chop faster."
+card = shop:card()
+card:heading "Stone axe"
+card:small "Chops twice as fast."
+card:button("Buy for 15", buy_stone)
+shop:button("Close", close_shop, "secondary")
+shop:hide()
+
+pause_menu = game:screen("Paused")
+pause_menu:button("Resume", resume)
+pause_menu:switch("Sound", true)
+pause_menu:hide()
+
+func chop():
+    coins += 5
+    coins_label:set "Coins: " + coins
+
+func open_shop():
+    shop:show()
+
+func close_shop():
+    shop:hide()
+
+func buy_stone():
+    if coins >= 15:
+        coins -= 15
+        axe = "Stone axe"
+        coins_label:set "Coins: " + coins
+        axe_badge:set axe
+        axe_badge:style "success"
+
+func resume():
+    pause_menu:hide()
+
+func key(name):
+    if name is "b":
+        if shop:shown():
+            shop:hide()
+        else:
+            shop:show()
+    if name is "escape":
+        if pause_menu:shown():
+            pause_menu:hide()
+        else:
+            pause_menu:show()
+
+game:on_key("any", key)

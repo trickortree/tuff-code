@@ -20,9 +20,12 @@ import json
 import math
 import os
 import random
+import re
 import struct
 import sys
 import time
+
+import tuff_atgui as atgui  # a game's menus are atgui's own widgets (GameUI, near the end)
 
 # ---------------------------------------------------------------- what tgame knows
 
@@ -84,6 +87,10 @@ PLAYER_MODES = ("first person", "third person")
 ALIGNS = ("left", "center", "centre", "right")
 TERRAIN_STYLES = ("grass", "desert", "snow", "rocky", "autumn")
 LIGHTINGS = ("simple", "modern")
+# Where game:panel pins a panel, and other words for the same places ("centre", "middle", "top center"...).
+ANCHORS = ("top left", "top", "top right", "left", "center", "right", "bottom left", "bottom", "bottom right")
+ANCHOR_WORDS = {"centre": "center", "middle": "center", "mid": "center", "centered": "center", "upper": "top",
+                "lower": "bottom"}
 
 # Methods people coming from other engines guess, and the tgame name (for "Use :box instead").
 HINTS = {
@@ -113,6 +120,13 @@ HINTS = {
     "player": {"goto": "move_to", "position": "move_to", "speed": "walk_speed", "jump_power": "jump_height",
                "holds": "hold", "equip": "hold", "aim": "looking_at", "target": "looking_at"},
 }
+# Names people guess for menus, the same in 2D and 3D.
+UI_HINTS = {"menu": "screen", "overlay": "screen", "popup": "screen", "dialog": "screen", "modal": "screen",
+            "title_screen": "start_screen", "start_menu": "start_screen", "main_menu": "start_screen",
+            "splash": "start_screen", "splash_screen": "start_screen", "click_to_play": "start_screen", "ui": "panel",
+            "gui": "panel", "toolbar": "panel", "sidebar": "panel"}
+HINTS["game"].update(UI_HINTS)
+HINTS["world"].update(UI_HINTS)
 
 KEY_CODES = {"Space": "space", "ArrowUp": "up", "ArrowDown": "down", "ArrowLeft": "left", "ArrowRight": "right",
              "Enter": "enter", "NumpadEnter": "enter", "Escape": "escape", "Tab": "tab", "Backspace": "backspace",
@@ -192,6 +206,23 @@ def style_problem(name):
 
 def lighting_problem(name):
     return f"The lighting can be \"simple\" or \"modern\", not \"{name}\".{did_you_mean(name, LIGHTINGS)}"
+
+
+def anchor_name(text):
+    """Where a panel goes ("top left", "center"...) for what a program wrote ("Top-Left", "centre", "top middle",
+    "left top"...), or None."""
+    words = [ANCHOR_WORDS.get(w, w) for w in re.split(r"[\s_-]+", str(text).strip().lower()) if w]
+    if len(words) > 1:
+        words = [w for w in words if w != "center"] or ["center"]  # "top center" is the top, "center center" the middle
+    if len(words) == 2 and words[0] in ("left", "right") and words[1] in ("top", "bottom"):
+        words.reverse()
+    name = " ".join(words)
+    return name if name in ANCHORS else None
+
+
+def anchor_problem(name):
+    return (f"A panel can go at the top left, top, top right, left, center, right, bottom left, bottom or bottom right, "
+            f"not \"{name}\".{did_you_mean(str(name).strip().lower(), ANCHORS)}")
 
 
 def image_size(path):
@@ -346,7 +377,8 @@ class Game:
         ("sound", "sound"), ("beep", "beep"), ("music", "music"), ("stop_music", "stop_music"),
         ("volume", "volume"), ("title", "set_title"), ("close", "close"), ("width", "width"),
         ("height", "height"), ("background", "background"), ("random_spot", "random_spot"),
-        ("group", "group"), ("hud", "get_hud"), ("clear", "clear"),
+        ("group", "group"), ("hud", "get_hud"), ("clear", "clear"), ("panel", "panel"), ("screen", "make_screen"),
+        ("start_screen", "start_screen"),
     ]
 
     def __init__(self, lib, title, width, height):
@@ -354,6 +386,7 @@ class Game:
         self.tv = tuff_view
         self.lib, self.rt = lib, lib.rt
         self.W, self.H = width, height
+        self.ui = None  # the game's menus (GameUI), once game:panel or a screen made them
         self.closed = self.close_seen = False
         self.down, self.just = set(), set()
         self.ticks, self.key_fns, self.click_fns, self.timers = [], [], [], []
@@ -430,6 +463,16 @@ class Game:
 
     def num(self, v, what):
         return self.rt.number(v, what)
+
+    @property
+    def is_paused(self):
+        """Paused by game:pause or game:game_over, or by a screen that pauses while it shows (game:resume doesn't
+        resume a game that a screen holds: hiding the screen does)."""
+        return self.program_paused or (self.ui is not None and self.ui.pausing)
+
+    @is_paused.setter
+    def is_paused(self, on):
+        self.program_paused = on
 
     def color(self, v, what="color"):
         t = self.rt.text(v).strip().lower()
@@ -570,12 +613,19 @@ class Game:
 
     # ---- input
     def handle(self, events):
+        ui = self.ui
         for e in events:
             t = e.get("type")
+            if ui is not None and t in UI_EVENTS and ui.handle(e):  # it was on the menus: it isn't the game's
+                if t == "mouseup":
+                    self.down.discard(MOUSE_BUTTONS.get(e.get("button", 0), "mouse"))
+                continue
             if t == "keydown":
                 name = key_of_event(e)
-                if not name:
-                    continue
+                if not name or (e.get("typing") and name != "escape"):
+                    continue  # no key, or one typed into a text box on the menus: it doesn't move the player
+                if ui is not None and name not in self.down and not e.get("repeat") and ui.start_key(name):
+                    continue  # Enter or Space on a start screen starts the game, and that's all it does
                 fresh = name not in self.down
                 self.down.add(name)
                 if fresh and not e.get("repeat"):
@@ -605,6 +655,10 @@ class Game:
                 if thing is not None and e.get("size"):
                     thing.dims = tuple(max(0.01, float(v)) for v in e["size"])
                     thing.push()
+            elif t == "tg-lock" and ui is not None:  # the page asked to lock the mouse (a start screen's click)
+                ui.lock_asks += 1
+            elif t == "tg-autopilot":
+                print(f"[autopilot] {e.get('message')}", flush=True)
             elif t == "close":
                 self.closed = True
 
@@ -747,6 +801,27 @@ class Game:
             thing.remove()
         self.things = {}
         self.movers = set()
+
+    # ---- menus, buttons and screens: atgui's widgets on the game
+    def menus(self):
+        if self.ui is None:
+            self.ui = GameUI(self)
+        return self.ui
+
+    def panel(self, anchor="top left"):
+        ui = self.menus()
+        where = anchor_name(ui.lib.text(anchor))
+        if where is None:
+            raise self.rt.error(anchor_problem(ui.lib.text(anchor)))
+        return Panel(ui, where).native()
+
+    def make_screen(self, title="", pauses=True):
+        ui = self.menus()
+        return Screen(ui, ui.lib.text(title), self.rt.truthy(pauses)).native()
+
+    def start_screen(self, title=None, hint="Click to play"):
+        ui = self.menus()
+        return StartScreen(ui, self.view.title if title is None else ui.lib.text(title), ui.lib.text(hint)).native()
 
     def stats(self):
         """Numbers for the autopilot's reports."""
@@ -1829,8 +1904,9 @@ class World3D(Game):
                 self.fire(fn, *args)
 
     def lock_changed(self):
-        if self.hint is not None:
-            self.hint.hide() if (self.locked or self.fake_lock) else self.hint.show()
+        if self.hint is not None:  # "Click the game to look around": not while it's locked, or under a screen
+            covered = self.ui is not None and self.ui.showing
+            self.hint.hide() if (self.locked or self.fake_lock or covered) else self.hint.show()
 
     def update(self, dt, real):
         p = self.the_player
@@ -3074,6 +3150,305 @@ class Player:
         w.push_camera()
 
 
+# ---------------------------------------------------------------- menus, buttons and screens (atgui on a game)
+
+# The page events that can be on the menus. One that is (its path goes through them) is theirs, not the game's.
+UI_EVENTS = frozenset(atgui.ROUTED) | {"mousedown", "mouseup", "wheel"}
+
+# How menus look on a game, on top of atgui's own look: see-through except where there's a widget, words that stay
+# readable over a bright sky, panels pinned to their places, and screens on a dimmed, blurred backdrop.
+UI_CSS = """
+.at-app.tg-ui{background:transparent;pointer-events:none;z-index:10}
+.tg-ui .tg-dock{position:absolute;display:flex;flex-direction:column;gap:10px;max-width:calc(100% - 28px);
+ max-height:calc(100% - 28px);pointer-events:none}
+.tg-ui .tg-panel{pointer-events:none;min-height:0;text-shadow:0 1px 2px rgba(0,0,0,.65),0 0 14px rgba(0,0,0,.35)}
+.tg-ui .tg-panel :is(.at-btn,.at-input,.at-textarea,.at-check,.at-slider,.at-dropdown,.at-list,.at-table-wrap,.at-tabs,
+ .at-card,.at-scroll,.at-chart-box,.at-html,.at-codeblock,.at-md a,[data-at-tip],[data-at-hover],[style*="cursor"]){pointer-events:auto}
+.tg-ui .tg-panel :is(.at-card,.at-btn,.at-input,.at-textarea,.at-dropdown,.at-table-wrap,.at-list,.at-badge,.at-codeblock){text-shadow:none}
+.tg-ui .tg-panel>.at-heading{font-size:20px;font-weight:700;letter-spacing:-.01em}
+.tg-ui .tg-panel .at-small{color:rgba(236,237,240,.82)}
+.tg-ui .tg-panel .at-badge{backdrop-filter:blur(8px) brightness(.45)}
+.tg-ui .tg-panel :is(.at-progress,.at-slider){min-width:180px}
+.tg-ui .tg-panel :is(.at-input,.at-textarea){min-width:210px}
+.tg-ui .tg-panel .at-progress{height:8px;background:rgba(0,0,0,.4);box-shadow:inset 0 0 0 1px rgba(255,255,255,.14)}
+.tg-ui .tg-panel>.at-card{background:color-mix(in srgb,var(--surface) 80%,transparent);backdrop-filter:blur(12px) saturate(1.4)}
+.tg-ui .tg-dock-top-left{top:14px;left:14px;align-items:flex-start}
+.tg-ui .tg-dock-top{top:14px;left:50%;translate:-50% 0;align-items:center}
+.tg-ui .tg-dock-top-right{top:14px;right:14px;align-items:flex-end}
+.tg-ui .tg-dock-left{top:50%;left:14px;translate:0 -50%;align-items:flex-start}
+.tg-ui .tg-dock-center{top:50%;left:50%;translate:-50% -50%;align-items:center}
+.tg-ui .tg-dock-right{top:50%;right:14px;translate:0 -50%;align-items:flex-end}
+.tg-ui .tg-dock-bottom-left{bottom:14px;left:14px;align-items:flex-start;justify-content:flex-end}
+.tg-ui .tg-dock-bottom{bottom:14px;left:50%;translate:-50% 0;align-items:center;justify-content:flex-end}
+.tg-ui .tg-dock-bottom-right{bottom:14px;right:14px;align-items:flex-end;justify-content:flex-end}
+.tg-ui :is(.tg-top,.tg-center,.tg-bottom){align-items:center;--self:center}
+.tg-ui :is(.tg-top-right,.tg-right,.tg-bottom-right){align-items:flex-end;--self:flex-end}
+.tg-ui .tg-center{text-align:center}
+.tg-ui .tg-screen{pointer-events:auto;z-index:20;
+ background:radial-gradient(120% 100% at 50% 42%,rgba(8,10,16,.4),rgba(3,4,7,.8));backdrop-filter:blur(6px)}
+.tg-ui .tg-card{width:min(460px,100%);padding:26px 28px 24px;gap:16px;text-align:center;border-color:rgba(255,255,255,.1);
+ box-shadow:0 30px 80px -24px rgba(0,0,0,.85),0 0 0 1px rgba(0,0,0,.35)}
+.tg-ui .tg-screen-title{font-size:26px;font-weight:750;letter-spacing:-.02em}
+.tg-ui .tg-card>.at-dialog-body{--self:stretch;gap:10px}
+.tg-ui .tg-card .at-row{justify-content:center}
+.tg-ui .tg-card .at-card{--self:center}
+.tg-ui .tg-card>.at-dialog-body>.at-btn{height:40px;font-size:14.5px}
+.tg-ui .tg-start{position:absolute;inset:0;z-index:30;pointer-events:auto;cursor:pointer;display:flex;flex-direction:column;
+ align-items:center;justify-content:center;gap:12px;padding:40px 32px;text-align:center;opacity:0;transition:opacity .28s;
+ background:radial-gradient(130% 110% at 50% 40%,rgba(10,13,22,.36),rgba(3,4,8,.86));backdrop-filter:blur(5px)}
+.tg-ui .tg-start.at-shown{opacity:1}
+.tg-ui .tg-title{margin:0;max-width:100%;font:800 clamp(36px,7.5vw,72px)/1.04 var(--font);letter-spacing:-.03em;color:#fff;
+ overflow-wrap:anywhere;text-shadow:0 2px 0 rgba(0,0,0,.25),0 10px 40px rgba(0,0,0,.55)}
+.tg-ui .tg-start-body{align-items:center;--self:center;max-width:min(560px,100%);gap:8px}
+.tg-ui .tg-start-body>:is(.at-text,.at-small){font-size:16px;color:#d9dce3;text-shadow:0 1px 8px rgba(0,0,0,.5)}
+.tg-ui .tg-start-body>.at-small{font-size:13.5px;color:var(--muted)}
+.tg-ui .tg-start-body:empty{display:none}
+.tg-ui .tg-hint{margin-top:18px;display:inline-flex;align-items:center;gap:11px;height:46px;padding:0 26px 0 22px;border-radius:999px;
+ background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;font:650 15.5px/1 var(--font);letter-spacing:.01em;
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 10px 30px -8px color-mix(in srgb,var(--accent) 70%,transparent)}
+.tg-ui .tg-hint::before{content:"";border-left:10px solid #fff;border-top:6.5px solid transparent;border-bottom:6.5px solid transparent}
+.tg-ui .tg-start:hover .tg-hint{filter:brightness(1.08)}
+.tg-ui .tg-start.at-shown .tg-title{animation:tg-rise .55s cubic-bezier(.2,.8,.2,1) both}
+.tg-ui .tg-start.at-shown .tg-start-body{animation:tg-rise .55s .06s cubic-bezier(.2,.8,.2,1) both}
+.tg-ui .tg-start.at-shown .tg-hint{animation:tg-rise .55s .12s cubic-bezier(.2,.8,.2,1) both,tg-glow 2.4s .8s ease-in-out infinite}
+@keyframes tg-rise{from{opacity:0;translate:0 14px}}
+@keyframes tg-glow{50%{box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 0 0 7px color-mix(in srgb,var(--accent) 22%,transparent),
+ 0 10px 34px -6px color-mix(in srgb,var(--accent) 80%,transparent)}}
+"""
+
+# The page side of a game's menus (it runs after atgui's own, tuff_atgui.JS).
+UI_JS = r"""
+const tg = window.__tg = {};
+const typing = (el) => el && (el.isContentEditable || el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !/^(checkbox|radio|range|button)$/i.test(el.type)));
+// Lock the mouse for looking around (a 3D world with a player). The browser only allows that in the user's own click
+// or key press, so it happens here, in the event, not after Python hears of it. If it isn't allowed, a click on the
+// game locks it as usual.
+tg.lock = () => {
+  const s = [...tv.objs.values()].find((n) => n.kind === 'scene' && n.clicklock);
+  if (!s || document.pointerLockElement === s.el) return null;
+  tv.emit('tg-lock', {});
+  try { const p = s.el.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (err) { /* not now */ }
+  return null;
+};
+const WIDGETS = '.at-btn,.at-input,.at-textarea,.at-check,.at-slider,.at-dropdown,.at-list,.at-tabs,.at-table-wrap,.at-card';
+addEventListener('pointerdown', (e) => {
+  const start = e.target.closest && e.target.closest('.tg-start.at-shown');
+  if (start && !e.target.closest(WIDGETS)) tg.lock();
+}, true);
+addEventListener('keydown', (e) => {
+  if ((e.key === 'Enter' || e.key === ' ') && !e.repeat && !typing(e.target) && document.querySelector('.tg-start.at-shown')) tg.lock();
+}, true);
+// A clicked button, checkbox or slider keeps the keyboard, so Enter would press it again and the arrows would move it:
+// give the keys back to the game. Text boxes keep them (typing in one doesn't move the player).
+addEventListener('click', () => {
+  const a = document.activeElement;
+  if (a && a !== document.body && !typing(a) && a.closest && a.closest('.tg-ui')) a.blur();
+});
+HTMLElement.prototype.tgShut = function () {
+  const a = document.activeElement;
+  if (a && this.contains(a)) a.blur();
+  return this.atShut();
+};
+"""
+
+
+class GameUI:
+    """A game's menus: atgui's own widgets, on the game's page, over the game.
+
+    It stands in for atgui's window (App) as the widgets' app: their lib, their scene, the layer their menus open in.
+    Its panels and screens are atgui containers, so everything atgui's containers make works in them and looks and
+    behaves as it does in atgui. Their events come through the game's loop (Game.handle), so their functions run
+    between frames, like the game's own events. Tuff Engine's preview (tuff.py --scene) leaves the menus out: their
+    scene never gets a window, so nothing is sent."""
+
+    def __init__(self, game):
+        self.game = game
+        self.rt = game.rt
+        self.lib = atgui.Lib(game.rt)
+        self.lib.app = self.app = self
+        self.scene = atgui.Scene()
+        if SCENE is None:
+            self.scene.view = game.view  # the game's window is open already: changes go straight to it
+        self.children, self.extra_ids = [], []
+        self.dead = self.kept = False
+        self._native = self.click_fn = None
+        self.screens = []
+        self.showing = self.pausing = False  # a screen shows; one that pauses shows
+        self.relock = False  # a screen let go of the mouse, so it's locked again when the screens are gone
+        self.lock_asks = 0
+        atgui.add_to_page(self.scene, game=True)
+        self.scene.call(0, "css", UI_CSS)
+        self.scene.js(UI_JS)
+        props = {}
+        if not game.three_d:  # a 2D game keeps its shape in a bigger window (bars beside it): the menus stay on it
+            W, H = game.W, game.H
+            props["style"] = {"margin": "auto", "width": f"min(100vw, calc(100vh * {W} / {H}))",
+                              "height": f"min(100vh, calc(100vw * {H} / {W}))"}
+        self.id = self.slot = self.scene.el("div", 0, cls="at-app at-dark tg-ui", **props)
+        self.layer = self.scene.el("div", self.id, cls="at-layer")  # for dropdowns' menus and tooltips, over the rest
+        self.docks = {}  # anchor -> the place its panels go, one under another
+
+    def dock(self, anchor):
+        if anchor not in self.docks:
+            self.docks[anchor] = self.scene.el("div", self.id, cls=f"tg-dock tg-dock-{anchor.replace(' ', '-')}",
+                                               before=self.layer)
+        return self.docks[anchor]
+
+    def handle(self, e):
+        """An event from the page: True when it was on the menus (their widgets get it, and the game doesn't)."""
+        if self.id not in (e.get("path") or ()):
+            return False
+        if e.get("type") in atgui.ROUTED:
+            self.lib.route(e)
+        return True
+
+    def start_key(self, name):
+        """Enter or Space while a start screen shows: it starts the game. True when one did."""
+        if name in ("enter", "space"):
+            for s in reversed(self.screens):
+                if isinstance(s, StartScreen) and s.is_shown:
+                    s.start()
+                    return True
+        return False
+
+    def removed(self, widget):
+        if widget in self.screens:
+            self.screens.remove(widget)
+            self.changed()
+
+    def changed(self):
+        """A screen showed or hid. The game is paused while one that pauses shows; while any shows the mouse is free
+        to use it (a locked one is let go, and locked again when the last screen goes)."""
+        g = self.game
+        shown = [s for s in self.screens if s.is_shown and not s.dead]
+        self.showing = bool(shown)
+        self.pausing = any(s.pauses for s in shown)
+        if SCENE is None and not g.closed:
+            if self.showing and g.locked:
+                g.view.call(0, "unlock")
+                self.relock = True
+            elif not self.showing and self.relock:
+                self.relock = False
+                g.view.js("window.__tg.lock()")
+        g.lock_changed()
+
+    def state(self):
+        """For the autopilot's reports: the screens, and the words and values on what shows."""
+        texts, inputs, values = [], [], []
+
+        def walk(w):
+            for c in w.children:
+                if isinstance(c, (atgui.Label, atgui.Badge)):
+                    texts.append(c.value_text if isinstance(c, atgui.Label) else c.label)
+                elif isinstance(c, atgui.Button):
+                    texts.append(c.label)
+                elif isinstance(c, atgui.Input):
+                    inputs.append(c.text)
+                elif isinstance(c, (atgui.Slider, atgui.Progress)):
+                    values.append(c.number)
+                walk(c)
+        for w in self.children:
+            if (isinstance(w, Screen) and w.is_shown) or (isinstance(w, Panel) and not w.hidden):
+                walk(w)
+        return {"screens": [{"title": s.title, "shown": s.is_shown, "pauses": s.pauses, "start": isinstance(s, StartScreen)}
+                            for s in self.screens],
+                "showing": self.showing, "pausing": self.pausing, "texts": texts, "inputs": inputs, "values": values,
+                "lock_asks": self.lock_asks}
+
+
+class Panel(atgui.Container):
+    """game:panel("top left"): an atgui column pinned to a place on the game, a little in from its edges (panels at
+    the same place go one under another). Clicks on its widgets go to them; clicks between them, and everywhere
+    else, reach the game. Panels never pause it."""
+    kind = "panel"
+
+    def __init__(self, ui, anchor):
+        super().__init__(ui, place=(ui.dock(anchor), None), cls=f"at-col tg-panel tg-{anchor.replace(' ', '-')}")
+        self.hidden = False
+
+    def show(self):
+        if self.hidden:
+            self.hidden = False
+            self.set(show=True)
+            self.call("atAnimate", "fade-in", 160, 1)
+
+    def hide(self):
+        self.hidden = True
+        self.set(show=False)
+
+
+class Screen(atgui.Container):
+    """game:screen("Shop"): a layer over the whole game with atgui's modal look: what's added to it goes in a card in
+    the middle, on a dimmed backdrop, under the title. It's made showing. One that pauses (the default) holds the
+    game while it shows: dt is 0, timers wait and the player stands still."""
+    kind = "screen"
+    cls = "at-overlay tg-screen"
+
+    def __init__(self, ui, title, pauses):
+        self.ui, self.title, self.pauses = ui, title, pauses
+        self.is_shown = False
+        super().__init__(ui, place=(ui.id, ui.layer), style={"display": "none"})
+        self.build(title)
+        ui.screens.append(self)
+        self.show()
+
+    def build(self, title):
+        box = self.scene.el("div", self.id, cls="at-dialog tg-card", role="dialog")
+        self.title_id = self.scene.el("h2", box, cls="at-heading tg-screen-title", text=title, show=bool(title))
+        self.slot = self.scene.el("div", box, cls="at-dialog-body")
+
+    def show(self):
+        if not self.is_shown and not self.dead:
+            self.is_shown = True
+            self.call("atOpen")
+            self.ui.changed()
+
+    def hide(self):
+        if self.is_shown:
+            self.is_shown = False
+            self.call("tgShut")
+            self.ui.changed()
+
+    def shown(self):
+        return self.is_shown
+
+    def set_title(self, text):
+        self.title = self.lib.text(text)
+        if not self.dead:
+            self.scene.set(self.title_id, text=self.title, show=bool(self.title))
+        return self.native()
+
+    def methods(self):
+        return {**super().methods(), "show": self.show, "hide": self.hide, "shown": self.shown, "set": self.set_title}
+
+
+class StartScreen(Screen):
+    """game:start_screen("Chop! Chop!"): a screen that is all one button, with a big title, the hint and whatever the
+    program adds between them. A click anywhere on it (or Enter or Space) hides it, and the game starts; in a 3D
+    world with a player that click also locks the mouse for looking around. start:clicked fn runs fn then."""
+    cls = "tg-screen tg-start"
+
+    def __init__(self, ui, title, hint):
+        self.hint = hint
+        self.start_fn = None
+        super().__init__(ui, title, True)
+
+    def build(self, title):
+        self.title_id = self.scene.el("h1", self.id, cls="tg-title", text=title, show=bool(title))
+        self.slot = self.scene.el("div", self.id, cls="at-col tg-start-body")
+        self.scene.el("div", self.id, cls="tg-hint", text=self.hint, show=bool(self.hint))
+        self.lib.on(self.id, "click", lambda e: self.start())
+
+    def start(self):
+        if self.is_shown:
+            self.hide()
+            self.lib.fire(self.start_fn)
+
+    def clicked(self, fn):
+        self.start_fn = self.lib.check_fn(fn, ":clicked")
+        return self.native()
+
+
 # ---------------------------------------------------------------- Tuff Engine's preview (tuff.py --scene)
 SCENE = None  # a Scene while tuff.py --scene runs a program's setup; None in every normal run
 
@@ -3188,7 +3563,7 @@ def editor_tables():
     """The names Tuff Engine offers in its menus, from the same tables a run uses."""
     return {"colors": COLORS, "skies": list(SKIES), "kit": list(KIT), "hold": list(HOLDABLE), "sounds": list(SOUNDS),
             "edges": list(EDGE_MODES), "players": list(PLAYER_MODES), "terrain_styles": list(TERRAIN_STYLES),
-            "lightings": list(LIGHTINGS)}
+            "lightings": list(LIGHTINGS), "anchors": list(ANCHORS)}
 
 
 # ---------------------------------------------------------------- the autopilot (tests)
@@ -3200,8 +3575,12 @@ class Autopilot:
         {"at": 0.5, "key": "right"}, {"at": 1, "hold": "w", "for": 0.8}, {"at": 1.2, "keydown": "a"}, {"keyup": ...},
         {"at": 2, "click": [x, y]} (window pixels), {"click_world": [x, y]} (a 2D game's own units),
         {"click_center": true}, {"look": [dx, dy]} (mouse movement), {"lock": true} (act as if the mouse were locked),
-        {"call": "tuff_function"}, {"say": "text"}, {"mark": true} (start measuring), {"shot": "name.png"},
-        {"dump": "name.json"} (add "memory": true to count the sprites and objects still in memory), {"close": true}]}
+        {"click_ui": "Play"} (the first button, item, tab or text box showing on the game's menus with these words, or
+        a text box's placeholder: exactly, or else containing them), {"type": "wasd", "for": 0.5} (keys typed into the
+        text box that has the keys, let go after "for" seconds),
+        {"call": "tuff_function"}, {"say": "text"}, {"mark": true} (start measuring), {"shot": "name.png"} (with
+        menus: the whole page as the window shows it), {"dump": "name.json"} (add "memory": true to count the
+        sprites and objects still in memory), {"close": true}]}
 
     Keys, clicks and mouse movement are made in the page, so they travel the same way real ones do.
     """
@@ -3258,10 +3637,41 @@ class Autopilot:
         return f"window.dispatchEvent(new KeyboardEvent({json.dumps(kind)}, {{key: {json.dumps(key)}, code: {json.dumps(code)}, bubbles: true}}));"
 
     def click_js(self, x, y):
+        # A real click somewhere else takes the keys from a text box: so does this one.
         return (f"const x = {x}, y = {y}; const el = document.elementFromPoint(x, y) || document.body;"
                 "const o = {clientX: x, clientY: y, bubbles: true, button: 0};"
+                "const a = document.activeElement; if (a && a !== document.body && !a.contains(el) && a.blur) a.blur();"
                 "el.dispatchEvent(new PointerEvent('pointerdown', o)); el.dispatchEvent(new PointerEvent('pointerup', o));"
                 "el.dispatchEvent(new MouseEvent('click', o));")
+
+    def click_ui_js(self, words):
+        """A click in the middle of the first widget on the game's menus that shows these words (see the class), the
+        way click_js clicks. A text box is found by its placeholder too, and gets the keys as a real click gives them."""
+        return ("const want = " + json.dumps(str(words).strip().lower()) + ";"
+                "const ui = document.querySelector('.tg-ui');"
+                "const seen = (el) => (el.checkVisibility ? el.checkVisibility() : el.getClientRects().length > 0) && !el.closest('.tg-screen:not(.at-shown)');"
+                "const field = (el) => el.matches('.at-input, .at-textarea');"
+                "const words = (el) => ((field(el) ? el.placeholder || el.value : el.textContent) || '').trim().toLowerCase();"
+                "const all = ui ? [...ui.querySelectorAll('.at-btn, .at-item, .at-mi, .at-tab, .at-check, .at-table tbody tr, .tg-hint, .at-input, .at-textarea')].filter(seen) : [];"
+                "const el = all.find((w) => words(w) === want) || all.find((w) => words(w).includes(want));"
+                "if (!el) { tv.emit('tg-autopilot', { message: `nothing on the game's menus says \"${want}\"` }); return; }"
+                "const r = el.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;"
+                "const hit = document.elementFromPoint(x, y) || el; const o = {clientX: x, clientY: y, bubbles: true, button: 0};"
+                "const a = document.activeElement; if (a && a !== document.body && !a.contains(hit) && a.blur) a.blur();"
+                "hit.dispatchEvent(new PointerEvent('pointerdown', o)); hit.dispatchEvent(new PointerEvent('pointerup', o));"
+                "if (field(el)) el.focus();"
+                "hit.dispatchEvent(new MouseEvent('click', o));")
+
+    def type_js(self, kind, text):
+        """Keys pressed (kind "keydown") or let go ("keyup") in the element that has the keys; pressing one types it
+        into a text box. Letting go uses the element they were pressed in."""
+        return ("const kind = " + json.dumps(kind) + ";"
+                "const el = (kind === 'keydown' ? (window.__tgTyped = document.activeElement) : window.__tgTyped) || document.body;"
+                "for (const ch of " + json.dumps(str(text)) + ") {"
+                "  const code = /[a-z]/i.test(ch) ? 'Key' + ch.toUpperCase() : /[0-9]/.test(ch) ? 'Digit' + ch : ch === ' ' ? 'Space' : '';"
+                "  el.dispatchEvent(new KeyboardEvent(kind, {key: ch, code, bubbles: true}));"
+                "  if (kind === 'keydown' && /^(INPUT|TEXTAREA)$/.test(el.tagName)) { el.value += ch; el.dispatchEvent(new Event('input', {bubbles: true})); }"
+                "}")
 
     def run(self, step, t):
         g = self.game
@@ -3293,6 +3703,14 @@ class Autopilot:
             dx, dy = step["look"]
             w, h = v.size
             v.js(f"window.dispatchEvent(new PointerEvent('pointermove', {{clientX: {w / 2}, clientY: {h / 2}, movementX: {dx}, movementY: {dy}, bubbles: true}}));")
+        if "click_ui" in step:
+            v.js(self.click_ui_js(step["click_ui"]))
+        if "type" in step:
+            v.js(self.type_js("keydown", step["type"]))
+            self.steps.append({"at": t + step.get("for", 0.05), "type_up": step["type"]})
+            self.steps.sort(key=lambda s: s.get("at", 0))
+        if "type_up" in step:
+            v.js(self.type_js("keyup", step["type_up"]))
         if "lock" in step:
             g.fake_lock = bool(step["lock"])
             g.lock_changed()
@@ -3316,10 +3734,15 @@ class Autopilot:
             self.marked_frames = g.frames
             v.page_stats(reset=True)
         if "shot" in step:
-            data = v.ask(0, "snapshot", timeout=10)
-            if data and data.startswith("data:image/png;base64,"):
+            # The page's snapshot has its canvases and 3D scenes; a game with menus needs the whole page.
+            png = v.page_png() if g.ui is not None else None
+            if png is None:
+                data = v.ask(0, "snapshot", timeout=10)
+                if data and data.startswith("data:image/png;base64,"):
+                    png = base64.b64decode(data.split(",", 1)[1])
+            if png:
                 with open(os.path.join(self.out, step["shot"]), "wb") as f:
-                    f.write(base64.b64decode(data.split(",", 1)[1]))
+                    f.write(png)
         if "dump" in step:
             with open(os.path.join(self.out, step["dump"]), "w", encoding="utf-8") as f:
                 json.dump(self.state(step.get("memory")), f, indent=2)
@@ -3351,6 +3774,9 @@ class Autopilot:
         out["blurs"] = g.blurs  # times the window lost focus (that lets go of held keys)
         out["paused"] = g.is_paused
         out["locked"] = g.locked
+        out["down"] = sorted(g.down)  # the keys the game sees held
+        if g.ui is not None:
+            out["ui"] = g.ui.state()
         out["things"] = len([t for t in g.things if t.alive])
         out["texts"] = [s.words for s in g.things if isinstance(s, Sprite) and s.alive and s.shape == "text"]
         if g.hud_layer is not None:
@@ -3370,16 +3796,20 @@ class Autopilot:
 _SETTERS = ("move", "move_to", "glide", "forward", "turn", "turn_to", "spin", "point_at", "speed", "on_edge", "size",
             "scale", "color", "layer", "flip", "align", "hide", "show", "set", "clicked", "shake", "look_at", "fall",
             "grow", "regrow", "swing", "glow", "solid", "label")
+# game:panel gives a "panel" and game:screen and game:start_screen a "screen": atgui containers (tables()["ui_kinds"] has
+# their methods; what those make is atgui's, as tuff_atgui.MAKES says).
+_MENUS = {"panel": "panel", "screen": "screen", "start_screen": "screen"}
 GIVES = {
     "game": {"open": "$bool", "frame": "$number", "held": "$bool", "pressed": "$bool", "mouse_x": "$number",
              "mouse_y": "$number", "time": "$number", "fps": "$number", "paused": "$bool", "width": "$number",
              "height": "$number", "random_spot": "$list", "group": "group", "hud": "hud", "box": "sprite",
-             "circle": "sprite", "line": "sprite", "text": "sprite", "image": "sprite"},
+             "circle": "sprite", "line": "sprite", "text": "sprite", "image": "sprite", **_MENUS},
     "world": {"open": "$bool", "frame": "$number", "held": "$bool", "pressed": "$bool", "mouse_x": "$number",
               "mouse_y": "$number", "time": "$number", "fps": "$number", "paused": "$bool", "width": "$number",
               "height": "$number", "random_spot": "$list", "group": "group", "hud": "hud", "light": "object",
               "ground": "object", "island": "object", "box": "object", "sphere": "object", "cylinder": "object",
-              "cone": "object", "plane": "object", "spawn": "object", "player": "player", "terrain": "terrain"},
+              "cone": "object", "plane": "object", "spawn": "object", "player": "player", "terrain": "terrain", **_MENUS},
+    "screen": {"shown": "$bool"},
     "terrain": {"height_at": "$number", **{m: "terrain" for m, _ in Terrain.NAMES if m != "height_at"}},
     "sprite": {"x": "$number", "y": "$number", "spot": "$list", "angle": "$number", "on_screen": "$bool",
                "distance": "$number", "value": "$text", **{m: "sprite" for m in _SETTERS}},
@@ -3416,6 +3846,7 @@ VALUES = {
     **{(k, "on_key"): {0: "anykey"} for k in ("game", "world")},
     **{(k, "sound"): {0: "sound"} for k in ("game", "world")},
     **{(k, "music"): {0: "music"} for k in ("game", "world")},
+    **{(k, "panel"): {0: "anchor"} for k in ("game", "world")},
 }
 
 
@@ -3456,6 +3887,8 @@ def check_value(kind, method, index, value, base_dir=None):
         return None if low in TERRAIN_STYLES else style_problem(low)
     if what == "lighting":
         return None if low in LIGHTINGS else lighting_problem(low)
+    if what == "anchor":
+        return None if anchor_name(value) else anchor_problem(value.strip())
     if what == "edge":
         return None if low in EDGE_MODES else ":on_edge can be \"bounce\", \"wrap\", \"stop\" (stay on screen) or \"none\"."
     if what == "align":
@@ -3490,7 +3923,9 @@ def check_value(kind, method, index, value, base_dir=None):
 
 def tables():
     """For tuff.py --check, without opening a window: tgame's functions, every kind's methods, what they give
-    back, the events, the hints for guessed names, and check_value for text inputs."""
+    back, the events, the hints for guessed names, and check_value for text inputs. "ui_kinds" has the methods of
+    a game's panels and screens (atgui containers, so they aren't among tgame's own kinds), and "anchors" the
+    places a panel can go."""
 
     class FakeRt:
         def builtin(self, name, fn):
@@ -3504,5 +3939,6 @@ def tables():
                       ("player", Player), ("hud", Hud), ("group", Group), ("terrain", Terrain)):
         obj = probe(cls)
         kinds[kind] = {name: getattr(obj, attr) for name, attr in cls.NAMES}
+    ui_kinds = {"panel": probe(Panel).methods(), "screen": probe(StartScreen).methods()}
     return {"lib": make_library(FakeRt()), "kinds": kinds, "gives": GIVES, "handlers": HANDLERS, "hints": HINTS,
-            "check": check_value}
+            "check": check_value, "ui_kinds": ui_kinds, "anchors": ANCHORS}

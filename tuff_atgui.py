@@ -422,7 +422,6 @@ CSS = """
 JS = r"""
 const at = window.__at = { keys: new Set(), menu: null, last: null, resize: null };
 const emit = tv.emit;
-tv.gameKeys = false;  // an app isn't a game: Space presses the focused button and the arrow keys scroll
 const pathOf = (el) => { const out = []; for (; el && el !== document.body; el = el.parentNode) if (el._tv !== undefined) out.push(el._tv); return out; };
 const near = (el, sel) => (el && el.closest ? el.closest(sel) : null);
 const P = HTMLElement.prototype;
@@ -703,6 +702,14 @@ P.atGrips = function () {
   return null;
 };
 """
+APP_JS = "\ntv.gameKeys = false;  // an app isn't a game: Space presses the focused button and the arrow keys scroll\n"
+
+
+def add_to_page(scene, game=False):
+    """atgui's look and its page side, once per window: an app's, or a game's that has menus (tgame's panels and
+    screens use these same widgets). In a game, Space and the arrow keys stay the game's."""
+    scene.call(0, "css", CSS)
+    scene.js("const ICONS = " + json.dumps(ICONS) + ";\n" + JS + ("" if game else APP_JS))
 
 
 def esc(text):
@@ -2309,11 +2316,13 @@ class Container(Widget):
     def mk_switch(self, label="", on=False):
         return Check(self, "switch", self.lib.text(label), self.rt.truthy(on)).native()
 
-    def mk_slider(self, low=0, high=100, value=None):
+    def mk_slider(self, low=0, high=100, value=None, fn=None):
         low, high = self.lib.num(low, "A slider"), self.lib.num(high, "A slider")
         if high <= low:
             raise self.rt.error("A slider's highest value must be bigger than its lowest value.")
-        return Slider(self, low, high, low if value is None else self.lib.num(value, "A slider")).native()
+        s = Slider(self, low, high, low if value is None else self.lib.num(value, "A slider"))
+        s.change_fn = self.lib.check_fn(fn, "A slider")  # the same as slider:change fn
+        return s.native()
 
     def mk_dropdown(self, options=None, value=None):
         items = self.rt.plain(options)
@@ -3032,8 +3041,7 @@ class App(Container):
         self.pages = []
         self.current_page = None
         self.hwnd = None
-        self.scene.call(0, "css", CSS)
-        self.scene.js("const ICONS = " + json.dumps(ICONS) + ";\n" + JS)
+        add_to_page(self.scene)
         self.id = self.scene.el("div", 0, cls="at-app at-dark")
         self.body = self.scene.el("div", self.id, cls="at-body")
         self.slot = self.scene.el("div", self.body, cls="at-main")

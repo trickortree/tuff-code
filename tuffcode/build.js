@@ -218,7 +218,7 @@ async function build(opts, emit) {
   const pyinstallerVersion = r.out.trim().split(/\s+/).pop();
   // A web view program (atgui, tgame) needs pywebview in the Python that builds it, like PyInstaller.
   const programSrc = await fsp.readFile(program, 'utf8');
-  const viewLibs = VIEW_LIBS.filter((lib) => usesLib(programSrc, lib));
+  const viewLibs = VIEW_LIBS.filter((lib) => usesLib(programSrc, lib) || (lib === 'atgui' && usesLib(programSrc, 'tgame')));  // a game's menus are atgui's widgets
   if (viewLibs.length && (await run(py.cmd, [...py.args, '-c', 'import webview'], { onLine: log })).code !== 0) {
     step('tools', 'running', 'Installing the window engine', 'First time only: pywebview, for game and app windows.');
     r = await run(py.cmd, [...py.args, '-m', 'pip', 'install', ...(py === PY ? ['--user'] : []), '--disable-pip-version-check', 'pywebview'], { onLine: log });

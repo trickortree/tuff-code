@@ -1898,6 +1898,11 @@ function editable(el) {
   return el && (el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT');
 }
 
+// A field the keys type into (a text box, not a checkbox or a slider): a game leaves those keys alone.
+function typing(el) {
+  return !!el && editable(el) && !(el.tagName === 'INPUT' && /^(checkbox|radio|range|button|submit|reset|color|file|image)$/i.test(el.type));
+}
+
 // What's under the pointer: a 2D shape or 3D object first, then the element and its parents.
 function target(e) {
   const t = e.target;
@@ -1947,7 +1952,7 @@ addEventListener('wheel', (e) => {
 const GAME_KEYS = new Set([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 addEventListener('keydown', (e) => {
   if (api.gameKeys && GAME_KEYS.has(e.key) && !editable(e.target)) e.preventDefault();
-  emit('keydown', { key: e.key, code: e.code, repeat: e.repeat, ...mods(e) });
+  emit('keydown', { key: e.key, code: e.code, repeat: e.repeat, typing: typing(e.target), ...mods(e) });
 });
 addEventListener('keyup', (e) => emit('keyup', { key: e.key, code: e.code, ...mods(e) }));
 document.addEventListener('input', (e) => {
