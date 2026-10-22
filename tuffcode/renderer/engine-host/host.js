@@ -157,6 +157,7 @@
 
   let heldLoad = null; // the newest scene that came while the mouse was held
   let heldTimer = null;
+  let painted = false; // a brush stroke was just written: the scene for it is on its way
   function startLoad(m) {
     load(m).catch((err) => post('error', { message: String(err && err.message || err), where: 'loading the scene' }));
   }
@@ -165,6 +166,16 @@
     const m = heldLoad;
     heldLoad = null;
     if (m) startLoad(m);
+  }
+  // A release this page never sees can't keep the scene old for long: 4 s after the pointer last moved, the press
+  // ends. A brush stroke is kept (its line is written), anything else is put back.
+  function armHeld() {
+    clearTimeout(heldTimer);
+    heldTimer = setTimeout(() => {
+      if (!heldLoad) return;
+      finish(null, !(press && press.kind === 'paint'));
+      if (painted) { heldLoad = null; painted = false; } else loadHeld();
+    }, 4000);
   }
 
   function handle(m) {
@@ -176,9 +187,7 @@
         case 'load':
           if (!press) { startLoad(m); break; }
           heldLoad = m;
-          // A release this page never sees can't keep the scene old for long.
-          clearTimeout(heldTimer);
-          heldTimer = setTimeout(() => { if (heldLoad) { finish(null, true); loadHeld(); } }, 4000);
+          armHeld();
           break;
         case 'select': select(Array.isArray(m.is) ? m.is : [], m.marks); break;
         case 'tool': setTool(m.tool); break;
@@ -947,6 +956,7 @@
     hover = [e.clientX, e.clientY];
     if (!press && tool) queueRing();
     if (!press || !L) return;
+    if (heldLoad) armHeld();
     const x = e.clientX;
     const y = e.clientY;
     if (!press.started) {
@@ -1009,7 +1019,10 @@
     if (p.kind === 'drag2d' && p.started) post('drag', { i: p.i, phase: 'end', dx: p.dx, dy: p.dy, alt: !!(e && e.altKey) });
     else if (p.kind === 'drag3d' && p.started) post('drag', { i: p.i, phase: 'end', x: p.x, z: p.z, alt: !!(p.alt || (e && e.altKey)) });
     else if (p.kind === 'paint') {
-      if (p.spots.length) post('brush', { tool: p.tool, spots: p.spots, size: p.size, amount: p.amount });
+      const s = p.spots;
+      if (p.tool === 'valley' && (!s[1] || Math.hypot(s[1][0] - s[0][0], s[1][1] - s[0][1]) < 1)) unpaint(p);
+      else if (s.length) painted = true;
+      if (s.length) post('brush', { tool: p.tool, spots: s, size: p.size, amount: p.amount });
     } else if (p.kind === 'orbit' && p.empty && !p.started && p.land !== null && p.land !== undefined) post('pick', { i: p.land });
     else if ((p.kind === 'empty' || (p.kind === 'orbit' && p.empty)) && !p.started) post('pick', { i: null });
     else if ((p.kind === 'orbit' || p.kind === 'pan') && p.started) postCam(true);
@@ -1018,7 +1031,12 @@
   document.documentElement.addEventListener('pointerleave', () => { hover = null; if (!press) hideRing(); });
 
   // (A second button pressed during a drag comes as a pointermove, and pointerup only when all are up.)
-  addEventListener('pointerup', (e) => { finish(e, false); post('focus'); loadHeld(); });
+  addEventListener('pointerup', (e) => {
+    finish(e, false);
+    post('focus');
+    if (painted) { clearTimeout(heldTimer); heldLoad = null; } else loadHeld();
+    painted = false;
+  });
   addEventListener('pointercancel', () => { finish(null, true); post('focus'); loadHeld(); });
 
   addEventListener('dblclick', (e) => {

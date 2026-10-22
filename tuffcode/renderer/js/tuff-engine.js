@@ -2994,6 +2994,7 @@ func coin_collect(dt):
   const landAct = (fn, form = false) => act((Q) => (Q.land ? fn(Q, Q.land) : null), { form });
 
   function addLand(replace) {
+    if (S.dump?.terrain && !S.parsed?.land) { ide.toast('This world already makes its land in the code (tgame allows one).', 'error'); return; }
     // The camera is fitted again, around the new land.
     S.cams.delete(S.file);
     S.hostFile = null;
@@ -3044,8 +3045,14 @@ func coin_collect(dt):
     const sig = JSON.stringify([P.game?.mode, !!P.other, L && [L.var, landStyle(L), L.water?.args[0] ?? null, L.water ? 1 : 0], old, S.tool, drawn, !!S.dump]);
     if (sig === terrainSig && box.firstChild) return;
     terrainSig = sig;
+    if (box.firstChild && box.contains(document.activeElement) && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
     box.innerHTML = '';
     if (!P.game || P.other || P.game.mode !== '3d') { box.innerHTML = '<div class="sd-hint">Land is for 3D worlds.</div>'; return; }
+    if (!L && S.dump?.terrain) {
+      const at = S.dump.terrain.made?.[0];
+      box.innerHTML = `<div class="sd-hint">Your code makes this world's land${at ? ` on line ${at}` : ''}, in a way Tuff Engine can't shape. Shape it in the code, or make it with a line of its own like <code>land = game:terrain(200)</code>.</div>`;
+      return;
+    }
     if (!L) {
       const card = document.createElement('div');
       card.className = 'en-landcard';
