@@ -1,0 +1,23 @@
+mention tgame
+
+# A game that changes the land while it runs: a brush moves around and raises the land every frame, so the heights
+# go to the page every frame. The test measures how long the page takes with them.
+world = tgame.world("Terrain Dig", 900, 560)
+world:lighting "modern"
+land = world:terrain(380)
+land:mountain(0, -60, 80, 30)
+world:camera_at(0, 60, 120)
+world:look_at(0, 0, 0)
+spot = -120
+digging = false
+
+func dig(dt):
+    if digging:
+        spot += 1
+        if spot > 120:
+            spot = -120
+        land:raise(spot, 30, 12, 1)
+
+func start():
+    digging = true
+    world:every_frame dig

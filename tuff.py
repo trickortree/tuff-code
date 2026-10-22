@@ -1606,7 +1606,7 @@ class Checker:
                    "every": (0, ":every"), "after": (0, ":after"), "change": (1, ":change"), "enter": (1, ":enter")}
     HANDLER_POS = {"click": 0, "opened": 0, "change": 0, "enter": 0, "button": 1, "every": 1, "after": 1,
                    "every_frame": 0, "on_key": 1, "clicked": 0, "game_over": 1}
-    TGAME_KINDS = ("game", "world", "sprite", "object", "player", "hud", "group")  # what tgame makes
+    TGAME_KINDS = ("game", "world", "sprite", "object", "player", "hud", "group", "terrain")  # what tgame makes
     # What tap's functions make, and what the methods of those give back (left out: it depends, like :json).
     TAP_MAKES = {"get": "response", "post": "response", "put": "response", "delete": "response", "data": "data object"}
     TAP_GIVES = {"response": {"status": "$number", "ok": "$bool", "text": "$text"},
