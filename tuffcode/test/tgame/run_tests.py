@@ -1208,9 +1208,30 @@ BAD = [
     ('w = tgame.world("x")\nw:lighting "modren"\n', "The lighting can be \"simple\" or \"modern\", not \"modren\". Did you mean \"modern\"?"),
     ('w = tgame.world("x")\nland = w:terrain()\nland:hil(1, 2)\n', "A terrain doesn't have :hil. Did you mean :hill?"),
     ('w = tgame.world("x")\nland = w:terrain()\nland:pond(1, 2)\n', "A terrain doesn't have :pond. Use :lake instead."),
-    ('w = tgame.world("x")\nland = w:terrain()\nland:hill(1, 2, 3, 4, 5)\n', "terrain:hill got the wrong number of inputs (5)."),
-    ('w = tgame.world("x")\nland = w:terrain()\nland:water()\n', "terrain:water got the wrong number of inputs (0)."),
+    ('w = tgame.world("x")\nland = w:terrain()\nland:hill(1, 2, 3, 4, 5)\n', "land:hill needs 4 inputs (x, z, size and height), but got 5."),
+    ('w = tgame.world("x")\nland = w:terrain()\nland:water()\n', "land:water needs 1 input (the sea's height), but got 0."),
     ('w = tgame.world("x")\nw:land(100)\n', "A world doesn't have :land. Use :terrain instead."),
+    # The land (world:terrain) and the lighting: names with "did you mean", each method's input count (a brush
+    # stroke is a list of spots in place of x and z), and one terrain per world.
+    ('w = tgame.world("x")\nw:lighting "realistic"\n', 'The lighting can be "simple" or "modern", not "realistic". Did you mean "modern"?'),
+    ('w = tgame.world("x")\nw:lighting "modrn"\n', 'not "modrn". Did you mean "modern"?'),
+    ('w = tgame.world("x")\nland = w:terrain(100)\nland:style "sandy"\n',
+     'The land\'s style can be grass, desert, snow, rocky or autumn, not "sandy". Did you mean "desert"?'),
+    ('w = tgame.world("x")\nland = w:terrain(100, "gras")\n', 'not "gras". Did you mean "grass"?'),
+    ('w = tgame.world("x")\nland = w:terrain(100)\nland:style "lava"\n', 'The land\'s style can be grass, desert, snow, rocky or autumn, not "lava".'),
+    ('w = tgame.world("x")\nland = w:terrain(100)\nland:hill(20, -10, 30)\n', "land:hill needs 4 inputs (x, z, size and height), but got 3."),
+    ('w = tgame.world("x")\nland = w:terrain(100)\nland:valley(-60, 0, 60, 10, 18)\n', "land:valley needs 6 inputs (x1, z1, x2, z2, width and depth), but got 5."),
+    ('w = tgame.world("x")\nland = w:terrain(100)\nland:smooth(5, 5, 8, 2)\n', "land:smooth needs 3 inputs (x, z and size), but got 4."),
+    ('w = tgame.world("x")\nland = w:terrain(100)\nland:raise([[1, 2], [3, 2]], 8)\n', "land:raise needs 3 inputs here (the spots, size and amount), but got 2."),
+    ('w = tgame.world("x")\nland = w:terrain(100)\nland:flatten([[1, 2], [3, 2]], 1, 8, 0)\n', "land:flatten needs 3 inputs here (the spots, size and height), but got 4."),
+    ('w = tgame.world("x")\nland = w:terrain(100)\nland:water()\n', "land:water needs 1 input (the sea's height), but got 0."),
+    ('w = tgame.world("x")\nland = w:terrain(100)\nland:pond(1, 2, 3, 4)\n', "A terrain doesn't have :pond. Use :lake instead."),
+    ('w = tgame.world("x")\nland = w:terrain(100)\nland:hils(1, 2, 3, 4)\n', "A terrain doesn't have :hils. Did you mean :hill?"),
+    ('w = tgame.world("x")\nland = w:terrain(100)\nw:terrain(50)\n',
+     "A world has one terrain, and line 3 already made it. Change it with land:hill, land:raise and so on."),
+    ('w = tgame.world("x")\nw:landscape(100)\n', "A world doesn't have :landscape. Use :terrain instead."),
+    ('w = tgame.world("x")\nw:terrain(100, "grass", 3)\n', "world:terrain got the wrong number of inputs (3)."),
+    ('game = tgame.window("x")\ngame:terrain(100)\n', "A game doesn't have :terrain."),
 ]
 
 
@@ -1230,6 +1251,18 @@ GOOD_SNIPPETS = [
     # The land: chained edits, a stroke, a spot from random_spot, the number height_at gives
     'w = tgame.world("x")\nw:lighting "Modern"\nland = w:terrain(150, "snow"):hill(0, 0, 20, 5)\n'
     'land:raise([[1, 2], [3, 4]], 6, 1):smooth(1, 2, 6):water(-2)\nh = land:height_at(w:random_spot())\nsay h + 1\n',
+    # The land: every method once (a brush stroke too), styles and lightings in any case, height_at as a number.
+    'world = tgame.world("My World", 960, 600)\nworld:sky "day"\nworld:lighting "modern"\nland = world:terrain(200)\n'
+    'land:style "grass"\nland:hill(20, -10, 30, 8)\nland:mountain(-40, -50, 60, 35)\nland:dip(10, 25, 16, 3)\n'
+    'land:lake(-20, 30, 36, 4)\nland:valley(-60, 0, 60, 10, 18, 6)\nland:raise(5, 5, 8, 1.5)\nland:lower(5, 5, 8, 1.5)\n'
+    'land:smooth(5, 5, 8)\nland:flatten(5, 5, 8, 2)\nland:raise([[1, 2], [3, 2], [5, 3]], 8, 1.5)\nland:water(-1)\n'
+    'h = land:height_at(12, 4)\nsay h + 1\nland:style "Snow"\nworld:lighting "Simple"\n',
+    # A stroke built in a loop, a function's inputs, the player's x and z, a style as world:terrain's second input,
+    # and a chain on the land it gives back.
+    'w = tgame.world("x")\nland = w:terrain(120, "desert")\nstroke = []\nfor i in range(1, 5):\n    stroke:add([i * 2, 0])\n'
+    'land:lower(stroke, 6, 1)\nfunc dig(x, y, z):\n    land:lower(x, z, 4, 0.5)\nw:clicked dig\np = w:player()\n'
+    'say land:height_at(p:x(), p:z())\n',
+    'w = tgame.world("x")\nw:terrain(80, "autumn"):hill(0, 0, 20, 4)\nw:island(60)\n',
 ]
 
 
@@ -1247,6 +1280,23 @@ def t_checker(c):
             f.write("mention tgame\n" + src)
         p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
         c.check(p.returncode == 0, f"--check accepts snippet {i + 1}: {src.splitlines()[1][:60]}", (p.stdout + p.stderr)[:400])
+    # The games the MCP server's tuff_examples gives agents (renderer/js/tuff-templates.js, TUFF_GAME_EXAMPLES).
+    templates = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-templates.js")
+    load = "const window = {}; require('vm').runInNewContext(require('fs').readFileSync(process.argv[1], 'utf8'), { window }); " \
+           "console.log(JSON.stringify(window.TUFF_GAME_EXAMPLES || []))"
+    try:
+        games = json.loads(subprocess.run(["node", "-e", load, templates], capture_output=True, text=True, encoding="utf-8", timeout=60).stdout)
+    except FileNotFoundError:
+        games = None
+        c.check(True, "Node isn't installed: skipped the MCP's game examples")
+    if games is not None:
+        c.check(any("terrain(" in g["code"] for g in games), "the MCP's game examples have a world with land (terrain)", [g["id"] for g in games])
+    for g in games or []:
+        path = os.path.join(folder, f"example_{g['id']}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(g["code"])
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(p.returncode == 0, f"--check accepts the MCP example {g['name']}", (p.stdout + p.stderr)[:400])
     for i, (src, want) in enumerate(BAD):
         path = os.path.join(folder, f"bad{i}.tuf")
         with open(path, "w", encoding="utf-8") as f:

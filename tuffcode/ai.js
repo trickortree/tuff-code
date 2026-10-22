@@ -342,11 +342,13 @@ function kindOf(question, hasCode) {
 const PLAYS = /\b(catch(es|ing)?|jump(s|ing)?|dodg(e|es|ing)|chas(e|es|ing)|shoot(s|ing|er)?|collect(s|ing)?|fall(s|ing)?|enem(y|ies)|players?|paddles?|balls?|maze|rac(e|es|ing)|racer|pong|snake|flappy|clicker|asteroids?|breakout|invaders|aliens?|space ?ships?|ships?|coins?|obstacles?|rocks?|bricks?|fly(ing)?|runner|3d|world)\b/;
 const NOT_PLAYED = /\b(guess(es|ing)?|quiz|trivia|hangman|riddles?|text|adventure|words?|dice|tic.?tac.?toe|in a variable|m?tgui|atgui)\b/;
 const isGame = (s) => /\bgames?\b/.test(s) && PLAYS.test(s) && !NOT_PLAYED.test(s);
+// "Make a 3D world with hills and a lake" is a tgame world too, without the word game ("Hello world" isn't).
+const isWorld = (s) => /\bterrain\b|\b3d (worlds?|scenes?|land|maps?)\b/.test(s) || (/\bworlds?\b/.test(s) && /\b(hills?|mountains?|lakes?|valleys?|islands?|forests?)\b/.test(s));
 
 // Console, window, game or web: from the words, or else from the library the open file mentions.
 function targetOf(question, code) {
   const s = question.toLowerCase();
-  if (/\btgame\b|\bsprites?\b|arrow keys|\bplatformer\b/.test(s) || isGame(s)) return 'game';
+  if (/\btgame\b|\bsprites?\b|arrow keys|\bplatformer\b/.test(s) || isGame(s) || isWorld(s)) return 'game';
   if (/\btap\b|\bweb ?(page|site)s?\b|\bwebsite\b|\bapi\b|\burl\b|\binternet\b/.test(s)) return 'web';
   if (/\b(m?tgui|atgui|windows?|buttons?|sliders?|labels?|gui|clicks?|clicked|text ?box|checkbox|dropdown|toggle|headings?)\b/.test(s)) return 'window';
   const lib = /^\s*(?:mention|import)\s+(\w+)/m.exec(code || '');
@@ -358,8 +360,9 @@ function targetOf(question, code) {
 // them in the message the model answers "ask my name" with a window (37 of Qwen's 105 failed write tasks
 // in Phase 1 did).
 const WINDOW_SECTIONS = ['App windows (tgui / mtgui)', 'Events: what the function gets', 'Timers', 'Pages (several screens in one window)', 'Layout and size', 'Looking good', 'atgui'];
-// The guide splits at every heading, so tgame's "Games Tuff Engine can edit" is a section of its own.
-const GAME_SECTIONS = ['tgame', 'Games Tuff Engine can edit'];
+// The guide splits at every heading, so tgame's "Land and lighting (3D)" and "Games Tuff Engine can edit" are
+// sections of their own.
+const GAME_SECTIONS = ['tgame', 'Land and lighting (3D)', 'Games Tuff Engine can edit'];
 const SECTIONS = {
   console: { skip: [...WINDOW_SECTIONS, 'Libraries', ...GAME_SECTIONS, 'tap'] },
   window: { first: ['App windows (tgui / mtgui)'], skip: [...GAME_SECTIONS, 'tap', 'Live lines and clearing (console programs)'] },
@@ -390,6 +393,7 @@ const TARGET = {
   consoleAsks: 'It\'s a console program, not a window: show text with say, and ask each question with input on a line of its own (a name, =, input, then the question in quotes). Don\'t use mtgui or tgui.',
   window: 'It\'s an app window: start with mention mtgui (or mention tgui for the plain look), then app = mtgui.window("Title", 400, 300). No input or wait in a window app.',
   game: 'It\'s a tgame game: start with mention tgame, then game = tgame.window("Title", 800, 600).',
+  world: 'It\'s a tgame 3D world: start with mention tgame, then game = tgame.world("Title"). Hills, lakes and mountains go on land = game:terrain(200).',
   web: 'It uses the web: start with mention tap, then res = tap.get(url).',
 };
 const NOT_PYTHON = 'Tuff, not Python: func (not def), true, false and nil, x is y, items:add(x) (not .append), "Hi " + name (no f-strings), and range(1, 3) gives 1, 2, 3.';
@@ -450,7 +454,8 @@ function improve(input) {
     const src = errLine && code ? code.split('\n')[errLine - 1] : '';
     lines.push(`When they last ran it, it stopped${errLine ? ` at line ${errLine}` : ''}${src?.trim() ? ` (${src.trim()})` : ''}: ${err.split('\n')[0].trim()}`);
   }
-  if (kind === 'write' || kind === 'edit' || (kind === 'fix' && target !== 'console')) lines.push(TARGET[target === 'console' && ASKS.test(question) ? 'consoleAsks' : target]);
+  const in3d = target === 'game' && (isWorld(question.toLowerCase()) || /\b3d\b/i.test(question) || /\btgame\.world\(/.test(code));
+  if (kind === 'write' || kind === 'edit' || (kind === 'fix' && target !== 'console')) lines.push(TARGET[target === 'console' && ASKS.test(question) ? 'consoleAsks' : in3d ? 'world' : target]);
   lines.push(`A good answer: ${GOOD[kind]}`);
   if (kind === 'write' || kind === 'fix' || kind === 'edit') lines.push(NOT_PYTHON);
   return { kind, target, focus, text: lines.map((l) => `- ${l}`).join('\n') };

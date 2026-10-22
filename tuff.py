@@ -1517,6 +1517,35 @@ def atgui_tables():
 
 _TGAME = None
 
+# tgame's land (land = world:terrain(200)) as the checker knows it: each of the land's methods and its inputs. A
+# spot ([x, z]) can go in place of an x and z, and the brushes (raise, lower, smooth, flatten) take a stroke there
+# too: a list of [x, z] spots. Then the styles, the lightings, and names people guess with the ones tgame uses.
+TERRAIN_INPUTS = {
+    "style": ("the style",), "hill": ("x", "z", "size", "height"), "mountain": ("x", "z", "size", "height"),
+    "dip": ("x", "z", "size", "depth"), "lake": ("x", "z", "size", "depth"), "valley": ("x1", "z1", "x2", "z2", "width", "depth"),
+    "raise": ("x", "z", "size", "amount"), "lower": ("x", "z", "size", "amount"), "smooth": ("x", "z", "size"),
+    "flatten": ("x", "z", "size", "height"), "water": ("the sea's height",), "height_at": ("x", "z"),
+}
+TERRAIN_BRUSHES = ("raise", "lower", "smooth", "flatten")
+TERRAIN_STYLES = ("grass", "desert", "snow", "rocky", "autumn")
+LIGHTINGS = ("modern", "simple")
+TERRAIN_HINTS = {
+    "world": {"land": "terrain", "landscape": "terrain", "heightmap": "terrain", "lights": "lighting", "shading": "lighting",
+              "graphics": "lighting"},
+    "terrain": {"mound": "hill", "bump": "hill", "peak": "mountain", "hole": "dip", "pit": "dip", "crater": "dip", "pond": "lake",
+                "pool": "lake", "river": "valley", "canyon": "valley", "trench": "valley", "dig": "lower", "sculpt": "raise",
+                "blur": "smooth", "level": "flatten", "flat": "flatten", "sea": "water", "ocean": "water", "texture": "style",
+                "paint": "style", "theme": "style", "height": "height_at", "get_height": "height_at", "elevation": "height_at",
+                "ground_y": "height_at"},
+}
+VALUE_HINTS = {
+    "style": {"sand": "desert", "sandy": "desert", "beach": "desert", "ice": "snow", "icy": "snow", "snowy": "snow", "winter": "snow",
+              "rock": "rocky", "stone": "rocky", "stony": "rocky", "fall": "autumn", "green": "grass", "grassy": "grass", "meadow": "grass"},
+    "lighting": {"realistic": "modern", "real": "modern", "pbr": "modern", "hd": "modern", "fancy": "modern", "advanced": "modern",
+                 "new": "modern", "basic": "simple", "default": "simple", "normal": "simple", "old": "simple", "classic": "simple",
+                 "flat": "simple"},
+}
+
 
 def tgame_tables():
     """tgame's functions ("lib"), the methods of everything it makes ("kinds"), what they give back, its events,
@@ -1526,10 +1555,34 @@ def tgame_tables():
     if _TGAME is None:
         try:
             import tuff_tgame
-            _TGAME = tuff_tgame.tables()
+            _TGAME = with_terrain(tuff_tgame.tables(), tuff_tgame)
         except Exception:
             _TGAME = {}
     return _TGAME or None
+
+
+def with_terrain(tg, lib):
+    """tgame's tables with the land filled in where they leave it out: world:terrain and world:lighting, the land's
+    methods, what world:terrain and land:height_at give back, the guessed names, and the style and lighting names
+    (tgame's TERRAIN_STYLES and LIGHTINGS when it has them). Whatever tgame's own tables say wins."""
+    def terrain(size, style=None):
+        return None
+
+    def lighting(name):
+        return None
+
+    def land(*inputs):  # Checker.check_land_inputs counts these
+        return None
+
+    world = dict(tg["kinds"]["world"])
+    world.setdefault("terrain", terrain)
+    world.setdefault("lighting", lighting)
+    kinds = {**tg["kinds"], "world": world, "terrain": tg["kinds"].get("terrain") or dict.fromkeys(TERRAIN_INPUTS, land)}
+    gives = {**tg["gives"], "world": {"terrain": "terrain", **tg["gives"]["world"]},
+             "terrain": {"height_at": "$number", **tg["gives"].get("terrain", {})}}
+    hints = {**tg["hints"], **{k: {**v, **tg["hints"].get(k, {})} for k, v in TERRAIN_HINTS.items()}}
+    return {**tg, "kinds": kinds, "gives": gives, "hints": hints, "styles": tuple(getattr(lib, "TERRAIN_STYLES", TERRAIN_STYLES)),
+            "lightings": tuple(getattr(lib, "LIGHTINGS", LIGHTINGS))}
 
 
 def nodes(x):
@@ -1607,6 +1660,8 @@ class Checker:
     HANDLER_POS = {"click": 0, "opened": 0, "change": 0, "enter": 0, "button": 1, "every": 1, "after": 1,
                    "every_frame": 0, "on_key": 1, "clicked": 0, "game_over": 1}
     TGAME_KINDS = ("game", "world", "sprite", "object", "player", "hud", "group", "terrain")  # what tgame makes
+    # tgame inputs written as text that the checker checks itself: (kind, method, input position) -> what it is.
+    LAND_VALUES = {("world", "terrain", 1): "style", ("terrain", "style", 0): "style", ("world", "lighting", 0): "lighting"}
     # What tap's functions make, and what the methods of those give back (left out: it depends, like :json).
     TAP_MAKES = {"get": "response", "post": "response", "put": "response", "delete": "response", "data": "data object"}
     TAP_GIVES = {"response": {"status": "$number", "ok": "$bool", "text": "$text"},
@@ -1681,6 +1736,7 @@ class Checker:
         self.makes_window = "window" in kinds
         self.body(self.program, self.top, in_loop=False)
         self.check_top_level()
+        self.check_one_terrain()
         seen, out = set(), []
         for p in sorted(self.problems):
             if p not in seen:
@@ -2061,6 +2117,26 @@ class Checker:
                     self.problem(s, f"There are two functions called {s.name}. This one replaces the one on line {made[s.name]}. Give them different names.")
                 made[s.name] = s.line
 
+    def check_one_terrain(self):
+        """A world has one terrain, so a second world:terrain for the same world at the top of the program fails
+        when it runs (also when it starts a chain, like world:terrain(50):style "snow")."""
+        made = {}  # the world's name -> the line that made its land, and the land's name
+        for s in self.program:
+            e = s.value if s.kind == "assign" else s.expr if s.kind == "expr" else None
+            while e is not None and e.kind == "method" and e.name != "terrain":
+                e = e.obj
+            if e is None or e.kind != "method" or e.obj.kind != "var" or self.kind(e.obj) != "world":
+                continue
+            w = e.obj.name
+            if len(self.assigned.get(w, [])) != 1 or w in self.params or w in self.loop_vars:
+                continue  # it might be another world by now
+            if w in made:
+                line, land = made[w]
+                self.problem(e, f"A world has one terrain, and line {line} already made it. Change it with {land}:hill, {land}:raise and so on.")
+            else:
+                named = s.kind == "assign" and s.value is e and s.target.kind == "var"
+                made[w] = (s.line, s.target.name if named else "land")
+
     def check_useless(self, e):
         """A line that works something out but throws the answer away."""
         if e.kind == "var" and e.name in self.func_count:
@@ -2383,7 +2459,7 @@ class Checker:
 
     def check_tgame(self, e, obj, bare_fix):
         """A method of something tgame made: its name, its input count, the function an event runs, and inputs
-        written as text that have to be a color, a sky, a key, a sound or a file tgame knows."""
+        written as text that have to be a color, a sky, a key, a sound, a land style, a lighting or a file tgame knows."""
         tg = tgame_tables()
         methods = tg["kinds"].get(obj) if tg else None
         if methods is None:
@@ -2394,7 +2470,10 @@ class Checker:
             alt = tg["hints"].get(obj, {}).get(name.lower())
             self.problem(e, f"{what} doesn't have :{name}. Use :{alt} instead." if alt in methods else method_help(what, name, list(methods)))
             return
-        if not accepts(methods[name], n):
+        if obj == "terrain" and name in TERRAIN_INPUTS:
+            if not self.check_land_inputs(e):
+                return
+        elif not accepts(methods[name], n):
             self.problem(e, bare_fix if e.bare and accepts(methods[name], 0) else f"{obj}:{name} got the wrong number of inputs ({n}).")
             return
         event = tg["handlers"].get(obj, {}).get(name)
@@ -2426,9 +2505,45 @@ class Checker:
             base = None  # a snippet in a temporary folder: its files aren't next to it
         for i, a in enumerate(e.args):
             if a.kind == "const" and isinstance(a.value, str):
-                msg = tg["check"](obj, name, i, a.value, base)
+                land = self.LAND_VALUES.get((obj, name, i))
+                msg = self.land_value(land, a.value, tg) if land else tg["check"](obj, name, i, a.value, base)
                 if msg:
                     self.problem(a, msg)
+
+    def check_land_inputs(self, e):
+        """How many inputs one of the land's methods got. A spot ([x, z]) can go in place of each x and z, and a
+        brush stroke (a list of spots) in place of a brush's x and z, so with a list (or something that could be
+        one) fewer inputs can be right too. True when the count can be right."""
+        name, n = e.name, len(e.args)
+        inputs = TERRAIN_INPUTS[name]
+        spots = len(inputs) - n  # how many x, z pairs a spot would have to stand in for
+        could_be_lists = sum(1 for a in e.args if self.kind(a) in ("$list", None))
+        spot_first = bool(e.args) and self.kind(e.args[0]) == "$list" and inputs[0] == "x"  # x can't be a list
+        if spot_first:
+            fits = spots == 1
+        else:
+            fits = spots == 0 or 0 < spots <= min(could_be_lists, sum(1 for i in inputs if i.startswith("x")))
+        if fits:
+            return True
+        owner = e.obj.name if e.obj.kind == "var" else "land"
+        if spot_first:
+            inputs = ("the spots" if name in TERRAIN_BRUSHES else "the spot",) + inputs[2:]
+        names = inputs[0] if len(inputs) == 1 else f"{', '.join(inputs[:-1])} and {inputs[-1]}"
+        here = " here" if len(inputs) < len(TERRAIN_INPUTS[name]) else ""
+        self.problem(e, f"{owner}:{name} needs {len(inputs)} input{'s' if len(inputs) != 1 else ''}{here} ({names}), but got {n}.")
+        return False
+
+    def land_value(self, what, value, tg):
+        """A land style or a lighting written as text: one tgame knows, or a "did you mean"."""
+        names = tg["styles"] if what == "style" else tg["lightings"]
+        low = value.strip().lower()
+        if low in names:
+            return None
+        guess = VALUE_HINTS[what].get(low)
+        hint = guess if guess in names else next(iter(difflib.get_close_matches(low, names, n=1, cutoff=0.6)), None)
+        thing, shown = ("The land's style", list(names)) if what == "style" else ("The lighting", [f'"{x}"' for x in names])
+        msg = f"{thing} can be {', '.join(shown[:-1])} or {shown[-1]}, not \"{value}\"."
+        return msg + (f" Did you mean \"{hint}\"?" if hint else "")
 
     def check_values(self, e, obj):
         """Styles, colors and themes written as text must be ones the library knows."""
