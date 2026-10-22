@@ -44,6 +44,16 @@ enemy = game:box(-12, 0, -20, 1, "red")
 crate = game:box(0, 0, -4, 2, "wood")
 `;
 
+const GAME_LAND = `mention tgame
+
+game = tgame.world("Hills", 960, 600)
+game:sky "day"
+land = game:terrain(100)
+land:hill(10, -10, 30, 8)
+land:lake(-15, 10, 20, 3)
+tree = game:spawn("tree", 10, 0, -10)
+`;
+
 // The IDE page's side: an iframe on top of everything, a log of what it posts, and helpers.
 const SETUP = (x, y) => `(() => {
   if (window.__eh) return 1;
@@ -343,6 +353,137 @@ export default async (t, ctx) => {
   check(again.scene === before.scene && again.b === 4e6 && Math.abs(again.objs - before.objs) <= 4,
     'the 3D scene node is kept from one 3D load to the next (one WebGL context), with new ids for the rest', { before, again });
   check(kept && Math.abs(kept.dist - zoom.dist) < 0.01 && Math.abs(kept.az - zoom.az) < 0.01, 'and the camera stays where it was', { kept, zoom });
+
+  // ---- the land (world:terrain): drawn from the dump, picked, things dragged over it, and the Terrain tab's tools
+  // painting this page's own copy of the heights live, with tgame's maths.
+  const fileLand = path.join(ctx.root, 'hills.tuf');
+  fs.writeFileSync(fileLand, GAME_LAND);
+  const dl = await scene(fileLand, GAME_LAND);
+  const landT = dl.things?.find((x) => x.kind === 'terrain');
+  check(dl.mode === '3d' && dl.stopped === 'end' && dl.terrain?.n >= 65 && dl.terrain.heights.length === dl.terrain.n ** 2 && landT?.made?.[0] === 5 && dl.terrain.edits.length === 2,
+    'engine:scene gives the land: a terrain thing (line 5), its heights and its two edits', { stopped: dl.stopped, error: dl.error, n: dl.terrain?.n, made: landT?.made, edits: dl.terrain?.edits });
+  // (A camera high over the land, so every spot used here is in view.)
+  check(await load(dl, 5, { cam: { tx: 0, ty: 0, tz: 0, az: 0, el: 55, dist: 100 }, terrain: dl.terrain }), 'the world with land loads', await msgs(`m.tuffHost === 'error'`));
+  await t.sleep(600);
+  stats = (await ask('stats')).value;
+  check(stats.land && stats.land.drawn && stats.land.i === landT.i && Math.abs(stats.land.high - 8) < 0.05 && stats.land.low < -2,
+    'the land is drawn by the engine, with the hill (8 high) and the lake (dug down)', stats.land);
+  const height = async (x, z) => (await ask('height', { x, z })).value;
+  const spot = async (x, z) => (await ask('spot', { x, z })).value;
+  const shotL = (await ask('snapshot')).value;
+  const flat = await spot(35, 5);
+  const colsL = await ev(`window.__eh.colors(${JSON.stringify(shotL)}, [${JSON.stringify(flat)}])`);
+  check(colsL[0][1] > colsL[0][0] && colsL[0][1] > colsL[0][2], 'flat land is drawn grassy green', colsL);
+  await t.shot('engine_host_land.png', { x: FX, y: FY, width: 800, height: 500 });
+  await clear();
+  await t.click(FX + flat[0], FY + flat[1]);
+  check(await waitMsg(`m.tuffHost === 'pick' && m.i === ${landT.i}`), 'a click on the land picks it (its terrain thing)', await msgs('true'));
+  await clear();
+  await t.move(FX + flat[0], FY + flat[1]);
+  await press(FX + flat[0], FY + flat[1]);
+  await moveTo(FX + flat[0], FY + flat[1], FX + flat[0] + 80, FY + flat[1], 8);
+  await release(FX + flat[0] + 80, FY + flat[1]);
+  await t.sleep(300);
+  check((await msgs(`m.tuffHost === 'cam'`)).length > 0 && !(await msgs(`m.tuffHost === 'pick' || m.tuffHost === 'brush'`)).length, 'with no tool, dragging the land orbits the camera', await msgs('true'));
+  // The tree on the hill: dragged off it, it goes down with the land (it stays standing on it).
+  const treeL = thing(dl, 'tree');
+  const [ttx, tty] = await screen(treeL.i);
+  await clear();
+  await t.move(FX + ttx, FY + tty);
+  await press(FX + ttx, FY + tty);
+  await moveTo(FX + ttx, FY + tty, FX + ttx + 140, FY + tty + 40, 10);
+  const treeAt = (await ask('pos', { i: treeL.i })).value;
+  await release(FX + ttx + 140, FY + tty + 40);
+  const treeH = await height(treeAt.x, treeAt.z);
+  check(await waitMsg(`m.tuffHost === 'drag' && m.phase === 'end'`) && Math.abs(treeAt.y - treeH) < 0.05 && treeAt.y < 7.5,
+    'a tree dragged off the hill goes down with the land (it stays on it)', { treeAt, treeH });
+
+  // Raise: a drag paints the land up as the mouse moves, and letting go says where (spots about size / 3 apart).
+  await ev(`window.__eh.post({ tuffHost: 'tool', tool: { kind: 'raise', size: 10, amount: 2 } })`);
+  const a0 = await spot(24, 8);
+  const a1 = await spot(40, 8);
+  await t.move(FX + a0[0], FY + a0[1]);
+  await t.sleep(150);
+  stats = (await ask('stats')).value;
+  check(stats.tool === 'raise' && stats.ring === true, 'with Raise on, a ring shows where the brush is', stats);
+  const before0 = await height(32, 8);
+  await clear();
+  await press(FX + a0[0], FY + a0[1]);
+  await moveTo(FX + a0[0], FY + a0[1], FX + a1[0], FY + a1[1], 12);
+  await t.sleep(100);
+  const during = await height(32, 8);
+  await release(FX + a1[0], FY + a1[1]);
+  const brush = (await waitMsg(`m.tuffHost === 'brush'`)) && (await msgs(`m.tuffHost === 'brush'`))[0];
+  check(during > before0 + 1 && !(await msgs(`m.tuffHost === 'cam' || m.tuffHost === 'pick'`)).length, `the land rises live while the brush is dragged (${before0} -> ${during?.toFixed?.(2)}), and the camera stays`, { before0, during });
+  check(brush && brush.tool === 'raise' && brush.size === 10 && brush.amount === 2 && brush.spots.length >= 4 && Math.abs(brush.spots[0][0] - 24) < 1 && Math.abs(brush.spots[0][1] - 8) < 1
+    && brush.spots.every((s) => s.every((v) => Math.abs(v * 10 - Math.round(v * 10)) < 1e-6)),
+  'letting go reports one brush stroke: raise, size 10, strength 2, its spots (to 0.1) from where it started', brush);
+  const gaps = brush.spots.slice(1).map((s, j) => Math.hypot(s[0] - brush.spots[j][0], s[1] - brush.spots[j][1]));
+  check(gaps.every((g) => g > 2.9 && g < 3.6), 'the spots are about size / 3 apart', gaps);
+
+  // Hill: a click puts one on the land.
+  await ev(`window.__eh.post({ tuffHost: 'tool', tool: { kind: 'hill', size: 16, amount: 5 } })`);
+  const hs = await spot(-30, -30);
+  await clear();
+  await t.click(FX + hs[0], FY + hs[1]);
+  const hillMsg = (await waitMsg(`m.tuffHost === 'brush'`)) && (await msgs(`m.tuffHost === 'brush'`))[0];
+  check(hillMsg && hillMsg.tool === 'hill' && hillMsg.spots.length === 1 && Math.abs(hillMsg.spots[0][0] + 30) < 1 && Math.abs(hillMsg.spots[0][1] + 30) < 1, 'with Hill on, a click places a hill (one spot)', hillMsg);
+  const hillTop = await height(...hillMsg.spots[0]);
+  check(Math.abs(hillTop - 5) < 0.4, 'and the preview has it straight away (about 5 high: the top falls between the grid points)', hillTop);
+  // Mountain: the same rocky peak tgame makes.
+  await ev(`window.__eh.post({ tuffHost: 'tool', tool: { kind: 'mountain', size: 24, amount: 12 } })`);
+  const ms = await spot(30, -35);
+  await clear();
+  await t.click(FX + ms[0], FY + ms[1]);
+  const mMsg = (await waitMsg(`m.tuffHost === 'brush'`)) && (await msgs(`m.tuffHost === 'brush'`))[0];
+  // The same lines run by tgame: its heights are the ones this page painted.
+  const r1 = (v) => Math.round(v * 10) / 10;
+  const more = `land:raise(${JSON.stringify(brush.spots.map((s) => s.map(r1))).replace(/,/g, ', ')}, 10, 2)\nland:hill(${hillMsg.spots[0].map(r1).join(', ')}, 16, 5)\nland:mountain(${mMsg.spots[0].map(r1).join(', ')}, 24, 12)\n`;
+  const dl2 = await scene(fileLand, GAME_LAND + more);
+  const N = dl2.terrain.n;
+  const gameAt = (x, z) => { const st = dl2.terrain.size / (N - 1); const i = Math.round((x + dl2.terrain.size / 2) / st); const j = Math.round((z + dl2.terrain.size / 2) / st); return [dl2.terrain.heights[j * N + i], i * st - dl2.terrain.size / 2, j * st - dl2.terrain.size / 2]; };
+  const cmp = [];
+  for (const [x, z] of [[32, 8], [36, 9], [-30, -30], [-27, -33], ...[[0, 0], [3, -2], [-4, 4], [6, 5]].map(([dx, dz]) => [mMsg.spots[0][0] + dx, mMsg.spots[0][1] + dz])]) {
+    const [g, gx, gz] = gameAt(x, z);
+    cmp.push([gx, gz, g, +(await height(gx, gz)).toFixed(2)]);
+  }
+  check(!dl2.error && cmp.every(([, , g, h]) => Math.abs(g - h) < 0.06), "the land painted here is tgame's own: the stroke, the hill and the mountain match the game's heights", { error: dl2.error, more, cmp });
+
+  // Escape while painting puts the land back.
+  await ev(`window.__eh.post({ tuffHost: 'tool', tool: { kind: 'lower', size: 12, amount: 3 } })`);
+  const e0 = await spot(-35, -5);
+  const e1 = await spot(-25, -5);
+  const beforeE = await height(-30, -5);
+  await clear();
+  await t.move(FX + e0[0], FY + e0[1]);
+  await press(FX + e0[0], FY + e0[1]);
+  await moveTo(FX + e0[0], FY + e0[1], FX + e1[0], FY + e1[1], 8);
+  const duringE = await height(-30, -5);
+  await t.key('Escape');
+  await release(FX + e1[0], FY + e1[1]);
+  await t.sleep(200);
+  check(duringE < beforeE - 1 && Math.abs(await height(-30, -5) - beforeE) < 1e-6 && !(await msgs(`m.tuffHost === 'brush'`)).length, 'Escape while lowering puts the land back, and nothing is reported', { beforeE, duringE, after: await height(-30, -5) });
+
+  // Valley: a drag from its start to its end.
+  await ev(`window.__eh.post({ tuffHost: 'tool', tool: { kind: 'valley', size: 10, amount: 4 } })`);
+  const v0 = await spot(-40, -44);
+  const v1 = await spot(5, -44);
+  await clear();
+  await t.move(FX + v0[0], FY + v0[1]);
+  await press(FX + v0[0], FY + v0[1]);
+  await moveTo(FX + v0[0], FY + v0[1], FX + v1[0], FY + v1[1], 10);
+  const midV = await height(-17.5, -44);
+  await release(FX + v1[0], FY + v1[1]);
+  const vMsg = (await waitMsg(`m.tuffHost === 'brush'`)) && (await msgs(`m.tuffHost === 'brush'`))[0];
+  check(vMsg && vMsg.tool === 'valley' && vMsg.spots.length === 2 && Math.abs(vMsg.spots[0][0] + 40) < 1.5 && Math.abs(vMsg.spots[1][0] - 5) < 1.5 && midV < -3,
+    'with Valley on, a drag carves a valley from its start to its end (live), and reports both ends', { vMsg, midV });
+  await t.shot('engine_host_land_painted.png', { x: FX, y: FY, width: 800, height: 500 });
+  // A selected land line shows rings where it works; no tool, no ring.
+  await ev(`window.__eh.post({ tuffHost: 'tool', tool: null })`);
+  await ev(`window.__eh.post({ tuffHost: 'select', is: [], marks: [[10, -10, 15], [-15, 10, 10]] })`);
+  await t.sleep(200);
+  stats = (await ask('stats')).value;
+  check(stats.tool === null && stats.ring === false && stats.marks === 2 && stats.outlines === 0, 'marks draw rings on the land (a selected hill and lake), and with the tool off the ring goes', stats);
 
   // Back to 2D: the 3D scene goes.
   await ev(`Object.assign(window.__eh.f.style, { width: '800px', height: '600px' })`);

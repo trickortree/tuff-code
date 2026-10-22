@@ -2,8 +2,9 @@
 // tiles, real drags in the preview (the real engine in tuffview://, see engine-host.mjs), real keys. It checks the code
 // it writes line for line (the templates are the judge's files), that each action is one Ctrl+Z step, that code typed
 // in the editor shows up in the scene, Play (the real game window, played by tgame's autopilot), the notice's "Open
-// Tuff Engine" button, the templates, the 3D world, the start cards, and "Ask an agent" through Tuff Agents (with the
-// stand-in agents). Screenshots of the walkthrough go to test/e2e/out/engine/.
+// Tuff Engine" button, the templates, the 3D world, the land (the Terrain tab and modern lighting), the start cards,
+// and "Ask an agent" through Tuff Agents (with the stand-in agents). Screenshots of the walkthrough go to
+// test/e2e/out/engine/.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -438,11 +439,11 @@ export default async (t, ctx) => {
 
   // ================================================================ templates and a 3D world
   const tpl = await ev('window.TuffEngine.templates().map((t) => ({ id: t.id, name: t.name, code: t.code }))');
-  check(tpl.map((x) => x.name).join(' | ') === 'Empty 2D game | Empty 3D world | Coin Dash (2D) | Island Walk (3D)', 'four templates: Empty 2D game, Empty 3D world, Coin Dash, Island Walk', tpl.map((x) => x.name));
-  check(tpl.find((x) => x.id === 'coin_dash').code === repoGame('coin_dash.tuf') && tpl.find((x) => x.id === 'island_walk').code === repoGame('island_walk.tuf'),
-    'the Coin Dash and Island Walk templates are exactly games/coin_dash.tuf and island_walk.tuf (which tgame plays)', null);
+  check(tpl.map((x) => x.name).join(' | ') === 'Empty 2D game | Empty 3D world | Coin Dash (2D) | Island Walk (3D) | Hills and Lake (3D)', 'five templates: Empty 2D game, Empty 3D world, Coin Dash, Island Walk, Hills and Lake', tpl.map((x) => x.name));
+  check(tpl.find((x) => x.id === 'coin_dash').code === repoGame('coin_dash.tuf') && tpl.find((x) => x.id === 'island_walk').code === repoGame('island_walk.tuf') && tpl.find((x) => x.id === 'hills_lake').code === repoGame('hills_lake.tuf'),
+    'the Coin Dash, Island Walk and Hills and Lake templates are exactly games/coin_dash.tuf, island_walk.tuf and hills_lake.tuf (which tgame plays)', null);
   await clickSel('#en-templates');
-  await waitFor(`document.querySelectorAll('.sd-modal .sd-tcard').length === 4`, 3000);
+  await waitFor(`document.querySelectorAll('.sd-modal .sd-tcard').length === 5`, 3000);
   await t.shot('engine_templates.png');
   await ev(`document.querySelector('.sd-tcard[data-id="island_walk"] [data-a="new"]').click()`);
   const island = path.join(ctx.root, 'island_walk.tuf');
@@ -533,7 +534,7 @@ export default async (t, ctx) => {
   check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'kid3_check.tuf'), w3), path.join(ctx.tmp, 'kid3_check.tuf'))).trim()), 'the 3D world passes tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'kid3_check.tuf')));
   // A template "Use here": it asks first, replaces the code in one step, and the scene goes from 3D to 2D.
   await clickSel('#en-templates');
-  await waitFor(`document.querySelectorAll('.sd-modal .sd-tcard').length === 4`, 3000);
+  await waitFor(`document.querySelectorAll('.sd-modal .sd-tcard').length === 5`, 3000);
   await ev(`document.querySelector('.sd-tcard[data-id="coin_dash"] [data-a="here"]').click()`);
   await waitFor(`!document.querySelector('#modal').classList.contains('hidden')`, 3000);
   const askText = await ev(`document.querySelector('#modal-title').textContent + ' / ' + document.querySelector('#modal-ok').textContent`);
@@ -549,6 +550,162 @@ export default async (t, ctx) => {
   await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kid3)})).getValue().includes('tgame.world'))()`, 4000);
   check(await m3() === w3, 'one Ctrl+Z brings the 3D world back', firstDiff(await m3(), w3));
   await settle(25000);
+
+  // ================================================================ the land: the Terrain tab, its tools, Lighting, Hills and Lake
+  // A world on an island: the Terrain tab offers to swap the island for land (one step), then the brush, a hill, a
+  // valley and the style each write one line (one Ctrl+Z each), the preview paints live, the Objects list and the
+  // Inspector change and remove the land's lines, the World gets modern lighting, and the template is a real game.
+  const landFile = path.join(ctx.root, 'land.tuf');
+  const landStart = 'mention tgame\n\ngame = tgame.world("My World", 960, 600)\ngame:sky "day"\ngame:island(80)\nplayer = game:player("first person")\n';
+  fs.writeFileSync(landFile, landStart);
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(landFile)})`);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(landFile)}`, 6000);
+  await settle(25000);
+  const ml = () => ev(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(landFile)})).getValue().replace(/\\r\\n/g, '\\n'))()`);
+  const mlIs = (want) => waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(landFile)})).getValue().replace(/\\r\\n/g, '\\n') === ${JSON.stringify(want)})()`, 6000);
+  const mlNot = (was) => waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(landFile)})).getValue().replace(/\\r\\n/g, '\\n') !== ${JSON.stringify(was)})()`, 6000);
+  // Where a point of the land is in the IDE window.
+  const landSpot = async (x, z) => {
+    const f = await rect('#en-frame');
+    const p = (await ask('spot', { x, z })).value;
+    return p ? [f[0] + p[0], f[1] + p[1]] : null;
+  };
+  const landH = async (x, z) => (await ask('height', { x, z })).value;
+  const undoKey = async () => { await ev(`document.querySelector('#en-stage').focus()`); await t.key('z', CTRL); };
+  check(await ev(`!document.querySelector('.en-tabs [data-tab="terrain"]').classList.contains('hidden') && document.querySelector('.en-tabs').classList.contains('four')`), 'a 3D world has a fourth tab: Terrain', null);
+  await clickSel('.en-left .en-tabs button[data-tab="terrain"]');
+  const startText = await ev(`document.querySelector('#en-terrain').textContent`);
+  check(/Make some land/.test(startText) && /Swap the island for land/.test(startText) && /Keep the island too/.test(startText), 'with no land, the Terrain tab offers Make some land, and to swap the island for it', startText);
+  await t.shot('engine_terrain_start.png');
+  await clickSel('#en-terrain [data-a="swap"]');
+  const withLand = 'mention tgame\n\ngame = tgame.world("My World", 960, 600)\ngame:sky "day"\nland = game:terrain(200)\nland:style "grass"\nplayer = game:player("first person")\n';
+  await mlIs(withLand);
+  check(await ml() === withLand, 'Swap the island for land writes land = game:terrain(200) and land:style "grass" where the island was', firstDiff(await ml(), withLand));
+  await undoKey();
+  await mlIs(landStart);
+  check(await ml() === landStart, 'one Ctrl+Z brings the island back', firstDiff(await ml(), landStart));
+  await ev(`document.querySelector('#en-stage').focus()`);
+  await t.key('y', CTRL);
+  await mlIs(withLand);
+  await settle(25000);
+  await t.sleep(500);
+  st = await stats();
+  if (gl) check(st.land?.drawn === true && st.land.size === 200 && st.cam?.dist >= 70, 'the preview draws the land, and the camera steps back to see it', st);
+  const tools = await ev(`[...document.querySelectorAll('#en-terrain .en-tool')].map((b) => b.dataset.tool).join()`);
+  check(tools === 'raise,lower,smooth,flatten,hill,mountain,dip,lake,valley', 'the Terrain tab has the brushes (Raise, Lower, Smooth, Flatten) and the shapes (Hill, Mountain, Dip, Lake, Valley)', tools);
+
+  // Raise: a drag paints the land live, and writes one line when it's let go.
+  await clickSel('#en-terrain .en-tool[data-tool="raise"]');
+  const sliders = await ev(`[...document.querySelectorAll('#en-terrain .en-slider')].map((l) => l.textContent + '=' + l.querySelector('input').min + '..' + l.querySelector('input').max).join(' | ')`);
+  check((await dbg()).tool === 'raise' && /^Size12=2\.\.60 \| Strength1=0\.2\.\.5$/.test(sliders) && /Drag on the land to raise it/.test(await ev(`document.querySelector('#en-hint').textContent`)),
+    'Raise turns on with its Size (2-60) and Strength (0.2-5) sliders, and the hint says how', { sliders, hint: await ev(`document.querySelector('#en-hint').textContent`) });
+  await t.shot('engine_terrain_tools.png');
+  let was = await ml();
+  if (gl) {
+    const b0 = await landSpot(-30, 10);
+    const b1 = await landSpot(-6, 10);
+    const h0 = await landH(-18, 10);
+    await drag(b0[0], b0[1], b1[0], b1[1], 14);
+    const h1 = await landH(-18, 10);
+    await mlNot(was);
+    const added = (await ml()).split('\n').filter((l) => !was.split('\n').includes(l));
+    check(added.length === 1 && /^land:raise\(\[\[-?[\d.]+, -?[\d.]+\](, \[-?[\d.]+, -?[\d.]+\]){2,}\], 12, 1\)$/.test(added[0]) && (await ml()).split('\n')[6] === added[0],
+      'a drag with Raise writes one land:raise line with the stroke\'s spots, after the land\'s lines', added);
+    check(h1 > h0 + 1, `and the preview's land rose while it was dragged (${h0} -> ${h1?.toFixed?.(2)})`, { h0, h1 });
+    check((await dbg()).sel.startsWith('le:'), 'the new line is selected', (await dbg()).sel);
+    await settle();
+    await t.shot('engine_terrain_raised.png');
+    await undoKey();
+    await mlIs(was);
+    check(await ml() === was, 'one Ctrl+Z undoes the whole stroke', firstDiff(await ml(), was));
+    await settle();
+    // A click with Hill puts a hill there.
+    await clickSel('#en-terrain .en-tool[data-tool="hill"]');
+    const hs = await landSpot(24, -16);
+    await t.click(hs[0], hs[1]);
+    await mlNot(was);
+    const hillLine = (await ml()).split('\n')[6];
+    const hm = /^land:hill\((-?[\d.]+), (-?[\d.]+), 30, 8\)$/.exec(hillLine);
+    check(hm && Math.abs(+hm[1] - 24) < 2 && Math.abs(+hm[2] + 16) < 2, 'a click with Hill writes land:hill(x, z, 30, 8) where it was clicked', hillLine);
+    await settle();
+    // A drag with Valley carves one from where it starts to where it ends.
+    await clickSel('#en-terrain .en-tool[data-tool="valley"]');
+    was = await ml();
+    const v0 = await landSpot(-40, -30);
+    const v1 = await landSpot(-4, -40);
+    await drag(v0[0], v0[1], v1[0], v1[1], 12);
+    await mlNot(was);
+    const valleyLine = (await ml()).split('\n')[7];
+    const vm = /^land:valley\((-?[\d.]+), (-?[\d.]+), (-?[\d.]+), (-?[\d.]+), 18, 6\)$/.exec(valleyLine);
+    check(vm && Math.abs(+vm[1] + 40) < 3 && Math.abs(+vm[3] + 4) < 3, 'a drag with Valley writes land:valley(x1, z1, x2, z2, 18, 6) from its start to its end', valleyLine);
+    await settle();
+    await ev(`document.querySelector('#en-stage').focus()`);
+    await t.key('Escape');
+    check((await dbg()).tool === null && !(await ev(`!!document.querySelector('#en-terrain .en-tool.on')`)), 'Escape puts the tool away', await dbg());
+  }
+  // Style: a chip changes the style line.
+  was = await ml();
+  await clickSel('#en-terrain .en-styles [data-style="desert"]');
+  await mlNot(was);
+  const styleLines = changedLines(was, await ml());
+  check(styleLines && styleLines.length === 1 && styleLines[0][2] === 'land:style "desert"', 'the Desert style changes the land:style line', styleLines);
+  await settle();
+  await t.shot('engine_terrain_desert.png');
+  // Lighting: Modern in the World's Inspector.
+  await ev(`window.TuffEngine.test.select('root')`);
+  await t.sleep(200);
+  was = await ml();
+  await clickSel('#en-lighting .pf-chip:nth-child(2)');
+  await mlNot(was);
+  const litAdded = (await ml()).split('\n');
+  check(litAdded[4] === 'game:lighting "modern"' && litAdded.length === was.split('\n').length + 1, 'Lighting: Modern in the World writes game:lighting "modern" with its settings', litAdded.slice(0, 7));
+  await settle();
+  if (gl) check((await stats()).modern === true, 'and the preview has modern lighting', await stats());
+  // The Objects list: the land and its lines; a line selected, changed and removed in the Inspector.
+  await clickSel('.en-left .en-tabs button[data-tab="objects"]');
+  const objRows = await ev(`[...document.querySelectorAll('#en-objects .sd-layer')].map((r) => r.dataset.key + ':' + r.querySelector('.lb').textContent).join()`);
+  check(/^root:World,land:Land(,le:\d+:(Hill|Valley))*,v:player:Player$/.test(objRows), 'Objects lists the land with its lines under it', objRows);
+  if (gl) {
+    const hillKey = (await dbg()).land.edits.find((e) => e.op === 'hill').key;
+    await clickSel(`#en-objects .sd-layer[data-key="${hillKey}"]`);
+    await waitFor(`window.TuffEngine.debug().sel === ${JSON.stringify(hillKey)}`, 3000);
+    const fields = await ev(`[...document.querySelectorAll('#en-inspector .en-num span')].map((x) => x.textContent).join()`);
+    check(fields === 'X,Z,Size,Height', 'its Inspector has X, Z, Size and Height', fields);
+    await t.shot('engine_terrain_inspector.png');
+    was = await ml();
+    await ev(`(() => { const l = [...document.querySelectorAll('#en-inspector .en-num')].find((x) => x.querySelector('span').textContent === 'Height'); const i = l.querySelector('input'); i.focus(); i.value = '12'; i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('change', { bubbles: true })); i.blur(); return 1; })()`);
+    await mlNot(was);
+    const hl = changedLines(was, await ml());
+    check(hl && hl.length === 1 && /^land:hill\(-?[\d.]+, -?[\d.]+, 30, 12\)$/.test(hl[0][2]), 'changing Height to 12 changes the hill\'s line', hl);
+    was = await ml();
+    await clickSel('#en-inspector .in-actions .btn.danger');
+    await mlNot(was);
+    check(!/land:hill/.test(await ml()) && (await dbg()).sel === 'land', 'Remove takes the hill\'s line out (and selects the land)', await ml());
+    await undoKey();
+    await mlIs(was);
+    check(await ml() === was, 'Ctrl+Z brings it back', firstDiff(await ml(), was));
+  }
+  check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'land_check.tuf'), await ml()), path.join(ctx.tmp, 'land_check.tuf'))).trim()), 'the land the Terrain tab wrote passes tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'land_check.tuf')));
+
+  // The Hills and Lake template: a new file that tgame plays (games/hills_lake.tuf), with land and modern light.
+  await clickSel('#en-templates');
+  await waitFor(`document.querySelectorAll('.sd-modal .sd-tcard').length === 5`, 3000);
+  await ev(`document.querySelector('.sd-tcard[data-id="hills_lake"] [data-a="new"]').click()`);
+  const hillsFile = path.join(ctx.root, 'hills_lake.tuf');
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(hillsFile)}`, 6000);
+  check(fs.existsSync(hillsFile) && fs.readFileSync(hillsFile, 'utf8') === repoGame('hills_lake.tuf'), 'Hills and Lake (3D) makes hills_lake.tuf from the template', null);
+  check(/^OK/.test(ctx.tuffCheck(hillsFile).trim()), 'and its code passes tuff --check', ctx.tuffCheck(hillsFile));
+  await settle(25000);
+  await t.sleep(800);
+  const dh = await dbg();
+  check(!dh.error && dh.land?.edits.map((e) => e.op).join() === 'hill,mountain,lake,valley' && dh.behaviours.length === 1, 'it has the land with a hill, a mountain, a lake and a valley, and the coin to collect', dh);
+  if (gl) {
+    st = await stats();
+    check(st.land?.drawn && st.modern === true && st.land.high > 20, 'the preview shows the land (the mountain is tall) in modern light', st);
+  }
+  await clickSel('.en-left .en-tabs button[data-tab="terrain"]');
+  await t.shot('engine_terrain_hills_lake.png');
+  await clickSel('.en-left .en-tabs button[data-tab="add"]');
 
   // ================================================================ start cards, Design Studio, the round trip
   await ev(`window.TuffIDE.openEngine(${JSON.stringify(path.join(ctx.root, 'demo.tuf'))})`);
@@ -587,7 +744,7 @@ export default async (t, ctx) => {
   const games = fs.readdirSync(GAMES).filter((f) => f.endsWith('.tuf'));
   const trip = await ev(`(() => { const out = { lines: 0, bad: [] }; for (const [name, code] of ${JSON.stringify(games.map((g) => [g, repoGame(g)]))}) { const P = window.TuffEngine.parse(code); for (const n of P.nodes) { out.lines++; const l = window.TuffEngine.lineFor(n); if (l !== P.lines[n.line - 1]) out.bad.push(name + ':' + n.line + ' ' + l); } } return out; })()`);
   check(trip.lines > 40 && !trip.bad.length, `lineFor gives back every line Tuff Engine reads in games/*.tuf unchanged (${trip.lines} lines, ${games.length} games)`, trip.bad.slice(0, 5));
-  const fx = await ev(`['coin_dash', 'island_walk'].every((id) => { const c = window.TuffEngine.templates().find((t) => t.id === id).code.split('\\n'); return window.TuffEngine.fixups(c).join('\\n') === c.join('\\n'); })`);
+  const fx = await ev(`['coin_dash', 'island_walk', 'hills_lake'].every((id) => { const c = window.TuffEngine.templates().find((t) => t.id === id).code.split('\\n'); return window.TuffEngine.fixups(c).join('\\n') === c.join('\\n'); })`);
   check(fx, "fixups leaves the templates as they are (they're already right)", null);
 
   // ================================================================ what the kid wrote stays, and the kid's pace

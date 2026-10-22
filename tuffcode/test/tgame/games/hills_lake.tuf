@@ -1,0 +1,35 @@
+mention tgame
+
+game = tgame.world("Hills and Lake", 960, 600)
+game:sky "day"
+game:lighting "modern"
+land = game:terrain(200)
+land:style "grass"
+land:hill(-24, -32, 40, 12)
+land:mountain(26, -80, 64, 32)
+land:lake(14, -14, 30, 3)
+land:valley(44, 24, 76, -46, 16, 6)
+hud = game:hud()
+score = 0
+score_label = hud:text("Score: 0", 90, 30, 26, "white")
+player = game:player("first person")
+player:move_to(0, 0, 12)
+coin = game:spawn("coin", -24, 0, -32)
+coin:spin 90
+tree = game:spawn("tree", -8, 0, -4)
+pine = game:spawn("pine", -34, 0, -24)
+pine2 = game:spawn("pine", -16, 0, -44)
+tree2 = game:spawn("tree", 34, 0, 0)
+rock = game:spawn("rock", 2, 0, -32)
+
+game:every_frame coin_collect
+
+# Tuff Engine: player collects coin
+func coin_collect(dt):
+    if coin:touches(player):
+        score += 1
+        score_label:set "Score: " + score
+        game:sound "coin"
+        coin:move_to(game:random_spot())
+        while coin:touches(player):
+            coin:move_to(game:random_spot())
