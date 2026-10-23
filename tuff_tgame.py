@@ -80,7 +80,10 @@ SKIES = {
     "space": {"sky": ["#000000", "#05060d", "#000000"], "fog": None, "sun": ("#ffffff", 2.4),
               "hemi": ("#4050a0", "#101010", 0.35), "at": (40, 30, 30), "far": 0},
 }
-KIT = ("tree", "pine", "rock", "bush", "flower", "house", "hut", "sign", "crate", "fence", "coin")
+KIT = ("tree", "pine", "rock", "bush", "flower", "house", "hut", "sign", "crate", "fence", "coin", "chest", "person")
+# How a model from the kit can move by itself (thing:animate): "auto" is the model's own (a person walks while it
+# moves and stands breathing when it doesn't; trees sway; coins spin), "none" holds it still.
+ANIMATIONS = ("auto", "walk", "idle", "wave", "none")
 HOLDABLE = ("axe", "pickaxe", "sword", "torch", "hammer")
 EDGE_MODES = ("bounce", "wrap", "stop", "none")
 PLAYER_MODES = ("first person", "third person")
@@ -1644,6 +1647,9 @@ class World3D(Game):
         return y + self.land.at(x, z) if self.land is not None else y
 
     def before_frame(self):
+        if self.is_paused != getattr(self, "page_paused", False) and SCENE is None:
+            self.page_paused = self.is_paused  # the page's animations (anim.js) hold still while the game is paused
+            self.view.set(self.scene, attrs={"data-paused": self.page_paused})
         if self.land is not None and self.land.dirty:
             self.land.push()
 
@@ -2288,82 +2294,238 @@ class Terrain:
                 "sea": tidy(self.sea[0]) if self.sea is not None else None, "edits": self.edits}
 
 
+def animation_problem(name):
+    return (f"object:animate can be \"walk\", \"idle\", \"wave\", \"auto\" or \"none\", not \"{name}\"."
+            + did_you_mean(name, ANIMATIONS))
+
+
 def kit(name):
-    """A built-in low-poly model: (size, solid body, parts, solid). Parts are (type, engine props, main part?)."""
+    """A built-in model: (size, solid body, parts, solid). Parts are (type, engine props, main part?); every part
+    casts and gets shadows, and colours vary a little from one model to the next. A part's "anim" says how the page
+    moves the model (tuff_view_web/anim.js): a "tree", "pine", "bush" or "flower" sways in the wind, a "coin" spins
+    and bobs, and each part of a "person" says which limb it is and where it turns ([style, role, pivot])."""
+    size, body, parts, solid = _kit(name)
+    return size, body, [(type_, {"shadow": True, **p}, main) for type_, p, main in parts], solid
+
+
+def _kit(name):
     rnd = random.random
     shade = lambda base, spread=0.08: _shade(base, (rnd() - 0.5) * 2 * spread)
     if name == "tree":
         leaf = shade("#4f9d3a")
-        return ((2.2, 3.4, 2.2), (0.5, 3.4, 0.5), [
-            ("cylinder", {"rt": 0.17, "rb": 0.26, "h": 1.7, "y": 0.85, "seg": 7, "color": "#7a5230", "flat": True, "shadow": True}, False),
-            ("sphere", {"r": 0.95, "y": 2.2, "seg": 7, "color": leaf, "flat": True, "shadow": True}, True),
-            ("sphere", {"r": 0.7, "x": 0.45, "y": 2.75, "z": 0.15, "seg": 6, "color": _shade(leaf, 0.06), "flat": True, "shadow": True}, True),
-            ("sphere", {"r": 0.62, "x": -0.4, "y": 2.65, "z": -0.25, "seg": 6, "color": _shade(leaf, -0.05), "flat": True, "shadow": True}, True),
-        ], True)
+        bark = shade("#7a5230", 0.06)
+        parts = [
+            ("cylinder", {"rt": 0.15, "rb": 0.22, "h": 1.8, "y": 0.9, "seg": 10, "color": bark, "rough": 0.95, "anim": "tree"}, False),
+            ("cylinder", {"rt": 0.21, "rb": 0.34, "h": 0.32, "y": 0.16, "seg": 10, "color": _shade(bark, -0.1), "rough": 0.95}, False),
+            ("cylinder", {"rt": 0.035, "rb": 0.075, "h": 0.62, "x": 0.25, "y": 1.6, "rz": -45, "seg": 6, "color": bark, "rough": 0.95}, False),
+        ]
+        # Clumps of leaves, lighter at the top, each tree's a little differently placed.
+        for r, x, y, z, light in ((0.88, 0, 2.22, 0, 0), (0.62, 0.56, 2.52, 0.24, 0.07), (0.6, -0.52, 2.46, -0.3, -0.07),
+                                  (0.54, -0.22, 2.34, 0.55, -0.02), (0.5, 0.04, 2.92, -0.06, 0.14)):
+            parts.append(("sphere", {"r": r, "x": x + (rnd() - 0.5) * 0.12, "y": y, "z": z + (rnd() - 0.5) * 0.12, "sy": 0.92, "seg": 14,
+                                     "color": _shade(leaf, light), "rough": 0.7}, True))
+        return ((2.2, 3.4, 2.2), (0.5, 3.4, 0.5), parts, True)
     if name == "pine":
         leaf = shade("#2f6b3a")
-        return ((2.3, 3.9, 2.3), (0.5, 3.9, 0.5), [
-            ("cylinder", {"rt": 0.14, "rb": 0.2, "h": 1.0, "y": 0.5, "seg": 6, "color": "#6b4428", "flat": True, "shadow": True}, False),
-            ("cone", {"r": 1.15, "h": 1.5, "y": 1.6, "seg": 7, "color": leaf, "flat": True, "shadow": True}, True),
-            ("cone", {"r": 0.9, "h": 1.3, "y": 2.45, "seg": 7, "color": _shade(leaf, 0.05), "flat": True, "shadow": True}, True),
-            ("cone", {"r": 0.6, "h": 1.1, "y": 3.25, "seg": 7, "color": _shade(leaf, 0.1), "flat": True, "shadow": True}, True),
-        ], True)
+        bark = shade("#6b4428", 0.06)
+        parts = [("cylinder", {"rt": 0.1, "rb": 0.19, "h": 1.3, "y": 0.65, "seg": 8, "color": bark, "rough": 0.95, "anim": "pine"}, False)]
+        for i, (r, h, y) in enumerate([(1.15, 1.3, 1.3), (0.95, 1.15, 1.95), (0.72, 1.0, 2.6), (0.46, 0.9, 3.25)]):
+            parts.append(("cone", {"r": r, "h": h, "y": y, "seg": 11, "ry": rnd() * 32, "color": _shade(leaf, -0.05 + i * 0.05),
+                                   "rough": 0.8, "flat": True}, True))
+        return ((2.3, 3.9, 2.3), (0.5, 3.9, 0.5), parts, True)
     if name == "rock":
         s = 0.8 + rnd() * 0.5
-        return ((1.3 * s, 0.85 * s, 1.2 * s), None, [
-            ("sphere", {"r": 0.65 * s, "y": 0.3 * s, "sy": 0.7, "seg": 5, "color": shade("#8e8e86", 0.1), "flat": True, "shadow": True}, True),
-        ], True)
+        stone = shade(random.choice(["#8e8e86", "#8a8478", "#80868a"]), 0.08)
+        turn, lean = rnd() * 360, (rnd() - 0.5) * 14
+        parts = [
+            ("sphere", {"r": 0.65, "y": 0.26 * s, "sx": s, "sy": 0.7 * s, "sz": 0.92 * s, "ry": turn, "rz": lean, "seg": 8,
+                        "color": stone, "rough": 0.95, "flat": True}, True),
+            ("sphere", {"r": 0.36, "x": 0.44 * s, "y": 0.08 * s, "z": 0.3 * s, "sx": s, "sy": 0.7 * s, "sz": 0.9 * s, "ry": turn + 40,
+                        "seg": 6, "color": _shade(stone, -0.08), "rough": 0.95, "flat": True}, True),
+        ]
+        if rnd() < 0.5:  # some have moss on top: the same shape, a little smaller, poking out of the top
+            parts.append(("sphere", {"r": 0.65, "y": 0.33 * s, "sx": 0.84 * s, "sy": 0.62 * s, "sz": 0.78 * s, "ry": turn, "rz": lean,
+                                     "seg": 8, "color": shade("#5d7f3a", 0.06), "rough": 1, "flat": True}, False))
+        return ((1.3 * s, 0.85 * s, 1.2 * s), None, parts, True)
     if name == "bush":
         leaf = shade("#3f8a35")
-        return ((1.5, 0.95, 1.5), None, [
-            ("sphere", {"r": 0.55, "y": 0.45, "seg": 6, "color": leaf, "flat": True, "shadow": True}, True),
-            ("sphere", {"r": 0.42, "x": 0.45, "y": 0.35, "z": 0.1, "seg": 6, "color": _shade(leaf, 0.06), "flat": True, "shadow": True}, True),
-            ("sphere", {"r": 0.4, "x": -0.4, "y": 0.33, "z": -0.15, "seg": 6, "color": _shade(leaf, -0.05), "flat": True, "shadow": True}, True),
-        ], False)
+        parts = [
+            ("sphere", {"r": 0.55, "y": 0.45, "sy": 0.9, "seg": 14, "color": leaf, "rough": 0.75, "anim": "bush"}, True),
+            ("sphere", {"r": 0.42, "x": 0.45, "y": 0.34, "z": 0.1, "seg": 12, "color": _shade(leaf, 0.07), "rough": 0.75}, True),
+            ("sphere", {"r": 0.4, "x": -0.42, "y": 0.32, "z": -0.15, "seg": 12, "color": _shade(leaf, -0.07), "rough": 0.75}, True),
+            ("sphere", {"r": 0.34, "x": 0.02, "y": 0.34, "z": 0.42, "seg": 12, "color": _shade(leaf, 0.03), "rough": 0.75}, True),
+            ("sphere", {"r": 0.3, "x": -0.08, "y": 0.66, "z": -0.05, "seg": 12, "color": _shade(leaf, 0.12), "rough": 0.75}, True),
+        ]
+        if rnd() < 0.45:  # berries
+            berry = random.choice(["#d63a4a", "#7a4ad6", "#f2f2f2"])
+            for bx, by, bz in ((0.32, 0.55, 0.32), (-0.4, 0.5, 0.2), (0.6, 0.38, -0.12), (-0.15, 0.32, 0.72)):
+                parts.append(("sphere", {"r": 0.045, "x": bx, "y": by, "z": bz, "seg": 8, "color": berry, "rough": 0.35}, False))
+        return ((1.5, 0.95, 1.5), None, parts, False)
     if name == "flower":
         petal = random.choice(["#ff5d8f", "#ffd23f", "#ffffff", "#b388ff", "#ff8a3d"])
-        return ((0.3, 0.5, 0.3), None, [
-            ("cylinder", {"r": 0.025, "h": 0.42, "y": 0.21, "seg": 5, "color": "#3f8a35"}, False),
-            ("sphere", {"r": 0.1, "y": 0.45, "seg": 6, "color": petal, "flat": True}, True),
-        ], False)
+        middle = "#7a4a1e" if petal == "#ffd23f" else "#ffc93d"
+        parts = [
+            ("cylinder", {"r": 0.018, "h": 0.42, "y": 0.21, "seg": 6, "color": "#3f8a35", "anim": "flower"}, False),
+            ("sphere", {"r": 0.06, "x": 0.055, "y": 0.13, "sx": 1.6, "sy": 0.3, "sz": 0.7, "rz": 25, "seg": 8, "color": "#4a9a3c"}, False),
+        ]
+        for ry in (0, 60, 120):  # three crossed ovals make six petals
+            parts.append(("sphere", {"r": 0.1, "y": 0.43, "sy": 0.22, "sz": 0.38, "ry": ry, "seg": 10, "color": _shade(petal, (rnd() - 0.5) * 0.08),
+                                     "rough": 0.6}, True))
+        parts.append(("sphere", {"r": 0.04, "y": 0.445, "sy": 0.7, "seg": 8, "color": middle, "rough": 0.9}, False))
+        return ((0.3, 0.5, 0.3), None, parts, False)
     if name == "house":
-        return ((3.2, 3.6, 3.2), (3.0, 2.2, 3.0), [
-            ("box", {"w": 3, "h": 2.2, "d": 3, "y": 1.1, "color": "#e9dcc4", "flat": True, "shadow": True}, True),
-            ("cone", {"r": 2.55, "h": 1.4, "y": 2.9, "ry": 45, "seg": 4, "color": "#b5483b", "flat": True, "shadow": True}, False),
-            ("box", {"w": 0.7, "h": 1.25, "d": 0.06, "y": 0.62, "z": 1.51, "color": "#6b4428"}, False),
-            ("box", {"w": 0.55, "h": 0.5, "d": 0.06, "x": -0.85, "y": 1.35, "z": 1.51, "color": "#9fd3ff", "emissive": "#1d3550"}, False),
-            ("box", {"w": 0.55, "h": 0.5, "d": 0.06, "x": 0.85, "y": 1.35, "z": 1.51, "color": "#9fd3ff", "emissive": "#1d3550"}, False),
-        ], True)
+        wall = shade("#ece0c8", 0.04)
+        trim = shade("#7a5536", 0.06)
+        frame = "#f4efe6"
+        roof = shade(random.choice(["#b5483b", "#a8443a", "#9c4c3c"]), 0.05)
+        glass = {"color": "#a9d8f5", "emissive": "#1d3550", "rough": 0.1, "metal": 0.3}
+        parts = [
+            ("box", {"w": 3.12, "h": 0.24, "d": 3.12, "y": 0.12, "color": shade("#8f8a80", 0.05), "rough": 0.95}, False),
+            ("box", {"w": 3, "h": 1.98, "d": 3, "y": 1.21, "color": wall, "rough": 0.9}, True),
+            # The roof's two slopes and its ridge, over the gables: a prism along x (a 3-sided cylinder on its side) in
+            # the walls' colour.
+            ("box", {"w": 3.5, "h": 0.1, "d": 2.26, "y": 2.93, "z": 0.86, "rx": 38.9, "color": roof, "rough": 0.75}, False),
+            ("box", {"w": 3.5, "h": 0.1, "d": 2.26, "y": 2.93, "z": -0.86, "rx": -38.9, "color": roof, "rough": 0.75}, False),
+            ("box", {"w": 3.6, "h": 0.1, "d": 0.2, "y": 3.63, "color": _shade(roof, -0.25), "rough": 0.8}, False),
+            ("cylinder", {"r": 1, "h": 2.98, "seg": 3, "y": 2.64, "rx": -90, "rz": -90, "sx": 1.72, "sz": 0.86, "color": wall,
+                          "rough": 0.9, "flat": True}, True),
+            ("box", {"w": 0.34, "h": 0.9, "d": 0.34, "x": 0.85, "y": 3.05, "z": -0.55, "color": shade("#9a5a44", 0.06), "rough": 0.95}, False),
+            ("box", {"w": 0.42, "h": 0.08, "d": 0.42, "x": 0.85, "y": 3.52, "z": -0.55, "color": "#5d5d5d", "rough": 0.9}, False),
+            # the door, its frame, its knob and a step
+            ("box", {"w": 0.86, "h": 1.36, "d": 0.05, "y": 0.9, "z": 1.51, "color": trim, "rough": 0.85}, False),
+            ("box", {"w": 0.7, "h": 1.24, "d": 0.06, "y": 0.86, "z": 1.52, "color": shade("#6b4428", 0.06), "rough": 0.85}, False),
+            ("sphere", {"r": 0.045, "x": 0.24, "y": 0.84, "z": 1.565, "seg": 10, "color": "#d9b45a", "metal": 0.8, "rough": 0.3,
+                        "emissive": "#3a2a00"}, False),
+            ("box", {"w": 1.0, "h": 0.12, "d": 0.32, "y": 0.06, "z": 1.66, "color": "#9a958b", "rough": 0.95}, False),
+        ]
+        for cx in (-1.46, 1.46):  # timber corners
+            for cz in (-1.46, 1.46):
+                parts.append(("box", {"w": 0.16, "h": 1.98, "d": 0.16, "x": cx, "y": 1.21, "z": cz, "color": trim, "rough": 0.85}, False))
+        for wx in (-0.85, 0.85):  # front windows: frame, glass, cross bars, sill
+            parts += [
+                ("box", {"w": 0.66, "h": 0.62, "d": 0.05, "x": wx, "y": 1.45, "z": 1.51, "color": frame, "rough": 0.7}, False),
+                ("box", {"w": 0.54, "h": 0.5, "d": 0.05, "x": wx, "y": 1.45, "z": 1.525, **glass}, False),
+                ("box", {"w": 0.04, "h": 0.5, "d": 0.03, "x": wx, "y": 1.45, "z": 1.555, "color": frame, "rough": 0.7}, False),
+                ("box", {"w": 0.54, "h": 0.04, "d": 0.03, "x": wx, "y": 1.45, "z": 1.555, "color": frame, "rough": 0.7}, False),
+                ("box", {"w": 0.74, "h": 0.06, "d": 0.14, "x": wx, "y": 1.12, "z": 1.56, "color": trim, "rough": 0.85}, False),
+            ]
+        for sx in (-1.51, 1.51):  # a window on each side
+            parts += [
+                ("box", {"w": 0.05, "h": 0.62, "d": 0.66, "x": sx, "y": 1.45, "color": frame, "rough": 0.7}, False),
+                ("box", {"w": 0.05, "h": 0.5, "d": 0.54, "x": sx * 1.01, "y": 1.45, **glass}, False),
+                ("box", {"w": 0.03, "h": 0.5, "d": 0.04, "x": sx * 1.02, "y": 1.45, "color": frame, "rough": 0.7}, False),
+            ]
+        return ((3.2, 3.6, 3.2), (3.0, 2.2, 3.0), parts, True)
     if name == "hut":
+        thatch = shade("#d9b45a", 0.06)
         return ((2.8, 3.1, 2.8), (2.4, 1.7, 2.4), [
-            ("cylinder", {"r": 1.25, "h": 1.7, "y": 0.85, "seg": 9, "color": "#a0703c", "flat": True, "shadow": True}, True),
-            ("cone", {"r": 1.75, "h": 1.4, "y": 2.35, "seg": 9, "color": "#d9b45a", "flat": True, "shadow": True}, False),
-            ("box", {"w": 0.6, "h": 1.1, "d": 0.08, "y": 0.55, "z": 1.22, "color": "#4a2f1a"}, False),
+            ("cylinder", {"r": 1.32, "h": 0.2, "y": 0.1, "seg": 16, "color": shade("#8f8a80", 0.05), "rough": 0.95, "flat": True}, False),
+            ("cylinder", {"r": 1.25, "h": 1.5, "y": 0.95, "seg": 18, "color": shade("#b07d45", 0.06), "rough": 0.95}, True),
+            ("torus", {"r": 1.265, "tube": 0.035, "y": 0.55, "rx": 90, "seg": 36, "color": "#6e4a26", "rough": 0.9}, False),
+            ("torus", {"r": 1.265, "tube": 0.035, "y": 1.4, "rx": 90, "seg": 36, "color": "#6e4a26", "rough": 0.9}, False),
+            ("cone", {"r": 1.8, "h": 1.0, "y": 2.15, "seg": 18, "color": thatch, "rough": 1, "flat": True}, False),
+            ("cone", {"r": 1.25, "h": 1.1, "y": 2.55, "seg": 18, "ry": 10, "color": _shade(thatch, 0.07), "rough": 1, "flat": True}, False),
+            ("cylinder", {"r": 0.05, "h": 0.22, "y": 3.05, "seg": 6, "color": "#6e4a26"}, False),
+            ("box", {"w": 0.74, "h": 1.24, "d": 0.1, "y": 0.82, "z": 1.2, "color": "#8a6038", "rough": 0.9}, False),
+            ("box", {"w": 0.58, "h": 1.08, "d": 0.1, "y": 0.76, "z": 1.23, "color": "#4a2f1a", "rough": 0.9}, False),
         ], True)
     if name == "sign":
+        board = shade("#c08a4d", 0.05)
+        edge = _shade(board, -0.3)
         return ((1.2, 1.6, 0.2), (0.3, 1.6, 0.2), [
-            ("cylinder", {"r": 0.06, "h": 1.2, "y": 0.6, "seg": 6, "color": "#6b4428"}, False),
-            ("box", {"w": 1.2, "h": 0.6, "d": 0.08, "y": 1.25, "color": "#c08a4d", "flat": True, "shadow": True}, True),
+            ("cylinder", {"rt": 0.055, "rb": 0.065, "h": 1.5, "y": 0.75, "z": -0.07, "seg": 8, "color": "#6b4428", "rough": 0.95}, False),
+            ("box", {"w": 1.12, "h": 0.52, "d": 0.06, "y": 1.25, "color": board, "rough": 0.85}, True),
+            ("box", {"w": 1.1, "h": 0.014, "d": 0.066, "y": 1.25, "color": edge, "rough": 0.9}, False),
+            ("box", {"w": 1.2, "h": 0.07, "d": 0.09, "y": 1.525, "color": edge, "rough": 0.85}, False),
+            ("box", {"w": 1.2, "h": 0.07, "d": 0.09, "y": 0.975, "color": edge, "rough": 0.85}, False),
+            ("box", {"w": 0.07, "h": 0.6, "d": 0.09, "x": -0.565, "y": 1.25, "color": edge, "rough": 0.85}, False),
+            ("box", {"w": 0.07, "h": 0.6, "d": 0.09, "x": 0.565, "y": 1.25, "color": edge, "rough": 0.85}, False),
         ], True)
     if name == "crate":
-        return ((0.9, 0.9, 0.9), None, [
-            ("box", {"w": 0.9, "h": 0.9, "d": 0.9, "y": 0.45, "color": "#b07a42", "flat": True, "shadow": True}, True),
-            ("box", {"w": 0.94, "h": 0.12, "d": 0.94, "y": 0.06, "color": "#7a5230"}, False),
-            ("box", {"w": 0.94, "h": 0.12, "d": 0.94, "y": 0.84, "color": "#7a5230"}, False),
-        ], True)
+        wood = shade("#b07a42", 0.05)
+        edge = _shade(wood, -0.3)
+        parts = [
+            ("box", {"w": 0.84, "h": 0.84, "d": 0.84, "y": 0.45, "color": wood, "rough": 0.85}, True),
+            ("box", {"w": 0.9, "h": 0.1, "d": 0.9, "y": 0.05, "color": edge, "rough": 0.85}, False),
+            ("box", {"w": 0.9, "h": 0.1, "d": 0.9, "y": 0.85, "color": edge, "rough": 0.85}, False),
+        ]
+        for cx in (-0.4, 0.4):  # corner posts
+            for cz in (-0.4, 0.4):
+                parts.append(("box", {"w": 0.1, "h": 0.7, "d": 0.1, "x": cx, "y": 0.45, "z": cz, "color": edge, "rough": 0.85}, False))
+        for f in (-0.43, 0.43):  # a brace across each side
+            parts.append(("box", {"w": 0.98, "h": 0.09, "d": 0.03, "y": 0.45, "z": f, "rz": 45 * (1 if f > 0 else -1), "color": edge, "rough": 0.85}, False))
+            parts.append(("box", {"w": 0.03, "h": 0.09, "d": 0.98, "x": f, "y": 0.45, "rx": 45 * (1 if f > 0 else -1), "color": edge, "rough": 0.85}, False))
+        return ((0.9, 0.9, 0.9), None, parts, True)
     if name == "fence":
-        return ((2.0, 1.0, 0.16), None, [
-            ("box", {"w": 0.14, "h": 1.0, "d": 0.14, "x": -0.93, "y": 0.5, "color": "#8a6038"}, False),
-            ("box", {"w": 0.14, "h": 1.0, "d": 0.14, "x": 0.93, "y": 0.5, "color": "#8a6038"}, False),
-            ("box", {"w": 2.0, "h": 0.12, "d": 0.08, "y": 0.75, "color": "#b5895a", "shadow": True}, True),
-            ("box", {"w": 2.0, "h": 0.12, "d": 0.08, "y": 0.4, "color": "#b5895a", "shadow": True}, True),
-        ], True)
+        wood = shade("#8a6038", 0.05)
+        rail = shade("#b5895a", 0.05)
+        parts = []
+        for px in (-0.93, 0, 0.93):
+            h = 0.92 if px else 0.86
+            parts.append(("box", {"w": 0.14 if px else 0.1, "h": h, "d": 0.14 if px else 0.1, "x": px, "y": h / 2, "color": wood, "rough": 0.9}, False))
+            parts.append(("cone", {"r": 0.1 if px else 0.071, "h": 0.1, "x": px, "y": h + 0.05, "ry": 45, "seg": 4, "color": wood, "rough": 0.9,
+                                   "flat": True}, False))
+        parts += [
+            ("box", {"w": 2.0, "h": 0.12, "d": 0.06, "y": 0.72, "z": 0.05, "color": rail, "rough": 0.85}, True),
+            ("box", {"w": 2.0, "h": 0.12, "d": 0.06, "y": 0.38, "z": 0.05, "color": _shade(rail, -0.06), "rough": 0.85}, True),
+        ]
+        return ((2.0, 1.0, 0.16), None, parts, True)
     if name == "coin":
+        gold = {"color": "#f2c230", "emissive": "#6a5000", "metal": 0.45, "rough": 0.35}
         return ((0.7, 1.3, 0.12), None, [
-            ("cylinder", {"r": 0.32, "h": 0.08, "y": 0.9, "rx": 90, "seg": 18, "color": "#f2c230", "emissive": "#5a4300",
-                          "metal": 0.6, "rough": 0.35}, True),
+            ("cylinder", {"r": 0.3, "h": 0.07, "y": 0.9, "rx": 90, "seg": 28, **gold, "anim": "coin"}, True),
+            ("torus", {"r": 0.3, "tube": 0.035, "y": 0.9, "seg": 36, **gold}, True),
+            ("cylinder", {"r": 0.16, "h": 0.1, "y": 0.9, "rx": 90, "seg": 6, **gold, "color": "#ffd95a", "flat": True}, True),
         ], False)
+    if name == "chest":
+        wood = shade("#9a6234", 0.05)
+        iron = {"color": "#4a4d52", "metal": 0.6, "rough": 0.45}
+        return ((0.9, 0.75, 0.6), None, [
+            ("box", {"w": 0.86, "h": 0.42, "d": 0.56, "y": 0.21, "color": wood, "rough": 0.85}, True),
+            ("cylinder", {"r": 0.28, "h": 0.86, "y": 0.42, "rz": 90, "seg": 18, "color": _shade(wood, 0.06), "rough": 0.85}, True),
+            ("box", {"w": 0.08, "h": 0.44, "d": 0.58, "x": -0.3, "y": 0.21, **iron}, False),
+            ("box", {"w": 0.08, "h": 0.44, "d": 0.58, "x": 0.3, "y": 0.21, **iron}, False),
+            ("cylinder", {"r": 0.29, "h": 0.08, "x": -0.3, "y": 0.42, "rz": 90, "seg": 18, **iron}, False),
+            ("cylinder", {"r": 0.29, "h": 0.08, "x": 0.3, "y": 0.42, "rz": 90, "seg": 18, **iron}, False),
+            ("box", {"w": 0.12, "h": 0.15, "d": 0.05, "y": 0.42, "z": 0.29, "color": "#f2c230", "emissive": "#3a2a00", "metal": 0.7,
+                     "rough": 0.3}, False),
+        ], True)
+    if name == "person":
+        return ((0.7, 1.75, 0.5), None, person_parts(), True)
     raise KeyError(name)
+
+
+def person_parts(shirt=None, skin=None, hair=None, pants=None):
+    """A person (the kit's, and the player in third person), facing -z like everything that walks forward: legs,
+    arms, hips, a body and a head. Each part tells anim.js which part it is and where it turns (hips, shoulders and
+    the neck), so it can walk, breathe and wave."""
+    shirt = shirt or random.choice(["#e5484d", "#3574f0", "#2fa36b", "#f2a33a", "#8e5bd8", "#14b8a6"])
+    skin = skin or random.choice(["#f1c9a5", "#e0ac7e", "#c68a5c", "#8d5a3b", "#ffd9b8"])
+    hair = hair or random.choice(["#2b2018", "#5a3a22", "#a8692e", "#e3c06b", "#1c1c1c", "#b5482b"])
+    pants = pants or random.choice(["#2f3e5c", "#3b3b44", "#5b4636", "#24456b"])
+
+    def part(type_, role, pivot, main=False, **p):
+        return (type_, {**p, "anim": ["person", role, pivot]}, main)
+    parts = []
+    for side, x in (("l", -1), ("r", 1)):  # its right is +x (it faces -z)
+        hip, shoulder = [0.1 * x, 0.8, 0], [0.29 * x, 1.38, 0]
+        parts += [
+            part("capsule", "leg_" + side, hip, r=0.085, h=0.56, x=0.1 * x, y=0.44, seg=12, color=pants, rough=0.9),
+            part("sphere", "leg_" + side, hip, r=0.085, x=0.1 * x, y=0.055, z=-0.04, sy=0.6, sz=1.45, seg=10, color="#2a2522", rough=0.7),
+            part("capsule", "arm_" + side, shoulder, True, r=0.065, h=0.46, x=0.29 * x, y=1.1, seg=10, color=shirt, rough=0.85),
+            part("sphere", "arm_" + side, shoulder, r=0.068, x=0.29 * x, y=0.79, seg=10, color=skin, rough=0.7),
+        ]
+    neck = [0, 1.46, 0]
+    parts += [
+        part("cylinder", "body", None, rt=0.19, rb=0.18, h=0.16, y=0.82, seg=14, color=pants, rough=0.9),
+        part("capsule", "torso", None, True, r=0.2, h=0.36, y=1.12, sz=0.72, seg=14, color=shirt, rough=0.85),
+        part("sphere", "head", neck, r=0.18, y=1.57, seg=18, color=skin, rough=0.65),
+        part("sphere", "head", neck, r=0.185, y=1.65, z=0.04, sy=0.78, seg=18, color=hair, rough=0.8),
+        part("sphere", "head", neck, r=0.17, y=1.56, z=0.065, sy=0.9, seg=16, color=hair, rough=0.8),
+        part("sphere", "head", neck, r=0.026, x=-0.065, y=1.59, z=-0.163, seg=8, color="#1d1d24", rough=0.3),
+        part("sphere", "head", neck, r=0.026, x=0.065, y=1.59, z=-0.163, seg=8, color="#1d1d24", rough=0.3),
+    ]
+    return parts
 
 
 def held_parts(name):
@@ -2403,6 +2565,7 @@ class Thing:
         ("spin", "spin"), ("look_at", "look_at"), ("speed", "speed"), ("shake", "shake"), ("fall", "fall"),
         ("fallen", "is_fallen"), ("grow", "grow"), ("regrow", "regrow"), ("swing", "swing"), ("size", "size"),
         ("scale", "set_scale"),
+        ("animate", "animate"),
         ("color", "set_color"), ("glow", "glow"), ("hide", "hide"), ("show", "show"), ("remove", "remove"),
         ("solid", "solid"), ("touches", "touches"), ("distance", "distance"), ("label", "label"),
         ("clicked", "clicked"), ("set", "set"), ("get", "get"),
@@ -2631,6 +2794,17 @@ class Thing:
         self.anims = [a for a in self.anims if a[0] != "swing"]
         self.anims.append(["swing", 0.0, 0.32])
         self.busy()
+        return self.native
+
+    def animate(self, how="auto"):
+        """How it moves by itself, in the page (anim.js): a person can "walk", "idle" (stand breathing) or "wave";
+        "auto" is the model's own way (a person walks while it moves, trees sway, coins spin); "none" holds it still."""
+        name = self.rt.text(how).strip().lower()
+        if name not in ANIMATIONS:
+            raise self.rt.error(animation_problem(name))
+        if name in ("walk", "idle", "wave") and self.kind not in ("person", "player"):
+            raise self.rt.error(f"Only a person can {name}: world:spawn(\"person\") makes one. This is a {self.kind}.")
+        self.send(self.node, anim=name)
         return self.native
 
     def stand_up(self):
@@ -2876,11 +3050,8 @@ class Player:
                                       lambda nested=False: f"<player at {tidy(self.x)}, {tidy(self.y)}, {tidy(self.z)}>")
         self.native.tg = self
         if mode == "third person":
-            self.body = Thing(world, "player", 0, 0, 0, (0.6, self.TALL, 0.6), [
-                ("capsule", {"r": 0.3, "h": 0.75, "y": 0.72, "seg": 10, "color": "#3574f0", "flat": True, "shadow": True}, True),
-                ("sphere", {"r": 0.22, "y": 1.48, "seg": 12, "color": "#f1c9a5", "shadow": True}, False),
-                ("box", {"w": 0.28, "h": 0.08, "d": 0.06, "y": 1.52, "z": -0.2, "color": "#2b2b2b"}, False),
-            ], pick=False)
+            parts = [(t, {**p, "shadow": True}, main) for t, p, main in person_parts("#3574f0", "#f1c9a5", "#5a3a22", "#2f3e5c")]
+            self.body = Thing(world, "player", 0, 0, 0, (0.6, self.TALL, 0.6), parts, pick=False)
             self.body.solid_ = False
             world.things.pop(self.body, None)
         hud = world.hud()
