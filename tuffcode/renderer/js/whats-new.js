@@ -4,7 +4,7 @@
 (() => {
   const NOTES = {
     '1.2.0': {
-      images: [],
+      images: ['1.png'],
       notes: `### Real physics in games
 - **Things fall, bounce, tumble and get pushed.** \`crate:physics()\` turns it on, with Rapier, a real physics engine. Tune it with \`crate:mass(2)\`, \`crate:bounce(0.6)\` and \`crate:friction(0.4)\`.
 - **Kick things around:** \`push\`, \`spin\` and \`velocity\`, or \`world:explode(x, y, z, strength, radius)\` to blast things apart.
