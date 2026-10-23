@@ -547,6 +547,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
         const modern = /^\s*(import|mention)\s+atgui\b/m.test(src) || (games && /:\s*(panel|screen|start_screen|main_menu)\b/.test(src));
         const names = Object.keys(window.TUFF_METHOD_DOCS).filter((m) => {
           const doc = window.TUFF_METHOD_DOCS[m][1] || '';
+          if (/^In tgame:/.test(doc)) return games || modern;  // a name both have (align, animate...): in either's files
           return (games || !/^tgame\b/.test(doc)) && (modern || !/^atgui\b/.test(doc));
         });
         const methods = new Set([...names, 'clear', 'upper', 'lower', 'trim', 'has', 'add', 'pop']);
