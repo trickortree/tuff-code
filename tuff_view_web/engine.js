@@ -2011,7 +2011,7 @@ function mods(e) {
   return { shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey, meta: e.metaKey };
 }
 
-addEventListener('pointerdown', (e) => emit('mousedown', { ...target(e), button: e.button, ...mods(e) }));
+addEventListener('pointerdown', (e) => emit('mousedown', { ...target(e), button: e.button, ...mods(e), ...(e.tvLocks ? { locks: true } : null) }));
 addEventListener('pointerup', (e) => emit('mouseup', { ...target(e), button: e.button, ...mods(e) }));
 addEventListener('click', (e) => emit('click', { ...target(e), button: e.button, ...mods(e) }));
 addEventListener('dblclick', (e) => emit('dblclick', { ...target(e), button: e.button, ...mods(e) }));
@@ -2050,11 +2050,12 @@ addEventListener('resize', () => { resized = true; });
 addEventListener('blur', () => emit('blur', {}));
 addEventListener('focus', () => emit('focus', {}));
 // A scene with `clicklock` locks the pointer when it's clicked (for mouse look); the browser only allows that
-// inside the click itself, so it can't wait for Python. Escape unlocks it.
+// inside the click itself, so it can't wait for Python. Escape unlocks it. That click's mousedown has `locks: true`.
 addEventListener('pointerdown', (e) => {
   wakeSound();
   const n = e.target && e.target._tv !== undefined ? objs.get(e.target._tv) : null;
   if (n && n.kind === 'scene' && n.clicklock && document.pointerLockElement !== n.el) {
+    e.tvLocks = true;
     const p = n.el.requestPointerLock();
     if (p && p.catch) p.catch(() => {});
   }
