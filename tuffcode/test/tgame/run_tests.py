@@ -1579,6 +1579,12 @@ def t_editor(c):
     c.check(all(m in t["games"] for m in physics) and not any(m in t["plain"] for m in ("physics", "push", "ragdoll")),
             "a tgame file offers them after a ':', and a file without tgame doesn't", [m for m in physics if m not in t["games"]])
     c.check("In tgame:" in t["methods"]["animate"][1] and "In atgui:" in t["methods"]["animate"][1], ":animate's hover says what it does in tgame and in atgui", t["methods"]["animate"])
+    # The game kit's names, from the checker's own tables too (before and after tgame's tables list them).
+    kit = sorted({m for kind in tuff.KIT_INPUTS.values() for m in kind})
+    c.check(all(m in t["methods"] and "tgame" in t["methods"][m][1] for m in kit), f"the game kit's methods ({len(kit)}: slow_mo, health_bar, countdown, door, path...) have tgame hover docs",
+            [m for m in kit if m not in t["methods"] or "tgame" not in t["methods"][m][1]])
+    c.check(all(m in t["games"] for m in kit) and not any(m in t["plain"] for m in ("slow_mo", "minimap", "jump_pad", "can_grab")),
+            "a tgame file offers them after a ':', and a file without tgame doesn't", [m for m in kit if m not in t["games"]])
     c.check("textarea" in t["ui"] and "switch" in t["ui"] and "textarea" not in t["games"],
             "with a panel or screen in it, a tgame file offers atgui's widgets too (and only then)", [m for m in ("textarea", "switch") if m not in t["ui"]])
     games = [(label, text) for label, text in t["snippets"] if label.startswith("tgame")]
@@ -1789,6 +1795,120 @@ BAD = [
     ('w = tgame.world("x")\nhero = w:spawn("hut")\nhero:animate("dance")\n',
      'A character\'s animation can be "auto", "walk", "idle", "wave" or "none", not "dance".'),
     ('w = tgame.world("x")\nhero = w:spawn("hut")\nhero:animate "running"\n', 'not "running". Did you mean "walk"?'),
+    # The game kit: effects, the HUD, interaction and level pieces. Each maker and method's inputs, the weathers,
+    # corners and path modes (with "did you mean"), numbers that can't be right, colors, what each event gives
+    # its function, names people guess, and the 3D-only ones in a 2D game.
+    ('w = tgame.world("x")\nw:weather("rainy")\n', 'The weather can be "rain", "snow" or "none", not "rainy". Did you mean "rain"?'),
+    ('w = tgame.world("x")\nw:weather "fog"\n', 'The weather can be "rain", "snow" or "none", not "fog".'),
+    ('w = tgame.world("x")\nw:weather("snow", 5)\n',
+     'w:weather needs a strength from 0 to 2 after the kind (1 is normal), like w:weather("snow", 1.5).'),
+    ('w = tgame.world("x")\nw:weather()\n',
+     'w:weather got the wrong number of inputs (0). It takes "rain", "snow" or "none", then how strong it is (0 to 2), like: w:weather("rain")'),
+    ('w = tgame.world("x")\nw:shake(3)\n', 'w:shake needs a number from 0 to 2 (1 is a good shake), like w:shake(0.5).'),
+    ('w = tgame.world("x")\nw:slow_mo(0)\n',
+     'w:slow_mo needs a number above 0 (0.3 is 30% of the speed, 1 is normal again), like w:slow_mo(0.3, 2).'),
+    ('w = tgame.world("x")\nw:slow_mo()\n',
+     'w:slow_mo got the wrong number of inputs (0). It takes how fast everything goes (0.3 is 30%), then for how many seconds, like: w:slow_mo(0.3, 2)'),
+    ('w = tgame.world("x")\nw:slowmo(0.3)\n', "A world doesn't have :slowmo. Use :slow_mo instead."),
+    ('game = tgame.window("x")\ngame:slow_motion(0.3)\n', "A game doesn't have :slow_motion. Use :slow_mo instead."),
+    ('w = tgame.world("x")\nw:screen_shake(1)\n', "A world doesn't have :screen_shake. Use :shake instead."),
+    ('w = tgame.world("x")\nw:pop_text("+10", 0, 2)\n',
+     'w:pop_text got the wrong number of inputs (3). It takes the text, x, y and z, then a color and a size, like: w:pop_text("+10", 0, 2, 0)'),
+    ('w = tgame.world("x")\nw:pop_text("+10", 0, 2, 0, "glod")\n', "'glod' isn't a color tgame knows."),
+    ('w = tgame.world("x")\nc = w:spawn("coin")\nw:pop_text("+10", c:spot(), "glod")\n', "'glod' isn't a color tgame knows."),
+    ('game = tgame.window("x")\ngame:pop_text("+10", 400, 300, "glod")\n', "'glod' isn't a color tgame knows."),
+    ('game = tgame.window("x")\ngame:pop_text("+10", 400)\n',
+     'game:pop_text got the wrong number of inputs (2). It takes the text, x and y, then a color and a size, like: game:pop_text("+10", 400, 300)'),
+    ('w = tgame.world("x")\nw:floating_text("+10", 0, 2, 0)\n', "A world doesn't have :floating_text. Use :pop_text instead."),
+    ('w = tgame.world("x")\nw:time_of_day(25)\n', 'w:time_of_day needs an hour from 0 to 24 (18 is 6 pm), like w:time_of_day(18).'),
+    ('w = tgame.world("x")\nw:day_cycle(-5)\n',
+     'w:day_cycle needs how many seconds a day takes, 0 or more (0 stops it), like w:day_cycle(120).'),
+    ('w = tgame.world("x")\nw:day_night_cycle(120)\n', "A world doesn't have :day_night_cycle. Use :day_cycle instead."),
+    ('game = tgame.window("x")\ngame:weather("rain")\n',
+     'The weather needs a 3D world. Make the game with tgame.world, like: world = tgame.world("My Game"), then world:weather("rain")'),
+    ('game = tgame.window("x")\ngame:minimap()\n',
+     'The minimap needs a 3D world. Make the game with tgame.world, like: world = tgame.world("My Game"), then map = world:minimap()'),
+    ('game = tgame.window("x")\ngame:door(1, 2, 3)\n', 'A door needs a 3D world.'),
+    ('game = tgame.window("x")\ngame:jump_pad(1, 2, 3)\n', 'A jump pad needs a 3D world.'),
+    ('w = tgame.world("x")\ne = w:spawn("person")\ne:health_bar(0)\n',
+     'e:health_bar needs a number above 0: the most health it can have, like e:health_bar(100).'),
+    ('w = tgame.world("x")\ne = w:spawn("person")\ne:health_bar()\n',
+     'e:health_bar got the wrong number of inputs (0). It takes the most health it can have, like: e:health_bar(100)'),
+    ('w = tgame.world("x")\ne = w:spawn("person")\ne:take_damage(10)\n', "An object doesn't have :take_damage. Use :hurt instead."),
+    ('w = tgame.world("x")\ne = w:spawn("person")\ne:hp()\n', "An object doesn't have :hp. Use :health instead."),
+    ('w = tgame.world("x")\ne = w:spawn("person")\ne:health(5)\n',
+     'e:health got the wrong number of inputs (1). It takes nothing: it gives back how much health it has, like: say e:health()'),
+    ('w = tgame.world("x")\ne = w:spawn("person")\ne:on_death(gone)\nfunc gone(who):\n    nil\n',
+     'gone() needs 1 input, but e:on_death gives it no inputs. Write it as: func gone():'),
+    ('w = tgame.world("x")\ne = w:spawn("person")\ne:on_death(gone())\nfunc gone():\n    nil\n',
+     "Pass the function's name without brackets: gone, not gone()."),
+    ('w = tgame.world("x")\ne = w:spawn("person")\ne:on_die(gone)\nfunc gone():\n    nil\n',
+     "An object doesn't have :on_die. Use :on_death instead."),
+    ('game = tgame.window("x")\ns = game:box(1, 2, 3, 4)\ns:healthbar(10)\n', "A sprite doesn't have :healthbar. Use :health_bar instead."),
+    ('game = tgame.window("x")\nclock = game:countdown(60, done)\nfunc done(t):\n    nil\n',
+     'done() needs 1 input, but game:countdown gives it no inputs. Write it as: func done():'),
+    ('game = tgame.window("x")\nclock = game:countdown()\n',
+     'game:countdown got the wrong number of inputs (0). It takes how many seconds, then the name of a function to run at 0, like: clock = game:countdown(60, times_up)'),
+    ('game = tgame.window("x")\nclock = game:timer(60)\n', "A game doesn't have :timer. Use :countdown instead."),
+    ('game = tgame.window("x")\nclock = game:countdown(60)\nclock:time_left()\n',
+     "A countdown doesn't have :time_left. Use :left instead."),
+    ('game = tgame.window("x")\nclock = game:countdown(60)\nclock:add()\n',
+     'clock:add got the wrong number of inputs (0). It takes how many seconds to add, like: clock:add(5)'),
+    ('game = tgame.window("x")\nclock = game:countdown(60)\nclock:explode()\n', "A countdown doesn't have :explode."),
+    ('w = tgame.world("x")\nc = w:spawn("chest")\na = w:arrow_to()\n',
+     'w:arrow_to got the wrong number of inputs (0). It takes the thing to point at, like: arrow = w:arrow_to(chest)'),
+    ('w = tgame.world("x")\nc = w:spawn("chest")\na = w:waypoint(c)\n', "A world doesn't have :waypoint. Use :arrow_to instead."),
+    ('w = tgame.world("x")\nc = w:spawn("chest")\na = w:arrow_to(c)\na:remove()\n', "An arrow doesn't have :remove. Use :hide instead."),
+    ('w = tgame.world("x")\nm = w:minimap(180, "top middle")\n',
+     'The minimap can go in the "top right", "top left", "bottom left" or "bottom right" corner, not "top middle".'),
+    ('w = tgame.world("x")\nm = w:minimap(180, "upper left")\n', 'not "upper left". Did you mean "top left"?'),
+    ('w = tgame.world("x")\nm = w:minimap("top left")\n',
+     'w:minimap takes its size first, then the corner, like: map = w:minimap(180, "top left")'),
+    ('w = tgame.world("x")\nm = w:minimap(180, "top left", 3)\n', 'w:minimap got the wrong number of inputs (3).'),
+    ('w = tgame.world("x")\nm = w:radar()\n', "A world doesn't have :radar. Use :minimap instead."),
+    ('w = tgame.world("x")\nm = w:minimap()\nc = w:spawn("coin")\nm:add(c)\n', "A minimap doesn't have :add. Use :mark instead."),
+    ('w = tgame.world("x")\nm = w:minimap()\nc = w:spawn("coin")\nm:mark(c, "glod")\n', "'glod' isn't a color tgame knows."),
+    ('w = tgame.world("x")\nm = w:minimap()\nm:zoom(0)\n', 'm:zoom needs a number above 0 (2 shows twice as close), like m:zoom(2).'),
+    ('w = tgame.world("x")\np = w:player()\np:grab()\n', "A player doesn't have :grab. Use :can_grab instead."),
+    ('w = tgame.world("x")\np = w:player()\np:can_grab(true, 3)\n',
+     'p:can_grab got the wrong number of inputs (2). It takes nothing, or false to turn grabbing off, like: p:can_grab()'),
+    ('w = tgame.world("x")\np = w:player()\np:held_item()\n', "A player doesn't have :held_item. Use :holding instead."),
+    ('w = tgame.world("x")\nn = w:spawn("person")\nn:speak("Hi")\n', "An object doesn't have :speak. Use :say instead."),
+    ('w = tgame.world("x")\nn = w:spawn("person")\nn:say()\n',
+     'n:say got the wrong number of inputs (0). It takes the words, then how many seconds the bubble stays (0 keeps it), like: n:say("Hi! Find my lost cat.")'),
+    ('w = tgame.world("x")\nn = w:spawn("person")\nn:on_talk(talk)\nfunc talk(a, b):\n    nil\n',
+     'talk() needs 2 inputs, but n:on_talk gives it no inputs. Write it as: func talk():'),
+    ('w = tgame.world("x")\nn = w:spawn("person")\nn:on_interact(talk)\nfunc talk():\n    nil\n',
+     "An object doesn't have :on_interact. Use :on_talk instead."),
+    ('w = tgame.world("x")\nd = w:door(0, 0)\n',
+     'w:door got the wrong number of inputs (2). It takes x, y and z, then a color, like: door = w:door(0, 0, -5)'),
+    ('w = tgame.world("x")\nd = w:door(0, 0, -5, "glod")\n', "'glod' isn't a color tgame knows."),
+    ('w = tgame.world("x")\nd = w:door([0, 0, -5], "glod")\n', "'glod' isn't a color tgame knows."),
+    ('w = tgame.world("x")\nd = w:gate(0, 0, -5)\n', "A world doesn't have :gate. Use :door instead."),
+    ('w = tgame.world("x")\nd = w:door(0, 0, -5)\nd:shut()\n', "A door doesn't have :shut. Use :close instead."),
+    ('w = tgame.world("x")\nd = w:door(0, 0, -5)\nd:needs("key")\n',
+     'd:needs takes the key itself, not its name, like: key = world:spawn("key", 3, 0, 3), then d:needs(key)'),
+    ('w = tgame.world("x")\nd = w:door(0, 0, -5)\nk = w:spawn("key")\nd:unlock_with(k)\n',
+     "A door doesn't have :unlock_with. Use :needs instead."),
+    ('w = tgame.world("x")\nd = w:door(0, 0, -5)\nd:open(1)\n',
+     'd:open got the wrong number of inputs (1). It takes nothing, like: d:open()'),
+    ('w = tgame.world("x")\nd = w:door(0, 0, -5)\nd:fly()\n', "A door doesn't have :fly."),
+    ('w = tgame.world("x")\np = w:jump_pad(0, 0)\n',
+     'w:jump_pad got the wrong number of inputs (2). It takes x, y and z, then how hard it launches things up (m/s), like: pad = w:jump_pad(0, 0, 5, 15)'),
+    ('w = tgame.world("x")\np = w:jump_pad(0, 0, 5, 0)\n',
+     'w:jump_pad needs how hard it launches things, a number above 0, like w:jump_pad(0, 0, 5, 15).'),
+    ('w = tgame.world("x")\np = w:jump_pad([0, 0, 5], -3)\n', 'w:jump_pad needs how hard it launches things, a number above 0'),
+    ('w = tgame.world("x")\np = w:trampoline(0, 0, 5)\n', "A world doesn't have :trampoline. Use :jump_pad instead."),
+    ('w = tgame.world("x")\np = w:boost_pad(0, 0, 10, 0)\n',
+     'w:boost_pad needs how hard it boosts, a number above 0, like w:boost_pad(0, 0, 10, 20).'),
+    ('w = tgame.world("x")\np = w:speed_pad(0, 0, 10)\n', "A world doesn't have :speed_pad. Use :boost_pad instead."),
+    ('w = tgame.world("x")\nlift = w:box(0, 2, 0, 4)\nlift:path([[0, 2, 0], [10, 2, 0]], 3, "around")\n',
+     'lift:path\'s third input can be "loop" or "ping-pong" (there and back, the default), not "around". Did you mean "loop"?'),
+    ('w = tgame.world("x")\nlift = w:box(0, 2, 0, 4)\nlift:waypoints([[0, 2, 0], [10, 2, 0]], 3)\n',
+     "An object doesn't have :waypoints. Use :path instead."),
+    ('w = tgame.world("x")\nlift = w:box(0, 2, 0, 4)\nlift:path([[0, 2, 0]], 3, "loop", 4)\n',
+     'lift:path got the wrong number of inputs (4).'),
+    ('w = tgame.world("x")\nk = w:spawn("kee")\n', 'tgame doesn\'t have a "kee" to spawn.'),
 ]
 
 
@@ -1857,6 +1977,30 @@ GOOD_SNIPPETS = [
     'ball:bounce(0.8)\nball:push(200, -300)\nball:push([200, -300])\nball:velocity(0, -200)\nsay ball:velocity()\n'
     'ball:on_hit(boing)\ngame:explode(400, 300, 600, 200)\nfunc boing(other, strength):\n    game:sound "pop"\n'
     'game:every_frame step\nfunc step(dt):\n    nil\n',
+    # The game kit in 3D: every maker and method in each way it's written (a spot for x, y and z, colors, the
+    # weathers and corners, "loop"), a key, a door that needs it, on_death, on_talk and the countdown's function.
+    'world = tgame.world("Kit", 960, 600)\nland = world:terrain(160)\nworld:slow_mo(0.3, 2)\nworld:slow_mo(1)\n'
+    'world:shake(0.5)\nworld:shake(1, 1.5)\nworld:pop_text("+10", 0, 2, 0)\nworld:pop_text("+10", 0, 2, 0, "gold", 2)\n'
+    'world:weather("rain")\nworld:weather("Snow", 1.5)\nworld:weather "none"\nworld:day_cycle(120)\nworld:day_cycle(0)\n'
+    'world:time_of_day(18)\nenemy = world:spawn("person", 4, 0, 2)\nenemy:health_bar(100)\nenemy:hurt(10)\nenemy:heal(5)\n'
+    'say enemy:health() + 1\nenemy:on_death(gone)\nclock = world:countdown(60, times_up)\nclock:add(5)\nclock:stop()\n'
+    'say clock:left() + 1\nchest = world:spawn("chest", 10, 0, 10)\narrow = world:arrow_to(chest)\narrow:hide()\n'
+    'arrow:show()\nworld:arrow_to(enemy)\nmap = world:minimap()\nmap = world:minimap(180, "top left")\n'
+    'map:mark(chest, "gold")\nmap:unmark(chest)\nmap:zoom(2)\nplayer = world:player()\nplayer:can_grab()\n'
+    'player:can_grab(false)\nheld = player:holding()\nnpc = world:spawn("person", 4, 0, 2)\n'
+    'npc:say("Hi! Find my lost cat.")\nnpc:say("Bye", 0)\nnpc:on_talk(talk)\nworld:pop_text("+1", npc:spot(), "gold")\n'
+    'door = world:door(0, 0, -5)\ndoor2 = world:door(0, 0, -15, "wood")\ndoor:open()\ndoor:close()\ndoor:turn(90)\n'
+    'key = world:spawn("key", 3, 0, 3)\ndoor:needs(key)\ndoor:lock()\ndoor:unlock()\ndoor:on_talk(talk)\n'
+    'pad = world:jump_pad(0, 0, 5, 15)\nboost = world:boost_pad(0, 0, 10, 20)\nboost:turn(90)\n'
+    'lift = world:box(0, 2, 0, [4, 0.4, 4], "stone")\nlift:path([[0, 2, 0], [10, 2, 0], [10, 6, 0]], 3)\n'
+    'lift:path([[0, 2, 0], [10, 2, 0]], 3, "loop")\nlift:path()\npad2 = world:jump_pad([0, 0, 8], 12)\nfunc gone():\n'
+    '    say "gone"\nfunc times_up():\n    world:pause("Time\'s up!")\nfunc talk():\n    npc:say("Thanks!")\n'
+    'while world:open():\n    world:frame()\n',
+    # And in 2D: slow_mo, shake, pop_text (a spot for x and y), a sprite's health bar and a countdown.
+    'game = tgame.window("Kit 2D", 800, 600)\nhero = game:box(400, 300, 40, 40, "blue")\nhero:health_bar(3)\nhero:hurt(1)\n'
+    'hero:on_death(lost)\ngame:slow_mo(0.5, 1)\ngame:shake(1)\ngame:pop_text("+10", 400, 300)\n'
+    'game:pop_text("Ouch", hero:x(), hero:y(), "red", 30)\ngame:pop_text("Ouch", hero:spot(), "red")\n'
+    'clock = game:countdown(30, lost)\nfunc lost():\n    game:pause("Game over")\n',
 ]
 
 
@@ -1899,6 +2043,23 @@ def t_checker(c):
             f.write("mention tgame\n" + src)
         p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
         c.check(p.returncode == 1 and want in p.stderr, f"--check catches: {want}", p.stderr[:400])
+    # The game kit once tgame has it itself: its own names win (here a countdown it calls a "timer", with a :pause of
+    # its own), the kit's checks still run on them, and "key" is a kit model either way.
+    import tuff
+    import tuff_tgame
+
+    def pause():
+        return None
+
+    own = tuff_tgame.tables()
+    landed = {**own, "kinds": {**own["kinds"], "world": {**own["kinds"]["world"], "countdown": lambda seconds, fn=None: None},
+                               "timer": {"pause": pause}},
+              "gives": {**own["gives"], "world": {**own["gives"]["world"], "countdown": "timer"}}}
+    tg = tuff.with_gamekit(landed, tuff_tgame)
+    c.check(tg["gives"]["world"]["countdown"] == "timer" and {"pause", "add", "stop", "left"} <= set(tg["kinds"]["timer"])
+            and "timer" in tg["kit_kinds"] and tg["handlers"]["timer"] == {} and tg["handlers"]["world"]["countdown"][0] == 1,
+            "with_gamekit keeps tgame's own names (a countdown it calls a timer) and fills in the rest", sorted(tg["kinds"]["timer"]))
+    c.check(tg["check"]("world", "spawn", 0, "key") is None and tg["check"]("world", "spawn", 0, "kee"), 'world:spawn("key") is fine before tgame lists it', None)
 
 
 # ---------------------------------------------------------------- performance

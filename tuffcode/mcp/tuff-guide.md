@@ -603,12 +603,102 @@ game:on_key("space", jump)
 - **Tips:** don't move a physics thing every frame with `:move_to`, `:move` or `:glide`: that fights the physics, and it jumps around. Push it or set its velocity instead. One `:move_to` is fine, like putting it back after it fell off the edge. Tuff Engine's preview doesn't simulate: press Play to see things fall.
 - **Animation:** character models walk with swinging arms and legs when they move and breathe gently when they stand still, trees and bushes sway in the wind, water ripples and coins spin and bob, all by themselves. `thing:animate("wave")` picks what a character does: `"walk"`, `"idle"`, `"wave"` or `"none"`.
 
+#### Game kit
+Ready-made pieces that make a game feel finished: **effects** (slow motion, a shaking camera, floating text, rain and snow, day and night), the **HUD** (health bars, a countdown, an arrow to a thing, a minimap), **interaction** (picking things up, people who talk, doors and keys) and **level pieces** (jump pads, boost pads, moving platforms). Each is one line, and each works without physics turned on.
+```tuff
+mention tgame
+
+world = tgame.world("Treasure Hunt")
+world:sky "day"
+land = world:terrain(120)
+land:hill(20, -10, 18, 5)
+world:weather("rain", 0.5)                # "rain", "snow" or "none", then how strong (0 to 2)
+world:day_cycle(180)                      # morning to night and back every 3 minutes
+player = world:player("third person")
+player:can_grab()                         # E picks up the thing you look at, a click throws it
+map = world:minimap()                     # a round map in the top right
+
+guide = world:spawn("person", 4, 0, -4)
+guide:say("My treasure is behind that door. Find the key!")
+guide:on_talk(talk)                       # walk up to them and press E
+key = world:spawn("key", -10, 0, -14)     # walking into it picks it up
+map:mark(key, "gold")
+arrow = world:arrow_to(key)               # an arrow at the screen's edge, with how far it is
+door = world:door(0, 0, -20, "wood")      # it swings open when you walk into it
+door:needs(key)                           # locked until you have the key
+chest = world:spawn("chest", 0, 0, -26)
+
+guard = world:spawn("person", -6, 0, -8)
+guard:health_bar(3)                       # a bar over it, full at 3
+guard:clicked hit
+guard:on_death(beaten)
+
+pad = world:jump_pad(12, 0, -4, 14)       # launches you up, 14 m/s
+boost = world:boost_pad(-4, 0, 6, 20)     # shoots you forward the way it faces
+boost:turn(180)
+lift = world:box(-16, 0.5, -4, [4, 0.4, 4], "stone")
+lift:path([[-16, 0.5, -4], [-16, 5, -4], [-26, 5, -4]], 2)   # there and back at 2 m/s, and you ride it
+crate = world:box(2, 0, 2, 1, "wood"):physics()             # something to grab and throw
+
+coins = world:group()
+for spot in [[6, 0, 6], [-8, 0, 2], [-26, 5, -4]]:
+    coins:add(world:spawn("coin", spot))
+clock = world:countdown(90, times_up)     # top right, red under 10 s
+found = false
+
+func talk():
+    guide:say("The key is by the big rock. Watch out for the guard!", 5)
+
+func hit(thing):
+    if thing:distance(player) < 4:
+        guard:hurt(1)                     # the bar shrinks and flashes
+        world:pop_text("-1", guard:spot(), "red")
+
+func beaten():
+    world:pop_text("Beaten!", guard:spot(), "gold")
+    guard:hide()
+
+func times_up():
+    world:pause("Out of time!")
+
+func step(dt):
+    got = player:touches(coins)
+    if got:
+        world:pop_text("+5 s", got:spot(), "gold")
+        coins:remove(got)
+        got:remove()
+        clock:add(5)
+    if not found and player:touches(chest):
+        found = true
+        clock:stop()
+        world:slow_mo(0.3, 2)             # everything at 30% for 2 seconds
+        world:shake(0.6)
+        world:pop_text("Treasure!", chest:spot(), "gold", 2)
+        world:arrow_to(chest)
+
+world:every_frame step
+
+while world:open():
+    world:frame()
+```
+- **Effects:** `world:slow_mo(0.3, 2)` runs everything (the game clock, things that move, physics, animation) at 30% for 2 seconds, then eases back, and `world:slow_mo(1)` ends it. `world:shake(0.5)` shakes the camera (0 to 2) for a moment, `world:shake(1, 1.5)` for 1.5 seconds. `world:pop_text("+10", x, y, z)` floats text up from a spot (a spot works too: `coin:spot()`), then fades; a color and a size come after: `world:pop_text("+10", coin:spot(), "gold", 2)`. 2D games have `game:slow_mo`, `game:shake` and `game:pop_text("+10", x, y, "gold", 30)` too.
+- **Weather and time (3D):** `world:weather("rain")` (falling streaks, a darker sky, thicker fog, wet ground), `"snow"` (drifting flakes, a paler sky) or `"none"`, then how strong it is from 0 to 2: `world:weather("snow", 1.5)`. `world:day_cycle(120)` goes morning, noon, sunset, night (with stars), dawn and back over 120 seconds, and the sky, the sun, the light and the fog follow; `world:day_cycle(0)` stops it where it is, and `world:time_of_day(18)` jumps to 6 pm (0 to 24).
+- **Health bars:** `enemy:health_bar(100)` puts a bar over a sprite or an object (in 3D it faces the camera), full at 100. `enemy:hurt(10)` takes some off (it shrinks and flashes), `enemy:heal(5)` gives some back, `enemy:health()` is how much is left, and `enemy:on_death(gone)` runs `func gone():` once, when it reaches 0.
+- **A countdown:** `clock = game:countdown(60, times_up)` shows a timer in the top right that ticks down, turns red under 10 seconds and runs `func times_up():` at 0. `clock:add(5)` adds seconds, `clock:stop()` stops it, and `clock:left()` is how many seconds are left. It works in 2D and 3D, and pauses with the game.
+- **Finding things (3D):** `arrow = world:arrow_to(chest)` is an arrow at the edge of the screen that points at a thing, with how far it is ("24 m"); when the thing is in view it sits over it. `arrow:hide()`, `arrow:show()`, and `world:arrow_to(other)` points it at something else. `map = world:minimap()` is a round map of the land and its water with the player as an arrow; its size (180 pixels) and a corner are optional: `world:minimap(200, "top left")` (`"top right"`, `"top left"`, `"bottom left"` or `"bottom right"`). `map:mark(coin, "gold")` adds a dot that follows a thing, `map:unmark(coin)` takes it off, and `map:zoom(2)` shows twice as close.
+- **Picking things up (3D):** `player:can_grab()` lets E pick up the physics thing the player is looking at (within 3 m): it floats in front of them, a click throws it and E again drops it. `player:holding()` is the thing (or nil), and `player:can_grab(false)` turns it off.
+- **People who talk (3D):** `npc = world:spawn("person", 4, 0, 2)`, then `npc:say("Hi!")` shows a speech bubble over it for 4 seconds (a second input is how many, 0 keeps it). `npc:on_talk(talk)` runs `func talk():` when the player is within 3 m and presses E ("E: Talk" shows).
+- **Doors and keys (3D):** `door = world:door(x, y, z)` is a door in a frame (a color is optional: `"wood"`) that swings open when the player walks into it or presses E near it, and closes after a while. `door:open()`, `door:close()` and `door:turn(90)`. `key = world:spawn("key", 3, 0, 3)` is a small gold key that spins; `door:needs(key)` locks the door until the player has walked into the key (it disappears), and a locked door shows "Locked!" and the key's name. `door:lock()` and `door:unlock()` too. E talks to the nearest person first, then opens a door, then grabs.
+- **Level pieces (3D):** `world:jump_pad(x, y, z, 15)` is a glowing pad that launches the player (and physics things) up at 15 m/s. `boost = world:boost_pad(x, y, z, 20)` shoots the player forward the way it faces, and `boost:turn(90)` aims it. Any object moves along spots with `lift:path([[0, 2, 0], [10, 2, 0], [10, 6, 0]], 3)`: there and back at 3 m/s, or round and round with `"loop"` as a third input. The player rides it (and physics things do too), and `lift:path()` stops it.
+- **Tips:** y is the height above the land here too, and a paused game pauses all of these. Make a door, a pad, a key or a person with one top-level line so Tuff Engine can show it, and keep `:say` and `:path` lines right after the thing.
+
 #### Games Tuff Engine can edit
 TuffCode's Tuff Engine tab (`Ctrl+Shift+G`) builds tgame games by clicking and dragging, and writes everything as normal Tuff code. It can only show and edit simple top-level lines, so when you change a game someone is building in it:
 - Make each new thing with **one top-level line and plain numbers**, like `coin = game:circle(200, 200, 14, "gold")` or `tree = game:spawn("tree", -5, 0, -10)`. Things made in a loop, a function or a chained line (`game:spawn("sign"):label "Hi"`) still work, but show as "Made by your code" and can't be dragged.
 - Put new lines **above** any `while game:open():` loop.
 - Make the land with one line (`land = game:terrain(200)`) and change it with **one top-level line per edit**, like `land:hill(20, -10, 30, 8)`, so Tuff Engine can list them under the land, change their numbers and remove them.
 - Give a thing its physics with **one top-level line each, right after it**, like `crate:physics()`, `crate:mass(2)`, `crate:bounce(0.6)` or `crate:friction(0.4)`, so its Physics section in Tuff Engine shows and changes them.
+- Make a door, a key, a jump pad, a boost pad or a talking person with **one top-level line**, like `door = game:door(0, 0, -5)`, and put its `door:needs(key)`, `npc:say("Hi!")` or `lift:path(...)` line **right after it**, so Tuff Engine's 3D Add tab and its Objects list show them.
 - Add behaviour as a **func registered with one line**, like `game:every_frame coin_spin` or `coin:clicked coin_clicked`. Functions under a `# Tuff Engine:` comment were written by Tuff Engine, and it keeps that comment and `play_again` up to date as the game changes. Changing one is fine: Tuff Engine then shows it as the person's own code.
 
 ## App windows (tgui / mtgui)

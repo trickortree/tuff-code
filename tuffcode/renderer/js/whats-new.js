@@ -17,8 +17,31 @@
 - The 3D kit has more detail, softer shapes and nicer materials, plus new \`"person"\` and \`"chest"\` models.
 - Characters walk with swinging arms and legs and breathe while standing. Trees sway, water ripples, coins spin.
 
+### Juice
+- **Slow motion:** \`world:slow_mo(0.3, 2)\` runs everything at 30% for 2 seconds, then eases back. Perfect for a big win.
+- **Screen shake:** \`world:shake(0.5)\` shakes the camera for a moment. Try it when something explodes.
+- **Floating text:** \`world:pop_text("+10", x, y, z)\` floats up and fades, like points over a coin. 2D games get all three too.
+- **Rain and snow:** \`world:weather("rain")\` brings falling streaks, a darker sky and wet ground; \`"snow"\` brings drifting flakes.
+- **Day and night:** \`world:day_cycle(120)\` goes from morning to sunset to a starry night and back. \`world:time_of_day(18)\` jumps to 6 pm.
+
+### Game screens
+- **Health bars:** \`enemy:health_bar(100)\`, then \`enemy:hurt(10)\` and \`enemy:heal(5)\`. \`enemy:on_death(gone)\` runs when it reaches 0.
+- **A countdown:** \`game:countdown(60, times_up)\` ticks down in the corner and turns red at the end.
+- **An arrow to anything:** \`world:arrow_to(chest)\` points the way at the edge of the screen and says how far it is.
+- **A minimap:** \`world:minimap()\` shows the land and where you are. \`map:mark(coin, "gold")\` adds a dot.
+
+### Interaction
+- **Pick things up:** \`player:can_grab()\` lets E pick up the thing you look at. Click to throw it!
+- **People who talk:** \`npc:say("Hi!")\` shows a speech bubble, and \`npc:on_talk(talk)\` runs when you walk up and press E.
+- **Doors and keys:** \`world:door(0, 0, -5)\` swings open when you walk into it. \`door:needs(key)\` locks it until you find the new \`"key"\`.
+
+### Level pieces
+- **Jump pads and boost pads:** \`world:jump_pad(0, 0, 5, 15)\` launches you up, and \`world:boost_pad(0, 0, 10, 20)\` shoots you forward.
+- **Moving platforms:** \`lift:path([[0, 2, 0], [10, 2, 0]], 3)\` moves anything along the spots, and you ride it.
+
 ### Tuff Engine and AIs
 - A **Physics** section in the Inspector (Off, Falls or Fixed, with Mass, Bounce and Friction), and **Car** and **Ragdoll** tiles in Add.
+- **Level pieces** in Add: Door, Key, Jump pad, Boost pad, Moving platform and Talking person.
 - Claude, Codex, Antigravity and Pumice 1 know all of it, and the checker catches mistakes.`,
     },
   };

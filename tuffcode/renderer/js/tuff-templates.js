@@ -422,4 +422,71 @@ game:on_key("f", flip)
 game:on_key("b", boom)
 game:every_frame step
 ` },
+    { id: 'snow_course', name: 'Snowy obstacle course (game kit, 3D)', desc: 'A tgame 3D world built from the game kit: snow at sunset (world:weather, :time_of_day), a person who talks when you press E (:say, :on_talk), a jump pad, a boost pad and a moving platform (:path), a key that opens a locked door (:needs), a countdown, a minimap and an arrow to what to find next, a snowman with a health bar, and pop_text, slow_mo and shake when you win.', code: `mention tgame
+
+game = tgame.world("Snowy Course", 960, 600)
+game:sky "sunset"
+land = game:terrain(140, "snow")
+game:weather("snow", 1.2)                  # "rain", "snow" or "none", then how strong (0 to 2)
+game:time_of_day(17)                       # 5 pm: a low sun
+player = game:player("third person")
+map = game:minimap(160, "top left")        # the land and the player, in a corner
+
+coach = game:spawn("person", 0, 0, 4)
+coach:say("Press E to talk to me!", 0)     # 0 keeps the bubble up
+coach:on_talk(coach_talk)
+
+pad = game:jump_pad(0, 0, -6, 12)          # launches you up onto the ledge
+ledge = game:box(0, 0, -14, [8, 3, 6], "stone")
+boost = game:boost_pad(0, 3, -12, 22)      # shoots you along the ledge
+boost:turn(180)
+lift = game:box(0, 3, -22, [4, 0.4, 4], "wood")
+lift:path([[0, 3, -22], [12, 6, -22], [12, 6, -34]], 3, "loop")   # round and round, and you ride it
+key = game:spawn("key", 12, 6, -34)        # walk into it to pick it up
+map:mark(key, "gold")
+door = game:door(0, 0, -44, "wood")
+door:needs(key)                            # "Locked!" until you have the key
+goal = game:spawn("chest", 0, 0, -50)
+arrow = game:arrow_to(key)                 # an arrow at the screen's edge, with how far it is
+
+snowman = game:sphere(-6, 0, -2, 1.2, "snow")
+snowman:health_bar(3)                      # click it three times
+snowman:clicked melt
+snowman:on_death(melted)
+
+clock = game:countdown(120, times_up)      # top right; red under 10 seconds
+has_key = false
+done = false
+
+func coach_talk():
+    coach:say("Jump pad, boost pad, ride the lift, grab the key, open the door!", 6)
+
+func melt(thing):
+    snowman:hurt(1)
+    game:pop_text("-1", snowman:spot(), "red")
+
+func melted():
+    snowman:hide()
+    clock:add(10)
+    game:pop_text("+10 s", -6, 1, -2, "gold")
+
+func times_up():
+    game:pause("Out of time!")
+
+func step(dt):
+    if not has_key and player:distance(key) < 1.5:
+        has_key = true
+        game:pop_text("Got the key!", player:spot(), "gold")
+        map:unmark(key)
+        game:arrow_to(goal)                # the arrow points at the chest now
+    if not done and player:touches(goal):
+        done = true
+        clock:stop()
+        arrow:hide()
+        game:slow_mo(0.3, 2)               # everything at 30% for 2 seconds
+        game:shake(0.5)
+        game:pop_text("You made it!", goal:spot(), "gold", 2)
+
+game:every_frame step
+` },
 ];

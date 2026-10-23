@@ -137,6 +137,7 @@ export default async (t, ctx) => {
   check(await ev(`document.querySelector('#en-kind').textContent`) === '2D game 800×600', 'the bar says what it is: 2D game 800×600', await ev(`document.querySelector('#en-kind').textContent`));
   await t.shot('engine_2d_empty.png');
   check(!(await ev(`!!document.querySelector('.en-tile[data-tile="car"], .en-tile[data-tile="ragdoll"]')`)), "a 2D game's Add tab has no Car or Ragdoll (they need a 3D world)", null);
+  check(!(await ev(`!!document.querySelector('.en-tile[data-tile="door"], .en-tile[data-tile="jump_pad"], .en-tile[data-tile="platform"], .en-tile[data-tile="person"]')`)), "... and no Level pieces (doors, pads, platforms and people are 3D)", null);
 
   const versions = [];
   for (const id of ['player', 'coin', 'enemy', 'ball']) {
@@ -640,6 +641,65 @@ export default async (t, ctx) => {
   check(await mp() === withCar, 'one Ctrl+Z takes the ragdoll away', firstDiff(await mp(), withCar));
   const physBanner = (await dbg()).banner;
   if (physBanner) t.info(`the scene stops at the physics lines until tgame's runtime has them: ${physBanner.slice(0, 120)}`);
+
+  // ================================================================ the game kit: the 3D Add tab's Level pieces
+  // Door, Key (it locks the door: door:needs(key) after the key), Jump pad, Boost pad, Moving platform (a stone box and
+  // its lift:path line) and Talking person (a person and its npc:say line), each one undo step, and what they write
+  // passes tuff --check. Objects lists them, and a door's and a pad's Inspector has no Behaviours or Moves.
+  const kitFile = path.join(ctx.root, 'kit.tuf');
+  const kitStart = 'mention tgame\n\ngame = tgame.world("My World", 960, 600)\ngame:sky "day"\ngame:island(80)\n';
+  fs.writeFileSync(kitFile, kitStart);
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(kitFile)})`);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(kitFile)}`, 6000);
+  await settle(25000);
+  const mk = () => ev(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kitFile)})).getValue().replace(/\\r\\n/g, '\\n'))()`);
+  const mkNot = (was) => waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kitFile)})).getValue().replace(/\\r\\n/g, '\\n') !== ${JSON.stringify(was)})()`, 6000);
+  const mkIs = (want) => waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kitFile)})).getValue().replace(/\\r\\n/g, '\\n') === ${JSON.stringify(want)})()`, 6000);
+  await clickSel('.en-left .en-tabs button[data-tab="add"]');
+  const kitTiles = await ev(`(() => { const c = [...document.querySelectorAll('#en-add .sd-cat')].find((x) => x.textContent === 'Level pieces'); const g = c?.nextElementSibling; return g ? [...g.querySelectorAll('.en-tile')].map((b) => b.dataset.tile + ':' + b.textContent).join() : null; })()`);
+  check(kitTiles === 'door:Door,key:Key,jump_pad:Jump pad,boost_pad:Boost pad,platform:Moving platform,person:Talking person', "a 3D world's Add tab has Level pieces: Door, Key, Jump pad, Boost pad, Moving platform and Talking person", kitTiles);
+  const N = '-?[\\d.]+';
+  const kitSteps = [
+    ['door', `^door = game:door\\(${N}, 0, ${N}, "wood"\\)\\n$`, 'Door writes door = game:door(x, 0, z, "wood")'],
+    ['key', `^key = game:spawn\\("key", ${N}, 0, ${N}\\)\\ndoor:needs\\(key\\)\\n$`, 'Key writes key = game:spawn("key", x, 0, z), then door:needs(key): the door is locked until the player has it'],
+    ['jump_pad', `^pad = game:jump_pad\\(${N}, 0, ${N}, 15\\)\\n$`, 'Jump pad writes pad = game:jump_pad(x, 0, z, 15)'],
+    ['boost_pad', `^boost = game:boost_pad\\(${N}, 0, ${N}, 20\\)\\n$`, 'Boost pad writes boost = game:boost_pad(x, 0, z, 20)'],
+    ['platform', `^lift = game:box\\((${N}), 1, (${N}), \\[4, 0\\.4, 4\\], "stone"\\)\\nlift:path\\(\\[\\[\\1, 1, \\2\\], \\[${N}, 1, \\2\\]\\], 3\\)\\n$`, 'Moving platform writes a stone box, then lift:path([[x, 1, z], [x + 8, 1, z]], 3)'],
+    ['person', `^person = game:spawn\\("person", ${N}, 0, ${N}\\)\\nperson:say\\("Hi there!", 0\\)\\n$`, 'Talking person writes person = game:spawn("person", x, 0, z), then person:say("Hi there!", 0)'],
+  ];
+  let kitCode = kitStart;
+  for (const [tile, re, what] of kitSteps) {
+    await clickSel('.en-left .en-tabs button[data-tab="add"]');
+    await clickSel(`.en-tile[data-tile="${tile}"]`);
+    await mkNot(kitCode);
+    const now = await mk();
+    const added = now.slice(kitCode.length);
+    check(now.startsWith(kitCode) && new RegExp(re).test(added), what, added);
+    kitCode = now;
+    await settle(25000);
+  }
+  const kitObjects = await ev(`[...document.querySelectorAll('#en-objects .sd-layer')].map((r) => r.dataset.key).join()`);
+  check(['v:door', 'v:key', 'v:pad', 'v:boost', 'v:lift', 'v:person'].every((k) => kitObjects.split(',').includes(k)), 'Objects lists the door, the key, both pads, the platform and the person', kitObjects);
+  await ev(`window.TuffEngine.test.select('v:door')`);
+  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-sec-h')].some((h) => h.textContent === 'Look')`, 4000);
+  const doorSecs = await ev(`[...document.querySelectorAll('#en-inspector .pf-sec-h')].map((h) => h.textContent).join()`);
+  check(!/Behaviours|Moves/.test(doorSecs), "a door's Inspector has no Behaviours or Moves", doorSecs);
+  await ev(`window.TuffEngine.test.select('v:pad')`);
+  await waitFor(`[...document.querySelectorAll('#en-inspector .en-num span')].some((x) => x.textContent === 'Power')`, 4000);
+  const padPower = await ev(`(() => { const l = [...document.querySelectorAll('#en-inspector .en-num')].find((x) => x.querySelector('span')?.textContent === 'Power'); return l?.querySelector('input')?.value; })()`);
+  check(padPower === '15', "a jump pad's Inspector shows its Power (15)", padPower);
+  await t.shot('engine_level_pieces.png');
+  const kitCheck = path.join(ctx.tmp, 'kit_check.tuf');
+  fs.writeFileSync(kitCheck, kitCode);
+  check(/^OK/.test(ctx.tuffCheck(kitCheck).trim()), 'the level pieces the tiles wrote pass tuff --check', ctx.tuffCheck(kitCheck));
+  const beforePerson = kitCode.slice(0, kitCode.indexOf('person = '));
+  await ev(`document.querySelector('#en-stage').focus()`);
+  await t.key('z', CTRL);
+  await mkIs(beforePerson);
+  check(await mk() === beforePerson, 'one Ctrl+Z takes the talking person and its speech bubble away', firstDiff(await mk(), beforePerson));
+  const kitBanner = (await dbg()).banner;
+  if (kitBanner) t.info(`the scene stops at the level pieces until tgame's runtime has them: ${kitBanner.slice(0, 120)}`);
+  await settle(25000);
 
   // ================================================================ the land: the Terrain tab, its tools, Lighting, Hills and Lake
   // A world on an island: the Terrain tab offers to swap the island for land (one step), then the brush, a hill, a
