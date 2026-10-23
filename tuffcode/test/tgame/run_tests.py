@@ -1303,6 +1303,14 @@ def t_editor(c):
     c.check(all(m in t["methods"] and "tgame" in t["methods"][m][1] for m in ui), "game:panel, :screen, :start_screen and :shown have tgame hover docs",
             [m for m in ui if m not in t["methods"]])
     c.check(all(m in t["games"] for m in ui), "a tgame file offers them after a ':'", [m for m in ui if m not in t["games"]])
+    # The physics methods, from the checker's own tables (they're there before tgame's tables list them).
+    import tuff
+    physics = sorted({m for kind in tuff.PHYSICS_INPUTS.values() for m in kind})
+    c.check(all(m in t["methods"] and "tgame" in t["methods"][m][1] for m in physics), f"tgame's physics methods ({len(physics)}: physics, push, on_hit, car...) have tgame hover docs",
+            [m for m in physics if m not in t["methods"] or "tgame" not in t["methods"][m][1]])
+    c.check(all(m in t["games"] for m in physics) and not any(m in t["plain"] for m in ("physics", "push", "ragdoll")),
+            "a tgame file offers them after a ':', and a file without tgame doesn't", [m for m in physics if m not in t["games"]])
+    c.check("In tgame:" in t["methods"]["animate"][1] and "In atgui:" in t["methods"]["animate"][1], ":animate's hover says what it does in tgame and in atgui", t["methods"]["animate"])
     c.check("textarea" in t["ui"] and "switch" in t["ui"] and "textarea" not in t["games"],
             "with a panel or screen in it, a tgame file offers atgui's widgets too (and only then)", [m for m in ("textarea", "switch") if m not in t["ui"]])
     games = [(label, text) for label, text in t["snippets"] if label.startswith("tgame")]
@@ -1464,6 +1472,52 @@ BAD = [
     ('game = tgame.window("x")\nhud = game:hud()\nhud:button("Shop")\n', "A hud doesn't have :button. The HUD only draws."),
     ('game = tgame.window("x")\ngame:menu("Shop")\n', "A game doesn't have :menu. Use :screen instead."),
     ('w = tgame.world("x")\nw:title_screen("Go")\n', "A world doesn't have :title_screen. Use :start_screen instead."),
+    # Physics: the kinds of physics (with "did you mean"), each method's inputs, numbers that can't be right, names
+    # people guess, what on_hit gives its function, and a car or a ragdoll in a 2D game.
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1, "wood")\ncrate:physics("fixed")\n',
+     'A thing\'s physics can be "dynamic" (it falls and can be pushed), "static" (it stays where it is), "kinematic" (your code moves it) '
+     'or "off", not "fixed". Did you mean "static"?'),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1, "wood")\ncrate:physics "dynamc"\n', 'not "dynamc". Did you mean "dynamic"?'),
+    ('game = tgame.window("x")\nball = game:circle(1, 2, 3)\nball:physics("bouncy")\n', 'A thing\'s physics can be "dynamic"'),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1, "wood")\ncrate:physics("dynamic", 2)\n',
+     'crate:physics got the wrong number of inputs (2). It takes nothing, or the kind of physics, like: crate:physics() or crate:physics("static")'),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1, "wood")\ncrate:mass(0)\n', "crate:mass needs a number above 0, like crate:mass(2)."),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1, "wood")\ncrate:mass(-2)\n', "crate:mass needs a number above 0, like crate:mass(2)."),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1, "wood")\ncrate:mass "heavy"\n', "crate:mass needs a number above 0, like crate:mass(2)."),
+    ('w = tgame.world("x")\nball = w:sphere(0, 6, 0, 1)\nball:bounce(1.5)\n', "ball:bounce needs a number from 0 (no bounce) to 1 (it bounces right back up), like ball:bounce(0.6)."),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1)\ncrate:friction(-1)\n', "crate:friction needs a number from 0 (slippery, like ice) up, like crate:friction(0.4)."),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1)\ncrate:push(0, 5)\n',
+     "crate:push got the wrong number of inputs (2). It takes x, y and z: how hard to push it each way, like: crate:push(0, 5, -3)"),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1)\ncrate:spin(0, 2)\n', "crate:spin got the wrong number of inputs (2)."),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1)\ncrate:velocity(1, 2)\n',
+     "crate:velocity got the wrong number of inputs (2). It takes nothing (to read it), or x, y and z, like: crate:velocity(0, 0, -4)"),
+    ('game = tgame.window("x")\nball = game:circle(1, 2, 3):physics()\nball:push(1, 2, 3)\n',
+     "ball:push got the wrong number of inputs (3). It takes x and y: how hard to push it each way, like: ball:push(200, -300)"),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1)\ncrate:sleep 3\n', "crate:sleep doesn't take an input, so what comes after it was read as one."),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1)\ncrate:apply_impulse(0, 1, 0)\n', "An object doesn't have :apply_impulse. Use :push instead."),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1)\ncrate:restitution(0.5)\n', "An object doesn't have :restitution. Use :bounce instead."),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1)\ncrate:on_collision(hit)\nfunc hit(a, b):\n    nil\n', "An object doesn't have :on_collision. Use :on_hit instead."),
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1)\ncrate:on_hit(hit)\nfunc hit(a, b, n):\n    nil\n',
+     "hit() needs 3 inputs, but crate:on_hit gives it 2 inputs (the thing that hit it, and how hard). Write it as: func hit(a, b):"),
+    ('w = tgame.world("x")\np = w:player()\np:on_hit(hit())\nfunc hit(a, b):\n    nil\n', "Pass the function's name without brackets: hit, not hit()."),
+    ('w = tgame.world("x")\nw:physics()\n',
+     "A world doesn't have :physics. Each thing turns its own on, like crate:physics(), and w:gravity(-9.8) changes how strong gravity is."),
+    ('w = tgame.world("x")\nw:explosion(0, 0, 0, 10, 5)\n', "A world doesn't have :explosion. Use :explode instead."),
+    ('w = tgame.world("x")\nw:explode(0, 0)\n', "w:explode got the wrong number of inputs (2). It takes x, y and z, then how strong and how far"),
+    ('w = tgame.world("x")\nw:gravity()\n', "w:gravity got the wrong number of inputs (0)."),
+    ('w = tgame.world("x")\ncar = w:vehicle(0, 1, 10)\n', "A world doesn't have :vehicle. Use :car instead."),
+    ('w = tgame.world("x")\ncar = w:car(0, 1, 10, "red")\ncar:accelerate(2)\n', "A car doesn't have :accelerate. Use :engine instead."),
+    ('w = tgame.world("x")\ncar = w:car(0, 1, 10, "red")\ncar:speed(3)\n',
+     "car:speed got the wrong number of inputs (1). It takes nothing: it gives back how fast it goes, in km/h, like: say car:speed()"),
+    ('w = tgame.world("x")\ncar = w:car(0, 1, 10, "red")\ncar:honk()\n', "A car doesn't have :honk."),
+    ('w = tgame.world("x")\ndummy = w:ragdoll(0, 0, 0)\ndummy:drive()\n', "A ragdoll doesn't have :drive."),
+    ('w = tgame.world("x")\nb = w:box(0, 1, 0):physics()\nb:drive()\n', "An object doesn't have :drive."),
+    ('game = tgame.window("x")\ncar = game:car(100, 100)\n', 'The car needs a 3D world. Make the game with tgame.world, like: world = tgame.world("Physics Fun")'),
+    ('game = tgame.window("x")\ndummy = game:ragdoll(100, 100)\n', "The ragdoll needs a 3D world."),
+    ('game = tgame.window("x")\ngame:edges(true)\n', "A game doesn't have :edges. Use :walls instead."),
+    ('w = tgame.world("x")\nhero = w:spawn("hut")\nhero:animate("dance")\n',
+     'A character\'s animation can be "walk", "idle", "wave" or "none", not "dance".'),
+    ('w = tgame.world("x")\nhero = w:spawn("hut")\nhero:animate "running"\n', 'not "running". Did you mean "walk"?'),
 ]
 
 
@@ -1514,6 +1568,24 @@ GOOD_SNIPPETS = [
     'func open_shop():\n    shop:show()\nfunc close_shop():\n    shop:hide()\nfunc buy_stone(text):\n    coins_label:set "Coins: " + coins\n'
     '    hp:set 50\nfunc named(text):\n    say text\nfunc volume_changed(v):\n    game:volume v\nfunc again():\n    over:hide()\n    start:show()\n'
     'func step(dt):\n    if shop:shown() and size:value() is "Big" and music:value():\n        say name_box:value()\ngame:every_frame step\n',
+    # Physics in 3D: every method in each way it's written (a spot for x, y and z, physics() chained, spin with one
+    # input or three, velocity() as a list), a car, a ragdoll, explode, animate, and on_hit on a thing and the player.
+    'world = tgame.world("Physics Fun", 960, 600)\nworld:gravity(-9.8)\nland = world:terrain(200)\ncrate = world:box(0, 6, 0, 1, "wood")\n'
+    'crate:physics()\ncrate:physics("Static")\ncrate:physics "kinematic"\ncrate:physics("off")\ncrate:mass(2)\ncrate:bounce(0.6)\n'
+    'crate:bounce 1\ncrate:friction(0)\ncrate:push(0, 5, -3)\ncrate:push([0, 5, -3])\ncrate:spin(0, 2, 0)\ncrate:spin 90\n'
+    'crate:velocity(0, 0, -4)\nv = crate:velocity()\nsay v[0]\ncrate:on_hit(bumped)\ncrate:sleep()\ncrate:wake()\n'
+    'ball = world:sphere(2, 10, 0, 0.5, "red"):physics()\nball:bounce(0.8):mass(1):push(1, 0, 0)\nworld:explode(0, 0, 0, 12, 8)\n'
+    'world:explode([0, 0, 0], 12, 8)\nworld:explode(ball:spot(), 5)\ncar = world:car(0, 1, 10, "red")\ncar:drive()\ncar:drive(false)\n'
+    'car:engine(1)\nsay car:speed() + 1\ncar:flip()\ncar:push(0, 4, -6)\ncar:on_hit(bumped)\ncar:move_to(0, 1, 10)\n'
+    'dummy = world:ragdoll(5, 0, 0, "blue")\ndummy:push(0, 4, -6)\ndummy:on_hit(bumped)\nhero = world:spawn("hut", 1, 0, 1)\n'
+    'hero:animate("walk")\nhero:animate "None"\nplayer = world:player("third person")\nplayer:on_hit(ouch)\n'
+    'func bumped(other, strength):\n    say strength\nfunc ouch(other):\n    say "ouch"\nwhile world:open():\n    world:frame()\n',
+    # Physics in 2D: gravity, walls, a static floor, a ball that bounces and is pushed, its velocity, on_hit, explode.
+    'game = tgame.window("Bouncy", 800, 600)\ngame:gravity(900)\ngame:walls(true)\n'
+    'floor = game:box(400, 580, 800, 40, "gray"):physics("static")\nball = game:circle(400, 100, 20, "red"):physics()\n'
+    'ball:bounce(0.8)\nball:push(200, -300)\nball:push([200, -300])\nball:velocity(0, -200)\nsay ball:velocity()\n'
+    'ball:on_hit(boing)\ngame:explode(400, 300, 600, 200)\nfunc boing(other, strength):\n    game:sound "pop"\n'
+    'game:every_frame step\nfunc step(dt):\n    nil\n',
 ]
 
 

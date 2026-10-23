@@ -136,6 +136,7 @@ export default async (t, ctx) => {
   check(st?.mode === '2d' && st.sceneBg === '#1e3a8a', 'the preview is the real engine: a navy 800 × 600 game area', st);
   check(await ev(`document.querySelector('#en-kind').textContent`) === '2D game 800×600', 'the bar says what it is: 2D game 800×600', await ev(`document.querySelector('#en-kind').textContent`));
   await t.shot('engine_2d_empty.png');
+  check(!(await ev(`!!document.querySelector('.en-tile[data-tile="car"], .en-tile[data-tile="ragdoll"]')`)), "a 2D game's Add tab has no Car or Ragdoll (they need a 3D world)", null);
 
   const versions = [];
   for (const id of ['player', 'coin', 'enemy', 'ball']) {
@@ -552,6 +553,93 @@ export default async (t, ctx) => {
   await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kid3)})).getValue().includes('tgame.world'))()`, 4000);
   check(await m3() === w3, 'one Ctrl+Z brings the 3D world back', firstDiff(await m3(), w3));
   await settle(25000);
+
+  // ================================================================ physics: the Inspector's Physics section, Car and Ragdoll
+  // A box gets its physics in its Inspector: Off, Falls (crate:physics()) or Fixed (crate:physics("static")), then
+  // Bounce typed in (crate:bounce(0.6)), each one line right after the box and one Ctrl+Z; Off takes them all out.
+  // Objects badges the things that use physics, and the 3D Add tab has Car (the arrow keys drive it) and Ragdoll.
+  // The preview doesn't simulate, so the code, the Inspector and tuff --check are checked (the scene shows the
+  // physics lines once tgame's runtime has them; before that, it stops at the first one with a banner).
+  const physFile = path.join(ctx.root, 'phys.tuf');
+  const physStart = 'mention tgame\n\ngame = tgame.world("My World", 960, 600)\ngame:sky "day"\ngame:island(80)\ncrate = game:box(0, 2, -6, 1, "wood")\n';
+  fs.writeFileSync(physFile, physStart);
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(physFile)})`);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(physFile)}`, 6000);
+  await settle(25000);
+  const mp = () => ev(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(physFile)})).getValue().replace(/\\r\\n/g, '\\n'))()`);
+  const mpIs = (want) => waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(physFile)})).getValue().replace(/\\r\\n/g, '\\n') === ${JSON.stringify(want)})()`, 6000);
+  const mpNot = (was) => waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(physFile)})).getValue().replace(/\\r\\n/g, '\\n') !== ${JSON.stringify(was)})()`, 6000);
+  const physUi = () => ev(`(() => { const p = document.querySelector('#en-physics'); const s = p?.closest('.pf-sec'); return p ? { chips: [...p.querySelectorAll('.pf-chip')].map((b) => b.dataset.v + ':' + b.textContent + (b.classList.contains('sel') ? '*' : '')).join(), nums: [...s.querySelectorAll('.en-num span')].map((x) => x.textContent).join() } : null; })()`);
+  const badged = () => ev(`[...document.querySelectorAll('#en-objects .sd-layer')].filter((r) => r.querySelector('.en-phys')).map((r) => r.dataset.key).join()`);
+  const physUndo = async (want) => { await ev(`document.querySelector('#en-stage').focus()`); await t.key('z', CTRL); await mpIs(want); };
+  await ev(`window.TuffEngine.test.select('v:crate')`);
+  await waitFor(`!!document.querySelector('#en-physics')`, 4000);
+  let pu = await physUi();
+  check(pu?.chips === 'off:Off*,dynamic:Falls,static:Fixed' && pu.nums === '' && await badged() === '', "a box's Inspector has a Physics section: Off (chosen), Falls and Fixed, and Objects badges nothing yet", { pu, badged: await badged() });
+  await clickSel('#en-physics .pf-chip[data-v="dynamic"]');
+  await mpNot(physStart);
+  const falls = await mp();
+  check(falls === `${physStart}crate:physics()\n`, 'Falls writes crate:physics() right after the box', firstDiff(falls, `${physStart}crate:physics()\n`));
+  await waitFor(`document.querySelector('#en-physics .pf-chip.sel')?.dataset.v === 'dynamic'`, 4000);
+  pu = await physUi();
+  check(pu?.nums === 'Mass,Bounce,Friction' && await badged() === 'v:crate', 'then it has Mass, Bounce and Friction, and Objects shows a physics badge on the crate', { pu, badged: await badged() });
+  let bounceRect = null;
+  for (let tries = 0; tries < 20 && !bounceRect; tries++) {
+    bounceRect = await ev(`(() => { const l = [...document.querySelectorAll('#en-inspector .en-num')].find((x) => x.querySelector('span')?.textContent === 'Bounce'); const i = l && l.querySelector('input'); if (!i) return null; i.id = 'en-test-bounce'; i.scrollIntoView({ block: 'center' }); const r = i.getBoundingClientRect(); return r.width ? [r.left, r.top] : null; })()`);
+    if (!bounceRect) await t.sleep(100);
+  }
+  await t.click(bounceRect[0] + 20, bounceRect[1] + 10);
+  await t.type('0.6', 60);
+  await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(physFile)})).getValue().includes('crate:bounce(0.6)'))()`, 4000);
+  await ev(`document.querySelector('#en-stage').focus()`);
+  const bounced = await mp();
+  check(bounced === `${falls}crate:bounce(0.6)\n`, 'typing 0.6 in Bounce writes crate:bounce(0.6) under it', firstDiff(bounced, `${falls}crate:bounce(0.6)\n`));
+  await clickSel('.en-left .en-tabs button[data-tab="objects"]');
+  await ev(`document.querySelector('#en-physics')?.scrollIntoView({ block: 'center' }); 1`);
+  await t.shot('engine_physics_box.png');
+  await clickSel('#en-physics .pf-chip[data-v="static"]');
+  await mpNot(bounced);
+  const fixedLines = changedLines(bounced, await mp());
+  check(fixedLines?.length === 1 && fixedLines[0][2] === 'crate:physics("static")', 'Fixed changes that one line to crate:physics("static")', fixedLines);
+  await physUndo(bounced);
+  check(await mp() === bounced, 'one Ctrl+Z makes it fall again', firstDiff(await mp(), bounced));
+  await ev(`window.TuffEngine.test.select('v:crate')`);
+  await waitFor(`!!document.querySelector('#en-physics .pf-chip[data-v="off"]')`, 4000);
+  await clickSel('#en-physics .pf-chip[data-v="off"]');
+  await mpIs(physStart);
+  check(await mp() === physStart, 'Off takes its physics lines out (physics and bounce), in one step', firstDiff(await mp(), physStart));
+  await waitFor(`!document.querySelector('#en-objects .en-phys')`, 4000);
+  check(await badged() === '', 'and the badge goes', await badged());
+  await physUndo(bounced);
+  check(await mp() === bounced, 'one Ctrl+Z brings them both back', firstDiff(await mp(), bounced));
+  await settle(25000);
+
+  // Car and Ragdoll, in the Add tab's Physics tiles.
+  await clickSel('.en-left .en-tabs button[data-tab="add"]');
+  const physTiles = await ev(`(() => { const c = [...document.querySelectorAll('#en-add .sd-cat')].find((x) => x.textContent === 'Physics'); const g = c?.nextElementSibling; return g ? [...g.querySelectorAll('.en-tile')].map((b) => b.dataset.tile + ':' + b.textContent).join() : null; })()`);
+  check(physTiles === 'car:Car,ragdoll:Ragdoll', "a 3D world's Add tab has Physics tiles: Car and Ragdoll", physTiles);
+  await clickSel('.en-tile[data-tile="car"]');
+  await mpNot(bounced);
+  const withCar = await mp();
+  const carAdded = withCar.slice(bounced.length);
+  check(withCar.startsWith(bounced) && /^car = game:car\(-?[\d.]+, 1, -?[\d.]+, "red"\)\ncar:drive\(\)\n$/.test(carAdded) && (await dbg()).sel === 'v:car',
+    'Car writes car = game:car(x, 1, z, "red") and car:drive() (there\'s no player to share the arrow keys with), and selects it', carAdded);
+  await waitFor(`!!document.querySelector('#en-inspector .pf-sec-h') && [...document.querySelectorAll('#en-inspector .pf-sec-h')].some((h) => h.textContent === 'Car')`, 4000);
+  const carUi = await ev(`(() => { const s = [...document.querySelectorAll('#en-inspector .pf-sec')].find((x) => x.querySelector('.pf-sec-h')?.textContent === 'Car'); return { secs: [...document.querySelectorAll('#en-inspector .pf-sec-h')].map((h) => h.textContent).join(), text: s?.textContent || '', engine: s?.querySelector('input[type="number"]')?.value }; })()`);
+  check(/Drive it/.test(carUi.text) && carUi.engine === '1' && !/Behaviours|Moves/.test(carUi.secs), "the car's Inspector has a Car section (Drive it, Engine 1), and no Behaviours or Moves", carUi);
+  check((await badged()).split(',').includes('v:car'), 'Objects badges the car: it always uses physics', await badged());
+  await clickSel('.en-left .en-tabs button[data-tab="add"]');
+  await clickSel('.en-tile[data-tile="ragdoll"]');
+  await mpNot(withCar);
+  const withDummy = await mp();
+  check(withDummy.startsWith(withCar) && /^dummy = game:ragdoll\(-?[\d.]+, 0, -?[\d.]+, "blue"\)\n$/.test(withDummy.slice(withCar.length)), 'Ragdoll writes dummy = game:ragdoll(x, 0, z, "blue")', withDummy.slice(withCar.length));
+  await settle(25000);
+  await t.shot('engine_physics.png');
+  check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'phys_check.tuf'), withDummy), path.join(ctx.tmp, 'phys_check.tuf'))).trim()), 'the physics the Inspector and the tiles wrote passes tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'phys_check.tuf')));
+  await physUndo(withCar);
+  check(await mp() === withCar, 'one Ctrl+Z takes the ragdoll away', firstDiff(await mp(), withCar));
+  const physBanner = (await dbg()).banner;
+  if (physBanner) t.info(`the scene stops at the physics lines until tgame's runtime has them: ${physBanner.slice(0, 120)}`);
 
   // ================================================================ the land: the Terrain tab, its tools, Lighting, Hills and Lake
   // A world on an island: the Terrain tab offers to swap the island for land (one step), then the brush, a hill, a

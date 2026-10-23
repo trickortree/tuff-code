@@ -365,11 +365,11 @@ function targetOf(question, code) {
 // them in the message the model answers "ask my name" with a window (37 of Qwen's 105 failed write tasks
 // in Phase 1 did).
 const WINDOW_SECTIONS = ['App windows (tgui / mtgui)', 'Events: what the function gets', 'Timers', 'Pages (several screens in one window)', 'Layout and size', 'Looking good', 'atgui'];
-// The guide splits at every heading, so tgame's "Menus, buttons and screens in games", "Land and lighting (3D)"
-// and "Games Tuff Engine can edit" are sections of their own. A game request about menus, buttons or screens
-// always gets the menus one (sectionsFor).
+// The guide splits at every heading, so tgame's "Menus, buttons and screens in games", "Land and lighting (3D)",
+// "Physics" and "Games Tuff Engine can edit" are sections of their own. A game request about menus, buttons or
+// screens always gets the menus one (sectionsFor).
 const GAME_UI_SECTION = 'Menus, buttons and screens in games';
-const GAME_SECTIONS = ['tgame', GAME_UI_SECTION, 'Land and lighting (3D)', 'Games Tuff Engine can edit'];
+const GAME_SECTIONS = ['tgame', GAME_UI_SECTION, 'Land and lighting (3D)', 'Physics', 'Games Tuff Engine can edit'];
 const SECTIONS = {
   console: { skip: [...WINDOW_SECTIONS, 'Libraries', ...GAME_SECTIONS, 'tap'] },
   window: { first: ['App windows (tgui / mtgui)'], skip: [...GAME_SECTIONS, 'tap', 'Live lines and clearing (console programs)'] },

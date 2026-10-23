@@ -529,11 +529,86 @@ while game:open():
 - **y is the height above the land.** With a terrain, every y you give (shapes, `:spawn`, `:light`, `:move_to`, `camera_at`, `look_at`, where the player starts) and every y you read (`:y()`, `:spot()`) counts up from the land at that x and z, so 0 stands on it, on a hilltop or at the bottom of a valley. Without a terrain nothing changes. `game:random_spot()` stays on dry land, and the player walks over the hills but can't walk off the edge or into the water.
 - **Modern lighting:** `game:lighting "modern"` lights everything softly from the sky, like newer game engines do (tone mapping, and bigger, sharper shadows), so the land, the water and the models look richer. `"simple"` (the default) is the classic look. It can change while the game runs, and a computer that can't do it stays simple.
 
+#### Physics
+`thing:physics()` makes a thing real: it falls, bounces, tumbles, knocks into other things and gets pushed. It works in 3D (boxes, spheres, cylinders and `spawn` models) and in 2D (boxes and circles). A game that never uses physics works exactly as before.
+```tuff
+mention tgame
+
+world = tgame.world("Crash Test")
+world:sky "day"
+land = world:terrain(120)                 # with physics on, the land is solid
+hits = 0
+label = world:hud():text("Hits: 0", 90, 30)
+for i in range(0, 4):
+    crate = world:box(0, i * 1.05, -10, 1, "wood")   # a tower of crates
+    crate:physics()                       # it falls, tumbles and can be pushed
+    crate:mass(2)                         # kg
+    crate:on_hit(bumped)
+ball = world:sphere(0, 1, 2, 1, "red"):physics()     # physics() gives back the thing
+ball:mass(5)
+ball:bounce(0.4)                          # 0 doesn't bounce, 1 bounces right back up
+dummy = world:ragdoll(4, 0, -8, "blue")   # a person made of parts that flops when it's hit
+car = world:car(-5, 1, 6, "orange")
+car:drive()                               # the arrow keys or WASD drive it, and the camera follows
+
+func bumped(other, strength):             # something hit a crate: what, and how hard
+    if strength > 2:
+        hits += 1
+        label:set "Hits: " + hits
+
+func kick(key):                           # Space rolls the ball at the tower
+    ball:push(0, 2, -40)
+
+func boom(key):                           # B blows everything away from the tower
+    world:explode(0, 0, -10, 15, 8)
+
+world:on_key("space", kick)
+world:on_key("b", boom)
+
+while world:open():
+    world:frame()
+```
+- **Kinds of physics:** `thing:physics()` (or `"dynamic"`) falls and can be pushed, `thing:physics("static")` stays where it is but things bump into it and land on it (a floor, a wall), `"kinematic"` is moved only by your code but pushes other things, and `"off"` turns it off. It gives back the thing, so it chains: `ball = world:sphere(0, 5, 0, 1, "red"):physics()`.
+- **What it's made of:** `:mass(2)` is how heavy it is in kg (by default it comes from its size), `:bounce(0.6)` how bouncy it is from 0 to 1, and `:friction(0.4)` how grippy it is (0 is slippery, like ice).
+- **Moving it:** `:push(x, y, z)` kicks it (a bigger number kicks harder, and heavy things move less), `:spin(x, y, z)` sets it spinning, and `:velocity(x, y, z)` sets how fast it's moving each way. `:velocity()` gives back `[x, y, z]`. `:sleep()` stops it until something wakes it, and `:wake()` wakes it.
+- **Hits:** `crate:on_hit(bumped)` runs `func bumped(other, strength):` when something hits it: `other` is what hit it and `strength` how hard (under 1 is a gentle touch). It works on the player too. `:touches`, `:x()`, `:y()`, `:spot()` always give where a physics thing really is.
+- **The world:** with physics on, the land, the ground, the island, the buildings and every other solid thing stay put, and physics things land on them (water isn't solid). `world:gravity(-9.8)` is how strong gravity is (-9.8 is like on Earth and the default, 0 floats like in space). `world:explode(x, y, z, strength, radius)` pushes every physics thing near a spot away from it, less the further away it is.
+- **The player** walks into physics things and pushes them, can stand on them, and gets knocked by them. Its keys work as before.
+- **A car:** `car = world:car(x, y, z, "red")` is a car with four wheels, springy suspension and steering. `car:drive()` lets the arrow keys or WASD drive it while the camera follows, and `car:drive(false)` stops. `car:engine(2)` gives it more power (1 is normal), `car:speed()` is how fast it's going in km/h, and `car:flip()` puts it back on its wheels after a crash.
+- **A ragdoll:** `dummy = world:ragdoll(x, y, z, "blue")` is a person made of jointed parts (a head, a body, arms and legs) that flops over when it's hit or pushed: `dummy:push(0, 4, -6)`.
+- **2D:** the same methods with x and y, and y goes down the screen. `game:gravity(900)` is in pixels a second each second, and `game:walls(true)` makes the edges of the screen walls.
+```tuff
+mention tgame
+
+game = tgame.window("Bouncy", 800, 600)
+game:gravity(900)                         # pixels a second each second, down the screen
+game:walls(true)                          # the edges of the screen are walls
+floor = game:box(400, 580, 800, 40, "gray"):physics("static")   # it stays put
+ball = game:circle(400, 100, 20, "red"):physics()
+ball:bounce(0.8)
+boings = 0
+label = game:text("Boings: 0", 400, 30)
+
+func boing(other, strength):
+    boings += 1
+    label:set "Boings: " + boings
+    game:sound "pop"
+
+func jump(key):
+    ball:push(0, -300)                    # up is minus in 2D
+
+ball:on_hit(boing)
+game:on_key("space", jump)
+```
+- **Tips:** don't move a physics thing every frame with `:move_to`, `:move` or `:glide`: that fights the physics, and it jumps around. Push it or set its velocity instead. One `:move_to` is fine, like putting it back after it fell off the edge. Tuff Engine's preview doesn't simulate: press Play to see things fall.
+- **Animation:** character models walk with swinging arms and legs when they move and breathe gently when they stand still, trees and bushes sway in the wind, water ripples and coins spin and bob, all by themselves. `thing:animate("wave")` picks what a character does: `"walk"`, `"idle"`, `"wave"` or `"none"`.
+
 #### Games Tuff Engine can edit
 TuffCode's Tuff Engine tab (`Ctrl+Shift+G`) builds tgame games by clicking and dragging, and writes everything as normal Tuff code. It can only show and edit simple top-level lines, so when you change a game someone is building in it:
 - Make each new thing with **one top-level line and plain numbers**, like `coin = game:circle(200, 200, 14, "gold")` or `tree = game:spawn("tree", -5, 0, -10)`. Things made in a loop, a function or a chained line (`game:spawn("sign"):label "Hi"`) still work, but show as "Made by your code" and can't be dragged.
 - Put new lines **above** any `while game:open():` loop.
 - Make the land with one line (`land = game:terrain(200)`) and change it with **one top-level line per edit**, like `land:hill(20, -10, 30, 8)`, so Tuff Engine can list them under the land, change their numbers and remove them.
+- Give a thing its physics with **one top-level line each, right after it**, like `crate:physics()`, `crate:mass(2)`, `crate:bounce(0.6)` or `crate:friction(0.4)`, so its Physics section in Tuff Engine shows and changes them.
 - Add behaviour as a **func registered with one line**, like `game:every_frame coin_spin` or `coin:clicked coin_clicked`. Functions under a `# Tuff Engine:` comment were written by Tuff Engine, and it keeps that comment and `play_again` up to date as the game changes. Changing one is fine: Tuff Engine then shows it as the person's own code.
 
 ## App windows (tgui / mtgui)
