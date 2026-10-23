@@ -447,7 +447,7 @@ class Game:
         self.ui = None  # the game's menus (GameUI), once game:panel or a screen made them
         self.closed = self.close_seen = False
         self.down, self.just = set(), set()
-        self.input_paused = False  # the game was paused when this frame's keys and clicks came in (they were a screen's)
+        self.input_paused = False  # this frame's keys and clicks were a screen's: the game was paused, or they hid one
         self.lock_click = False  # this frame's click is the one that locks the mouse for looking around
         self.ticks, self.key_fns, self.click_fns, self.timers = [], [], [], []
         self.clock = 0.0
@@ -602,8 +602,12 @@ class Game:
         self.frames += 1
         self.just = set()
         self.wheel = 0.0
+        ui = self.ui
+        hides = ui.hides if ui is not None else 0
         self.input_paused, self.lock_click = self.is_paused, False
         self.handle(self.view.events())
+        if self.ui is not None and self.ui.hides != hides:  # a key hid a screen (E in on_key closed a note): that's all it did
+            self.input_paused = True
         if self.autopilot:
             self.autopilot.tick(t)
         if self.closed or not self.view.is_open:
@@ -5934,6 +5938,7 @@ class GameUI:
         self._native = self.click_fn = None
         self.screens = []
         self.showing = self.pausing = False  # a screen shows; one that pauses shows
+        self.shown, self.hides = [], 0  # the screens that show; how many times one hid (Game.step)
         self.relock = False  # a screen let go of the mouse, so it's locked again when the screens are gone
         self.lock_asks = 0
         atgui.add_to_page(self.scene, game=True)
@@ -5983,6 +5988,8 @@ class GameUI:
         to use it (a locked one is let go, and locked again when the last screen goes)."""
         g = self.game
         shown = [s for s in self.screens if s.is_shown and not s.dead]
+        self.hides += sum(1 for s in self.shown if s not in shown)
+        self.shown = shown
         self.showing = bool(shown)
         self.pausing = any(s.pauses for s in shown)
         if SCENE is None and not g.closed and g.three_d:

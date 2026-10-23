@@ -2361,27 +2361,30 @@ def t_ix_talk(c):
     c.check(shot and color_share(shot, (255, 255, 255), 10, (0.44, 0.84, 0.56, 0.9)) > 0.01, "and the \"E: Talk\" hint at the bottom", shot)
 
     # games/ix_note.tuf: E talks to a sign, whose on_talk shows a note; the next E hides it in on_key, and only that.
-    r = play("ix_note", game("ix_note.tuf"), [
-        {"at": 0.8, "dump": "ixn_start.json"},
-        {"at": 1.0, "key": "e"}, {"at": 1.3, "call": "report"},
-        {"at": 1.5, "key": "e"}, {"at": 1.8, "call": "report"}, {"at": 1.85, "dump": "ixn_hidden.json"},
-        {"at": 2.0, "call": "to_door"}, {"at": 2.2, "key": "e"}, {"at": 2.7, "call": "report"}, {"at": 2.75, "dump": "ixn_door.json"},
-        {"at": 2.9, "key": "e"}, {"at": 3.4, "dump": "ixn_opened.json"}, {"at": 3.5, "close": True}])
-    clean_exit(c, r)
-    start = r.dumps.get("ixn_start.json", {})
-    c.check(ix(start).get("hint") == "E: Talk" and "E: Talk" in start.get("hud_texts", []) and "Talks: 0" in start.get("hud_texts", []),
-            "a HUD cleared and drawn again every frame (hud:clear) keeps the \"E: Talk\" hint", (ix(start).get("hint"), start.get("hud_texts")))
-    talks = [line for line in r.lines if line.startswith("talks ")]
-    c.check(talks[:1] == ["talks 1, note shown true"], "E talks to the sign, and its on_talk shows a note", talks)
-    c.check(talks[1:2] == ["talks 1, note shown false"] and "talk 2" not in r.lines,
-            "the E that hides the note (in on_key) only hides it: it doesn't talk again and show the note again", talks)
-    c.check("E: Talk" in r.dumps.get("ixn_hidden.json", {}).get("hud_texts", []), "and the hint is back once the note is gone",
-            r.dumps.get("ixn_hidden.json", {}).get("hud_texts"))
-    door = ix(r.dumps.get("ixn_door.json", {})).get("doors") or [{}]
-    c.check(talks[2:3] == ["talks 1, note shown false"] and not door[0].get("open"),
-            "next to a door, the E that hides the note doesn't open the door too", (talks, door))
-    opened = ix(r.dumps.get("ixn_opened.json", {})).get("doors") or [{}]
-    c.check(opened[0].get("open"), "the next E opens it", opened)
+    # Then the same with a note that doesn't pause the game (calm).
+    for name, calm, what in (("ix_note", [], ""), ("ix_note_calm", [{"at": 0.5, "call": "calm"}], " (a note that doesn't pause the game)")):
+        r = play(name, game("ix_note.tuf"), calm + [
+            {"at": 0.8, "dump": "ixn_start.json"},
+            {"at": 1.0, "key": "e"}, {"at": 1.3, "call": "report"},
+            {"at": 1.5, "key": "e"}, {"at": 1.8, "call": "report"}, {"at": 1.85, "dump": "ixn_hidden.json"},
+            {"at": 2.0, "call": "to_door"}, {"at": 2.2, "key": "e"}, {"at": 2.7, "call": "report"}, {"at": 2.75, "dump": "ixn_door.json"},
+            {"at": 2.9, "key": "e"}, {"at": 3.4, "dump": "ixn_opened.json"}, {"at": 3.5, "close": True}])
+        clean_exit(c, r)
+        start = r.dumps.get("ixn_start.json", {})
+        if not calm:
+            c.check(ix(start).get("hint") == "E: Talk" and "E: Talk" in start.get("hud_texts", []) and "Talks: 0" in start.get("hud_texts", []),
+                    "a HUD cleared and drawn again every frame (hud:clear) keeps the \"E: Talk\" hint", (ix(start).get("hint"), start.get("hud_texts")))
+        talks = [line for line in r.lines if line.startswith("talks ")]
+        c.check(talks[:1] == ["talks 1, note shown true"], f"E talks to the sign, and its on_talk shows a note{what}", talks)
+        c.check(talks[1:2] == ["talks 1, note shown false"] and "talk 2" not in r.lines,
+                f"the E that hides the note (in on_key) only hides it: it doesn't talk again and show the note again{what}", talks)
+        c.check("E: Talk" in r.dumps.get("ixn_hidden.json", {}).get("hud_texts", []), f"and the hint is back once the note is gone{what}",
+                r.dumps.get("ixn_hidden.json", {}).get("hud_texts"))
+        door = ix(r.dumps.get("ixn_door.json", {})).get("doors") or [{}]
+        c.check(talks[2:3] == ["talks 1, note shown false"] and not door[0].get("open"),
+                f"next to a door, the E that hides the note doesn't open the door too{what}", (talks, door))
+        opened = ix(r.dumps.get("ixn_opened.json", {})).get("doors") or [{}]
+        c.check(opened[0].get("open"), f"the next E opens it{what}", opened)
 
 
 def t_ix_door(c):

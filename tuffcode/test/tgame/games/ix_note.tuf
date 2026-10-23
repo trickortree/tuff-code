@@ -1,8 +1,8 @@
 mention tgame
 
 # E and screens: a sign's on_talk shows a note, and the E (in on_key) that hides it only hides it: it doesn't talk to
-# the sign again, or open a door in reach. A score on the HUD, cleared and drawn again every frame with hud:clear,
-# leaves tgame's own "E: Talk" hint alone.
+# the sign again, or open a door in reach. That's so for a note that pauses the game, and (after calm) one that doesn't.
+# A score on the HUD, cleared and drawn again every frame with hud:clear, leaves tgame's own "E: Talk" hint alone.
 world = tgame.world("Note", 900, 560)
 world:ground "grass"
 player = world:player("first person")
@@ -40,3 +40,8 @@ func to_door():
 
 func report():
     say "talks " + talks + ", note shown " + note:shown()
+
+func calm():
+    note = world:screen("A calm note", false)
+    note:text "Meet me by the hut."
+    note:hide()
