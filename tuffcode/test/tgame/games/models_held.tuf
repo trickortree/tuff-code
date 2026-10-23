@@ -1,0 +1,11 @@
+mention tgame
+
+# The player in third person with an axe, then a sword in its place: as it walks, what it holds goes up and down
+# with its hand.
+world = tgame.world("Models Held", 900, 560)
+world:sky "day"
+world:ground "grass"
+player = world:player("third person")
+player:hold("axe")
+for spot in [[-4, -8], [5, -12], [-7, -16]]:
+    world:spawn("tree", spot[0], 0, spot[1])

@@ -961,6 +961,12 @@ class View:
     def is_open(self):
         return not self._closed
 
+    @property
+    def batch(self):
+        """The number of the batch that changes made now go to the page in (the page counts the batches it has
+        applied, so an event it sends can say whether it saw them)."""
+        return self._seq + 1
+
     def page_stats(self, reset=False):
         """The page's own numbers: frames drawn per second, frame gaps, time spent applying and drawing."""
         return self.ask(0, "stats", bool(reset))

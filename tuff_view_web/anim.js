@@ -6,13 +6,13 @@
 // can choose with `anim` too (thing:animate): "auto" (its own way), "walk", "idle", "wave" or "none" (still).
 // Everything holds still while the game is paused (tgame puts data-paused on the scene's canvas).
 //
-// engine.js calls add() when an object gets an `anim`, and frame() before it draws each frame. Python never moves a
-// model's parts after making them (only the model's group), so each part's pose is worked out from the one it was
-// made with.
+// engine.js calls add() when an object gets an `anim`, and frame() before it draws each frame; it sets a model's
+// `kids` to -1 when a part is added or removed (a held axe swapped for a sword), so its parts are looked at again.
+// Python never moves a model's parts after making them (only the model's group), so each part's pose is worked out
+// from the one it was made with.
 
 const live = new Set();   // groups (models) that move by themselves
 let THREE = null;
-let then = 0;             // the last frame's time (ms)
 let W = null;             // scratch vectors and quaternions, made once three.js is here
 
 export function add(n, v) {
@@ -30,6 +30,20 @@ export function add(n, v) {
   live.add(group);
 }
 
+// For the page's stats (the tests): the models that move by themselves, the things they hold that move with them,
+// and how many of those are no longer in their model (moved, though they've gone).
+export function info() {
+  let held = 0;
+  let stale = 0;
+  for (const g of live) {
+    for (const h of g.anim.held) {
+      held++;
+      if (h.o.parent !== g.obj) stale++;
+    }
+  }
+  return { live: live.size, held, stale };
+}
+
 // Moves everything for this frame. If it ever fails, it stops (the error goes out once) and the game goes on still.
 let broken = false;
 
@@ -44,8 +58,6 @@ export function frame(now, scenes) {
 }
 
 function step(now, scenes) {
-  const dt = then ? Math.min(0.1, (now - then) / 1000) : 0;
-  then = now;
   if (!THREE) {
     const t = window.tuffView && window.tuffView.three();
     if (!t || t.failed || !t.Quaternion) return;
@@ -54,7 +66,15 @@ function step(now, scenes) {
       up: new THREE.Vector3(), y: new THREE.Vector3(0, 1, 0), x: new THREE.Vector3(1, 0, 0), z: new THREE.Vector3(0, 0, 1) };
   }
   for (const s of scenes) {
-    s.animDt = s.paused || s.el.hasAttribute('data-paused') ? 0 : dt;
+    // A scene's models move with each frame it's drawn anyway (Python changed something), and on their own at most
+    // about 60 times a second, less while something else is drawing it: a screen faster than 60 Hz doesn't draw the
+    // whole world again on every refresh just because a tree sways.
+    if (s.dirty) s.busyAt = now;
+    const since = s.animAt ? now - s.animAt : 0;
+    s.animDt = 0;
+    if (s.animAt && !s.dirty && since < (now - s.busyAt < 50 ? 33 : 15)) continue;
+    s.animAt = now;
+    if (!s.paused && !s.el.hasAttribute('data-paused')) s.animDt = Math.min(0.1, since / 1000);
     s.animT = (s.animT || 0) + s.animDt;
     if (s.waters && s.waters.size && ripple(s)) s.dirty = true;
   }

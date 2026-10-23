@@ -17,7 +17,7 @@ const root = document.getElementById('tv-root');
 let THREE = null;
 let threeLoading = null;
 
-const stats = { since: performance.now(), frames: 0, gaps: [], last: 0, batches: 0, cmds: 0, applyMs: 0, drawMs: 0, seq: 0 };
+const stats = { since: performance.now(), frames: 0, draws: 0, gaps: [], last: 0, batches: 0, cmds: 0, applyMs: 0, drawMs: 0, seq: 0 };
 
 function node(id) {
   const n = objs.get(id);
@@ -158,6 +158,7 @@ function attach(n, parent, before) {
     if (!parent || (parent.kind !== 'scene' && parent.kind !== 'obj')) throw new Error('a 3D object has to go in a scene or a group');
     n.host = parent.kind === 'scene' ? parent : parent.host;
     (parent.kind === 'scene' ? parent.scene : parent.obj).add(n.obj);
+    if (parent.anim) parent.anim.kids = -1;  // a model that moves by itself (anim.js) looks at its parts again
     n.host.dirty = true;
   } else {
     if (parent && parent.kind !== 'el') throw new Error('elements, canvases and scenes go inside an element (or the window)');
@@ -183,6 +184,7 @@ function remove(id) {
       break;
     case 'obj':
       n.obj.removeFromParent();
+      if (n.parent && n.parent.anim) n.parent.anim.kids = -1;  // (a thing swapped for another of its parts)
       labels.delete(n);
       track(n, false);
       if (n.type === 'label' && n.obj.material.map) n.obj.material.map.dispose();
@@ -256,15 +258,15 @@ const engineCalls = {
     const at = (q) => (gaps.length ? gaps[Math.min(gaps.length - 1, Math.floor(gaps.length * q))] : 0);
     const secs = (now - stats.since) / 1000;
     const out = {
-      seconds: secs, frames: stats.frames, fps: stats.frames / secs,
+      seconds: secs, frames: stats.frames, fps: stats.frames / secs, draws: stats.draws,
       gap_median_ms: at(0.5), gap_p95_ms: at(0.95), gap_p99_ms: at(0.99), gap_max_ms: gaps.length ? gaps[gaps.length - 1] : 0,
       batches: stats.batches, cmds: stats.cmds, last_seq: stats.seq,
       apply_ms_per_batch: stats.batches ? stats.applyMs / stats.batches : 0,
       draw_ms_per_frame: stats.frames ? stats.drawMs / stats.frames : 0,
       objects: objs.size, waiting: Math.max(0, batches.length - 1),
-      physics: physics ? physics.info() : physicsJob ? 'loading' : null,
+      physics: physics ? physics.info() : physicsJob ? 'loading' : null, anim: anim.info(),
     };
-    if (reset) Object.assign(stats, { since: now, frames: 0, gaps: [], batches: 0, cmds: 0, applyMs: 0, drawMs: 0 });
+    if (reset) Object.assign(stats, { since: now, frames: 0, draws: 0, gaps: [], batches: 0, cmds: 0, applyMs: 0, drawMs: 0 });
     return out;
   },
   snapshot,
@@ -291,7 +293,7 @@ const physicsWaiting = [];    // what came for it while it loads, in order
 function startPhysics(opts) {
   if (physicsJob) return;
   physicsJob = import('./physics.js')
-    .then((m) => m.load({ emit, report, node: (id) => objs.get(id) }, opts))
+    .then((m) => m.load({ emit, report, node: (id) => objs.get(id), applied: () => stats.seq }, opts))
     .then((m) => {
       physics = m;
       for (const fn of physicsWaiting.splice(0)) runPhysics(fn);
@@ -312,7 +314,7 @@ function runPhysics(fn) {
 }
 
 // An object's `phys` (what its body is) came, or what it was moved by: physics.js puts its body there.
-const PHYS_MOVES = new Set(['x', 'y', 'z', 'rx', 'ry', 'rz', 'rot', 'visible', 'sx', 'sy', 'sz', 'scale']);
+const PHYS_MOVES = new Set(['x', 'y', 'z', 'rx', 'ry', 'rz', 'rot', 'visible', 'sx', 'sy', 'sz', 'scale', 'wobble']);
 
 function physicsChanged(n, props) {
   if ('phys' in props) {
@@ -393,7 +395,7 @@ const SHAPE_DEFAULTS = {
 function makeShape(type) {
   if (!SHAPE_DEFAULTS[type]) throw new Error(`there's no 2D shape called '${type}'`);
   const p = { x: 0, y: 0, z: 0, rot: 0, sx: 1, sy: 1, scale: 1, alpha: 1, ax: 0.5, ay: 0.5, color: '#ffffff',
-    stroke: null, lw: 1, radius: 0, visible: true, pick: true, frame: null, w: null, h: null, ...SHAPE_DEFAULTS[type] };
+    stroke: null, lw: 1, radius: 0, visible: true, pick: true, frame: null, w: null, h: null, nudge: null, ...SHAPE_DEFAULTS[type] };
   if (type === 'line') p.color = null;
   return { p, fontStr: '', tw: 0 };
 }
@@ -505,7 +507,9 @@ function drawShape(ctx, s, k, ox, oy) {
   const sin = Math.sin(a);
   const sx = p.sx * p.scale * k;
   const sy = p.sy * p.scale * k;
-  ctx.setTransform(cos * sx, sin * sx, -sin * sy, cos * sy, ox + p.x * k, oy + p.y * k);
+  const nx = p.nudge ? +p.nudge[0] || 0 : 0;  // drawn this far from where it is (a shake of a thing physics moves)
+  const ny = p.nudge ? +p.nudge[1] || 0 : 0;
+  ctx.setTransform(cos * sx, sin * sx, -sin * sy, cos * sy, ox + (p.x + nx) * k, oy + (p.y + ny) * k);
   ctx.globalAlpha = p.alpha;
   switch (s.type) {
     case 'rect': {
@@ -1523,6 +1527,7 @@ function setObj(n, props) {
         if (o.isMesh) o.receiveShadow = !!v;
         break;
       case 'phys': break;  // physicsChanged, below
+      case 'wobble': n.wobble = v; break;  // a physics body's shake: physics.js tilts how it's drawn by it
       case 'intensity': if (o.isLight) { p.intensity = v; o.intensity = v * lightScale(n); } break;
       case 'distance': if (o.isLight) o.distance = v; break;
       case 'ground': if (o.groundColor) o.groundColor.set(v); break;
@@ -1905,8 +1910,8 @@ function tick(now) {
       report(err, 'physics');
     }
   }
-  for (const c of canvases) if (c.dirty) { c.dirty = false; try { draw2d(c); } catch (err) { report(err, 'drawing a canvas'); } }
-  for (const s of scenes) if (s.dirty) { s.dirty = false; try { draw3d(s); } catch (err) { report(err, 'drawing a 3D scene'); } }
+  for (const c of canvases) if (c.dirty) { c.dirty = false; stats.draws++; try { draw2d(c); } catch (err) { report(err, 'drawing a canvas'); } }
+  for (const s of scenes) if (s.dirty) { s.dirty = false; stats.draws++; try { draw3d(s); } catch (err) { report(err, 'drawing a 3D scene'); } }
   stats.drawMs += performance.now() - t0;
   flushMoves();
 }

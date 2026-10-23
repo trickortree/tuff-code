@@ -1,0 +1,78 @@
+mention tgame
+
+# Physics things the program moves and changes: a ball sent back up each time it nearly lands (once a fall, even in
+# a frame that takes a while), a box that fell off the world and is put back, a pole lying on its side that shakes
+# (it stays lying), a ball that grows as it falls (it keeps falling), and a bullet removed as it hits a crate (the
+# crate's on_hit still gets the bullet).
+world = tgame.world("Physics Reset", 900, 560)
+world:ground "grass"
+world:camera_at(0, 3.5, 9)
+world:look_at(0, 1.5, 0)
+target = world:spawn("crate", -4, 0, 0)
+target:physics()
+bullet = world:sphere(-4, 3, 0, 0.4, "white"):physics()
+pole = world:box(4, 0, 2, [0.4, 2.4, 0.4], "wood"):physics()
+grower = world:sphere(6, 10, -2, 0.6, "blue"):physics()
+lost = world:box(300, 0, 0, 1, "gold"):physics()  # past the grass's edge: nothing under it
+lost:velocity(0, -200, 0)
+ball = nil
+resets = 0
+doubles = 0
+last = -1
+falling = false
+gone = false
+target_hits = 0
+
+func shot(other, strength):
+    target_hits += 1
+    say "the crate was hit by " + other
+
+target:on_hit shot
+
+# A frame that takes a while (a program with a lot to do in it).
+func busy():
+    n = 0
+    for i in range(1, 8000):
+        n += i
+
+func watch(dt):
+    # The bullet goes as soon as it stops falling (it hit the crate), before the hit is reported.
+    if not gone:
+        v = bullet:velocity()
+        if v[1] < -1:
+            falling = true
+        elif falling:
+            bullet:remove()
+            gone = true
+    # The ball goes back up when it's nearly down, once for each fall.
+    if ball is not nil and ball:y() < 1:
+        if world:time() - last < 0.3:
+            doubles += 1
+        last = world:time()
+        resets += 1
+        ball:move_to(0, 6, 0)
+        ball:velocity(0, 0, 0)
+        busy()
+
+world:every_frame watch
+
+func drop_ball():
+    ball = world:sphere(0, 6, 0, 0.6, "red"):physics()
+
+func topple():
+    pole:spin(0, 0, -0.5)
+
+func grow_it():
+    grower:grow()
+
+func bring_back():
+    lost:move_to(3, 4, -3)
+    lost:velocity(0, 0, 0)
+
+func shake_it():
+    pole:shake()
+
+func report():
+    say "resets " + resets + " doubles " + doubles + " target hits " + target_hits
+    say "lost " + lost:spot() + " speed " + lost:speed()
+    say "grower " + grower:spot() + " pole " + pole:spot()

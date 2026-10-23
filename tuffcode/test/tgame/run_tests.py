@@ -668,6 +668,16 @@ def t_models(c):
     c.check(moving > 150, f"a fifth of a second later the people, trees and coin have moved ({moving} pixels changed)", moving)
     still = changed_pixels(r.shots.get("models_paused.png"), r.shots.get("models_paused_later.png"))
     c.check(0 <= still < 60, f"while the game is paused nothing moves ({still} pixels changed in half a second)", still)
+    # The player in third person swaps its axe for a sword and walks: the sword goes up and down with its hand (the
+    # page moves what it holds now, not the axe that's gone).
+    r = play("models_held", game("models_held.tuf"), [
+        {"at": 0.5, "dump": "mh_axe.json"}, {"at": 0.6, "tuff": 'player:hold("sword")'},
+        {"at": 0.7, "hold": "w", "for": 0.8}, {"at": 1.2, "dump": "mh_sword.json"}, {"at": 1.25, "shot": "models_held.png"},
+        {"at": 1.6, "close": True}])
+    clean_exit(c, r)
+    axe, sword = [((r.dumps.get(n, {}).get("page") or {}).get("anim") or {}) for n in ("mh_axe.json", "mh_sword.json")]
+    c.check(axe.get("held") == 1 and sword.get("held") == 1 and sword.get("stale") == 0,
+            "a thing the player holds moves with its hand, and so does the one it holds after a swap (not the one that's gone)", (axe, sword))
 
 
 def t_terrain(c):
@@ -822,9 +832,10 @@ def t_physics(c):
         {"at": 0.3, "dump": "pd_start.json"},
         {"at": 0.8, "tuff": "lifted = world:box(-3, 0, 4, 1, \"gold\"):physics()"},
         {"at": 1.3, "tuff": "lifted:move_to(-3, 5, 4)"}, {"at": 1.4, "dump": "pd_lifted.json"},
-        {"at": 3.5, "call": "report"}, {"at": 3.55, "dump": "pd_end.json"}, {"at": 3.6, "shot": "physics_drop.png"},
-        {"at": 3.7, "tuff": "world:pause()"}, {"at": 3.8, "dump": "pd_pause1.json"}, {"at": 4.4, "dump": "pd_pause2.json"},
-        {"at": 4.5, "close": True}])
+        # (The ball's second bounce is about 3 s after Rapier has loaded, which takes up to half a second.)
+        {"at": 4.2, "call": "report"}, {"at": 4.25, "dump": "pd_end.json"}, {"at": 4.3, "shot": "physics_drop.png"},
+        {"at": 4.4, "tuff": "world:pause()"}, {"at": 4.5, "dump": "pd_pause1.json"}, {"at": 5.1, "dump": "pd_pause2.json"},
+        {"at": 5.2, "close": True}])
     first_line_is_notice(c, r)
     clean_exit(c, r)
     start, end = r.dumps.get("pd_start.json", {}), r.dumps.get("pd_end.json", {})
@@ -881,10 +892,48 @@ def t_physics(c):
     shot = r.shots.get("physics_ragdoll.png")
     c.check(shot and color_share(shot, (40, 90, 200), 50, (0.3, 0.4, 0.7, 0.7)) > 0.001, "the screenshot shows the blue one lying there", shot)
 
+    r = play("physics_reset", game("physics_reset.tuf"), [
+        {"at": 0.8, "call": "topple"}, {"at": 1.0, "call": "grow_it"}, {"at": 2.0, "call": "drop_ball"},
+        {"at": 2.6, "dump": "px_grown.json"}, {"at": 2.65, "dump": "px_lost.json"},
+        {"at": 3.0, "call": "bring_back"}, {"at": 3.2, "dump": "px_lying.json"},
+        {"at": 3.3, "call": "shake_it"}, {"at": 3.5, "dump": "px_shaking.json"}, {"at": 4.2, "dump": "px_shaken.json"},
+        {"at": 4.4, "dump": "px_back.json"}, {"at": 5.6, "call": "report"}, {"at": 5.65, "shot": "physics_reset.png"},
+        {"at": 5.8, "close": True}])
+    clean_exit(c, r)
+    words = said(r, "resets")
+    resets, doubles = (int(words[1]), int(words[3])) if len(words) > 3 else (0, -1)
+    c.check(resets >= 2 and doubles == 0,
+            f"a ball the program sends back up as it lands goes up once a fall ({resets} times, {doubles} twice in a row): the "
+            "page's report from before the move doesn't put it back down", words)
+    lost, back = (bodies(r.dumps.get("px_lost.json", {}), "box") or [[]])[-1], (bodies(r.dumps.get("px_back.json", {}), "box") or [[]])[-1]
+    c.check(len(lost) > 2 and lost[2] < -300 and len(back) > 4 and abs(back[2]) < 0.05 and back[4] < 0.2 and abs(back[1] - 3) < 0.3,
+            f"a box that fell off the world (y {lost[2] if len(lost) > 2 else '?'}), put back with move_to, falls and lands again "
+            f"(y {back[2] if len(back) > 2 else '?'})", (lost, back))
+    grown = ([b for b in bodies(r.dumps.get("px_grown.json", {}), "sphere") if abs(b[1] - 6) < 1] or [[]])[0]
+    c.check(len(grown) > 2 and abs(grown[2]) < 0.05, f"a ball that grows as it falls keeps falling and lands (y {grown[2] if len(grown) > 2 else '?'})", grown)
+    poles = [(bodies(r.dumps.get(f"px_{n}.json", {}), "box") or [[]])[0] for n in ("lying", "shaking", "shaken")]
+    c.check(all(len(p) > 6 for p in poles) and all(abs(p[6]) < 0.3 and abs(p[2]) < 0.3 for p in poles)
+            and math.dist(poles[0][1:4:2], poles[2][1:4:2]) < 0.3,
+            "a pole lying on its side that shakes stays lying where it was (a shake only tilts how it's drawn)", poles)
+    hits = [line for line in r.lines if line.startswith("the crate was hit by")]
+    c.check(hits and all(h.startswith("the crate was hit by <sphere") for h in hits),
+            "a bullet removed just as it hits a crate: the crate's on_hit still gets the bullet (not nil)", hits[:3])
+    shot = r.shots.get("physics_reset.png")
+    c.check(shot and color_share(shot, (200, 60, 60), 60, (0.3, 0.2, 0.7, 0.7)) > 0.001, "the screenshot shows the red ball", shot)
+
+    # Nothing moving, nothing to draw: once physics has put 48 boxes to sleep, the page stops drawing the world.
+    rest = perf(c, "physics_rest", "physics_rest.tuf", [{"at": 3.5, "mark": True}, {"at": 4.5, "dump": "physics_rest.json"},
+                                                         {"at": 4.6, "close": True}], "48 boxes asleep")
+    awake = (rest.get("physics") or {}).get("awake")
+    c.check(awake == 0 and rest["page_draws_per_s"] < 5,
+            f"48 boxes asleep ({awake} awake): the page draws {rest['page_draws_per_s']} times a second", rest)
+
 
 def t_physics_player(c):
-    """The player and physics: walking into a crate pushes it, the player stands on a physics box and jumps off it,
-    and a ball falling on the player is an on_hit."""
+    """The player and physics: walking into a crate pushes it, the player stands on a physics box and jumps off it
+    (with Space, and with player:jump() in an every-frame function), a ball falling on the player is an on_hit, a
+    move_to in an every-frame function puts the player there (the page's next report doesn't put it back), and a
+    kinematic lift carries the player up."""
     r = play("physics_player", game("physics_player.tuf"), [
         {"at": 0.6, "call": "where"},
         {"at": 0.7, "hold": "w", "for": 1.5},
@@ -892,8 +941,11 @@ def t_physics_player(c):
         {"at": 2.6, "call": "stand"},
         {"at": 3.8, "call": "where"}, {"at": 3.85, "dump": "pp_stand.json"},
         {"at": 3.9, "key": "space"}, {"at": 4.2, "dump": "pp_jump.json"},
-        {"at": 5.0, "tuff": "player:move_to(6, 0, 8)"}, {"at": 5.1, "call": "drop"},
-        {"at": 6.6, "close": True}])
+        {"at": 5.2, "tuff": "hop = true"}, {"at": 5.5, "dump": "pp_hop.json"},
+        {"at": 6.4, "tuff": "player:move_to(6, 0, 8)"}, {"at": 6.5, "call": "drop"},
+        {"at": 8.0, "tuff": "warp = true"}, {"at": 8.3, "call": "where"}, {"at": 8.35, "dump": "pp_warp.json"},
+        {"at": 8.4, "tuff": "lift:glide(10, 2, 4, 1)"}, {"at": 9.8, "call": "where"}, {"at": 9.85, "dump": "pp_lift.json"},
+        {"at": 10.0, "close": True}])
     clean_exit(c, r)
     push = r.dumps.get("pp_push.json", {})
     crate, p = (bodies(push, "crate") or [None])[0], push.get("player") or [0, 0, 0]
@@ -904,8 +956,15 @@ def t_physics_player(c):
     c.check(0.85 < sp[1] < 1.0 and stand.get("on_ground"), f"the player stands on a physics box (y {sp[1]}), on the ground there", stand.get("player"))
     jump = (r.dumps.get("pp_jump.json", {}).get("player") or [0, 0, 0])
     c.check(jump[1] > 1.5, f"and can jump off it (y {jump[1]})", jump)
+    hop = (r.dumps.get("pp_hop.json", {}).get("player") or [0, 0, 0])
+    c.check(hop[1] > 1.5, f"player:jump() in an every-frame function jumps off it too, every time (y {hop[1]})", hop)
     c.check(any(line.startswith("the player was hit by <sphere") for line in r.lines), "a ball falling on the player: player:on_hit runs",
             r.lines[-4:])
+    warp = (r.dumps.get("pp_warp.json", {}).get("player") or [0, 0, 0])
+    c.check(abs(warp[0] - 10) < 0.2 and abs(warp[2] - 4) < 0.2,
+            f"player:move_to in an every-frame function puts the player there, and it stays (x {warp[0]}, z {warp[2]})", warp)
+    lift = (r.dumps.get("pp_lift.json", {}).get("player") or [0, 0, 0])
+    c.check(2.2 < lift[1] < 2.45 and abs(lift[0] - 10) < 0.2, f"a kinematic lift gliding up carries the player up with it (y {lift[1]})", lift)
     shot = r.shots.get("physics_player.png")
     c.check(shot and color_share(shot, (125, 80, 45), 45, (0.35, 0.5, 0.65, 0.9)) > 0.05, "the screenshot shows the crate in front", shot)
 
@@ -937,11 +996,41 @@ def t_physics_car(c):
     shot = r.shots.get("physics_car.png")
     c.check(shot and color_share(shot, (200, 50, 60), 60, (0.3, 0.35, 0.7, 0.8)) > 0.02, "the screenshot shows the red car ahead", shot)
 
+    # The player gets in (standing in front of the car), drives off, looks around on the way, brakes, and gets out
+    # (in an every-frame function, in a frame that takes a while).
+    r = play("physics_drive", game("physics_drive.tuf"), [
+        {"at": 0.8, "call": "report"}, {"at": 0.85, "dump": "pv_start.json"},
+        {"at": 0.9, "call": "get_in"}, {"at": 1.0, "lock": True},
+        {"at": 1.1, "hold": "w", "for": 2.6}, {"at": 3.75, "hold": "space", "for": 0.9},
+        {"at": 1.5, "look": [300, 0]}, {"at": 1.8, "look": [300, 40]}, {"at": 2.1, "look": [300, 40]},
+        {"at": 2.5, "dump": "pv_driving.json"},
+        {"at": 4.6, "call": "report"}, {"at": 4.65, "dump": "pv_drive.json"},
+        {"at": 4.7, "tuff": "leave = true"},
+        {"at": 5.2, "call": "report"}, {"at": 5.25, "dump": "pv_out.json"}, {"at": 5.3, "shot": "physics_drive.png"},
+        {"at": 5.5, "close": True}])
+    clean_exit(c, r)
+    start, driving = r.dumps.get("pv_start.json", {}), r.dumps.get("pv_driving.json", {})
+    drove, out = r.dumps.get("pv_drive.json", {}), r.dumps.get("pv_out.json", {})
+    p0, p1 = start.get("player") or [0, 0, 0, 0], out.get("player") or [0, 0, 0, 0]
+    car = (bodies(drove, "car") or [None])[0]  # just before the player gets out
+    c.check(car and car[3] < -9 and int((said(r, "car") or ["0"])[-1]) == 0,
+            f"the car drives on through where the player got in (z {car and car[3]}): the player isn't left standing there, and nothing hits it",
+            (car, said(r, "car")))
+    c.check(start.get("player_shown") is True and driving.get("player_shown") is False and out.get("player_shown") is True,
+            "the player's figure isn't left standing there either: it's hidden while it drives, and back when it gets out",
+            [d.get("player_shown") for d in (start, driving, out)])
+    c.check(car and math.dist((p1[0], p1[2]), (car[1], car[3])) < 3 and math.dist((p1[0], p1[2]), (p0[0], p0[2])) > 4,
+            f"car:drive(false) in an every-frame function: the player gets out beside the car's door (at {p1[:3]}, the car at {car and car[1:4]})",
+            (p0, p1, car))
+    c.check(abs((p1[3] - p0[3] + 180) % 360 - 180) < 1,
+            f"moving the mouse while driving doesn't turn the player: it gets out facing the way it did ({p0[3]} -> {p1[3]})", (p0, p1))
+
 
 def t_physics_2d(c):
     """2D physics: a ball bounces on a static floor and its on_hit runs, a box lands on the floor, a line falls flat,
-    a push sends the ball up, and the window's edges are walls."""
+    a push sends the ball up, a ball that shakes as it flies up keeps flying, and the window's edges are walls."""
     r = play("physics_2d", game("physics_2d.tuf"), [
+        {"at": 1.5, "call": "launch"}, {"at": 1.6, "call": "shake_it"}, {"at": 2.4, "dump": "p2_shake.json"},
         {"at": 3.0, "call": "report"}, {"at": 3.05, "dump": "p2_rest.json"}, {"at": 3.1, "shot": "physics_2d.png"},
         {"at": 3.2, "call": "kick"}, {"at": 3.25, "tuff": "box:push(9000, 0)"},
         {"at": 3.6, "call": "report"}, {"at": 4.6, "dump": "p2_wall.json"},
@@ -957,6 +1046,9 @@ def t_physics_2d(c):
     c.check(len(box) == 2 and abs(box[1][2] - 530) < 2 and abs(box[1][3]) < 2, "the box lands flat on the floor (y 530)", box)
     line = (bodies(rest, "line") or [None])[0]
     c.check(line and abs(line[2] - 558) < 3, "a line falls and lies on the floor", line)
+    shaker = ([b for b in bodies(r.dumps.get("p2_shake.json", {}), "circle") if abs(b[1] - 80) < 5] or [None])[0]
+    c.check(shaker and shaker[2] < 250, f"a ball sent flying up that shakes keeps flying (the shake is only drawn): it's high up "
+            f"(y {shaker and shaker[2]}), not held back and dropped", shaker)
     ys = [float(b[2].strip("[],")) for b in balls]
     c.check(len(ys) == 2 and ys[1] < ys[0] - 50, f"ball:push(200, -300) sends it up (y {ys})", balls)
     wall = (bodies(r.dumps.get("p2_wall.json", {}), "box") or [None, None])
@@ -1912,7 +2004,9 @@ def perf(c, name, program, steps, label):
                "engine_ms_median": d.get("engine_ms_median"), "engine_ms_p95": d.get("engine_ms_p95"),
                "page_fps": round(page.get("fps", 0), 1), "page_batches_per_s": round(page.get("batches", 0) / max(0.001, page.get("seconds", 1)), 1),
                "page_draw_ms": round(page.get("draw_ms_per_frame", 0), 3), "page_apply_ms": round(page.get("apply_ms_per_batch", 0), 3),
-               "objects": page.get("objects")}
+               "page_draws_per_s": round(page.get("draws", 0) / max(0.001, page.get("seconds", 1)), 1), "objects": page.get("objects")}
+    if isinstance(page.get("physics"), dict):
+        numbers["physics"] = page["physics"]
     print(f"  NUMBERS {label}: {json.dumps(numbers)}", flush=True)
     c.check((d.get("python_fps") or 0) >= 55, f"{label}: the Tuff program runs at {d.get('python_fps')} fps (want 60)", numbers)
     return numbers
@@ -1935,6 +2029,10 @@ def t_perf(c):
     }
     with open(os.path.join(OUT, "perf.json"), "w") as f:
         json.dump(results, f, indent=2)
+    fp = results["3d_fp_300"]
+    c.check(fp["page_draws_per_s"] <= 80,
+            f"300 objects from the kit: the page draws {fp['page_draws_per_s']} times a second, as often as the world changes "
+            f"({fp['page_draw_ms']} ms a display frame): swaying trees don't make a fast screen draw it at its full rate", fp)
 
 
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
