@@ -1,7 +1,8 @@
 mention tgame
 
-# Physics and the player: walking into a crate pushes it, the player can stand on a crate, and a ball that
-# falls on the player hits it.
+# Physics and the player: walking into a crate pushes it, the player can stand on a crate (and jump off it), a ball
+# that falls on the player hits it, a move_to in an every-frame function puts the player there, and a kinematic lift
+# carries the player up.
 world = tgame.world("Physics Player", 900, 560)
 world:ground "grass"
 world:gravity(-9.8)
@@ -13,14 +14,36 @@ step = world:box(-6, 0, 6, [1.6, 0.9, 1.6], "wood")
 step:physics()
 step:mass(40)
 wall = world:spawn("house", 8, 0, -8)
+lift = world:box(10, 0, 4, [2, 0.3, 2], "gray"):physics("kinematic")
 ball = nil
 hits = 0
+hop = false
+warp = false
 
 func knocked(other, strength):
     hits += 1
     say "the player was hit by " + other
 
 player:on_hit knocked
+
+# A frame that takes a while (a program with a lot to do in it).
+func busy():
+    n = 0
+    for i in range(1, 8000):
+        n += i
+
+# What the autopilot asks for, done the way a game does it: in an every-frame function, after the player has
+# walked.
+func watch(dt):
+    if hop:
+        hop = false
+        player:jump()
+    if warp:
+        warp = false
+        player:move_to(10, 0.3, 4)
+        busy()
+
+world:every_frame watch
 
 func drop():
     ball = world:sphere(6, 4, 8, 0.6, "red"):physics()

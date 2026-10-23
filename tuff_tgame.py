@@ -1274,6 +1274,7 @@ class Physical:
         self.hit_fns = []
         self.vel = [0.0] * self.D  # its speed, as physics last reported it
         self.phys_sent = None  # its body, as the page last heard of it
+        self.moved_in = 0  # the batch that took the program's last move of its body to the page (see phys_moved)
 
     def phys_name(self):
         """What it's called in a message ("box:mass needs...")."""
@@ -1285,6 +1286,12 @@ class Physical:
 
     def dynamic(self):
         return self.phys_kind == "dynamic" and self.game.phys is not None
+
+    def phys_moved(self):
+        """The program moved its body (or set its speed): the page's reports from before that reached the page are
+        old, and don't put it back (a ball sent back up as it lands isn't sent up twice)."""
+        if self.dynamic() and self.game.phys.live:
+            self.moved_in = self.game.view.batch
 
     def need_dynamic(self, what):
         if self.dynamic():
@@ -1379,6 +1386,7 @@ class Physical:
         if self.dynamic():
             self.vel = list(v)
             self.game.phys.send("velocity", int(self.node), *v)
+            self.phys_moved()
         else:  # without physics, it moves that fast by itself (like :speed)
             self.set_speed(v)
         return self.native
@@ -1691,7 +1699,15 @@ class Sprite(Physical):
             self.game.view.set(self.node, **props)
 
     def push(self):
+        if self.dynamic():  # its body goes there; a shake only nudges where it's drawn
+            self.send(x=self.x, y=self.y, nudge=[self.dx, self.dy])
+            self.phys_moved()
+            return
         self.send(x=self.x + self.dx, y=self.y + self.dy)
+
+    def push_rot(self):
+        self.send(rot=self.rot)
+        self.phys_moved()
 
     def moved(self):
         if self.edge != "none":
@@ -1837,12 +1853,12 @@ class Sprite(Physical):
 
     def turn(self, degrees):
         self.rot = (self.rot + self.num(degrees, ":turn")) % 360
-        self.send(rot=self.rot)
+        self.push_rot()
         return self.native
 
     def turn_to(self, degrees):
         self.rot = self.num(degrees, ":turn_to") % 360
-        self.send(rot=self.rot)
+        self.push_rot()
         return self.native
 
     def angle(self):
@@ -1866,7 +1882,7 @@ class Sprite(Physical):
         cx, cy = self.center()
         if tx != cx or ty != cy:
             self.rot = math.degrees(math.atan2(ty - cy, tx - cx)) % 360
-            self.send(rot=self.rot)
+            self.push_rot()
         return self.native
 
     def speed(self, vx=MISSING, vy=0):
@@ -1876,6 +1892,7 @@ class Sprite(Physical):
         if self.dynamic():
             self.vel = v
             self.game.phys.send("velocity", int(self.node), *v)
+            self.phys_moved()
             return self.native
         self.vx, self.vy = v
         self.busy()
@@ -2022,6 +2039,8 @@ class Sprite(Physical):
             self.game.things.pop(self, None)
             if self in self.layer.sprites:
                 self.layer.sprites.remove(self)
+            if self.game.phys is not None and self.phys_sent is not None:
+                self.game.phys.forget(self)  # a hit it was in still names it
 
     # ---- its own values, and text
     def set(self, a, b=MISSING):
@@ -2062,7 +2081,7 @@ class Sprite(Physical):
 
     # ---- every frame, while it moves by itself
     def tick(self, dt):
-        moved = False
+        moved = glided = False
         if self.vx or self.vy:
             self.x += self.vx * dt
             self.y += self.vy * dt
@@ -2076,7 +2095,7 @@ class Sprite(Physical):
             if a[0] == "glide":
                 e = ease(t)
                 self.x, self.y = a[3] + (a[5] - a[3]) * e, a[4] + (a[6] - a[4]) * e
-                moved = True
+                moved = glided = True
             elif a[0] == "shake":
                 self.dx = math.sin(a[1] * 70) * 6 * (1 - t)
                 moved = True
@@ -2084,7 +2103,9 @@ class Sprite(Physical):
                 self.anims.remove(a)
                 if a[0] == "shake":
                     self.dx = 0.0
-        if moved:
+        if moved and self.dynamic() and not glided:  # physics moves it: a shake only nudges where it's drawn
+            self.send(nudge=[self.dx, self.dy])
+        elif moved:
             if self.edge != "none":
                 self.apply_edge(True)
             self.push()
@@ -3436,18 +3457,36 @@ class Thing(Physical):
     def push(self):
         self.send(self.node, x=self.x, y=self.y, z=self.z)
         self.push_label()
+        self.phys_moved()
 
     def push_label(self):
         if self.label_node is not None:
             top = self.y + (0.9 if self.fallen else self.height() + 0.25)
             self.send(self.label_node, x=self.x, y=top, z=self.z)
 
-    def push_rotation(self):
-        if self.quat is not None and not self.tilt and not self.pitch:  # tumbled by physics: as it lies
+    def push_rotation(self, anim=False):
+        """Sends how it's turned. A thing physics moves turns its body only when the program turns it (turn, look_at);
+        a shake's or a fall's tilt (anim) only tilts how it's drawn (its wobble), not its body."""
+        dyn = self.dynamic()
+        if dyn:
+            self.send(self.node, wobble=self.wobble())
+            if anim:
+                return
+        tilt, pitch = (0.0, 0.0) if dyn else (self.tilt, self.pitch)
+        if self.quat is not None and not tilt and not pitch:  # tumbled by physics: as it lies
             rx, ry, rz = euler_of_quat(self.quat)
         else:
-            rx, ry, rz = euler(self.heading, self.tilt_axis, self.tilt, self.pitch)
+            rx, ry, rz = euler(self.heading, self.tilt_axis, tilt, pitch)
         self.send(self.node, rx=rx, ry=ry, rz=rz)
+        self.phys_moved()
+
+    def wobble(self):
+        """A shake's or a fall's tilt as a turn about its level axis in the world ([x, y, z, w]), or None."""
+        if not self.tilt:
+            return None
+        kx, kz = self.tilt_axis
+        h = math.radians(self.tilt) / 2
+        return [round(kx * math.sin(h), 5), 0.0, round(kz * math.sin(h), 5), round(math.cos(h), 5)]
 
     def turn_by(self, degrees, to=None):
         """Turns it about the up axis (clockwise from above), however physics has turned it (to: to face that way)."""
@@ -3699,11 +3738,11 @@ class Thing(Physical):
             self.solid_ = self.was_solid
         if self.world.phys is not None:
             self.world.phys.dirty.add(self)
-        self.push_rotation()
-        self.push()
+        self.push_rotation(anim=True)
+        self.push_label() if self.dynamic() else self.push()
 
     def tick(self, dt):
-        moved = rotated = False
+        moved = rotated = glided = False
         if self.vx or self.vy or self.vz:
             g = self.ground()
             self.x += self.vx * dt
@@ -3724,7 +3763,7 @@ class Thing(Physical):
                 (x0, y0, z0), (x1, y1, z1) = a[3], a[4]
                 self.x, self.y, self.z = x0 + (x1 - x0) * e, y0 + (y1 - y0) * e, z0 + (z1 - z0) * e
                 self.y += self.ground()
-                moved = True
+                moved = glided = True
             elif kind == "shake":
                 self.tilt_axis = a[3]
                 self.tilt = math.sin(a[1] * 42) * 7 * (1 - t)
@@ -3755,12 +3794,14 @@ class Thing(Physical):
                     self.tilt = 0.0
                 elif kind == "swing":
                     self.pitch = 0.0
-        if moved:
+        if moved and self.dynamic() and not glided:  # physics moves it: a grow or a fall only changes how it looks
+            self.push_label()
+        elif moved:
             self.push()
             if self.dynamic():  # a glide carries it: no speed builds up meanwhile
                 self.game.phys.send("velocity", int(self.node), 0, 0, 0)
         if rotated:
-            self.push_rotation()
+            self.push_rotation(anim=True)
         self.busy()
 
     # ---- how it looks
@@ -3832,9 +3873,10 @@ class Thing(Physical):
             w.by_node.pop(int(node), None)
         if w.phys is not None:
             w.phys.dirty.discard(self)  # its body went with its object
-            if w.driving is self:
-                w.driving = None
-                w.stop_chase()
+            if self.phys_sent is not None:
+                w.phys.forget(self)
+            if w.driving is self:  # the player gets out where the car was
+                self.drive(False)
 
     def solid(self, on=True):
         self.solid_ = self.rt.truthy(on)
@@ -3948,6 +3990,7 @@ class Player:
         self.pitch = 0.0
         self.vy = 0.0
         self.on_ground = True
+        self.phys_ground = -1.0  # the game's time when physics last said it stands on something physics moves
         self.speed = 5.0
         self.jump_v = math.sqrt(2 * GRAVITY * 1.2)
         self.alive = True
@@ -4034,10 +4077,15 @@ class Player:
         return self.native
 
     def jump(self):
-        if self.on_ground:
+        if self.grounded():
             self.vy = self.jump_v
             self.on_ground = False
         return self.native
+
+    def grounded(self):
+        """On the ground, for a jump: on the land or something solid, or (physics said so a moment ago) on a thing
+        physics moves, which Python's walking doesn't see under it."""
+        return self.on_ground or (self.vy <= 0 and self.world.clock - self.phys_ground < 0.15)
 
     def hold(self, item="axe"):
         name = self.rt.text(item).strip().lower()
@@ -4109,9 +4157,9 @@ class Player:
     # ---- walking, every frame
     def solids(self):
         """What stops the player here: solid things, except what physics moves (the page's physics stops the player
-        at those, and pushes them)."""
+        at those, and pushes them). A kinematic thing is here: the program moves it, so a lift carries the player."""
         return [t for t in self.world.things if isinstance(t, Thing) and t.alive and t.solid_ and not t.hidden
-                and t.phys_kind not in ("dynamic", "kinematic")]
+                and t.phys_kind != "dynamic"]
 
     def blocked(self, x, z, y, solids):
         r = self.RADIUS
@@ -4145,6 +4193,7 @@ class Player:
     def update(self, dt, real):
         w = self.world
         if w.driving is not None:  # in the car: the keys and the camera are the car's
+            w.view.mouse_delta()  # and the mouse's moves go (kept, they'd spin the view on getting out)
             return
         look = w.locked or w.fake_lock
         mdx, mdy = w.view.mouse_delta()
@@ -4194,7 +4243,7 @@ class Player:
             else:
                 self.try_step(self.x, nz, solids)
             self.keep_inside()
-        if "space" in w.just and self.on_ground:
+        if "space" in w.just and self.grounded():
             self.vy = self.jump_v
             self.on_ground = False
         self.vy -= GRAVITY * dt
@@ -4297,7 +4346,8 @@ class Physics:
     that uses it. Python tells the page what each thing's body is (a `phys` property on its object: kind, shape,
     size, mass, bounce...) and sends the program's kicks, twists and explosions. Every frame the page sends back
     where the physics things went and what hit what (a "phys" event); the things keep those values and never send
-    them back. A thing moved by the program (move_to, glide...) goes on from there in the page.
+    them back. A thing moved by the program (move_to, glide...) goes on from there in the page, and the reports from
+    before the page had that move (each says the last batch it had) leave the thing be.
 
     In a 3D world, solid things (buildings, rocks, trees' trunks, things made solid), the land, the island and the
     ground become bodies that don't move, and the player becomes a capsule that walks into physics things, pushes
@@ -4313,6 +4363,9 @@ class Physics:
         self.walls_ = False
         self.paused = False
         self.dirty = set()  # things whose body may have changed: they're checked once, at the frame
+        # Things removed in the last frames, by their object's id: the page reports a hit a few steps after it
+        # starts, so a bullet removed as it hits is still what hit the target. {id: (thing, frame it went)}
+        self.gone = {}
         # The player (3D): its moves the page hasn't made yet, [seq, (dx, dy, dz)], and where the page will have it
         self.seq = self.first_seq = 0
         self.moves = collections.deque()
@@ -4344,6 +4397,8 @@ class Physics:
         """Before each frame goes: the bodies that changed, and pausing (physics stops while the game is paused)."""
         for t in list(self.dirty):
             self.sync(t)
+        if self.gone:
+            self.gone = {i: g for i, g in self.gone.items() if self.game.frames - g[1] < 30}
         paused = bool(self.game.is_paused)
         if paused != self.paused:
             self.paused = paused
@@ -4360,6 +4415,8 @@ class Physics:
             self.moves.clear()
             self.sent = at
             self.send("player_to", self.seq, *at)
+            if self.game.driving is not None:  # in a car (from the start): its capsule stays out of the way
+                self.send("player_off")
             return
         d = (at[0] - self.sent[0], at[1] - self.sent[1], at[2] - self.sent[2])
         if not any(d):
@@ -4371,9 +4428,10 @@ class Physics:
 
     def player_report(self, p, rep):
         """Where the page's capsule is after the moves up to `done`: the player is there, plus the moves the page
-        hasn't made yet. Standing on a physics thing, it's on the ground."""
+        hasn't made yet. Standing on a physics thing, it's on the ground. Not when the program has just moved the
+        player (move_to, getting out of a car): that goes to the page next, and the capsule's spot is the old one."""
         done, x, y, z, grounded = rep
-        if done < self.first_seq or self.sent is None:
+        if p.teleported or done < self.first_seq or self.sent is None:
             return
         while self.moves and self.moves[0][0] <= done:
             self.moves.popleft()
@@ -4382,7 +4440,7 @@ class Physics:
         p.x, p.y, p.z = x, y, z
         self.sent = (x, y, z)
         if grounded and p.vy <= 0:
-            p.vy, p.on_ground = 0.0, True
+            p.vy, p.on_ground, p.phys_ground = 0.0, True, self.game.clock
 
     # ---- what the page says
     def who(self, i):
@@ -4393,13 +4451,19 @@ class Physics:
         land = getattr(g, "land", None)
         if land is not None and i == int(land.node):
             return land
-        return g.by_node.get(i)
+        t = g.by_node.get(i)
+        return t if t is not None or i not in self.gone else self.gone[i][0]
+
+    def forget(self, t):
+        """t was removed: for a few frames more, a hit it was in still names it."""
+        self.gone[int(t.node)] = (t, self.game.frames)
 
     def report(self, e):
         g = self.game
+        seen = e.get("seq")  # the last batch the page had applied: a thing moved in a later one isn't there yet
         for b in e.get("b") or ():
             t = g.by_node.get(b[0])
-            if t is not None and t.alive and hasattr(t, "from_physics"):
+            if t is not None and t.alive and hasattr(t, "from_physics") and (seen is None or seen >= t.moved_in):
                 t.from_physics(b)
         p = e.get("p")
         if p and getattr(g, "the_player", None) is not None:
@@ -4510,6 +4574,11 @@ class Car(Thing):
                 w.cam_mode = "drive"
             w.camera_dirty = False
             ph.send("chase", int(self.node))
+            p = w.the_player
+            if p is not None:  # in the car: its figure and its capsule aren't left standing where it got in
+                if p.body is not None:
+                    p.body.hide()
+                ph.send("player_off")
         elif w.driving is self:
             w.driving = None
             self.controls = (0, 0, 0)
@@ -4523,7 +4592,9 @@ class Car(Thing):
                 h = math.radians(self.heading)
                 p.x, p.z = self.x - math.cos(h) * 2.2, self.z - math.sin(h) * 2.2
                 p.y, p.vy = w.ground_y(p.x, p.z), 0.0
-                p.teleported = True
+                p.teleported = True  # its capsule comes back there (player_to)
+                if p.body is not None and not p.hidden:
+                    p.body.show()
                 p.place_camera(1)
         return self.native
 
@@ -6440,6 +6511,8 @@ class Autopilot:
             out["interact"] = g.interact.state()
         if g.three_d and g.the_player is not None:
             out["on_ground"] = g.the_player.on_ground
+            body = g.the_player.body  # third person: the figure the camera follows
+            out["player_shown"] = body is not None and not body.hidden
         return out
 
 

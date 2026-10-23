@@ -1,0 +1,10 @@
+mention tgame
+
+# 48 boxes at rest on the grass and nothing else: once physics has put them to sleep, there's nothing to draw.
+world = tgame.world("Physics Rest", 900, 560)
+world:ground "grass"
+world:camera_at(0, 9, 15)
+world:look_at(0, 0, -1)
+for row in range(0, 5):
+    for col in range(0, 7):
+        world:box(col * 2 - 7, 0, row * 2 - 6, 1, "wood"):physics()

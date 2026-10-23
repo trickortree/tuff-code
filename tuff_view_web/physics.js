@@ -5,7 +5,9 @@
 // never more), draws each body where it is (smoothed between steps, for screens faster than 60 Hz), and once a frame
 // tells Python where its physics things went and what hit what, in one 'phys' event. Python keeps those values and
 // never sends them back. When the program moves a physics thing itself, the move arrives as a change to the thing's
-// object (x, y, z, rx...) and its body goes there (a teleport) and carries on, keeping its speed.
+// object (x, y, z, rx...) and its body goes there (a teleport) and carries on, keeping its speed. Each report says
+// the last of Python's batches the page had applied (seq), so Python knows a report from before its move is old.
+// A shake only tilts how a body is drawn (its object's `wobble`, a quaternion), not the body.
 //
 // What each object is comes from Python as its `phys` property: { kind: 'dynamic' (falls, tumbles, gets pushed),
 // 'static' (never moves) or 'kinematic' (moved by the program), shape, size, cy (how far its middle is above the
@@ -19,14 +21,15 @@
 const STEP = 1 / 60;
 const MAX_STEPS = 4;        // after a slow frame, catch up at most this many steps; the rest of the time is dropped
 const DEG = Math.PI / 180;
-const LOST = -300;          // a body that falls this far (off the island, through the world) stops being simulated
+const LOST = -300;          // a body that falls this far (off the island, through the world) stops being simulated,
+                            // until the program puts it somewhere (revive)
 const PLAYER = { r: 0.32, half: 0.555, feet: 0.875 };  // tgame's player: a capsule 1.75 tall, its feet at y
 
 let R = null;               // Rapier (rapier3d.mjs or rapier2d.mjs)
 let D3 = true;              // a 3D world (tgame.world) or a 2D game (tgame.window)
 let world = null;
 let queue = null;           // the world's EventQueue
-let host = null;            // what engine.js lends: emit, report
+let host = null;            // what engine.js lends: emit, report, node, applied
 let paused = false;
 let last = 0;               // the last frame's time (ms)
 let acc = 0;                // seconds of the world not stepped yet
@@ -58,7 +61,9 @@ export async function load(helpers, opts) {
 const api = { attach, moved, detach, call, step, landChanged, info };
 
 function info() {
-  return { dim: D3 ? 3 : 2, bodies: recs.size, steps, paused };
+  let awake = 0;
+  for (const r of recs.values()) if (r.kind === 'dynamic' && r.moving) awake++;
+  return { dim: D3 ? 3 : 2, bodies: recs.size, awake, steps, paused };
 }
 
 // ---------------------------------------------------------------- objects with a body
@@ -341,6 +346,7 @@ function moved(n, props) {
     else holdStill(n);
     return;
   }
+  if ('wobble' in props && D3 && r.kind === 'dynamic' && r.cur) draw(r, 1);  // a shake: drawn tilted, the body as it is
   if (D3 ? !('x' in props || 'y' in props || 'z' in props || 'rx' in props || 'ry' in props || 'rz' in props)
     : !('x' in props || 'y' in props || 'rot' in props)) return;
   if (!r.body) return;
@@ -359,8 +365,10 @@ function moved(n, props) {
     if (r.kind === 'dynamic') {
       // Python's x, y, z for a dynamic body: its middle across, its lowest point up (a car: its own position). Only
       // turned, it turns about its middle.
-      const c = !('x' in props || 'y' in props || 'z' in props) ? vec(r.body.translation())
+      const put = 'x' in props || 'y' in props || 'z' in props;
+      const c = !put ? vec(r.body.translation())
         : r.vehicle ? add(vec(o.position), qrot(q, [0, r.cy, 0])) : [o.position.x, o.position.y + extentY(r.spec, q), o.position.z];
+      if (put) revive(r);
       r.body.setTranslation({ x: c[0], y: c[1], z: c[2] }, true);
       r.body.setRotation({ x: q[0], y: q[1], z: q[2], w: q[3] }, true);
     } else {
@@ -393,8 +401,16 @@ function glide(r) {
   r.body.setNextKinematicTranslation(vecObj(next));
 }
 
+// A body that fell out of the world was switched off (see fixedStep). Put somewhere by the program (or flipped back
+// onto its wheels), it's switched on again, unless it's hidden (that switches it off too).
+function revive(r) {
+  if (!D3 || r.n.obj.visible === false) return;
+  for (const b of bodies(r)) if (!b.isEnabled()) b.setEnabled(true);
+}
+
 // A ragdoll moved by the program: every part moves by as much as its reported spot did (and it's drawn there).
 function moveRagdoll(r) {
+  revive(r);
   const o = r.n.obj;
   const want = vec(o.position);
   const now = report3d(r);
@@ -500,12 +516,19 @@ const OPS = {
   },
   player_to(seq, x, y, z) {
     if (!player) makePlayer(x, y, z);
+    player.body.setEnabled(true);
     player.at = [+x, +y + PLAYER.feet, +z];
     player.body.setTranslation(vecObj(player.at), true);
     world.propagateModifiedBodyPositionsToColliders();
     player.want = [0, 0, 0];
     player.seq = player.done = seq;
     dirty = true;
+  },
+  // The player got into a car: its capsule isn't left standing where it got in (player_to brings it back).
+  player_off() {
+    if (!player) return;
+    player.body.setEnabled(false);
+    player.touching.clear();
   },
   // A car's controls: throttle (1 forward, -1 back), steer (1 left, -1 right), brake (0 or 1).
   drive(id, throttle, steer, brake) {
@@ -520,6 +543,7 @@ const OPS = {
     const t = r.body.translation();
     const q = quat(r.body.rotation());
     const yaw = Math.atan2(2 * (q[3] * q[1] + q[0] * q[2]), 1 - 2 * (q[1] * q[1] + q[2] * q[2]));
+    revive(r);
     r.body.setTranslation({ x: t.x, y: t.y + 1.2, z: t.z }, true);
     r.body.setRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) }, true);
     r.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
@@ -548,14 +572,16 @@ function makePlayer(x, y, z) {
   player = { body, collider: c, kcc, at, want: [0, 0, 0], seq: 0, done: 0, grounded: false, touching: new Set(), v: [0, 0, 0] };
 }
 
-// The player's move this step: as far as its controller lets it go toward where Python walked it. The land and fixed
-// things are left to Python (it walks on them as it always has); this is for the things physics moves.
+// The player's move this step: as far as its controller lets it go toward where Python walked it. The land, fixed
+// things and kinematic ones (the program moves those, so Python knows where they are) are left to Python: it walks
+// on them as it always has, and a lift carries it. This is for the things physics moves.
 function movePlayer() {
   const p = player;
   const want = p.want;
   p.want = [0, 0, 0];
   p.done = p.seq;
-  p.kcc.computeColliderMovement(p.collider, vecObj(want), R.QueryFilterFlags.EXCLUDE_FIXED | R.QueryFilterFlags.EXCLUDE_SENSORS);
+  p.kcc.computeColliderMovement(p.collider, vecObj(want),
+    R.QueryFilterFlags.EXCLUDE_FIXED | R.QueryFilterFlags.EXCLUDE_KINEMATIC | R.QueryFilterFlags.EXCLUDE_SENSORS);
   const m = p.kcc.computedMovement();
   p.v = [m.x / STEP, m.y / STEP, m.z / STEP];
   p.at = [p.at[0] + m.x, p.at[1] + m.y, p.at[2] + m.z];
@@ -595,7 +621,9 @@ function step(now) {
   }
   if (acc >= STEP) acc = 0;  // still behind: let the time go rather than fall further behind
   const alpha = Math.min(1, acc / STEP);
-  for (const r of recs.values()) if (r.kind === 'dynamic' && (r.moving || n)) draw(r, alpha);
+  // The bodies that are moving, or that stepped this frame and moved (one that just fell asleep goes where it
+  // stopped). A body asleep isn't drawn again, so a world where everything has settled isn't drawn at all.
+  for (const r of recs.values()) if (r.kind === 'dynamic' && (r.moving || (n && r.moved))) draw(r, alpha);
   if (chase) follow(dt);
   if (n || dirty) send();
 }
@@ -606,7 +634,7 @@ function fixedStep() {
     if (r.vehicle) driveCar(r);
     if (r.glide) glide(r);
   }
-  if (player) movePlayer();
+  if (player && player.body.isEnabled()) movePlayer();
   world.step(queue);
   steps++;
   queue.drainCollisionEvents((h1, h2, start) => { if (start) started(h1, h2, 0); });
@@ -676,7 +704,8 @@ function draw(r, alpha) {
   const [t, q] = blend(r.prev, r.cur, alpha);
   const at = sub(t, qrot(q, [0, r.cy, 0]));
   n.obj.position.set(at[0], at[1], at[2]);
-  n.obj.quaternion.set(q[0], q[1], q[2], q[3]);
+  const w = n.wobble ? qmul(n.wobble, q) : q;  // a shake tilts how it's drawn, not its body
+  n.obj.quaternion.set(w[0], w[1], w[2], w[3]);
   if (r.vehicle) drawWheels(r);
   n.host.dirty = true;
 }
@@ -755,7 +784,9 @@ function send() {
     const cam = chase.rec.n.host.camera;
     out.c = [r4(cam.position.x), r4(cam.position.y), r4(cam.position.z), r4(-cam.rotation.y / DEG), r4(cam.rotation.x / DEG)];
   }
-  if (out.b || out.h || out.p || out.c) host.emit('phys', out);
+  if (!(out.b || out.h || out.p || out.c)) return;
+  out.seq = host.applied();  // the last of Python's batches applied: Python's moves after it aren't in this report
+  host.emit('phys', out);
 }
 
 // 3D: [id, x, y, z, qx, qy, qz, qw, vx, vy, vz] (a car adds its speed in km/h). x and z are the middle and y the

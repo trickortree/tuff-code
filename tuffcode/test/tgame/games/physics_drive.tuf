@@ -1,0 +1,38 @@
+mention tgame
+
+# Physics: the player gets in a car standing in front of it and drives off, looks around with the mouse on the way,
+# and gets out beside the car's door, facing the way it did.
+world = tgame.world("Physics Drive", 900, 560)
+world:ground "grass"
+player = world:player("third person")
+player:move_to(0, 0, -6)
+car = world:car(0, 0, 0, "red")
+hits = 0
+leave = false
+
+func knocked(other, strength):
+    hits += 1
+    say "the player was hit by " + other
+
+player:on_hit knocked
+
+func get_in():
+    car:drive()
+
+# A frame that takes a while (a program with a lot to do in it).
+func busy():
+    n = 0
+    for i in range(1, 8000):
+        n += i
+
+# Getting out the way a game does it: in an every-frame function (a key's flag), in a frame that takes a while.
+func watch(dt):
+    if leave:
+        leave = false
+        car:drive(false)
+        busy()
+
+world:every_frame watch
+
+func report():
+    say "car " + car:spot() + " player " + player:spot() + " facing " + round(player:angle()) + " hits " + hits

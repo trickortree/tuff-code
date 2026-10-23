@@ -1,7 +1,7 @@
 mention tgame
 
-# 2D physics: a ball bounces on a floor (lower each time), a box falls and lands, a plank tips over, and the
-# window's edges are walls.
+# 2D physics: a ball bounces on a floor (lower each time), a box falls and lands, a plank tips over, a ball that
+# shakes as it flies up keeps flying, and the window's edges are walls.
 game = tgame.window("Bouncy", 800, 600)
 game:gravity(900)
 game:walls(true)
@@ -11,6 +11,7 @@ ball:bounce(0.8)
 box = game:box(600, 200, 60, 60, "orange"):physics()
 box:mass(3)
 plank = game:line(330, 300, 470, 300, "white"):physics()
+shaker = game:circle(80, 500, 15, "yellow"):physics()
 hits = 0
 floor_hits = 0
 
@@ -27,3 +28,9 @@ func report():
 
 func kick():
     ball:push(200, -300)
+
+func launch():
+    shaker:velocity(0, -900)
+
+func shake_it():
+    shaker:shake()
