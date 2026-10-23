@@ -120,7 +120,7 @@
     sprite: ['speed', 'spin', 'on_edge', 'layer', 'turn_to', 'hide', 'align', 'clicked'],
     object: ['speed', 'spin', 'turn_to', 'hide', 'label', 'solid', 'glow', 'scale', 'clicked', ...PHYSICS_PROPS, ...KIT_PROPS],
     player: ['move_to', 'turn_to', 'walk_speed', 'jump_height'],
-    car: ['drive', 'engine', 'clicked'],
+    car: ['drive', 'engine', 'turn_to', 'clicked'],
     ragdoll: ['clicked'],
     door: ['needs', 'turn_to', 'hide', 'clicked'],
   };
@@ -865,6 +865,25 @@
     else pl.ed.insertAfter(ownLast(node), propLine(V, method, args));
   }
 
+  // A thing on a path (lift:path([[0, 1, -6], [8, 1, -6]], 3)): the spots are places in the world, so when the thing
+  // moves (from where it is to its new inputs, args), each spot moves by as much. Gives its path line written again,
+  // null when it has no path or didn't move, or false when a spot comes from code (then the path stays as it is).
+  function pathMoved(node, args) {
+    const p = node.props.path;
+    if (!p || p.args[0] === undefined || !['xy', 'spot'].includes(node.pos.form)) return null;
+    const to = { ...node, args };
+    readPos(to);
+    if (!['xy', 'spot'].includes(to.pos.form)) return null;
+    const [dx, dy, dz] = [to.pos.x - node.pos.x, (to.pos.y ?? 0) - (node.pos.y ?? 0), to.pos.z - node.pos.z];
+    if (!dx && !dy && !dz) return null;
+    const raw = p.args[0].raw || '';
+    const spots = raw.startsWith('[') && raw.endsWith(']') ? K.splitTop(raw.slice(1, -1)).map(val) : [];
+    if (!spots.length || !spots.every((s) => Array.isArray(s) && (s.length === 2 || s.length === 3))) return false;
+    // (A spot on the land, [x, z], stays on it unless the thing went up or down.)
+    const moved = spots.map((s) => (s.length === 3 ? [s[0] + dx, s[1] + dy, s[2] + dz] : dy ? [s[0] + dx, dy, s[1] + dz] : [s[0] + dx, s[1] + dz]));
+    return callText(p.call, [moved, ...p.args.slice(1)], { paren: true });
+  }
+
   function settingLine(G, method, args) {
     if (method === 'island' || method === 'ground') return `${G}:${method}(${args.map(fmt).join(', ')})`;
     return propLine(G, method, args);
@@ -1031,12 +1050,17 @@
         const cam = S.cams.get(S.file) || { tx: 0, tz: -6 };
         const [X, Z] = freeSpot3(P, snap(cam.tx), snap(cam.tz));
         switch (id) {
-          case 'player':
+          // The player walks with the arrow keys (the Car tile's rule), so a car that drives waits now, in the same step.
+          case 'player': {
             if (P.player) { ide.toast('This world has a player already. A world can have one.'); return null; }
             put(nm('player'), '');
             lines = [`${V} = ${G}:player("first person")`];
-            say = connectWaiting(pl, V);
+            const cars = P.nodes.filter((m) => m.kind === 'car' && m.props.drive && m.props.drive.args[0] !== false);
+            for (const c of cars) pl.ed.remove(c.props.drive.line);
+            const waits = cars.length ? `${cap(V)} walks with the arrow keys now, so ${cars.map((c) => c.var).join(' and ')} ${cars.length === 1 ? 'waits' : 'wait'}. Turn on Drive it in its Inspector to drive it instead.` : null;
+            say = [waits, connectWaiting(pl, V)].filter(Boolean).join(' ') || null;
             break;
+          }
           case 'coin': {
             const T = target3(P);
             const n = nm('coin');
@@ -1151,11 +1175,15 @@
     },
 
     // Moves a thing (a drag, the arrow keys, the X and Y fields): 2D by dx, dy (a line moves all four numbers),
-    // 3D to x, z; patch can also name fields (x, y, w, color...).
+    // 3D to x, z; patch can also name fields (x, y, w, color...). A thing on a path takes its path with it.
     setArgs(P, node, patch) {
       const pl = plan(P);
-      setNodeArgs(pl, node, withArgs(node, patch));
+      const args = withArgs(node, patch);
+      setNodeArgs(pl, node, args);
+      const path = pathMoved(node, args);
+      if (path) pl.ed.replace(node.props.path.line, path);
       pl.done();
+      if (path === false) ide.toast(`${cap(node.var)}'s path has a spot that comes from code, so it stays where it was. Change its spots in the code.`, 'info', 5000);
       return node.key;
     },
 
@@ -1179,6 +1207,8 @@
       const pl = plan(P);
       propEdit(pl, node, method, args);
       if (extra) for (const [m, a] of extra) propEdit(pl, node, m, a);
+      // One car has the arrow keys: Drive it on for this one takes the others' drive lines out.
+      if (method === 'drive' && args && !PROP_OFF.drive(args)) for (const c of P.nodes) if (c !== node && c.kind === 'car' && c.props.drive) pl.ed.remove(c.props.drive.line);
       pl.done();
       return node._var ? `v:${node._var}` : node.key;
     },
@@ -1221,15 +1251,19 @@
       let args = node.args;
       if (node.kind === 'line' && q.form === 'line') args = withArgs(node, { x1: q.x1 + 30, y1: q.y1 + 30, x2: q.x2 + 30, y2: q.y2 + 30 });
       else if (['xy', 'spot'].includes(q.form)) args = withArgs(node, node.layer === 'world' ? { x: q.x + 2 } : { x: q.x + 30, y: q.y + 30 });
-      // (A copy of a car doesn't drive too: one car has the arrow keys.)
+      // (A copy of a car doesn't drive too: one car has the arrow keys. A copy on a path gets its own path, moved as
+      // far as the copy is.)
+      const path = pathMoved(node, args);
       const props = Object.entries(node.props).filter(([m]) => !(node.kind === 'car' && m === 'drive')).map(([, p]) => p)
-        .sort((a, b) => a.line - b.line).map((p) => K.renameIdents(P.lines[p.line - 1], map));
+        .sort((a, b) => a.line - b.line).map((p) => K.renameIdents(p === node.props.path && path ? path : P.lines[p.line - 1], map));
       pl.ed.insertAfter(ownLast(node), [lineFor(node, args, N), ...props].join('\n'));
       pl.done();
+      if (path === false) ide.toast(`${cap(N)} has the same path as ${node.var}: a spot on it comes from code. Change its spots in the code.`, 'info', 5000);
       return `v:${N}`;
     },
 
-    // Deletes a thing: its lines, its behaviours, and other things' behaviours that need it (collect by, chase, game over).
+    // Deletes a thing: its lines, its behaviours, other things' behaviours that need it (collect by, chase, game over),
+    // and the lock of a door it opens (door:needs(key)).
     remove(P, node) {
       const sc = P.score && P.score.label === node;
       if (sc) {
@@ -1245,14 +1279,17 @@
       if (sc) del(P.scoreLine);
       const own = P.behaviours.filter((b) => b.node === node);
       const needs = node.var ? P.behaviours.filter((b) => b.node !== node && ((b.type === 'collect' && b.p.C === node.var) || ((b.type === 'chase' || b.type === 'hurts') && b.p.T === node.var))) : [];
+      const locks = node.var ? P.nodes.filter((d) => d !== node && d.props.needs?.args[0]?.raw === node.var) : [];
       for (const b of [...own, ...needs]) behLines(P, b).forEach(del);
+      for (const d of locks) del(d.props.needs.line);
       pl.done();
       const name = node.var || KIND_LABEL(node).toLowerCase();
       const still = node.var && S.model.getLinesContent().some((l) => wordRe(node.var).test(K.stripComment(l).code));
       if (still) ide.toast(`Removed. Some code still mentions ${node.var}. Check the red marks when you run.`, 'error', 5000);
-      else if (needs.length) {
+      else if (needs.length || locks.length) {
         const by = new Map();
         for (const b of needs) { if (!by.has(b.V)) by.set(b.V, []); by.get(b.V).push(BEH[b.type].short); }
+        for (const d of locks) { if (!by.has(d.var)) by.set(d.var, []); by.get(d.var).push('lock'); }
         const parts = [...by].map(([v, s]) => `${v}'s ${s.join(' and ')}`);
         ide.toast(`Removed ${name}, and ${parts.join(' and ')}, which needed it. Ctrl+Z brings it back.`, 'info', 5000);
       } else ide.toast(`Removed ${name}. Ctrl+Z brings it back.`, 'info', 3000);
@@ -3020,10 +3057,14 @@ func coin_collect(dt):
       const c = f('color');
       kids.push(fieldEl(colorLabel('Color', c), colorPick(c, (v) => setA({ color: v }))));
     }
+    // Which way it faces (thing:turn_to). A boost pad shoots the player that way; a jump pad is round.
+    const angle = (title) => ['Angle', isNum(node.props.turn_to?.args[0]) ? node.props.turn_to.args[0] : 0, (v) => setP('turn_to', [v3(v)]), { title }];
     if (k === 'jump_pad' || k === 'boost_pad') {
-      kids.push(numbers([['Power', f('power'), (v) => v > 0 && setA({ power: v3(v) }), { step: 1, min: 1, title: k === 'jump_pad' ? 'How hard it launches the player up, in metres a second' : 'How hard it shoots the player forward, in metres a second' }]]));
+      kids.push(numbers([['Power', f('power'), (v) => v > 0 && setA({ power: v3(v) }), { step: 1, min: 1, title: k === 'jump_pad' ? 'How hard it launches the player up, in metres a second' : 'How hard it shoots the player forward, in metres a second' }],
+        ...(k === 'boost_pad' ? [angle('Which way it shoots the player, in degrees')] : [])]));
       return sec('Pad', kids);
     }
+    if (k === 'car' || k === 'door') kids.push(numbers([angle('Which way it faces, in degrees')]));
     if (k === 'light' || k === 'car' || k === 'ragdoll' || k === 'door') return sec('Look', kids);
     if (!is3) {
       kids.push(numbers([
@@ -3032,7 +3073,7 @@ func coin_collect(dt):
       ]));
       if (k === 'text') kids.push(fieldEl('Align', K.control('segment', node.props.align?.args[0] || 'center', { options: ['left', 'center', 'right'] }, (v) => setP('align', [v]))));
     } else {
-      kids.push(numbers([['Angle', isNum(node.props.turn_to?.args[0]) ? node.props.turn_to.args[0] : 0, (v) => setP('turn_to', [v3(v)]), { title: 'Which way it faces, in degrees' }]]));
+      kids.push(numbers([angle('Which way it faces, in degrees')]));
       kids.push(fieldEl('Label', textEl(typeof node.props.label?.args[0] === 'string' ? node.props.label.args[0] : '', (v) => setP('label', [v])), 'Words shown above it'));
       const glow = typeof node.props.glow?.args[0] === 'string' ? node.props.glow.args[0] : 'none';
       kids.push(fieldEl(colorLabel('Glow', glow), colorPick(glow, (v) => setP('glow', [v]), { none: true })));

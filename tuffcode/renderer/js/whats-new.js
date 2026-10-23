@@ -79,6 +79,7 @@
   }
 
   let ide = null;
+  let back = null; // what had the focus before it opened (it gets it back when it closes)
   const has = (version) => !!NOTES[version];
 
   // The pictures scroll sideways one at a time (dots under them when there's more than one).
@@ -92,7 +93,8 @@
   function show(version) {
     const entry = NOTES[version];
     if (!entry) return false;
-    close();
+    if (!document.getElementById('whatsnew')) back = document.activeElement;
+    close(false);
     const box = document.createElement('div');
     box.id = 'whatsnew';
     box.setAttribute('role', 'dialog');
@@ -132,7 +134,9 @@
       dots.forEach((d, k) => d.classList.toggle('on', k === i));
     });
     dots.forEach((d) => (d.onclick = () => strip.scrollTo({ left: +d.dataset.dot * strip.clientWidth, behavior: 'smooth' })));
-    box.addEventListener('mousedown', (e) => { if (e.target === box) close(); });
+    // A click on the backdrop closes it. preventDefault: the mousedown would move the focus to the page right after
+    // close() gave it back.
+    box.addEventListener('mousedown', (e) => { if (e.target === box) { e.preventDefault(); close(); } });
     box.addEventListener('click', (e) => {
       const a = e.target.closest('a[data-web]');
       if (a) { e.preventDefault(); ide?.openWeb?.(a.dataset.web); }
@@ -144,12 +148,30 @@
   }
 
   function onKey(e) {
-    if (e.key === 'Escape' && document.getElementById('whatsnew')) { e.preventDefault(); e.stopPropagation(); close(); }
+    const box = document.getElementById('whatsnew');
+    if (!box) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    // It's modal: Tab goes round its links and buttons, never to the IDE behind it.
+    if (e.key === 'Tab') {
+      const stops = [...box.querySelectorAll('a[href], button')].filter((el) => el.offsetParent);
+      const i = stops.indexOf(document.activeElement);
+      const next = e.shiftKey ? (i <= 0 ? stops.length - 1 : i - 1) : (i + 1) % stops.length;
+      e.preventDefault();
+      stops[next]?.focus();
+    }
   }
 
-  function close() {
+  // refocus: give the focus back to what had it (or the code editor, when that's gone or it was nothing).
+  function close(refocus = true) {
     document.removeEventListener('keydown', onKey, true);
-    document.getElementById('whatsnew')?.remove();
+    const box = document.getElementById('whatsnew');
+    if (!box) return;
+    box.remove();
+    if (!refocus) return;
+    const to = back;
+    back = null;
+    if (to && to !== document.body && to.isConnected) to.focus();
+    if (!document.activeElement || document.activeElement === document.body) ide?.focusEditor?.();
   }
 
   window.TuffWhatsNew = {
