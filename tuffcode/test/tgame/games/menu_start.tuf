@@ -1,0 +1,21 @@
+mention tgame
+
+# A splash screen before a start screen: the start screen waits behind it (Enter during the splash only skips it),
+# then works as before: Enter starts the game, and asks the page to lock the mouse for looking around.
+world = tgame.world("Cave Run", 960, 600)
+world:sky "night"
+world:ground "stone"
+world:spawn("rock", 2, 0, -6)
+player = world:player("first person")
+starts = 0
+
+world:splash("Night falls", 4)
+start = world:start_screen("Cave Run")
+start:text "Find the way out before the torch burns down."
+start:clicked began
+
+func began():
+    starts += 1
+
+func report():
+    say "starts " + starts

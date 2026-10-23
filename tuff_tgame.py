@@ -63,6 +63,8 @@ SOUNDS = {
 SOUND_FILES = (".wav", ".mp3", ".ogg", ".m4a")
 IMAGE_FILES = (".png", ".gif", ".jpg", ".jpeg", ".webp", ".bmp", ".svg")
 MODEL_FILES = (".glb",)
+# Files a splash screen can't show (game:splash "intro.mp4"): anything else that isn't a picture is text to show.
+NOT_PICTURES = SOUND_FILES + MODEL_FILES + (".mp4", ".webm", ".mov", ".avi", ".mkv", ".txt", ".tuf", ".pdf", ".ico")
 
 SKIES = {
     # sky: [top, horizon, below]; fog color; sun color and brightness; hemisphere sky/ground color and brightness;
@@ -152,12 +154,28 @@ HINTS["ragdoll"] = {**HINTS["object"], "hit": "push", "flop": "push"}
 NEEDS_3D = {"car": "The car needs a 3D world. Make the game with tgame.world(...) to drive one.",
             "ragdoll": "A ragdoll needs a 3D world. Make the game with tgame.world(...) for one."}
 # Names people guess for menus, the same in 2D and 3D.
-UI_HINTS = {"menu": "screen", "overlay": "screen", "popup": "screen", "dialog": "screen", "modal": "screen",
-            "title_screen": "start_screen", "start_menu": "start_screen", "main_menu": "start_screen",
-            "splash": "start_screen", "splash_screen": "start_screen", "click_to_play": "start_screen", "ui": "panel",
+UI_HINTS = {"overlay": "screen", "popup": "screen", "dialog": "screen", "modal": "screen",
+            "start_menu": "start_screen", "click_to_play": "start_screen", "ui": "panel",
             "gui": "panel", "toolbar": "panel", "sidebar": "panel"}
+# ... and for splash screens and main menus (game:splash, game:main_menu).
+UI_HINTS.update({"title_screen": "splash", "intro": "splash", "logo": "splash", "splash_screen": "splash",
+                 "splashscreen": "splash", "logo_screen": "splash", "intro_screen": "splash", "menu": "main_menu",
+                 "home_screen": "main_menu", "menu_screen": "main_menu", "mainmenu": "main_menu",
+                 "title_menu": "main_menu", "home_menu": "main_menu"})
 HINTS["game"].update(UI_HINTS)
 HINTS["world"].update(UI_HINTS)
+# The mouse in a 3D world: locked for looking around, or free (world:lock_mouse...), and the names people guess.
+MOUSE_NAMES = ("lock_mouse", "unlock_mouse", "mouse_locked", "auto_lock")
+HINTS["world"].update({
+    "release_mouse": "unlock_mouse", "free_mouse": "unlock_mouse", "show_cursor": "unlock_mouse", "show_mouse": "unlock_mouse",
+    "unlock_cursor": "unlock_mouse", "unlock_pointer": "unlock_mouse", "exit_pointer_lock": "unlock_mouse",
+    "release_pointer": "unlock_mouse", "capture_mouse": "lock_mouse", "hide_cursor": "lock_mouse", "hide_mouse": "lock_mouse",
+    "lock_cursor": "lock_mouse", "lock_pointer": "lock_mouse", "pointer_lock": "lock_mouse", "request_pointer_lock": "lock_mouse",
+    "grab_mouse": "lock_mouse", "is_mouse_locked": "mouse_locked", "mouse_is_locked": "mouse_locked", "is_locked": "mouse_locked",
+    "locked": "mouse_locked", "cursor_locked": "mouse_locked", "pointer_locked": "mouse_locked", "click_to_lock": "auto_lock",
+    "lock_on_click": "auto_lock", "autolock": "auto_lock", "auto_lock_mouse": "auto_lock"})
+NEEDS_3D.update(dict.fromkeys(MOUSE_NAMES, "Locking the mouse is for looking around in a 3D world. Make the game with "
+                                           "tgame.world(...) and give it a player: world:player(\"first person\")."))
 
 KEY_CODES = {"Space": "space", "ArrowUp": "up", "ArrowDown": "down", "ArrowLeft": "left", "ArrowRight": "right",
              "Enter": "enter", "NumpadEnter": "enter", "Escape": "escape", "Tab": "tab", "Backspace": "backspace",
@@ -417,6 +435,7 @@ class Game:
         ("group", "group"), ("hud", "get_hud"), ("clear", "clear"), ("panel", "panel"), ("screen", "make_screen"),
         ("start_screen", "start_screen"),
         ("slow_mo", "slow_mo"), ("shake", "shake"), ("pop_text", "pop_text"),
+        ("splash", "splash"), ("main_menu", "main_menu"),
     ]
 
     def __init__(self, lib, title, width, height):
@@ -696,6 +715,7 @@ class Game:
                 self.wheel += e.get("dy", 0) or 0
             elif t == "lock":
                 self.locked = bool(e.get("locked"))
+                self.on_lock()
                 self.lock_changed()
             elif t == "model":  # a .glb finished loading: now its size is known, for collisions and its label
                 thing = self.by_node.get(e.get("id"))
@@ -706,8 +726,12 @@ class Game:
                         self.phys.dirty.add(thing)  # its body is the model's size too
             elif t == "phys" and self.phys is not None:  # where physics moved things this frame, and what hit what
                 self.phys.report(e)
-            elif t == "tg-lock" and ui is not None:  # the page asked to lock the mouse (a start screen's click)
-                ui.lock_asks += 1
+            elif t == "tg-lock":  # the page asked to lock the mouse (a start screen's click, world:lock_mouse...)
+                self.lock_asks += 1
+                if ui is not None:
+                    ui.lock_asks += 1
+            elif t == "tg-splash" and ui is not None:  # a splash screen ended, or all of them did
+                ui.splash_event(e)
             elif t == "tg-autopilot":
                 print(f"[autopilot] {e.get('message')}", flush=True)
             elif t == "close":
@@ -896,6 +920,46 @@ class Game:
     def start_screen(self, title=None, hint="Click to play"):
         ui = self.menus()
         return StartScreen(ui, self.view.title if title is None else ui.lib.text(title), ui.lib.text(hint)).native()
+
+    # ---- splash screens and the main menu (Splashes and MainMenu, after StartScreen)
+    lock_asks = 0  # times the page asked the browser to lock the mouse (for the autopilot's reports)
+
+    def splash(self, what=None, seconds=2):
+        """A splash screen at the start of the game, before any main menu or start screen: a picture file from the
+        project folder (shown fitted, on black) or some text. game:splash() is "Made with Tuff"."""
+        ui = self.menus()
+        if self.rt.callable(what):
+            raise self.rt.error("game:splash takes a picture file or some text, then how many seconds it shows, "
+                                "like game:splash(\"logo.png\", 3). The game starts by itself after the splash screens.")
+        secs = self.num(seconds, ":splash")
+        if not secs > 0:
+            raise self.rt.error(":splash needs a number of seconds above 0, like game:splash(\"logo.png\", 3).")
+        if self.rt.plain(what) is None:
+            ui.splashes().add("tuff", None, secs, "Made with Tuff")
+            return None
+        text = ui.lib.text(what)
+        low = text.strip().lower()
+        if low.endswith(IMAGE_FILES):
+            url, _ = self.file_url(text, "picture", IMAGE_FILES)
+            ui.splashes().add("picture", url, secs, text.strip())
+        elif low.endswith(NOT_PICTURES):
+            raise self.rt.error(f"'{text.strip()}' can't be a splash screen. Use a picture from your project folder "
+                                "(.png, .jpg or .gif), or some text.")
+        else:
+            ui.splashes().add("text", text, secs, text)
+        return None
+
+    def main_menu(self, title=None):
+        """A main menu: a screen with a big title and wide buttons, shown when the game starts (after the splash
+        screens), with the game paused and the mouse free until menu:hide()."""
+        ui = self.menus()
+        if self.rt.callable(title):
+            raise self.rt.error("A main menu's input is its title, like: menu = game:main_menu(\"My Game\"). "
+                                "Then add buttons to it: menu:button(\"Play\", play).")
+        return MainMenu(ui, self.view.title if title is None else ui.lib.text(title)).native()
+
+    def on_lock(self):
+        """The page's mouse lock changed (World3D keeps track of why)."""
 
     def stats(self):
         """Numbers for the autopilot's reports."""
@@ -2204,6 +2268,8 @@ class World3D(Game):
         ("weather", "weather"), ("day_cycle", "day_cycle"), ("time_of_day", "time_of_day"),
         ("door", "door"),
         ("jump_pad", "jump_pad"), ("boost_pad", "boost_pad"),
+        ("lock_mouse", "lock_mouse"), ("unlock_mouse", "unlock_mouse"), ("mouse_locked", "mouse_locked"),
+        ("auto_lock", "auto_lock"),
     ]
 
     def setup(self):
@@ -2548,7 +2614,7 @@ class World3D(Game):
         self.the_player = Player(self, m)
         if SCENE is not None: SCENE.player_made = list(SCENE.interp.lines)
         self.cam_mode = "player"
-        self.view.set(self.scene, clicklock=True)
+        self.view.set(self.scene, clicklock=self.clicks_lock())
         return self.the_player.native
 
     def camera_at(self, x=MISSING, y=MISSING, z=MISSING):
@@ -2699,7 +2765,131 @@ class World3D(Game):
     def lock_changed(self):
         if self.hint is not None:  # "Click the game to look around": not while it's locked, or under a screen
             covered = self.ui is not None and self.ui.showing
-            self.hint.hide() if (self.locked or self.fake_lock or covered) else self.hint.show()
+            no_click = not (self.clicks_lock() or self.lock_want)  # world:auto_lock(false): a click doesn't lock it
+            self.hint.hide() if (self.locked or self.fake_lock or covered or no_click) else self.hint.show()
+
+    # ---- the mouse: locked for looking around, or free (to read a note, use a shop or a menu)
+    auto_lock_on = None  # world:auto_lock(on); None: a click on the game locks the mouse once there's a player
+    lock_want = False  # world:lock_mouse() the browser hasn't allowed yet: the next click on the game locks it
+    freeing = False  # tgame let go of the mouse itself, so the unlock coming isn't the player's Escape
+    fake_freed = False  # a screen let go of the autopilot's pretend lock: it comes back when the lock is asked again
+    escaped_at = -1e9  # when the player let go of the mouse with Escape
+    escaped = False  # the player let go of it with Escape, and nothing has locked it since
+    asked_at = -1e9  # when the page was last asked to lock it
+    mouse_js = False  # MOUSE_JS is on the page
+
+    def lock_mouse(self):
+        """Lock the mouse for looking around: now if the browser allows it (in a click or a key press, or just after
+        one), or else on the next click on the game. Under a screen, once the last screen hides. After the player let
+        go of it with Escape, only their next click on the game locks it (as browsers want), so a program that asks
+        every frame doesn't take the mouse straight back, or ask the page 60 times a second."""
+        ui = self.ui
+        if ui is not None and ui.showing:
+            ui.relock = True
+        elif not self.mouse_locked():
+            if self.escaped or (self.lock_want and time.perf_counter() - self.asked_at < 1.0):
+                self.want(True)
+            else:
+                self.want_lock()
+        self.lock_changed()
+
+    def unlock_mouse(self):
+        """Let go of the mouse, and keep it free until lock_mouse or a click on the game."""
+        self.want(False)
+        if self.ui is not None:
+            self.ui.relock = self.ui.menu_played = False
+        self.free_mouse()
+        self.fake_freed = False
+        self.lock_changed()
+
+    def mouse_locked(self):
+        return bool(self.locked or self.fake_lock)
+
+    def auto_lock(self, on=True):
+        """Whether a click on the game locks the mouse (it does once there's a player): world:auto_lock(false)
+        leaves locking to the program (world:lock_mouse)."""
+        self.auto_lock_on = self.rt.truthy(on)
+        self.view.set(self.scene, clicklock=self.auto_lock_on)
+        self.lock_changed()
+
+    def clicks_lock(self):
+        return self.the_player is not None if self.auto_lock_on is None else self.auto_lock_on
+
+    def mouse_held(self):
+        """Is the mouse locked (or the autopilot acting as if it were), or did the player let go of it with Escape a
+        moment ago? The same Escape often opens a pause menu, and the lock comes back when it closes."""
+        return self.locked or self.fake_lock or time.perf_counter() - self.escaped_at < 0.6
+
+    def want(self, on):
+        """The next click on the game locks the mouse, even with auto_lock(false) (MOUSE_JS)."""
+        if on != self.lock_want:
+            self.lock_want = on
+            if SCENE is None:
+                self.view.set(self.scene, attrs={"data-tg-want": True if on else None})
+
+    def want_lock(self):
+        self.want(True)
+        self.ask_lock()
+
+    def ask_lock(self):
+        """Ask the page to lock the mouse now. The browser allows it only in a click or a key press, or just after
+        one, which is when this runs: a menu's button was clicked, or a screen's Close."""
+        if SCENE is not None or self.closed:
+            return
+        self.mouse_page()
+        self.view.js("window.__tgMouse.lock()")
+        self.asked_at = time.perf_counter()
+        if self.fake_freed:  # the autopilot acted as if it was locked: it is again, as a browser allows it here
+            self.fake_freed, self.fake_lock = False, True
+
+    def free_mouse(self):
+        if self.locked:
+            self.freeing = True
+        if SCENE is None:
+            self.view.call(0, "unlock")
+        if self.fake_lock:
+            self.fake_lock, self.fake_freed = False, True
+
+    def mouse_page(self):
+        if not self.mouse_js and SCENE is None:
+            self.mouse_js = True
+            self.view.js(MOUSE_JS)
+
+    def on_lock(self):
+        if self.locked:
+            self.want(False)
+            self.escaped = False
+            ui = self.ui
+            # Locked under a screen (asked for just before it showed): let go again until it's gone. A start
+            # screen's own click locks it on purpose, as it hides.
+            if ui is not None and ui.showing and not any(isinstance(s, StartScreen) and s.is_shown for s in ui.screens):
+                self.free_mouse()
+                ui.relock = True
+        elif self.freeing:
+            self.freeing = False
+        else:
+            self.escaped_at = time.perf_counter()
+            self.escaped = True
+
+    def covered(self, showing):
+        """A screen, the main menu or a splash showed or hid (GameUI.changed). The mouse is free while any of them
+        shows; when the last one goes, the lock comes back if it was locked before, and after a main menu (its Play
+        button starts the game) if a click on the game locks it."""
+        ui = self.ui
+        if showing:
+            if self.mouse_held():
+                self.free_mouse()
+                ui.relock = True
+            return
+        lock = ui.relock or (ui.menu_played and self.clicks_lock())
+        ui.relock = ui.menu_played = False
+        if lock:
+            self.want_lock()
+
+    def mouse_state(self):
+        """For the autopilot's reports."""
+        return {"locked": self.mouse_locked(), "asks": self.lock_asks, "want": self.lock_want, "auto": self.clicks_lock(),
+                "relock": bool(self.ui is not None and self.ui.relock)}
 
     def update(self, dt, real):
         if self.interact is not None:
@@ -5691,7 +5881,8 @@ addEventListener('pointerdown', (e) => {
   if (start && !e.target.closest(WIDGETS)) tg.lock();
 }, true);
 addEventListener('keydown', (e) => {
-  if ((e.key === 'Enter' || e.key === ' ') && !e.repeat && !typing(e.target) && document.querySelector('.tg-start.at-shown')) tg.lock();
+  if ((e.key === 'Enter' || e.key === ' ') && !e.repeat && !typing(e.target) && document.querySelector('.tg-start.at-shown')
+      && !document.querySelector('.tg-splashes.tg-playing')) tg.lock();  // a key during a splash screen only skips it
 }, true);
 // A clicked button, checkbox or slider keeps the keyboard, so Enter would press it again and the arrows would move it:
 // give the keys back to the game. Text boxes keep them (typing in one doesn't move the player).
@@ -5759,6 +5950,8 @@ class GameUI:
 
     def start_key(self, name):
         """Enter or Space while a start screen shows: it starts the game. True when one did."""
+        if self.splash_playing():  # any key skips a splash screen (the page does it), and that's all it does
+            return True
         if name in ("enter", "space"):
             for s in reversed(self.screens):
                 if isinstance(s, StartScreen) and s.is_shown:
@@ -5778,13 +5971,8 @@ class GameUI:
         shown = [s for s in self.screens if s.is_shown and not s.dead]
         self.showing = bool(shown)
         self.pausing = any(s.pauses for s in shown)
-        if SCENE is None and not g.closed:
-            if self.showing and g.locked:
-                g.view.call(0, "unlock")
-                self.relock = True
-            elif not self.showing and self.relock:
-                self.relock = False
-                g.view.js("window.__tg.lock()")
+        if SCENE is None and not g.closed and g.three_d:
+            g.covered(self.showing)  # the mouse: World3D.covered
         g.lock_changed()
 
     def state(self):
@@ -5805,10 +5993,47 @@ class GameUI:
         for w in self.children:
             if (isinstance(w, Screen) and w.is_shown) or (isinstance(w, Panel) and not w.hidden):
                 walk(w)
-        return {"screens": [{"title": s.title, "shown": s.is_shown, "pauses": s.pauses, "start": isinstance(s, StartScreen)}
-                            for s in self.screens],
+        return {"screens": [{"title": s.title, "shown": s.is_shown, "pauses": s.pauses, "start": isinstance(s, StartScreen),
+                             "main": isinstance(s, MainMenu)} for s in self.screens if not isinstance(s, Splashes)],
                 "showing": self.showing, "pausing": self.pausing, "texts": texts, "inputs": inputs, "values": values,
-                "lock_asks": self.lock_asks}
+                "lock_asks": self.lock_asks, "splash": self.splash_state()}
+
+    # ---- splash screens and main menus (Splashes and MainMenu, below)
+    splash_layer = None  # the splash screens (game:splash), once there are some
+    menu_played = False  # a main menu hid: when nothing covers the game, the mouse locks for looking around (3D)
+    intro_css = False  # MENU_CSS and MENU_JS are on the page
+
+    def intro_page(self):
+        if not self.intro_css:
+            self.intro_css = True
+            self.scene.call(0, "css", MENU_CSS)
+            self.scene.js(MENU_JS)
+
+    def splashes(self):
+        self.intro_page()
+        if self.splash_layer is None:
+            self.splash_layer = Splashes(self)
+        return self.splash_layer
+
+    def splash_playing(self):
+        return self.splash_layer is not None and self.splash_layer.is_shown
+
+    def splash_event(self, e):
+        if self.splash_layer is not None and e.get("id") == self.splash_layer.id:
+            self.splash_layer.event(e)
+
+    def splashes_done(self):
+        """The last splash screen ended: a main menu or start screen behind it comes in as if it just showed."""
+        for s in self.screens:
+            if s.is_shown and not s.dead and isinstance(s, (StartScreen, MainMenu)):
+                s.call("atClass", "at-shown", False)
+                s.call("atOpen")
+
+    def splash_state(self):
+        s = self.splash_layer
+        if s is None:
+            return None
+        return {"playing": s.is_shown, "items": list(s.items), "ended": list(s.ended)}
 
 
 class Panel(atgui.Container):
@@ -5902,6 +6127,241 @@ class StartScreen(Screen):
     def clicked(self, fn):
         self.start_fn = self.lib.check_fn(fn, ":clicked")
         return self.native()
+
+
+# ---------------------------------------------------------------- splash screens, main menus and the mouse
+
+# How they look (on top of UI_CSS). Splash screens: black over the whole window, each picture or text fading in and
+# out in turn while it drifts a little closer. The main menu: the game dimmed and blurred, a big title, and wide
+# buttons one under another in the middle. Both come in after GameUI's own CSS, the first time a game makes one.
+MENU_CSS = """
+.tg-ui .tg-splashes{position:fixed;inset:0;z-index:40;pointer-events:auto;background:#000;overflow:hidden;cursor:default;
+ transition:opacity .5s ease}
+.tg-ui .tg-splashes.tg-leaving{opacity:0;pointer-events:none}
+.tg-ui .tg-splash{position:absolute;inset:0;display:none;align-items:center;justify-content:center;opacity:0;
+ transition:opacity .45s ease}
+.tg-ui .tg-splash.tg-on{opacity:1}
+.tg-ui .tg-splash>*{animation:tg-drift var(--secs,2s) linear both}
+@keyframes tg-drift{from{transform:scale(.97)}to{transform:scale(1.015)}}
+.tg-ui .tg-splash-img{display:block;max-width:86%;max-height:80%;object-fit:contain;user-select:none;-webkit-user-drag:none}
+.tg-ui .tg-splash-text{max-width:min(88%,1000px);font:800 clamp(30px,6.2vw,72px)/1.1 var(--font);letter-spacing:-.03em;
+ color:#fff;text-align:center;text-wrap:balance;overflow-wrap:anywhere;white-space:pre-wrap}
+.tg-ui .tg-made{display:flex;align-items:center;gap:clamp(16px,3vw,30px)}
+.tg-ui .tg-made-t{height:clamp(64px,16vh,116px);width:auto;flex-shrink:0;overflow:visible}
+.tg-ui .tg-made-t circle{transform-box:fill-box;transform-origin:center}
+.tg-ui .tg-splash.tg-on .tg-made-t circle{animation:tg-dot .6s cubic-bezier(.2,.8,.3,1.25) both;animation-delay:var(--d)}
+@keyframes tg-dot{from{opacity:0;transform:scale(.15)}}
+.tg-ui .tg-made-words{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left}
+.tg-ui .tg-made-with{font:650 clamp(11px,1.8vh,14px)/1 var(--font);letter-spacing:.34em;text-transform:uppercase;color:#7d879c;
+ padding-left:.18em}
+.tg-ui .tg-made-name{font:800 clamp(52px,12.5vh,100px)/.92 var(--font);letter-spacing:-.045em;padding-right:.06em;
+ background:linear-gradient(115deg,#fff 32%,#b9d3ff 70%,#7fe3f5);-webkit-background-clip:text;background-clip:text;
+ -webkit-text-fill-color:transparent}
+.tg-ui .tg-splash.tg-on .tg-made-words{animation:tg-rise .7s .28s cubic-bezier(.2,.8,.2,1) both}
+.tg-ui .tg-main{position:absolute;inset:0;z-index:19;pointer-events:auto;display:flex;overflow:auto;padding:32px 28px;opacity:0;
+ transition:opacity .2s;backdrop-filter:blur(7px) saturate(1.15);
+ background:radial-gradient(110% 85% at 50% 40%,rgba(9,12,22,.3),rgba(3,4,8,.86)),linear-gradient(rgba(0,0,0,.1),rgba(0,0,0,.4))}
+.tg-ui .tg-main.at-shown{opacity:1}
+.tg-ui .tg-main-box{margin:auto;max-width:100%;display:flex;flex-direction:column;align-items:center;gap:30px;text-align:center}
+.tg-ui .tg-main-title{font-size:clamp(40px,8.6vw,92px);max-width:min(92vw,900px);text-wrap:balance}
+.tg-ui .tg-main-title::after{content:"";display:block;width:64px;height:4px;margin:22px auto 0;border-radius:4px;
+ background:linear-gradient(90deg,var(--accent),var(--accent-2));box-shadow:0 0 22px color-mix(in srgb,var(--accent) 70%,transparent)}
+.tg-ui .tg-main-body{width:min(360px,100%);--self:stretch;gap:12px;text-align:center}
+.tg-ui .tg-main-body:empty{display:none}
+.tg-ui .tg-main-body>:is(.at-text,.at-heading){color:#e6e9f0;text-shadow:0 1px 10px rgba(0,0,0,.5)}
+.tg-ui .tg-main-body>.at-text{font-size:16px}
+.tg-ui .tg-main-body>.at-small{font-size:13.5px;color:#a7aebb}
+.tg-ui .tg-main-body>:is(.at-image,.at-badge,.at-icon,.at-spinner,.at-avatar){align-self:center}
+.tg-ui .tg-main-body .at-btn{height:50px;border-radius:12px;font:650 16px/1 var(--font);gap:9px}
+.tg-ui .tg-main-body .at-btn .at-i{width:18px;height:18px}
+.tg-ui .tg-main-body .at-btn.at-primary{background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 62%,var(--accent-2)));
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 12px 30px -10px color-mix(in srgb,var(--accent) 75%,transparent)}
+.tg-ui .tg-main-body .at-btn:is(.at-secondary,.at-outline,.at-ghost){background:rgba(255,255,255,.07);color:#eef1f6;
+ border-color:rgba(255,255,255,.14);backdrop-filter:blur(8px)}
+.tg-ui .tg-main-body .at-btn:hover{translate:0 -1px;filter:brightness(1.08)}
+.tg-ui .tg-main-body .at-btn:is(.at-secondary,.at-outline,.at-ghost):hover{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.26)}
+.tg-ui .tg-main-body>.at-row{justify-content:center;gap:10px}
+.tg-ui .tg-main-body>.at-row>.at-btn{flex:1 1 0}
+.tg-ui .tg-main-body .at-card{text-align:left;background:color-mix(in srgb,var(--surface) 82%,transparent);backdrop-filter:blur(12px)}
+.tg-ui .tg-main.at-shown .tg-main-title{animation:tg-rise .6s cubic-bezier(.2,.8,.2,1) both}
+.tg-ui .tg-main.at-shown .tg-main-body>*{animation:tg-rise .5s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(.08s + var(--n,7) * 45ms)}
+""" + "".join(f".tg-ui .tg-main-body>:nth-child({i + 1}){{--n:{i}}}\n" for i in range(7))
+
+# The page side of splash screens: a layer plays its pictures and texts in turn. Each fades in, stays and fades out in
+# its seconds (a picture waits until it has loaded), and a click or a key skips to the next. Python hears when each
+# one ends ('tg-splash' with i), and when they all have (done, with how many there were): then the layer fades away.
+MENU_JS = r"""
+(() => {
+  const FADE = 450, QUICK = 220;
+  HTMLElement.prototype.tgSplash = function () {
+    const layer = this;
+    layer.classList.remove('tg-leaving');
+    layer.classList.add('tg-playing');
+    layer.style.display = '';
+    if (layer._next) return null;  // playing already: it gets to the new one in turn
+    const next = () => {
+      const all = [...layer.children].filter((x) => x.classList.contains('tg-splash'));
+      const item = all.find((x) => !x.classList.contains('tg-done'));
+      if (!item) {
+        layer._next = layer._skip = null;
+        layer.classList.remove('tg-playing');
+        layer.classList.add('tg-leaving');
+        setTimeout(() => { if (!layer._next) { layer.style.display = 'none'; layer.classList.remove('tg-leaving'); } }, 520);
+        tv.emit('tg-splash', { id: layer._tv, done: true, n: all.length });
+        return;
+      }
+      const ms = Math.max(600, (+item.dataset.secs || 2) * 1000);
+      const fade = Math.min(FADE, ms / 4);
+      let timer = 0, over = false, shown = false;
+      const end = (skipped) => {
+        if (over) return;
+        over = true;
+        clearTimeout(timer);
+        const out = shown ? (skipped ? QUICK : fade) : 0;
+        item.style.transitionDuration = out + 'ms';
+        item.classList.remove('tg-on');
+        setTimeout(() => {
+          item.classList.add('tg-done');
+          item.style.display = 'none';
+          tv.emit('tg-splash', { id: layer._tv, i: all.indexOf(item), skipped });
+          next();
+        }, out);
+      };
+      const start = () => {
+        if (over) return;
+        shown = true;
+        item.style.setProperty('--secs', ms + 'ms');
+        item.style.display = 'flex';
+        void item.offsetWidth;
+        item.style.transitionDuration = fade + 'ms';
+        item.classList.add('tg-on');
+        timer = setTimeout(() => end(false), ms - fade);
+      };
+      layer._skip = () => end(true);
+      const img = item.querySelector('img');
+      if (img && !img.complete && img.decode) Promise.race([img.decode().catch(() => {}), new Promise((r) => setTimeout(r, 1500))]).then(start);
+      else start();
+    };
+    layer._next = next;
+    next();
+    return null;
+  };
+  // A click on a splash screen, or any key: the next one.
+  const playing = () => document.querySelector('.tg-splashes.tg-playing');
+  addEventListener('pointerdown', (e) => { const l = playing(); if (l && l._skip && l.contains(e.target)) l._skip(); }, true);
+  addEventListener('keydown', (e) => { const l = playing(); if (l && l._skip && !e.repeat) l._skip(); }, true);
+})();
+"""
+
+# The page side of the mouse in a 3D world (World3D.ask_lock). The browser only locks it in a click or a key press,
+# or just after one, so world:lock_mouse() and a screen that gives the lock back ask right then; if the browser says
+# no, the next click on the game locks it (the scene's data-tg-want), even after world:auto_lock(false).
+MOUSE_JS = r"""
+const m = window.__tgMouse = {};
+const world = () => [...tv.objs.values()].find((n) => n.kind === 'scene');
+m.lock = () => {
+  const s = world();
+  if (!s || document.pointerLockElement === s.el) return null;
+  tv.emit('tg-lock', {});
+  try { const p = s.el.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (err) { /* not now: the next click */ }
+  return null;
+};
+addEventListener('pointerdown', (e) => {
+  const n = e.target && e.target._tv !== undefined ? tv.objs.get(e.target._tv) : null;
+  if (n && n.kind === 'scene' && !n.clicklock && n.el.hasAttribute('data-tg-want')) m.lock();
+}, true);
+"""
+
+
+def made_with_tuff():
+    """game:splash() with nothing: Tuff's dotted T (TuffCode's icon), its dots popping in one after another, and
+    "Made with Tuff"."""
+    dots = [(28 + 9 * c, 23.5 + 9 * r) for r in range(3) for c in range(9)]
+    dots += [(55 + 9 * c, 50.5 + 9 * r) for r in range(7) for c in range(3)]
+    circles = "".join(f'<circle cx="{x:g}" cy="{y:g}" r="3.1" style="--d:{round((x - 28) / 9 * 16 + (y - 23.5) / 9 * 30)}ms"/>'
+                      for x, y in dots)
+    return ('<div class="tg-made"><svg class="tg-made-t" viewBox="22 17 84 94" aria-hidden="true"><defs>'
+            '<linearGradient id="tg-made-g" gradientUnits="userSpaceOnUse" x1="23.5" y1="19" x2="104.5" y2="109">'
+            '<stop offset="0" stop-color="#3574f0"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>'
+            f'<g fill="url(#tg-made-g)">{circles}</g></svg><div class="tg-made-words"><span class="tg-made-with">Made with</span>'
+            '<span class="tg-made-name">Tuff</span></div></div>')
+
+
+class Splashes(Screen):
+    """game:splash(...): the splash screens, one black layer over the whole window that plays its pictures and texts
+    in turn when the game starts, before any main menu or start screen (those wait behind it). Each fades in and out
+    in its seconds, and a click or any key skips to the next. The page times them and says when each one ends; while
+    they play the game is paused and the mouse is free, like under any screen."""
+    kind = "splash"
+    cls = "tg-splashes"
+
+    def __init__(self, ui):
+        self.items, self.ended = [], []  # what each one shows, in order; how the ones that played ended
+        super().__init__(ui, "", True)
+
+    def build(self, title):
+        self.title_id = None
+
+    def add(self, kind, value, seconds, label):
+        """One more splash screen: a "picture" (its address), some "text", or "tuff" (Made with Tuff)."""
+        item = self.scene.el("div", self.id, cls="tg-splash", attrs={"data-secs": tidy(min(seconds, 60)), "data-kind": kind})
+        if kind == "picture":
+            self.scene.el("img", item, cls="tg-splash-img", src=value, alt="", draggable=False)
+        elif kind == "text":
+            self.scene.el("div", item, cls="tg-splash-text", text=value)
+        else:
+            self.scene.set(item, html=made_with_tuff())
+        self.items.append(label)
+        self.show()
+        self.call("tgSplash")  # the page plays it after the ones before it
+
+    def show(self):
+        if not self.is_shown and not self.dead:
+            self.is_shown = True
+            self.ui.changed()
+
+    def hide(self):
+        """Splash screens end by themselves (event)."""
+
+    def event(self, e):
+        if e.get("done"):
+            if self.is_shown and (e.get("n") or 0) >= len(self.items):  # else one came since, and the page plays it
+                self.is_shown = False
+                self.ui.changed()
+                self.ui.splashes_done()
+        elif "i" in e and len(self.ended) < len(self.items):
+            self.ended.append("skipped" if e.get("skipped") else "timed")
+
+    def set_title(self, text):
+        return self.native()
+
+
+class MainMenu(Screen):
+    """game:main_menu("Forest Walk"): a game's main menu, a screen with a big title over the dimmed game and what
+    the program adds under it (its buttons wide, one under another). It shows when the game starts, after any splash
+    screens, with the game paused behind it and the mouse free: clicks on it are never the game's, and never lock the
+    mouse. menu:hide() starts the game; in a 3D world with a player that also locks the mouse for looking around (in
+    the click on the menu's button that hid it: World3D.covered). menu:show() brings it back, like from a pause menu.
+    Other screens show over it."""
+    cls = "tg-screen tg-main"
+
+    def __init__(self, ui, title):
+        super().__init__(ui, title, True)
+
+    def build(self, title):
+        box = self.scene.el("div", self.id, cls="tg-main-box")
+        self.title_id = self.scene.el("h1", box, cls="tg-title tg-main-title", text=title, show=bool(title))
+        self.slot = self.scene.el("div", box, cls="at-col tg-main-body")
+
+    def show(self):
+        if not self.is_shown and not self.dead:
+            self.ui.menu_played = False
+        super().show()
+
+    def hide(self):
+        if self.is_shown:
+            self.ui.menu_played = True  # the game starts (or goes on)
+        super().hide()
 
 
 # ---------------------------------------------------------------- Tuff Engine's preview (tuff.py --scene)
@@ -6297,7 +6757,8 @@ class Autopilot:
         {"click_ui": "Play"} (the first button, item, tab or text box showing on the game's menus with these words, or
         a text box's placeholder: exactly, or else containing them), {"type": "wasd", "for": 0.5} (keys typed into the
         text box that has the keys, let go after "for" seconds),
-        {"call": "tuff_function"}, {"say": "text"}, {"mark": true} (start measuring), {"shot": "name.png"} (with
+        {"call": "tuff_function"}, {"say": "text"}, {"js": "code"} (run in the page, where
+        tv.emit('tg-autopilot', {message}) prints a line), {"mark": true} (start measuring), {"shot": "name.png"} (with
         menus: the whole page as the window shows it), {"dump": "name.json"} (add "memory": true to count the
         sprites and objects still in memory), {"close": true}]}
 
@@ -6444,6 +6905,8 @@ class Autopilot:
                 interp.run_block(tuff.Parser(tuff.tokenize(step["tuff"])).program(), interp.globals)
             except tuff.TuffError as err:
                 print(f"[autopilot] {step['tuff']}: {err.msg}", flush=True)
+        if "js" in step:  # JavaScript in the page; tv.emit('tg-autopilot', {message}) prints what it finds
+            v.js(step["js"])
         if "say" in step:
             print(step["say"], flush=True)
         if step.get("mark"):
@@ -6493,6 +6956,8 @@ class Autopilot:
         out["blurs"] = g.blurs  # times the window lost focus (that lets go of held keys)
         out["paused"] = g.is_paused
         out["locked"] = g.locked
+        if g.three_d:
+            out["mouse"] = g.mouse_state()  # world:mouse_locked(), the locks asked, world:auto_lock...
         out["down"] = sorted(g.down)  # the keys the game sees held
         if g.ui is not None:
             out["ui"] = g.ui.state()
@@ -6529,7 +6994,7 @@ _OBJECT_GIVES = {"x": "$number", "y": "$number", "z": "$number", "spot": "$list"
                  "distance": "$number", "fallen": "$bool"}
 # game:panel gives a "panel" and game:screen and game:start_screen a "screen": atgui containers (tables()["ui_kinds"] has
 # their methods; what those make is atgui's, as tuff_atgui.MAKES says).
-_MENUS = {"panel": "panel", "screen": "screen", "start_screen": "screen"}
+_MENUS = {"panel": "panel", "screen": "screen", "start_screen": "screen", "main_menu": "screen"}
 GIVES = {
     "game": {"open": "$bool", "frame": "$number", "held": "$bool", "pressed": "$bool", "mouse_x": "$number",
              "mouse_y": "$number", "time": "$number", "fps": "$number", "paused": "$bool", "width": "$number",
@@ -6541,7 +7006,7 @@ GIVES = {
               "ground": "object", "island": "object", "box": "object", "sphere": "object", "cylinder": "object",
               "cone": "object", "plane": "object", "spawn": "object", "player": "player", "terrain": "terrain",
               "car": "car", "ragdoll": "ragdoll", **_MENUS,
-              "time_of_day": "$number"},
+              "time_of_day": "$number", "mouse_locked": "$bool"},
     "screen": {"shown": "$bool"},
     "terrain": {"height_at": "$number", **{m: "terrain" for m, _ in Terrain.NAMES if m != "height_at"}},
     "sprite": {"x": "$number", "y": "$number", "spot": "$list", "angle": "$number", "on_screen": "$bool",
@@ -6591,6 +7056,7 @@ VALUES = {
     **{(k, "music"): {0: "music"} for k in ("game", "world")},
     **{(k, "panel"): {0: "anchor"} for k in ("game", "world")},
     ("world", "weather"): {0: "weather"}, ("world", "pop_text"): {4: "color"}, ("game", "pop_text"): {3: "color"},
+    **{(k, "splash"): {0: "splash"} for k in ("game", "world")},
 }
 # Talking, grabbing, doors and keys (Interaction, Door).
 for _k in ("object", "car", "ragdoll"):
@@ -6691,6 +7157,11 @@ def check_value(kind, method, index, value, base_dir=None):
         return file_problem(IMAGE_FILES, "picture")
     if what == "path":
         return None if path_mode(value) else path_problem(value.strip())
+    if what == "splash":  # a picture file, or any other text to show
+        if low.endswith(IMAGE_FILES):
+            return file_problem(IMAGE_FILES, "picture")
+        if low.endswith(NOT_PICTURES):
+            return f"'{value.strip()}' can't be a splash screen. Use a picture from your project folder (.png, .jpg or .gif), or some text."
     return None
 
 

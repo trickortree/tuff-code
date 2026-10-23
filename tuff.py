@@ -1574,19 +1574,36 @@ ANCHOR_HINTS = {"middle": "center", "centre": "center", "centered": "center", "c
                 "topleft": "top left", "topright": "top right", "bottomleft": "bottom left", "bottomright": "bottom right",
                 "up": "top", "down": "bottom", "north": "top", "south": "bottom", "east": "right", "west": "left",
                 "middle top": "top", "middle bottom": "bottom"}
-GAME_UI = ("panel", "screen", "start_screen")
-GAME_UI_HINTS = {"menu": "screen", "overlay": "screen", "popup": "screen", "pop_up": "screen", "dialog": "screen",
+GAME_UI = ("panel", "screen", "start_screen", "main_menu")
+GAME_UI_HINTS = {"overlay": "screen", "popup": "screen", "pop_up": "screen", "dialog": "screen",
                  "modal": "screen", "page": "screen", "shop": "screen", "ui": "panel", "gui": "panel", "toolbar": "panel",
-                 "sidebar": "panel", "bar": "panel", "title_screen": "start_screen", "start_menu": "start_screen",
-                 "main_menu": "start_screen", "menu_screen": "start_screen", "splash": "start_screen",
-                 "intro": "start_screen", "click_to_play": "start_screen", "click_to_start": "start_screen",
-                 "startscreen": "start_screen", "start_page": "start_screen"}
+                 "sidebar": "panel", "bar": "panel", "start_menu": "start_screen",
+                 "click_to_play": "start_screen", "click_to_start": "start_screen",
+                 "startscreen": "start_screen", "start_page": "start_screen",
+                 # splash screens and main menus (game:splash, game:main_menu)
+                 "title_screen": "splash", "intro": "splash", "logo": "splash", "splash_screen": "splash",
+                 "splashscreen": "splash", "logo_screen": "splash", "intro_screen": "splash", "menu": "main_menu",
+                 "home_screen": "main_menu", "menu_screen": "main_menu", "mainmenu": "main_menu", "title_menu": "main_menu",
+                 "home_menu": "main_menu"}
 GAME_UI_METHOD_HINTS = {"close": "hide", "dismiss": "hide", "open": "show", "visible": "shown", "is_visible": "shown",
                         "is_shown": "shown", "showing": "shown", "is_open": "shown", "is_showing": "shown", "empty": "clear"}
 GAME_UI_USE = {"panel": 'bar = {owner}:panel("top left")', "screen": 'shop = {owner}:screen("Shop") or {owner}:screen("Shop", false)',
-               "start_screen": 'start = {owner}:start_screen("My Game", "Click to play")'}
+               "start_screen": 'start = {owner}:start_screen("My Game", "Click to play")',
+               "main_menu": 'menu = {owner}:main_menu("My Game")'}
 GAME_UI_TAKES = {"panel": "where the panel goes", "screen": "a title, then whether it pauses the game",
-                 "start_screen": "a title, then a hint"}
+                 "start_screen": "a title, then a hint", "main_menu": "its title"}
+
+# The mouse in a 3D world (world:lock_mouse...), filled in where tgame's tables leave it out (with_mouse): each
+# method's inputs, what mouse_locked gives back, and names people guess.
+MOUSE_INPUTS = {"lock_mouse": (), "unlock_mouse": (), "mouse_locked": (), "auto_lock": ("on",)}
+MOUSE_HINTS = {"release_mouse": "unlock_mouse", "free_mouse": "unlock_mouse", "show_cursor": "unlock_mouse",
+               "unlock_cursor": "unlock_mouse", "unlock_pointer": "unlock_mouse", "exit_pointer_lock": "unlock_mouse",
+               "capture_mouse": "lock_mouse", "hide_cursor": "lock_mouse", "lock_cursor": "lock_mouse",
+               "lock_pointer": "lock_mouse", "pointer_lock": "lock_mouse", "request_pointer_lock": "lock_mouse",
+               "is_mouse_locked": "mouse_locked", "is_locked": "mouse_locked", "locked": "mouse_locked",
+               "click_to_lock": "auto_lock", "lock_on_click": "auto_lock", "autolock": "auto_lock"}
+MOUSE_NEEDS_3D = ("Locking the mouse is for looking around in a 3D world. Make the game with tgame.world(...) and "
+                  "give it a player: world:player(\"first person\").")
 
 
 # tgame's physics as the checker knows it, filled in where tgame's own tables leave it out (with_physics): what each
@@ -1689,8 +1706,8 @@ def tgame_tables():
     if _TGAME is None:
         try:
             import tuff_tgame
-            _TGAME = with_game_ui(with_gamekit(with_physics(with_terrain(tuff_tgame.tables(), tuff_tgame), tuff_tgame), tuff_tgame),
-                                  tuff_tgame)
+            _TGAME = with_mouse(with_game_ui(with_gamekit(with_physics(with_terrain(tuff_tgame.tables(), tuff_tgame),
+                                                                     tuff_tgame), tuff_tgame), tuff_tgame), tuff_tgame)
         except Exception:
             _TGAME = {}
     return _TGAME or None
@@ -1710,8 +1727,14 @@ def with_game_ui(tg, lib):
     def start_screen(title, hint="Click to play"):
         return None
 
-    makers = {"panel": panel, "screen": screen, "start_screen": start_screen}
-    made = {"panel": "@panel", "screen": "@screen", "start_screen": "@screen"}
+    def main_menu(title=None):
+        return None
+
+    def splash(what=None, seconds=2):
+        return None
+
+    makers = {"panel": panel, "screen": screen, "start_screen": start_screen, "main_menu": main_menu, "splash": splash}
+    made = {"panel": "@panel", "screen": "@screen", "start_screen": "@screen", "main_menu": "@screen"}
     kinds, gives, hints = dict(tg["kinds"]), dict(tg["gives"]), dict(tg["hints"])
     for kind in ("game", "world"):
         kinds[kind] = {**makers, **tg["kinds"][kind]}
@@ -1720,6 +1743,23 @@ def with_game_ui(tg, lib):
         hints[kind] = {**GAME_UI_HINTS, **tg["hints"].get(kind, {})}
     anchors = getattr(lib, "ANCHORS", ANCHORS)
     return {**tg, "kinds": kinds, "gives": gives, "hints": hints, "anchors": tuple(anchors)}
+
+
+def with_mouse(tg, lib):
+    """tgame's tables with the mouse in a 3D world filled in where they leave it out: world:lock_mouse,
+    :unlock_mouse, :mouse_locked (true or false) and :auto_lock(on), the names people guess, and what a 2D game
+    says about them (tgame's NEEDS_3D). Whatever tgame's own tables say wins."""
+    def mouse():
+        return None
+
+    def auto_lock(on=True):
+        return None
+
+    world = {**{m: (auto_lock if m == "auto_lock" else mouse) for m in MOUSE_INPUTS}, **tg["kinds"]["world"]}
+    gives = {**tg["gives"], "world": {"mouse_locked": "$bool", **tg["gives"]["world"]}}
+    hints = {**tg["hints"], "world": {**MOUSE_HINTS, **tg["hints"].get("world", {})}}
+    needs_3d = {**dict.fromkeys(MOUSE_INPUTS, MOUSE_NEEDS_3D), **tg.get("needs_3d", {})}
+    return {**tg, "kinds": {**tg["kinds"], "world": world}, "gives": gives, "hints": hints, "needs_3d": needs_3d}
 
 
 def with_terrain(tg, lib):
@@ -2931,6 +2971,8 @@ class Checker:
         if name not in methods and obj == "game" and name in KIT_3D:
             noun, use = KIT_3D[name]
             self.problem(e, f"{noun} needs a 3D world. Make the game with tgame.world, like: world = tgame.world(\"My Game\"), then {use}")
+        if name not in methods and obj == "game" and name in MOUSE_INPUTS:  # world:lock_mouse... on a 2D game
+            self.problem(e, tg.get("needs_3d", {}).get(name) or MOUSE_NEEDS_3D)
             return
         if name not in methods and obj in ("game", "world") and name == "physics":
             owner = e.obj.name if e.obj.kind == "var" else obj
@@ -2967,6 +3009,8 @@ class Checker:
             return
         if game_ui:
             self.check_game_ui(e, tg)
+            return
+        if obj in ("game", "world") and name in ("splash", "auto_lock") and not self.check_intro_inputs(e):
             return
         event = tg["handlers"].get(obj, {}).get(name)
         fn = e.args[event[0]] if event and len(e.args) > event[0] else None
@@ -3157,6 +3201,34 @@ class Checker:
             bad = next((a for a, k in zip(e.args, kinds) if k in funcs), None)
             if bad is not None:
                 self.problem(bad, f"A start screen takes a title and a hint, both text, like: {use}. A click on it starts the game by itself.")
+        elif name == "main_menu":
+            if kinds and kinds[0] in funcs + ("$list", "$bool"):
+                self.problem(e.args[0], f"A main menu's input is its title, like: {use}. Then add buttons to it: menu:button(\"Play\", play).")
+
+    def check_intro_inputs(self, e):
+        """game:splash(what, seconds) and world:auto_lock(on): a function, a list or true/false where the picture or
+        text goes, seconds that aren't a number above 0, and text where true or false goes. True when they can be right."""
+        owner = e.obj.name if e.obj.kind == "var" else ("world" if e.name == "auto_lock" else "game")
+        kinds = [self.kind(a) for a in e.args]
+        if e.name == "auto_lock":
+            if kinds and kinds[0] in ("$text", "$number", "$list", "$func", "$builtin"):
+                self.problem(e.args[0], f"{owner}:auto_lock takes true or false (without quotes), like: {owner}:auto_lock(false)")
+                return False
+            return True
+        if kinds and kinds[0] in ("$func", "$builtin", "$list", "$bool"):
+            self.problem(e.args[0], f"{owner}:splash takes a picture file or some text, then how many seconds it shows, like: "
+                                    f"{owner}:splash(\"logo.png\", 3). The game starts by itself after the splash screens.")
+            return False
+        if len(e.args) > 1:
+            a = e.args[1]
+            inner = a.value if a.kind == "neg" else a
+            v = getattr(inner, "value", None) if inner.kind == "const" else None
+            number = isinstance(v, (int, float)) and not isinstance(v, bool)
+            v = -v if number and a.kind == "neg" else v
+            if kinds[1] in ("$text", "$bool", "$list", "$func", "$builtin") or (number and v <= 0):
+                self.problem(a, f"{owner}:splash's second input is how many seconds it shows: a number above 0, like {owner}:splash(\"logo.png\", 3).")
+                return False
+        return True
 
     def anchor_problem(self, value, anchors):
         """Where a panel goes, written as text: one of the places tgame knows (in any case, with - or _ for the
