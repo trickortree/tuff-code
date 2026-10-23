@@ -598,6 +598,78 @@ def t_hud_3d(c):
     c.check(shot and color_share(shot, (180, 33, 24), 40, (0.4, 0.4, 0.6, 0.8)) > 0.01, "the shapes with size lists are drawn (the red box)", shot)
 
 
+# The kit as 1.1.0 made it (random.random() giving 0.5, so a rock is 1.05 times its usual size): size, solid body,
+# solid. Games made then must not change.
+KIT_1_1 = {"tree": ((2.2, 3.4, 2.2), (0.5, 3.4, 0.5), True), "pine": ((2.3, 3.9, 2.3), (0.5, 3.9, 0.5), True),
+           "rock": ((1.365, 0.8925, 1.26), None, True), "bush": ((1.5, 0.95, 1.5), None, False),
+           "flower": ((0.3, 0.5, 0.3), None, False), "house": ((3.2, 3.6, 3.2), (3.0, 2.2, 3.0), True),
+           "hut": ((2.8, 3.1, 2.8), (2.4, 1.7, 2.4), True), "sign": ((1.2, 1.6, 0.2), (0.3, 1.6, 0.2), True),
+           "crate": ((0.9, 0.9, 0.9), None, True), "fence": ((2.0, 1.0, 0.16), None, True), "coin": ((0.7, 1.3, 0.12), None, False)}
+
+
+def kit_sizes(c):
+    import random
+    import tuff_tgame
+    real = random.random
+    random.random = lambda: 0.5
+    try:
+        made = {name: tuff_tgame.kit(name) for name in tuff_tgame.KIT}
+    finally:
+        random.random = real
+    same = lambda a, b: a is b is None or (a is not None and b is not None and all(abs(x - y) < 1e-9 for x, y in zip(a, b)))
+    changed = {n: (made[n][0], made[n][1], made[n][3]) for n, (size, body, solid) in KIT_1_1.items()
+               if not (same(made[n][0], size) and same(made[n][1], body) and made[n][3] == solid)}
+    c.check(list(tuff_tgame.KIT[:11]) == list(KIT_1_1) and not changed,
+            "the kit's 11 models from 1.1.0 keep their names, sizes, solid bodies and solidness", changed)
+    c.check(made["person"][0] == (0.7, 1.75, 0.5) and made["chest"][0] == (0.9, 0.75, 0.6), "and the person and the chest are new",
+            {n: made[n][0] for n in ("person", "chest")})
+    c.check(all(p.get("shadow") for n in made for _, p, _ in made[n][2]), "every part of every model casts shadows")
+    styles = {n: next((p["anim"] for _, p, _ in made[n][2] if "anim" in p), None) for n in made}
+    c.check(styles["tree"] == "tree" and styles["coin"] == "coin" and styles["house"] is None and styles["person"][:2] == ["person", "leg_l"],
+            "trees, bushes, flowers and coins move by themselves in the page, houses don't, a person's parts say which limb they are", styles)
+    c.check('Did you mean "walk"?' in tuff_tgame.animation_problem("wlak"), "thing:animate with a misspelt name says which one it means",
+            tuff_tgame.animation_problem("wlak"))
+
+
+def changed_pixels(a, b, box=(0, 0, 1, 1), step=2):
+    """How many pixels (every `step`-th, in box) differ between two pictures of the same size."""
+    try:
+        w, h, get_a = png_rgb(a)
+        _, _, get_b = png_rgb(b)
+    except Exception:
+        return -1
+    return sum(1 for y in range(int(box[1] * h), int(box[3] * h), step) for x in range(int(box[0] * w), int(box[2] * w), step)
+               if max(abs(p - q) for p, q in zip(get_a(x, y), get_b(x, y))) > 12)
+
+
+def t_models(c):
+    """games/models.tuf, every model in the kit (the pictures, out/models_*.png, are worth a look after a change to the
+    kit); they move by themselves in the page (anim.js): people breathe, wave and walk, trees sway, coins spin and bob,
+    and nothing moves while the game is paused. The kit's sizes are the same as in 1.1.0, so older games don't change."""
+    kit_sizes(c)
+    r = play("models", game("models.tuf"), [
+        {"at": 0.6, "shot": "models.png"}, {"at": 0.8, "shot": "models_later.png"},
+        {"at": 0.85, "tuff": 'game:lighting "modern"'}, {"at": 1.25, "shot": "models_modern.png"},
+        {"at": 1.3, "tuff": 'game:lighting "simple"'},
+        {"at": 1.35, "tuff": "game:camera_at(0, 1.5, 1.2)"}, {"at": 1.37, "tuff": "game:look_at(0, 1.0, -2)"},
+        {"at": 1.7, "shot": "models_people.png"},
+        {"at": 1.75, "call": "walk"}, {"at": 2.35, "shot": "models_walking.png"},
+        {"at": 2.4, "call": "still"},
+        {"at": 2.5, "tuff": "game:pause()"}, {"at": 3.3, "shot": "models_paused.png"}, {"at": 3.8, "shot": "models_paused_later.png"},
+        {"at": 3.9, "close": True}])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    c.check(any(line.startswith("animate <person at") for line in r.lines), "thing:animate gives back the thing", r.lines[-3:])
+    shot = r.shots.get("models.png")
+    c.check(shot and color_share(shot, (167, 77, 65), 30, (0.36, 0.32, 0.5, 0.43)) > 0.3, "the house has its red roof", shot)
+    c.check(shot and color_share(shot, (212, 178, 99), 30, (0.5, 0.35, 0.62, 0.47)) > 0.15, "the hut has its straw roof", shot)
+    c.check(shot and color_share(shot, (76, 140, 56), 25, (0.15, 0.33, 0.25, 0.45)) > 0.1, "the tree has its leaves", shot)
+    moving = changed_pixels(shot, r.shots.get("models_later.png"))
+    c.check(moving > 150, f"a fifth of a second later the people, trees and coin have moved ({moving} pixels changed)", moving)
+    still = changed_pixels(r.shots.get("models_paused.png"), r.shots.get("models_paused_later.png"))
+    c.check(0 <= still < 60, f"while the game is paused nothing moves ({still} pixels changed in half a second)", still)
+
+
 def t_terrain(c):
     """The land (world:terrain): the player walks up a hill and stops at a lake's shore and at the land's edge;
     things made at y 0 stand on it; every y a program gives or reads is the height above the land; and a game that
@@ -1801,6 +1873,7 @@ def t_perf(c):
 
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
+         "models": t_models,
          "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "terrain": t_terrain,
          "terrain_look": t_terrain_look, "no_webgl": t_no_webgl, "ui_2d": t_ui_2d, "ui_3d": t_ui_3d,
          "physics": t_physics, "physics_player": t_physics_player, "physics_car": t_physics_car, "physics_2d": t_physics_2d,

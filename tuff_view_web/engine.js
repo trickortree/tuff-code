@@ -2,6 +2,8 @@
 // the retained scene they describe (DOM elements, 2D canvases, three.js scenes) and draws it on every animation
 // frame, at the display's own rate. Input goes back to Python as batched events.
 
+import * as anim from './anim.js';  // models that move by themselves: swaying trees, spinning coins, walking people, water
+
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
 const objs = new Map();              // id -> node
@@ -1512,6 +1514,7 @@ function setObj(n, props) {
       case 'sz': o.scale.z = v; break;
       case 'scale': o.scale.setScalar(v); break;
       case 'visible': o.visible = !!v; break;
+      case 'anim': anim.add(n, v); break;  // how it moves by itself (anim.js)
       case 'pick': n.pick = v !== false; break;
       case 'look': o.lookAt(v[0], v[1], v[2]); break;
       case 'camera': (v ? n.host.camera : n.host.scene).add(o); break;
@@ -1886,6 +1889,7 @@ function wakeSound() {
 
 function tick(now) {
   requestAnimationFrame(tick);
+  try { anim.frame(now, scenes); } catch (err) { report(err, 'animating'); }  // anim.js: before the scenes are drawn
   if (stats.last) {
     stats.gaps.push(now - stats.last);
     if (stats.gaps.length > 4000) stats.gaps.splice(0, 1000);
