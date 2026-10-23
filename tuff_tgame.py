@@ -416,6 +416,7 @@ class Game:
         ("height", "height"), ("background", "background"), ("random_spot", "random_spot"),
         ("group", "group"), ("hud", "get_hud"), ("clear", "clear"), ("panel", "panel"), ("screen", "make_screen"),
         ("start_screen", "start_screen"),
+        ("slow_mo", "slow_mo"), ("shake", "shake"), ("pop_text", "pop_text"),
     ]
 
     def __init__(self, lib, title, width, height):
@@ -451,6 +452,7 @@ class Game:
         self.blurs = 0
         self.sound_count = 0
         self.phys = None  # the game's physics (Physics), once something uses it
+        self.fx = None  # its effects (Effects): slow motion, a shake, pop text, weather, the time of day
         self.base = getattr(getattr(self.rt, "interp", None), "base_dir", None) or os.getcwd()
         if SCENE is not None:
             self.autopilot = None
@@ -563,6 +565,8 @@ class Game:
             self.work.append(now - self.work_from)
         if self.phys is not None:
             self.phys.frame()
+        if self.fx is not None:
+            self.fx.before_frame()
         self.before_frame()
         try:
             self.view.frame()
@@ -583,6 +587,8 @@ class Game:
             self.closed = True
             return 0
         dt = 0.0 if self.is_paused else real
+        if self.fx is not None:
+            dt = self.fx.frame(dt, real)  # slow motion slows everything that goes by dt
         if dt:
             self.clock += dt
             self.run_timers()
@@ -819,6 +825,18 @@ class Game:
     def volume(self, percent):
         self.view.call(0, "sound_volume", clamp(self.num(percent, ":volume"), 0, 100) / 100)
 
+    # ---- effects (Effects): slow motion, a shake, pop text
+    def effects(self):
+        if self.fx is None:
+            self.fx = Effects(self)
+        return self.fx
+
+    def slow_mo(self, speed=0.3, seconds=None):
+        self.effects().slow_mo(speed, seconds)
+
+    def shake(self, strength=0.5, seconds=0.4):
+        self.effects().shake(strength, seconds)
+
     # ---- the window
     def set_title(self, text):
         self.view.set_title(self.rt.text(text))
@@ -887,6 +905,351 @@ class Game:
         (tm, tp), (em, ep) = spread(self.work), spread(self.engine)
         return {"fps": self.fps(), "frames": self.frames, "tuff_ms_median": tm, "tuff_ms_p95": tp,
                 "engine_ms_median": em, "engine_ms_p95": ep}
+
+
+# ---------------------------------------------------------------- effects: slow motion, a shake, pop text, weather, the time of day
+
+WEATHERS = ("rain", "snow", "none")
+WEATHER_WORDS = {"rainy": "rain", "raining": "rain", "storm": "rain", "stormy": "rain", "drizzle": "rain", "showers": "rain",
+                 "wet": "rain", "snowy": "snow", "snowing": "snow", "blizzard": "snow", "snowfall": "snow", "clear": "none",
+                 "sunny": "none", "off": "none", "nothing": "none", "dry": "none", "stop": "none", "no": "none", "": "none"}
+# The day, hour by hour: the sky it looks like then. Between two hours the sky is a mix of the two.
+DAY = ((0, "night"), (4.5, "night"), (6.5, "dawn"), (8.5, "day"), (16, "day"), (18.5, "sunset"), (20.5, "night"), (24, "night"))
+# The hour a day_cycle or time_of_day starts from, for the sky the world has (a "day" sky is the morning).
+SKY_HOURS = {"day": 9, "sunset": 18.5, "dawn": 6.5, "night": 0, "cloudy": 12, "space": 12}
+POP_SECONDS = 1.1  # how long pop text floats before it's gone
+# Names people guess for the effects, and the tgame name (for "Use :slow_mo instead").
+FX_HINTS = {"slowmo": "slow_mo", "slow_motion": "slow_mo", "slowmotion": "slow_mo", "bullet_time": "slow_mo",
+            "time_scale": "slow_mo", "timescale": "slow_mo", "set_time_scale": "slow_mo", "slow_down": "slow_mo",
+            "camera_shake": "shake", "screen_shake": "shake", "shake_camera": "shake", "shake_screen": "shake",
+            "screenshake": "shake", "quake": "shake", "earthquake": "shake", "float_text": "pop_text",
+            "floating_text": "pop_text", "damage_text": "pop_text", "popup_text": "pop_text", "pop_up_text": "pop_text",
+            "text_pop": "pop_text", "damage_number": "pop_text", "popup_number": "pop_text", "score_popup": "pop_text"}
+HINTS["game"].update(FX_HINTS)
+HINTS["world"].update({**FX_HINTS, "rain": "weather", "snow": "weather", "set_weather": "weather", "climate": "weather",
+                       "precipitation": "weather", "day_night": "day_cycle", "day_night_cycle": "day_cycle",
+                       "daynight": "day_cycle", "daylight_cycle": "day_cycle", "time_cycle": "day_cycle",
+                       "night_cycle": "day_cycle", "cycle": "day_cycle", "set_time": "time_of_day", "hour": "time_of_day",
+                       "time_of_the_day": "time_of_day", "set_hour": "time_of_day", "daytime": "time_of_day",
+                       "clock_time": "time_of_day"})
+NEEDS_3D.update({"weather": "The weather needs a 3D world. Make the game with tgame.world(...) for rain or snow.",
+                 "day_cycle": "Day and night need a 3D world, with a sky. Make the game with tgame.world(...) for them.",
+                 "time_of_day": "The time of day needs a 3D world, with a sky. Make the game with tgame.world(...) for it."})
+
+
+def weather_problem(name):
+    return (f"The weather can be \"rain\", \"snow\" or \"none\", not \"{name}\"."
+            + did_you_mean(str(name).strip().lower(), WEATHERS))
+
+
+def _rgb(h):
+    h = h.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+
+
+def _hex(c):
+    return "#" + "".join(f"{round(clamp(v, 0.0, 1.0) * 255):02x}" for v in c)
+
+
+def mix_color(a, b, t):
+    """The color a part t (0 to 1) of the way from a to b (hex colors; None stays None)."""
+    if a is None or b is None:
+        return a or b
+    return _hex([x + (y - x) * t for x, y in zip(_rgb(a), _rgb(b))])
+
+
+def sun_at(hour):
+    """Where the light comes from at an hour: the sun rises in the east at 6, is high at noon and sets in the west at
+    18, and the moon goes on round (lower) through the night, so shadows turn smoothly all day."""
+    h = hour % 24
+    turn = math.radians(90 + (h - 6) / 12 * 180)
+    up = math.sin((h - 6) / 12 * math.pi)
+    el = math.radians(15 + (50 * up if up > 0 else -35 * up))
+    return (70 * math.cos(el) * math.sin(turn), 70 * math.sin(el), -70 * math.cos(el) * math.cos(turn))
+
+
+class Effects:
+    """A game's effects, made the first time the program uses one: slow motion (the frame's dt, so the game clock,
+    timers, things that move by themselves and the player slow down, and the page's clock for physics and animation),
+    shaking the camera (3D) or the game (2D), text that pops up from a spot and floats away, and in a 3D world the
+    weather and the time of day (the sky, the sun, the light and the fog, worked out here and sent like world:sky's).
+
+    The page draws its part in tuff_view_web/fx.js (the shake, pop text in 3D, rain and snow, the wet ground, the
+    stars). Pop text in 2D is sprites. Everything holds still while the game is paused, and in Tuff Engine's preview
+    (tuff.py --scene) nothing goes to the page but the sky."""
+
+    def __init__(self, game):
+        self.game = game
+        self.live = SCENE is None
+        self.speed = 1.0           # how fast the game runs now (slow motion eases it down and back)
+        self.slow = None           # [the speed it eases to, real seconds left (None: until slow_mo(1))]
+        self.sent = {"speed": 1.0, "pause": False}
+        self.pops = []             # 2D: [text, its shadow, age, x, y, size]
+        self.weather_ = "none"
+        self.strength = 1.0
+        self.hour = None           # the time of day (0-24), once day_cycle or time_of_day set it
+        self.cycle = 0.0           # seconds for a whole day (0: the time holds still)
+        self.sky_due = 0.0         # seconds until the day's sky goes again
+        self.look_sent = None      # what the sky was made from last time (to notice world:sky, :fog, :sun, :terrain)
+        self.stars = 0.0
+
+    def send(self, op, *args):
+        if self.live and not self.game.closed:
+            self.game.view.call(0, "fx", op, *args)
+
+    def target(self):
+        """The page's node that shakes: a world's scene, or a 2D game's canvas."""
+        g = self.game
+        return int(g.scene if g.three_d else g.node)
+
+    # ---- every frame
+    def frame(self, dt, real):
+        """The frame's dt at the game's speed (0 while paused), after slow motion and the time of day moved on."""
+        g = self.game
+        if not g.is_paused and real:
+            want = 1.0
+            if self.slow is not None:
+                want, left = self.slow
+                if left is not None:
+                    self.slow[1] = left - real
+                    if self.slow[1] <= 0:
+                        self.slow, want = None, 1.0
+            if self.speed != want:  # quickly into slow motion, gently back out of it
+                self.speed += (want - self.speed) * min(1.0, real * (25 if want < self.speed else 6))
+                if abs(self.speed - want) < 0.003:
+                    self.speed = want
+        dt *= self.speed
+        if dt and self.hour is not None and self.cycle:
+            self.hour = (self.hour + dt * 24 / self.cycle) % 24
+            self.sky_due -= dt
+        if self.pops:
+            self.move_pops(dt)
+        return dt
+
+    def before_frame(self):
+        """Before the frame goes: the game's speed and pausing for the page, and the sky when it changed."""
+        g = self.game
+        paused = bool(g.is_paused)
+        if paused != self.sent["pause"]:
+            self.sent["pause"] = paused
+            self.send("pause", paused)
+        if abs(self.speed - self.sent["speed"]) > 0.002 or (self.speed == 1.0 != self.sent["speed"]):
+            self.sent["speed"] = self.speed
+            self.send("speed", round(self.speed, 4))
+        if g.three_d and (self.hour is not None or self.weather_ != "none"):
+            due = self.hour is not None and self.cycle and self.sky_due <= 0
+            if due or self.look_sent != self.look_key():
+                self.show_sky()
+
+    # ---- slow motion
+    def slow_mo(self, speed, seconds):
+        g = self.game
+        k = g.num(speed, ":slow_mo")
+        if not 0.05 <= k <= 1:
+            raise g.rt.error(f":slow_mo needs a speed from 0.05 to 1 (0.3 is 30%, 1 is normal speed), like "
+                             f"{g.KIND}:slow_mo(0.3, 2).")
+        secs = None if seconds is None else g.num(seconds, ":slow_mo")
+        if secs is not None and secs < 0:
+            raise g.rt.error(":slow_mo needs how many seconds it lasts (0 or more), like "
+                             f"{g.KIND}:slow_mo(0.3, 2).")
+        self.slow = None if k == 1 else [k, secs or None]
+
+    # ---- shaking
+    def shake(self, strength, seconds):
+        g = self.game
+        s = g.num(strength, ":shake")
+        secs = g.num(seconds, ":shake")
+        if not 0 <= s <= 2:
+            raise g.rt.error(f":shake needs a strength from 0 to 2 (0.5 is a bump, 2 is an earthquake), like {g.KIND}:shake(0.5).")
+        if secs <= 0:
+            raise g.rt.error(f":shake needs how long it shakes, in seconds (more than 0), like {g.KIND}:shake(1, 1.5).")
+        self.send("shake", self.target(), s, min(secs, 60))
+
+    # ---- pop text
+    def pop_text(self, text, x, y, z, color, size):
+        g = self.game
+        words = g.rt.text(text)
+        c = g.color(color)
+        px = g.num(size, ":pop_text")
+        if px <= 0:
+            raise g.rt.error(f":pop_text needs a size above 0 (how tall the text is), like {g.KIND}:pop_text(\"+10\", "
+                             + ("0, 1, 0, \"gold\", 40)." if g.three_d else "100, 50, \"gold\", 40)."))
+        if g.three_d:
+            self.send("pop", self.target(), words, x, y, z, c, min(px, 400))
+            return
+        common = {"text": words, "size": px, "bold": True, "ax": 0.5, "ay": 0.5}
+        shadow = g.make("text", x + px * 0.06, y + px * 0.06, {**common, "color": "#000000", "alpha": 0.55, "z": 1e5}, own=False)
+        front = g.make("text", x, y, {**common, "color": c, "z": 1e5 + 1}, own=False)
+        self.pops.append([front, shadow, 0.0, x, y, px])
+        while len(self.pops) > 80:
+            for s in self.pops.pop(0)[:2]:
+                s.remove()
+
+    def move_pops(self, dt):
+        """2D pop text floats up and fades (its sprites are tgame's own: game:clear leaves them to finish)."""
+        keep = []
+        for pop in self.pops:
+            front, shadow, age, x, y, px = pop
+            age += dt
+            if age >= POP_SECONDS:
+                front.remove()
+                shadow.remove()
+                continue
+            f = age / POP_SECONDS
+            rise = (1 - (1 - f) ** 3) * max(40.0, px * 1.6)
+            alpha = 1.0 if f < 0.55 else 1 - (f - 0.55) / 0.45
+            grow = 1 + 0.3 * math.sin(min(1.0, f / 0.22) * math.pi)
+            front.send(y=y - rise, alpha=round(alpha, 3), scale=round(grow, 3))
+            shadow.send(y=y - rise + px * 0.06, alpha=round(alpha * 0.55, 3), scale=round(grow, 3))
+            pop[2] = age
+            keep.append(pop)
+        self.pops = keep
+
+    # ---- the weather (3D)
+    def weather(self, kind, strength):
+        g = self.game
+        name = g.rt.text(kind).strip().lower()
+        name = WEATHER_WORDS.get(name, name)
+        if name not in WEATHERS:
+            raise g.rt.error(weather_problem(name))
+        k = g.num(strength, ":weather")
+        if not 0 <= k <= 2:
+            raise g.rt.error(":weather needs a strength from 0 to 2 (1 is normal), like world:weather(\"rain\", 1.5).")
+        self.weather_, self.strength = (name, k) if k > 0 else ("none", 0.0)
+        self.send("weather", self.target(), self.weather_, self.strength)
+        self.sky_changed()
+        if self.weather_ == "none" and self.hour is None:
+            self.show_sky()  # back to the plain sky, which the world shows again from now on
+
+    def grounds(self):
+        """The page's nodes of the ground: the land, world:ground and world:island (they look wet in the rain)."""
+        g = self.game
+        ids = [int(t.node) for t in g.things if getattr(t, "floor", False) and t.alive]
+        if g.land is not None:
+            ids.append(int(g.land.node))
+        return ids
+
+    # ---- the time of day (3D)
+    def day_cycle(self, seconds):
+        g = self.game
+        secs = g.num(seconds, ":day_cycle")
+        if secs != 0 and secs < 2:
+            raise g.rt.error(":day_cycle needs how many seconds a whole day takes (2 or more), like world:day_cycle(120). "
+                             "world:day_cycle(0) stops the time where it is.")
+        if self.hour is None:
+            self.hour = float(SKY_HOURS.get(g.sky_name, 12))
+        self.cycle = float(secs)
+        self.sky_changed()
+
+    def time_of_day(self, hour):
+        g = self.game
+        if hour is None:
+            return tidy(self.hour if self.hour is not None else SKY_HOURS.get(g.sky_name, 12))
+        h = g.num(hour, ":time_of_day")
+        if not 0 <= h <= 24:
+            raise g.rt.error(":time_of_day needs an hour from 0 to 24 (18 is 6 pm), like world:time_of_day(18).")
+        self.hour = h % 24
+        self.sky_changed()
+        return None
+
+    def chose_sky(self):
+        """world:sky: a sky the program picks stops the day where it is (the weather still changes it)."""
+        self.hour, self.cycle = None, 0.0
+        self.look_sent = None
+        if self.stars:
+            self.stars = 0.0
+            self.send("stars", self.target(), 0)
+
+    # ---- the sky they make
+    def sky_changed(self):
+        """The sky goes again before the next frame (in Tuff Engine's preview, which has no frames, right away)."""
+        self.look_sent = None
+        if not self.live:
+            self.show_sky()
+
+    def look_key(self):
+        """What the sky is made from, besides the time: when one of these changes, the sky goes again."""
+        g = self.game
+        land = g.land.size if g.land is not None else None
+        return (g.sky_name, g.fog_far, g.sun_strength, land, self.weather_, self.strength, len(self.grounds()))
+
+    def day_look(self, hour):
+        """The sky at an hour, as SKIES has them: a mix of the two skies either side of it in DAY."""
+        h = hour % 24
+        a, b, t = "night", "night", 0.0
+        for (h0, s0), (h1, s1) in zip(DAY, DAY[1:]):
+            if h0 <= h <= h1:
+                a, b, t = s0, s1, ease((h - h0) / (h1 - h0))
+                break
+        A, B = SKIES[a], SKIES[b]
+
+        def lerp(p, q):
+            return p + (q - p) * t
+        return {"sky": [mix_color(p, q, t) for p, q in zip(A["sky"], B["sky"])], "fog": mix_color(A["fog"], B["fog"], t),
+                "sun": (mix_color(A["sun"][0], B["sun"][0], t), lerp(A["sun"][1], B["sun"][1])),
+                "hemi": (mix_color(A["hemi"][0], B["hemi"][0], t), mix_color(A["hemi"][1], B["hemi"][1], t),
+                         lerp(A["hemi"][2], B["hemi"][2])),
+                "at": sun_at(h), "far": lerp(A["far"], B["far"]), "stars": (a == "night") * (1 - t) + (b == "night") * t}
+
+    def weathered(self, look):
+        """The sky with the weather: rain makes it greyer and darker, with less sun and thicker fog that hides the
+        stars; snow makes it paler, with a little less sun and some fog."""
+        k = self.strength if self.weather_ != "none" else 0.0
+        if not k:
+            return look
+        w = min(1.0, k)
+        rain = self.weather_ == "rain"
+
+        def grey(c):
+            r, g_, b = _rgb(c)
+            lum = 0.3 * r + 0.59 * g_ + 0.11 * b
+            if rain:
+                return mix_color(c, _hex([lum * 0.72, lum * 0.75, lum * 0.8]), 0.78 * w)
+            lum = min(1.0, lum * 1.05 + 0.18)
+            return mix_color(c, _hex([lum * 0.97, lum * 0.99, lum]), 0.75 * w)
+        out = dict(look)
+        out["sky"] = [grey(c) for c in look["sky"]]
+        out["fog"] = grey(look["fog"]) if look["fog"] else None
+        out["sun"] = (grey(look["sun"][0]), look["sun"][1] * (1 - (0.6 if rain else 0.3) * w))
+        out["hemi"] = (grey(look["hemi"][0]), look["hemi"][1], look["hemi"][2] * ((1 - 0.1 * w) if rain else (1 + 0.05 * w)))
+        out["thick"] = 1 + (0.9 if rain else 0.55) * k  # the fog comes this many times closer
+        out["stars"] = look.get("stars", 0) * (1 - w)
+        return out
+
+    def show_sky(self):
+        """Sends the sky (as World3D.apply_sky does) for the time of day and the weather."""
+        g = self.game
+        self.look_sent = self.look_key()
+        base = self.day_look(self.hour) if self.hour is not None else {**SKIES[g.sky_name], "stars": 0.0}
+        s = self.weathered(base)
+        far = g.fog_far if g.fog_far is not None else g.sky_far(s)
+        far = far / s.get("thick", 1)
+        g.view.set(g.scene, sky=s["sky"], bg=s["sky"][1], fog=[s["fog"], far * 0.3, far] if (s["fog"] and far) else None)
+        g.view.set(g.hemi, color=s["hemi"][0], ground=s["hemi"][1], intensity=s["hemi"][2])
+        x, y, z = s["at"]
+        g.view.set(g.sun_node, color=s["sun"][0], intensity=s["sun"][1] * g.sun_strength, x=x, y=y, z=z)
+        stars = round(s["stars"], 3)
+        if stars != self.stars:
+            self.stars = stars
+            self.send("stars", self.target(), stars)
+        self.send("wet", self.target(), min(1.0, self.strength) if self.weather_ == "rain" else 0, self.grounds())
+        # The next sky goes when the day has moved on a little (every frame for a day of a few seconds).
+        self.sky_due = min(0.1, self.cycle / 1200) if self.cycle else 0.0
+
+    def state(self):
+        """For the autopilot's reports: Python's side and the page's."""
+        out = {"speed": round(self.speed, 3), "slow": self.slow and [self.slow[0], self.slow[1] and round(self.slow[1], 2)],
+               "weather": self.weather_, "strength": self.strength,
+               "hour": None if self.hour is None else round(self.hour, 3), "cycle": self.cycle, "stars": self.stars,
+               "pops": len(self.pops)}
+        if self.live and not self.game.closed:
+            try:
+                out["page"] = self.game.view.ask(0, "fx", "info")
+            except Exception as exc:
+                out["page"] = {"error": str(exc)}
+        return out
 
 
 # ---------------------------------------------------------------- physics on sprites and objects
@@ -1191,6 +1554,18 @@ class Game2D(Game, Layer):
         ph = self.physics_on()
         ph.walls_ = self.rt.truthy(on)
         ph.send("walls", ph.walls_, self.W, self.H)
+
+    def pop_text(self, text="", x=MISSING, y=MISSING, color=MISSING, size=MISSING):
+        t = thing_of(x)
+        if isinstance(t, Sprite):  # over a sprite: game:pop_text("+1", coin)
+            given = [a for a in (y, color, size) if a is not MISSING]
+            if len(given) > 2:
+                raise self.rt.error(":pop_text got too many inputs.")
+            color, size = given + ["white", 32][len(given):]
+            x, y = t.x, t.y - max(t.h, t.r * 2, t.size_ if t.shape == "text" else 0) * t.k / 2 - 8
+        else:
+            x, y, (color, size) = self.place([x, y, color, size], ("white", 32), "pop_text")
+        self.effects().pop_text(text, x, y, None, color, size)
 
     def setup(self):
         self.bg = self.BACKGROUND
@@ -1804,6 +2179,7 @@ class World3D(Game):
         ("look_at", "look_at"), ("follow", "follow"), ("orbit", "orbit"), ("looking_at", "looking_at"),
         ("terrain", "terrain"), ("lighting", "lighting"), ("gravity", "gravity"), ("explode", "explode"),
         ("car", "car"), ("ragdoll", "ragdoll"),
+        ("weather", "weather"), ("day_cycle", "day_cycle"), ("time_of_day", "time_of_day"),
     ]
 
     def setup(self):
@@ -1860,6 +2236,8 @@ class World3D(Game):
         name = self.rt.text(preset).strip().lower()
         if name not in SKIES:
             raise self.rt.error(f"The sky can be {', '.join(SKIES)}, not \"{name}\".")
+        if self.fx is not None:
+            self.fx.chose_sky()
         self.apply_sky(name)
 
     def background(self, color):
@@ -2061,6 +2439,31 @@ class World3D(Game):
     def ragdoll(self, x=MISSING, y=MISSING, z=MISSING, color=MISSING):
         x, y, z, (color,) = self.where([x, y, z, color], ("blue",), "ragdoll")
         return Ragdoll(self, x, self.above(x, y, z), z, color).native
+
+    # ---- effects (Effects): pop text, the weather, the time of day
+    def pop_text(self, text="", x=MISSING, y=MISSING, z=MISSING, color=MISSING, size=MISSING):
+        t = thing_of(x)
+        if isinstance(t, (Thing, Player)):  # over a thing: world:pop_text("+1", coin)
+            given = [a for a in (y, z, color, size) if a is not MISSING]
+            if len(given) > 2:
+                raise self.rt.error(":pop_text got too many inputs.")
+            color, size = given + ["white", 34][len(given):]
+            x, y, z = t.x, t.y + t.height() + 0.15, t.z
+        else:
+            x, y, z, (color, size) = self.where([x, y, z, color, size], ("white", 34), "pop_text")
+            y = self.above(x, y, z)
+        self.effects().pop_text(text, x, y, z, color, size)
+
+    def weather(self, kind="rain", strength=1):
+        self.effects().weather(kind, strength)
+
+    def day_cycle(self, seconds=120):
+        self.effects().day_cycle(seconds)
+
+    def time_of_day(self, hour=None):
+        if hour is None and self.fx is None:
+            return tidy(SKY_HOURS.get(self.sky_name, 12))
+        return self.effects().time_of_day(hour)
 
     def stop_chase(self):
         """The camera stops following the car it drives (the program put the camera somewhere else)."""
@@ -4561,7 +4964,8 @@ def editor_tables():
     """The names Tuff Engine offers in its menus, from the same tables a run uses."""
     return {"colors": COLORS, "skies": list(SKIES), "kit": list(KIT), "hold": list(HOLDABLE), "sounds": list(SOUNDS),
             "edges": list(EDGE_MODES), "players": list(PLAYER_MODES), "terrain_styles": list(TERRAIN_STYLES),
-            "lightings": list(LIGHTINGS), "anchors": list(ANCHORS), "physics": list(PHYSICS_KINDS)}
+            "lightings": list(LIGHTINGS), "anchors": list(ANCHORS), "physics": list(PHYSICS_KINDS),
+            "weathers": list(WEATHERS)}
 
 
 # ---------------------------------------------------------------- the autopilot (tests)
@@ -4785,6 +5189,7 @@ class Autopilot:
         out["objects"] = [[t.kind, round(t.x, 2), round(t.y, 2), round(t.z, 2), t.fallen, t.data]
                           for t in g.things if isinstance(t, Thing) and t.alive][:400]
         out["physics"] = g.phys.state() if g.phys is not None else None
+        out["effects"] = g.fx.state() if g.fx is not None else None
         if g.three_d and g.the_player is not None:
             out["on_ground"] = g.the_player.on_ground
         return out
@@ -4814,7 +5219,8 @@ GIVES = {
               "height": "$number", "random_spot": "$list", "group": "group", "hud": "hud", "light": "object",
               "ground": "object", "island": "object", "box": "object", "sphere": "object", "cylinder": "object",
               "cone": "object", "plane": "object", "spawn": "object", "player": "player", "terrain": "terrain",
-              "car": "car", "ragdoll": "ragdoll", **_MENUS},
+              "car": "car", "ragdoll": "ragdoll", **_MENUS,
+              "time_of_day": "$number"},
     "screen": {"shown": "$bool"},
     "terrain": {"height_at": "$number", **{m: "terrain" for m, _ in Terrain.NAMES if m != "height_at"}},
     "sprite": {"x": "$number", "y": "$number", "spot": "$list", "angle": "$number", "on_screen": "$bool",
@@ -4863,6 +5269,7 @@ VALUES = {
     **{(k, "sound"): {0: "sound"} for k in ("game", "world")},
     **{(k, "music"): {0: "music"} for k in ("game", "world")},
     **{(k, "panel"): {0: "anchor"} for k in ("game", "world")},
+    ("world", "weather"): {0: "weather"}, ("world", "pop_text"): {4: "color"}, ("game", "pop_text"): {3: "color"},
 }
 
 
@@ -4934,6 +5341,8 @@ def check_value(kind, method, index, value, base_dir=None):
         return f"'{value}' isn't one of tgame's sounds ({', '.join(SOUNDS)}). Or play a .wav, .mp3 or .ogg file from your project folder."
     if what == "music":
         return file_problem(SOUND_FILES, "music")
+    if what == "weather":
+        return None if WEATHER_WORDS.get(low, low) in WEATHERS else weather_problem(value)
     if what == "image":
         return file_problem(IMAGE_FILES, "picture")
     return None
@@ -4961,4 +5370,4 @@ def tables():
     ui_kinds = {"panel": probe(Panel).methods(), "screen": probe(StartScreen).methods()}
     return {"lib": make_library(FakeRt()), "kinds": kinds, "gives": GIVES, "handlers": HANDLERS, "hints": HINTS,
             "check": check_value, "ui_kinds": ui_kinds, "anchors": ANCHORS, "physics_kinds": PHYSICS_KINDS,
-            "physics_words": PHYSICS_WORDS, "needs_3d": NEEDS_3D}
+            "physics_words": PHYSICS_WORDS, "needs_3d": NEEDS_3D, "weathers": WEATHERS}

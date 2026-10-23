@@ -1,0 +1,23 @@
+mention tgame
+
+# A shake and pop text: the camera shakes for a second, and "+10" floats up from the coin (and two more from spots).
+world = tgame.world("Shake and Pop", 900, 560)
+world:ground("grass")
+world:camera_at(0, 3, 9)
+world:look_at(0, 1, 0)
+crate = world:spawn("crate", -2, 0, 0)
+coin = world:spawn("coin", 2, 1, 0)
+world:box(0, 0, -4, [6, 3, 1], "stone")
+score = 0
+
+func boom():
+    world:shake(1.5, 1)
+
+func got():
+    score += 10
+    world:pop_text("+10", coin, "gold", 48)
+    world:pop_text("Nice!", -2, 1.5, 0)
+    world:pop_text("big", [0, 2, -3], "pink", 60)
+
+func report():
+    say "score " + score
