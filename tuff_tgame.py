@@ -91,6 +91,12 @@ LIGHTINGS = ("simple", "modern")
 ANCHORS = ("top left", "top", "top right", "left", "center", "right", "bottom left", "bottom", "bottom right")
 ANCHOR_WORDS = {"centre": "center", "middle": "center", "mid": "center", "centered": "center", "upper": "top",
                 "lower": "bottom"}
+# What thing:physics(kind) can make a thing: falls and gets pushed, never moves, moved by the program, or no body.
+PHYSICS_KINDS = ("dynamic", "static", "kinematic", "off")
+PHYSICS_WORDS = {"on": "dynamic", "falls": "dynamic", "fall": "dynamic", "fixed": "static", "still": "static",
+                 "solid": "static", "none": "off", "no": "off"}
+# Kit models that get a capsule for a body when they use physics (people and creatures), not a box.
+CAPSULE_KINDS = ("person", "character", "villager", "npc", "enemy", "zombie", "robot", "knight", "player")
 
 # Methods people coming from other engines guess, and the tgame name (for "Use :box instead").
 HINTS = {
@@ -111,15 +117,37 @@ HINTS = {
                 "down": "lower", "level": "flatten", "flat": "flatten", "soften": "smooth", "blur": "smooth"},
     "sprite": {"goto": "move_to", "go_to": "move_to", "position": "move_to", "rotate": "turn", "rotation": "angle",
                "collide": "touches", "collides": "touches", "colliding": "touches", "hits": "touches", "touching": "touches",
-               "velocity": "speed", "fill": "color", "colour": "color", "text": "set", "on_click": "clicked", "delete": "remove",
-               "destroy": "remove", "kill": "remove", "wrap": "on_edge", "bounce": "on_edge", "keep_on_screen": "on_edge"},
+               "fill": "color", "colour": "color", "text": "set", "on_click": "clicked", "delete": "remove",
+               "destroy": "remove", "kill": "remove", "wrap": "on_edge", "keep_on_screen": "on_edge"},
     "object": {"goto": "move_to", "go_to": "move_to", "position": "move_to", "rotate": "turn", "rotation": "angle",
-               "collide": "touches", "collides": "touches", "touching": "touches", "hits": "touches", "velocity": "speed",
+               "collide": "touches", "collides": "touches", "touching": "touches", "hits": "touches",
                "colour": "color", "on_click": "clicked", "delete": "remove", "destroy": "remove", "kill": "remove",
                "text": "label", "name": "label", "chop": "shake", "topple": "fall"},
     "player": {"goto": "move_to", "position": "move_to", "speed": "walk_speed", "jump_power": "jump_height",
-               "holds": "hold", "equip": "hold", "aim": "looking_at", "target": "looking_at"},
+               "holds": "hold", "equip": "hold", "aim": "looking_at", "target": "looking_at", "on_collision": "on_hit",
+               "on_collide": "on_hit", "collided": "on_hit"},
 }
+# Physics names people bring from other engines (Unity, Godot, pygame's pymunk...), for sprites and objects alike.
+PHYSICS_HINTS = {"rigidbody": "physics", "rigid_body": "physics", "add_physics": "physics", "enable_physics": "physics",
+                 "use_physics": "physics", "body": "physics", "impulse": "push", "apply_impulse": "push", "add_force": "push",
+                 "apply_force": "push", "force": "push", "kick": "push", "throw": "push", "weight": "mass",
+                 "bounciness": "bounce", "restitution": "bounce", "elasticity": "bounce", "on_collision": "on_hit",
+                 "on_collide": "on_hit", "on_contact": "on_hit", "collided": "on_hit", "on_bump": "on_hit",
+                 "torque": "spin", "apply_torque": "spin", "add_torque": "spin", "linear_velocity": "velocity",
+                 "set_velocity": "velocity", "freeze": "sleep", "unfreeze": "wake", "wake_up": "wake"}
+HINTS["sprite"].update(PHYSICS_HINTS)
+HINTS["object"].update(PHYSICS_HINTS)
+HINTS["world"].update({"set_gravity": "gravity", "explosion": "explode", "blast": "explode", "bomb": "explode",
+                       "vehicle": "car", "kart": "car", "buggy": "car", "doll": "ragdoll", "dummy": "ragdoll"})
+HINTS["game"].update({"set_gravity": "gravity", "explosion": "explode", "blast": "explode", "bomb": "explode",
+                      "edges": "walls", "borders": "walls", "bounds": "walls", "screen_walls": "walls"})
+HINTS["car"] = {**HINTS["object"], "accelerate": "engine", "power": "engine", "throttle": "engine", "control": "drive",
+                "steer": "drive", "drive_with_keys": "drive", "reset": "flip", "unflip": "flip", "upright": "flip",
+                "kmh": "speed", "mph": "speed"}
+HINTS["ragdoll"] = {**HINTS["object"], "hit": "push", "flop": "push"}
+# What a 2D game can't make, with what to do instead.
+NEEDS_3D = {"car": "The car needs a 3D world. Make the game with tgame.world(...) to drive one.",
+            "ragdoll": "A ragdoll needs a 3D world. Make the game with tgame.world(...) for one."}
 # Names people guess for menus, the same in 2D and 3D.
 UI_HINTS = {"menu": "screen", "overlay": "screen", "popup": "screen", "dialog": "screen", "modal": "screen",
             "title_screen": "start_screen", "start_menu": "start_screen", "main_menu": "start_screen",
@@ -314,6 +342,12 @@ class Methods(dict):
             def hint(*_args):
                 raise rt.error(f"{what} doesn't have :{name}. Use :{alt} instead.")
             return hint
+        if self.what == "A game" and str(name).lower() in NEEDS_3D:
+            message, rt = NEEDS_3D[str(name).lower()], self.rt
+
+            def needs_3d(*_args):
+                raise rt.error(message)
+            return needs_3d
         return default
 
 
@@ -413,6 +447,7 @@ class Game:
         self.fake_lock = False
         self.blurs = 0
         self.sound_count = 0
+        self.phys = None  # the game's physics (Physics), once something uses it
         self.base = getattr(getattr(self.rt, "interp", None), "base_dir", None) or os.getcwd()
         if SCENE is not None:
             self.autopilot = None
@@ -523,6 +558,8 @@ class Game:
         now = time.perf_counter()
         if self.work_from is not None:
             self.work.append(now - self.work_from)
+        if self.phys is not None:
+            self.phys.frame()
         self.before_frame()
         try:
             self.view.frame()
@@ -655,6 +692,10 @@ class Game:
                 if thing is not None and e.get("size"):
                     thing.dims = tuple(max(0.01, float(v)) for v in e["size"])
                     thing.push()
+                    if self.phys is not None:
+                        self.phys.dirty.add(thing)  # its body is the model's size too
+            elif t == "phys" and self.phys is not None:  # where physics moved things this frame, and what hit what
+                self.phys.report(e)
             elif t == "tg-lock" and ui is not None:  # the page asked to lock the mouse (a start screen's click)
                 ui.lock_asks += 1
             elif t == "tg-autopilot":
@@ -802,6 +843,17 @@ class Game:
         self.things = {}
         self.movers = set()
 
+    # ---- physics
+    def physics_on(self):
+        """The game's physics, started the first time something uses it (that's when the page loads Rapier)."""
+        if self.phys is None:
+            self.phys = Physics(self)
+        return self.phys
+
+    def gravity(self, strength):
+        g = self.num(strength, ":gravity")
+        self.physics_on().set_gravity(g)
+
     # ---- menus, buttons and screens: atgui's widgets on the game
     def menus(self):
         if self.ui is None:
@@ -832,6 +884,172 @@ class Game:
         (tm, tp), (em, ep) = spread(self.work), spread(self.engine)
         return {"fps": self.fps(), "frames": self.frames, "tuff_ms_median": tm, "tuff_ms_p95": tp,
                 "engine_ms_median": em, "engine_ms_p95": ep}
+
+
+# ---------------------------------------------------------------- physics on sprites and objects
+
+def physics_problem(word):
+    return (f"Physics can be \"dynamic\" (it falls and gets pushed), \"static\" (it never moves), \"kinematic\" (your code "
+            f"moves it) or \"off\", not \"{word}\".{did_you_mean(word, PHYSICS_KINDS)}")
+
+
+class Physical:
+    """What sprites (2D) and objects (3D) share for physics. A thing with a body of its own (thing:physics()) is in the
+    page's physics (Rapier, see Physics): a dynamic one falls, tumbles, bounces and gets pushed, and the page tells
+    Python where it went every frame; a static one never moves; a kinematic one is moved by the program and pushes
+    dynamic ones out of its way. push, spin and velocity work on dynamic ones."""
+    D = 3  # numbers in a push, a velocity, a position (a sprite's: 2)
+    EXAMPLE = "crate"
+
+    def phys_init(self):
+        self.phys_kind = None  # its own body: None, "dynamic", "static" or "kinematic"
+        self.mass_ = self.bounce_ = self.friction_ = None
+        self.hit_fns = []
+        self.vel = [0.0] * self.D  # its speed, as physics last reported it
+        self.phys_sent = None  # its body, as the page last heard of it
+
+    def phys_name(self):
+        """What it's called in a message ("box:mass needs...")."""
+        return self.kind
+
+    def phys_changed(self):
+        if self.game.phys is not None:
+            self.game.phys.sync(self)
+
+    def dynamic(self):
+        return self.phys_kind == "dynamic" and self.game.phys is not None
+
+    def need_dynamic(self, what):
+        if self.dynamic():
+            return
+        n = self.phys_name()
+        if self.phys_kind is None:
+            raise self.rt.error(f"{n}:{what} works on things with physics. Turn it on first, like {self.EXAMPLE}:physics().")
+        raise self.rt.error(f"A {self.phys_kind} {n} doesn't move by itself, so :{what} can't move it. "
+                            f"{n}:physics() lets it fall and be pushed.")
+
+    def phys_vector(self, args, what, example):
+        """D numbers (or one list of them), for push, spin and velocity."""
+        rt = self.rt
+        given = [a for a in args if a is not MISSING]
+        if len(given) == 1 and isinstance(rt.plain(given[0]), list):
+            given = list(rt.plain(given[0]))
+        if len(given) != self.D:
+            raise rt.error(f"{self.phys_name()}:{what} needs {'x, y and z' if self.D == 3 else 'x and y'}, like {example}.")
+        return [rt.number(v, f":{what}") for v in given]
+
+    def physics(self, kind=MISSING):
+        rt = self.rt
+        if kind is MISSING:
+            k = "dynamic"
+        elif isinstance(rt.plain(kind), bool):
+            k = "dynamic" if rt.plain(kind) else "off"
+        else:
+            k = rt.text(kind).strip().lower()
+            k = PHYSICS_WORDS.get(k, k)
+            if k not in PHYSICS_KINDS:
+                raise rt.error(physics_problem(k))
+        self.can_have_physics(k)
+        ph = self.game.physics_on()
+        was = self.phys_kind
+        self.phys_kind = None if k == "off" else k
+        if k == "dynamic":
+            self.stop_moving()  # from now on physics moves it
+        elif was == "dynamic":
+            self.push()  # it stays where physics left it
+            self.after_physics()
+        ph.sync(self)
+        return self.native
+
+    def can_have_physics(self, kind):
+        pass
+
+    def stop_moving(self):
+        self.vx = self.vy = self.spin_speed = 0.0
+        if self.D == 3:
+            self.vz = 0.0
+        self.busy()
+
+    def after_physics(self):
+        pass
+
+    def mass(self, kg):
+        m = self.num(kg, ":mass")
+        if m <= 0:
+            raise self.rt.error(f"{self.phys_name()}:mass needs a number above 0, like {self.EXAMPLE}:mass(2).")
+        self.mass_ = m
+        self.phys_changed()
+        return self.native
+
+    def bounce(self, amount=MISSING):
+        v = self.rt.plain(amount)
+        if amount is MISSING or isinstance(v, (str, bool)) or not 0 <= self.num(amount, ":bounce") <= 1:
+            edges = " To bounce off the window's edges, use :on_edge(\"bounce\")." if self.D == 2 else ""
+            raise self.rt.error(f"{self.phys_name()}:bounce needs how bouncy it is, from 0 to 1, like "
+                                f"{self.EXAMPLE}:bounce(0.6).{edges}")
+        self.bounce_ = self.num(amount, ":bounce")
+        self.phys_changed()
+        return self.native
+
+    def friction(self, amount):
+        f = self.num(amount, ":friction")
+        if f < 0:
+            raise self.rt.error(f"{self.phys_name()}:friction needs a number of 0 or more, like {self.EXAMPLE}:friction(0.4).")
+        self.friction_ = f
+        self.phys_changed()
+        return self.native
+
+    def kick(self, x, y=MISSING, z=MISSING):  # thing:push (push() sends where a thing is)
+        v = self.phys_vector([x, y, z], "push", f"{self.EXAMPLE}:push(0, 5, -3)" if self.D == 3 else "ball:push(200, -300)")
+        self.need_dynamic("push")
+        self.game.phys.send("push", int(self.node), *v)
+        return self.native
+
+    def velocity(self, x=MISSING, y=MISSING, z=MISSING):
+        if x is MISSING:
+            return [tidy(v) for v in self.velocity_now()]
+        v = self.phys_vector([x, y, z], "velocity", f"{self.EXAMPLE}:velocity(0, 0, -4)" if self.D == 3 else "ball:velocity(100, 0)")
+        if self.dynamic():
+            self.vel = list(v)
+            self.game.phys.send("velocity", int(self.node), *v)
+        else:  # without physics, it moves that fast by itself (like :speed)
+            self.set_speed(v)
+        return self.native
+
+    def velocity_now(self):
+        """Its speed each way: physics's, or the one it moves by itself."""
+        if self.dynamic():
+            return self.vel
+        return [self.vx, self.vy] + ([self.vz] if self.D == 3 else [])
+
+    def set_speed(self, v):
+        self.vx, self.vy = v[0], v[1]
+        if self.D == 3:
+            self.vz = v[2]
+        self.busy()
+
+    def on_hit(self, fn):
+        self.hit_fns.append(self.game.lib.check_fn(fn, ":on_hit"))
+        self.phys_changed()  # its body reports hits now
+        return self.native
+
+    def sleep(self):
+        self.need_dynamic("sleep")
+        self.game.phys.send("sleep", int(self.node))
+        return self.native
+
+    def wake(self):
+        self.need_dynamic("wake")
+        self.game.phys.send("wake", int(self.node))
+        return self.native
+
+    def phys_dump(self):
+        """For Tuff Engine (tuff.py --scene): its physics settings, or None."""
+        if self.phys_kind is None:
+            return None
+        return {"kind": self.phys_kind, "mass": tidy(self.mass_) if self.mass_ is not None else None,
+                "bounce": tidy(self.bounce_) if self.bounce_ is not None else None,
+                "friction": tidy(self.friction_) if self.friction_ is not None else None}
 
 
 # ---------------------------------------------------------------- 2D
@@ -952,11 +1170,24 @@ class Game2D(Game, Layer):
     KIND = "game"
     BACKGROUND = "#101218"
     NAMES = Game.NAMES + [("box", "box"), ("circle", "circle"), ("line", "line"), ("text", "text"), ("image", "image"),
-                          ("camera", "camera")]
+                          ("camera", "camera"), ("gravity", "gravity"), ("explode", "explode"), ("walls", "walls")]
 
     def __init__(self, lib, title, width, height):
         Layer.__init__(self, self, scrolls=True)
         Game.__init__(self, lib, title, width, height)
+
+    def explode(self, x=MISSING, y=MISSING, strength=MISSING, radius=MISSING):
+        x, y, (strength, radius) = self.place([x, y, strength, radius], (600, 150), "explode")
+        s, r = self.num(strength, ":explode"), self.num(radius, ":explode")
+        if r <= 0:
+            raise self.rt.error(":explode needs a radius above 0 (how far it reaches), like game:explode(400, 300, 600, 150).")
+        self.physics_on().send("explode", x, y, s, r)
+
+    def walls(self, on=True):
+        """The window's edges as walls that physics sprites bounce off (or not, with game:walls(false))."""
+        ph = self.physics_on()
+        ph.walls_ = self.rt.truthy(on)
+        ph.send("walls", ph.walls_, self.W, self.H)
 
     def setup(self):
         self.bg = self.BACKGROUND
@@ -1015,7 +1246,7 @@ class Game2D(Game, Layer):
         return self.cx, self.cy, self.cx + self.W, self.cy + self.H
 
 
-class Sprite:
+class Sprite(Physical):
     """A shape, some text or a picture in a 2D game (or on a HUD)."""
     NAMES = [
         ("x", "get_x"), ("y", "get_y"), ("spot", "spot"), ("move", "move"), ("move_to", "move_to"), ("glide", "glide"),
@@ -1025,7 +1256,11 @@ class Sprite:
         ("color", "set_color"), ("layer", "set_layer"), ("flip", "flip"), ("align", "align"), ("hide", "hide"),
         ("show", "show"), ("remove", "remove"), ("set", "set"), ("get", "get"), ("value", "value"),
         ("clicked", "clicked"), ("shake", "shake"),
+        ("physics", "physics"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
+        ("velocity", "velocity"), ("on_hit", "on_hit"), ("sleep", "sleep"), ("wake", "wake"),
     ]
+    D = 2
+    EXAMPLE = "ball"
     counter = 0
 
     def __init__(self, layer, shape, x, y, props):
@@ -1055,6 +1290,8 @@ class Sprite:
         self.alive = True
         self.hidden = False
         self.dx = self.dy = 0.0  # a shake's offset, drawn but not where the sprite is
+        self.phys_init()
+        self.spin_rate = 0.0  # physics: how fast it turns (degrees a second), as the page last reported
         self.node = g.view.shape(layer.node, shape, x=self.x, y=self.y, **props)
         layer.sprites.append(self)
         g.by_node[int(self.node)] = self
@@ -1087,6 +1324,44 @@ class Sprite:
             self.game.movers.add(self)
         else:
             self.game.movers.discard(self)
+
+    # ---- physics (see Physical)
+    def phys_name(self):
+        return {"rect": "box"}.get(self.shape, self.shape)
+
+    def can_have_physics(self, kind):
+        if self.layer is not self.game:
+            raise self.rt.error("Only sprites in the game can use physics, not the ones on the HUD.")
+
+    def kick(self, x, y=MISSING):
+        return Physical.kick(self, x, y)
+
+    def velocity(self, x=MISSING, y=MISSING):
+        return Physical.velocity(self, x, y)
+
+    def phys_spec(self):
+        """Its body for the page (physics.js), in the game's pixels: a box, a ball, or a line's capsule."""
+        if not self.alive or self.phys_kind is None or self.game.phys is None:
+            return None
+        k = self.k
+        if self.shape == "circle":
+            shape, size = "ball", tidy(max(0.5, self.r * k))
+        elif self.shape == "line":
+            (ax, ay), (bx, by) = self.points
+            length = math.hypot(bx - ax, by - ay) * k
+            turn = math.degrees(math.atan2(by - ay, bx - ax)) - 90  # a capsule lies along its own y
+            shape, size = "capsule", [tidy(length / 2), 2, tidy((ax + bx) / 2 * k), tidy((ay + by) / 2 * k), tidy(turn)]
+        else:
+            hw, hh = self.half()
+            shape, size = "box", [tidy(hw), tidy(hh)]
+        return {"kind": self.phys_kind, "shape": shape, "size": size, "mass": self.mass_, "bounce": self.bounce_,
+                "friction": self.friction_, "hits": bool(self.hit_fns)}
+
+    def from_physics(self, b):
+        """Where physics moved it: [id, x, y, angle, vx, vy, spin] (it isn't sent back)."""
+        self.x, self.y, self.rot = b[1], b[2], b[3] % 360
+        self.vel = [b[4], b[5]]
+        self.spin_rate = b[6]
 
     # ---- size and collisions (rotation is left out: boxes stay boxes)
     def half(self):
@@ -1195,7 +1470,11 @@ class Sprite:
         return tidy(self.rot)
 
     def spin(self, degrees_per_second):
-        self.spin_speed = self.num(degrees_per_second, ":spin")
+        n = self.num(degrees_per_second, ":spin")
+        if self.dynamic():  # with physics it's a twist (an angular kick), like 3D's
+            self.game.phys.send("spin", int(self.node), n)
+            return self.native
+        self.spin_speed = n
         self.busy()
         return self.native
 
@@ -1211,8 +1490,15 @@ class Sprite:
             self.send(rot=self.rot)
         return self.native
 
-    def speed(self, vx, vy=0):
-        self.vx, self.vy = self.num(vx, ":speed"), self.num(vy, ":speed")
+    def speed(self, vx=MISSING, vy=0):
+        if vx is MISSING:  # how fast it goes (pixels a second)
+            return tidy(math.hypot(*self.velocity_now()))
+        v = [self.num(vx, ":speed"), self.num(vy, ":speed")]
+        if self.dynamic():
+            self.vel = v
+            self.game.phys.send("velocity", int(self.node), *v)
+            return self.native
+        self.vx, self.vy = v
         self.busy()
         return self.native
 
@@ -1303,11 +1589,15 @@ class Sprite:
             self.send(size=a)
         else:
             self.send(lw=a)
+        if self.phys_kind is not None:
+            self.phys_changed()  # its body's size too
         return self.native
 
     def set_scale(self, k):
         self.k = self.num(k, ":scale")
         self.send(scale=self.k)
+        if self.phys_kind is not None:
+            self.phys_changed()
         return self.native
 
     def set_color(self, color):
@@ -1419,6 +1709,8 @@ class Sprite:
             if self.edge != "none":
                 self.apply_edge(True)
             self.push()
+            if self.dynamic():  # a glide carries it: no speed builds up meanwhile
+                self.game.phys.send("velocity", int(self.node), 0, 0)
         self.busy()
 
 
@@ -1507,7 +1799,8 @@ class World3D(Game):
         ("island", "island"), ("box", "box"), ("sphere", "sphere"), ("cylinder", "cylinder"), ("cone", "cone"),
         ("plane", "plane"), ("spawn", "spawn"), ("player", "player"), ("camera_at", "camera_at"),
         ("look_at", "look_at"), ("follow", "follow"), ("orbit", "orbit"), ("looking_at", "looking_at"),
-        ("terrain", "terrain"), ("lighting", "lighting"),
+        ("terrain", "terrain"), ("lighting", "lighting"), ("gravity", "gravity"), ("explode", "explode"),
+        ("car", "car"), ("ragdoll", "ragdoll"),
     ]
 
     def setup(self):
@@ -1524,6 +1817,7 @@ class World3D(Game):
         self.cam_look = None
         self.orbit_state = None
         self.the_player = None
+        self.driving = None  # the car the keys drive (car:drive)
         self.island_r = None
         self.land = None  # the Terrain, once world:terrain made it
         self.lighting_name = "simple"
@@ -1626,6 +1920,8 @@ class World3D(Game):
         if name not in TERRAIN_STYLES:
             raise self.rt.error(style_problem(name))
         self.land = Terrain(self, sz, name)
+        if self.phys is not None:
+            self.phys.dirty.add(self.land)
         s = SKIES[self.sky_name]
         if self.fog_far is None and s["fog"] and s["far"]:
             far = self.sky_far(s)
@@ -1744,6 +2040,44 @@ class World3D(Game):
         t.push_rotation()
         return t.native
 
+    # ---- physics
+    def explode(self, x=MISSING, y=MISSING, z=MISSING, strength=MISSING, radius=MISSING):
+        x, y, z, (strength, radius) = self.where([x, y, z, strength, radius], (10, 6), "explode")
+        s, r = self.num(strength, ":explode"), self.num(radius, ":explode")
+        if r <= 0:
+            raise self.rt.error(":explode needs a radius above 0 (how far it reaches), like world:explode(0, 0, 0, 12, 8).")
+        self.physics_on().send("explode", x, self.above(x, y, z), z, s, r)
+
+    def car(self, x=MISSING, y=MISSING, z=MISSING, color=MISSING):
+        x, y, z, (color,) = self.where([x, y, z, color], ("red",), "car")
+        return Car(self, x, self.above(x, y, z), z, color).native
+
+    def ragdoll(self, x=MISSING, y=MISSING, z=MISSING, color=MISSING):
+        x, y, z, (color,) = self.where([x, y, z, color], ("blue",), "ragdoll")
+        return Ragdoll(self, x, self.above(x, y, z), z, color).native
+
+    def stop_chase(self):
+        """The camera stops following the car it drives (the program put the camera somewhere else)."""
+        if self.cam_mode == "drive":
+            self.cam_mode = "fixed"
+            if self.phys is not None:
+                self.phys.send("chase", None)
+
+    def drive_keys(self):
+        """The keys, as the controls of the car being driven (sent when they change)."""
+        car = self.driving
+        if not car.alive:
+            self.driving = None
+            self.stop_chase()
+            return
+        d = self.down
+        controls = (0, 0, 0) if self.is_paused else (
+            ("w" in d or "up" in d) - ("s" in d or "down" in d), ("a" in d or "left" in d) - ("d" in d or "right" in d),
+            int("space" in d))
+        if controls != car.controls:
+            car.controls = controls
+            self.phys.send("drive", int(car.node), *controls)
+
     # ---- the camera and the player
     def player(self, mode="first person"):
         m = self.rt.text(mode).strip().lower().replace("-", " ").replace("_", " ")
@@ -1765,6 +2099,7 @@ class World3D(Game):
         x, y, z, _ = self.where([x, y, z], (), "camera_at")
         if self.cam_mode == "player":
             raise self.rt.error("The player has the camera. Use player:move_to to move the player instead.")
+        self.stop_chase()
         self.cam_mode = "fixed"
         self.cam = [x, self.above(x, y, z), z]
         if self.cam_look is not None:
@@ -1797,6 +2132,7 @@ class World3D(Game):
             raise self.rt.error(f"world:follow needs an object to follow, not {self.rt.what(target)}.")
         if self.cam_mode == "player":
             raise self.rt.error("The player has the camera, so the world can't follow something else.")
+        self.stop_chase()
         self.cam_mode = "follow"
         self.cam_target = (t, self.num(distance, ":follow"), self.num(height, ":follow"))
         self.camera_dirty = True
@@ -1811,6 +2147,7 @@ class World3D(Game):
             tx, ty, tz, _ = self.where([x, y, z], (), "orbit")
             target = (tx, self.above(tx, ty, tz), tz)
         dist = max(4.0, math.dist(self.cam, self.point_of(target)))
+        self.stop_chase()
         self.cam_mode = "orbit"
         self.orbit_state = {"target": target, "yaw": self.cam_yaw + 180, "elev": 25.0, "dist": dist}
         self.camera_dirty = True
@@ -1909,9 +2246,13 @@ class World3D(Game):
             self.hint.hide() if (self.locked or self.fake_lock or covered) else self.hint.show()
 
     def update(self, dt, real):
+        if self.driving is not None:
+            self.drive_keys()
         p = self.the_player
         if p is not None:
             p.update(dt, real)
+            if self.phys is not None:
+                self.phys.player_sync(p)
             return
         mode = self.cam_mode
         if mode == "follow":
@@ -1996,6 +2337,7 @@ class Terrain:
         self.sea = None  # [level, water node]
         self.edits = []  # for Tuff Engine (tuff.py --scene): each edit and the lines that made it
         self.alive = True
+        self.phys_sent = None  # with physics on, the land is a heightfield of its own heights (physics.js)
         self.dirty = True  # the heights go with the first frame, after the setup's edits
         self.node = world.view.obj(world.scene, "terrain", size=self.size, n=n, style=style, shadow=True)
         self.native = world.rt.native("terrain", methods(self, "terrain", self.NAMES, world.rt), self.show_text)
@@ -2003,6 +2345,9 @@ class Terrain:
 
     def show_text(self, nested=False):
         return f"<terrain {tidy(self.size)} wide>"
+
+    def phys_spec(self):
+        return {"kind": "static", "shape": "land"} if self.world.phys is not None else None
 
     def heights(self):
         """The heights to the hundredth of a metre (whole ones as 0, not 0.0: most of the land is often flat)."""
@@ -2121,7 +2466,8 @@ class Terrain:
         """What stands in this part of the land (objects and the player), with the land's height under each."""
         w = self.world
         out = [(t, self.at(t.x, t.z)) for t in w.things if isinstance(t, Thing) and t.alive and t.on_land
-               and not getattr(t, "floor", False) and x0 <= t.x <= x1 and z0 <= t.z <= z1]
+               and not getattr(t, "floor", False) and t.phys_kind != "dynamic"  # physics moves those with the land
+               and x0 <= t.x <= x1 and z0 <= t.z <= z1]
         p = w.the_player
         if p is not None and x0 <= p.x <= x1 and z0 <= p.z <= z1:
             out.append((p, self.at(p.x, p.z)))
@@ -2395,8 +2741,9 @@ def _shade(hex_color, amount):
     return "#" + "".join(f"{clamp(c, 0, 255):02x}" for c in rgb)
 
 
-class Thing:
+class Thing(Physical):
     """An object in a 3D world: a shape, a model from the kit, the ground, a light or something held."""
+    KIND = "object"
     NAMES = [
         ("x", "get_x"), ("y", "get_y"), ("z", "get_z"), ("spot", "spot"), ("move", "move"), ("move_to", "move_to"),
         ("glide", "glide"), ("forward", "forward"), ("turn", "turn"), ("turn_to", "turn_to"), ("angle", "angle"),
@@ -2406,6 +2753,8 @@ class Thing:
         ("color", "set_color"), ("glow", "glow"), ("hide", "hide"), ("show", "show"), ("remove", "remove"),
         ("solid", "solid"), ("touches", "touches"), ("distance", "distance"), ("label", "label"),
         ("clicked", "clicked"), ("set", "set"), ("get", "get"),
+        ("physics", "physics"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
+        ("velocity", "velocity"), ("on_hit", "on_hit"), ("sleep", "sleep"), ("wake", "wake"),
     ]
 
     def __init__(self, world, kind, x, y, z, size, parts, body=None, parent=None, pick=True, camera=False):
@@ -2431,6 +2780,8 @@ class Thing:
         self.label_node = None
         self.label_text = ""
         self.on_land = parent is None and not camera  # held things have their own x, y, z (in the hand)
+        self.phys_init()
+        self.quat = None  # how physics has turned it ([x, y, z, w]), once it has
         v = world.view
         props = {"x": self.x, "y": self.y, "z": self.z}
         if camera:
@@ -2449,8 +2800,10 @@ class Thing:
             v.set(self.node, pick=False)
         if parent is None and not camera:
             world.adopt(self)
-        self.native = world.rt.native("object", methods(self, "object", self.NAMES, world.rt), self.show_text)
+        self.native = world.rt.native(self.KIND, methods(self, self.KIND, self.NAMES, world.rt), self.show_text)
         self.native.tg = self
+        if world.phys is not None:
+            world.phys.dirty.add(self)  # solid things get a body that doesn't move (once it's settled, at the frame)
 
     def show_text(self, nested=False):
         return f"<{self.kind} at {tidy(self.x)}, {tidy(self.y)}, {tidy(self.z)}>"
@@ -2474,13 +2827,84 @@ class Thing:
 
     def push(self):
         self.send(self.node, x=self.x, y=self.y, z=self.z)
+        self.push_label()
+
+    def push_label(self):
         if self.label_node is not None:
             top = self.y + (0.9 if self.fallen else self.height() + 0.25)
             self.send(self.label_node, x=self.x, y=top, z=self.z)
 
     def push_rotation(self):
-        rx, ry, rz = euler(self.heading, self.tilt_axis, self.tilt, self.pitch)
+        if self.quat is not None and not self.tilt and not self.pitch:  # tumbled by physics: as it lies
+            rx, ry, rz = euler_of_quat(self.quat)
+        else:
+            rx, ry, rz = euler(self.heading, self.tilt_axis, self.tilt, self.pitch)
         self.send(self.node, rx=rx, ry=ry, rz=rz)
+
+    def turn_by(self, degrees, to=None):
+        """Turns it about the up axis (clockwise from above), however physics has turned it (to: to face that way)."""
+        if self.quat is not None:
+            self.quat = quat_mul(yaw_quat(-(degrees if to is None else to - self.heading)), self.quat)
+            self.heading = heading_of(self.quat)
+        else:
+            self.heading = (self.heading + degrees) % 360 if to is None else to % 360
+        self.push_rotation()
+
+    # ---- physics (see Physical)
+    def can_have_physics(self, kind):
+        if not self.on_land:
+            raise self.rt.error("Only things in the world can use physics, not something the player holds.")
+        if getattr(self, "floor", False):
+            raise self.rt.error(f"The {self.kind} is solid for physics already: it doesn't need :physics.")
+        if kind != "off":
+            self.solid_ = True
+
+    def after_physics(self):
+        self.push_rotation()
+
+    def phys_spec(self):
+        """Its body for the page (physics.js): its own (thing:physics), or a fixed one for something solid, the
+        ground or the island. None: no body."""
+        w = self.world
+        if not self.alive or w.phys is None or not self.on_land:
+            return None
+        kind = self.phys_kind
+        base = {"mass": self.mass_, "bounce": self.bounce_, "friction": self.friction_, "hits": bool(self.hit_fns)}
+        if kind is None:
+            if getattr(self, "floor", False):
+                half = self.dims[0] / 2
+                if self.kind == "island":  # the grass's cylinder, its top at 0
+                    return {**base, "kind": "static", "shape": "cylinder", "size": [1.5, tidy(half)], "cy": -1.5}
+                return {**base, "kind": "static", "shape": "box", "size": [tidy(half), 0.5, tidy(self.dims[2] / 2)], "cy": -0.5}
+            if not self.solid_ or self.fallen:
+                return None
+            kind = "static"
+        shape, size, cy = self.phys_shape(kind)
+        return {**base, "kind": kind, "shape": shape, "size": size, "cy": cy}
+
+    def phys_shape(self, kind):
+        """(shape, size, how high its middle is above its position): a ball for a sphere, a cylinder or a cone for
+        those, a capsule for a person, and a box for everything else (a fixed tree's is its trunk)."""
+        kx, ky, kz = self.k
+        w, h, d = self.body if kind == "static" and self.body else self.dims
+        hy = max(h * ky, 0.02) / 2
+        if self.kind == "sphere":
+            r = w / 2 * max(kx, ky, kz)
+            return "ball", tidy(r), tidy(r)
+        if self.kind in ("cylinder", "cone"):
+            return self.kind, [tidy(hy), tidy(w * max(kx, kz) / 2)], tidy(hy)
+        if self.kind in CAPSULE_KINDS:
+            r = max(w * kx, d * kz) / 2
+            return "capsule", [tidy(max(0.01, hy - r)), tidy(r)], tidy(hy)
+        return "box", [tidy(w * kx / 2), tidy(hy), tidy(d * kz / 2)], tidy(hy)
+
+    def from_physics(self, b):
+        """Where physics moved it: [id, x, y, z, qx, qy, qz, qw, vx, vy, vz] (it isn't sent back). y is its lowest point."""
+        self.x, self.y, self.z = b[1], b[2], b[3]
+        self.quat = b[4:8]
+        self.heading = heading_of(self.quat)
+        self.vel = b[8:11]
+        self.push_label()  # its label follows it (the thing itself is where the page put it)
 
     def push_scale(self):
         self.send(self.node, sx=self.k[0], sy=self.k[1], sz=self.k[2])
@@ -2540,20 +2964,26 @@ class Thing:
         return self.native
 
     def turn(self, degrees):
-        self.heading = (self.heading + self.num(degrees, ":turn")) % 360
-        self.push_rotation()
+        self.turn_by(self.num(degrees, ":turn"))
         return self.native
 
     def turn_to(self, degrees):
-        self.heading = self.num(degrees, ":turn_to") % 360
-        self.push_rotation()
+        self.turn_by(0, to=self.num(degrees, ":turn_to"))
         return self.native
 
     def angle(self):
         return tidy(self.heading)
 
-    def spin(self, degrees_per_second):
-        self.spin_speed = self.num(degrees_per_second, ":spin")
+    def spin(self, a, b=MISSING, c=MISSING):
+        if self.dynamic():  # a twist (an angular kick): about x, y and z, or one number about the up axis
+            v = [0, self.num(a, ":spin"), 0] if b is MISSING and not isinstance(self.rt.plain(a), list) else \
+                self.phys_vector([a, b, c], "spin", f"{self.EXAMPLE}:spin(0, 2, 0)")
+            self.game.phys.send("spin", int(self.node), *v)
+            return self.native
+        if b is not MISSING or isinstance(self.rt.plain(a), list):
+            raise self.rt.error(f"{self.kind}:spin(x, y, z) twists things with physics. Without physics it spins "
+                                f"at so many degrees a second, like {self.kind}:spin(90).")
+        self.spin_speed = self.num(a, ":spin")
         self.busy()
         return self.native
 
@@ -2564,12 +2994,18 @@ class Thing:
         else:
             tx, _, tz, _ = self.world.where([x, y, z], (), "look_at")
         if (tx, tz) != (self.x, self.z):
-            self.heading = math.degrees(math.atan2(tx - self.x, -(tz - self.z))) % 360
-            self.push_rotation()
+            self.turn_by(0, to=math.degrees(math.atan2(tx - self.x, -(tz - self.z))))
         return self.native
 
-    def speed(self, vx, vy=0, vz=0):
-        self.vx, self.vy, self.vz = self.num(vx, ":speed"), self.num(vy, ":speed"), self.num(vz, ":speed")
+    def speed(self, vx=MISSING, vy=0, vz=0):
+        if vx is MISSING:  # how fast it goes (metres a second)
+            return tidy(math.hypot(*self.velocity_now()))
+        v = [self.num(vx, ":speed"), self.num(vy, ":speed"), self.num(vz, ":speed")]
+        if self.dynamic():
+            self.vel = v
+            self.game.phys.send("velocity", int(self.node), *v)
+            return self.native
+        self.vx, self.vy, self.vz = v
         self.busy()
         return self.native
 
@@ -2601,6 +3037,8 @@ class Thing:
         self.anims.append(["fall", 0.0, 1.1, (dz, -dx)])
         self.was_solid = self.solid_
         self.solid_ = False
+        if self.world.phys is not None:
+            self.world.phys.dirty.add(self)  # a fallen tree is no longer in the way
         self.busy()
         return self.native
 
@@ -2638,6 +3076,8 @@ class Thing:
         self.tilt = 0.0
         if getattr(self, "was_solid", None) is not None:
             self.solid_ = self.was_solid
+        if self.world.phys is not None:
+            self.world.phys.dirty.add(self)
         self.push_rotation()
         self.push()
 
@@ -2696,6 +3136,8 @@ class Thing:
                     self.pitch = 0.0
         if moved:
             self.push()
+            if self.dynamic():  # a glide carries it: no speed builds up meanwhile
+                self.game.phys.send("velocity", int(self.node), 0, 0, 0)
         if rotated:
             self.push_rotation()
         self.busy()
@@ -2712,6 +3154,7 @@ class Thing:
         self.k = [w / bw if bw else 1, h / bh if bh else 1, d / bd if bd else 1]
         self.push_scale()
         self.push()
+        self.phys_changed()  # its body grows with it
         return self.native
 
     def size_base(self):
@@ -2722,6 +3165,7 @@ class Thing:
         self.k = [n, n, n]
         self.push_scale()
         self.push()
+        self.phys_changed()
         return self.native
 
     def set_color(self, color):
@@ -2765,9 +3209,16 @@ class Thing:
         w.things.pop(self, None)
         for node in [self.node] + [n for n, _ in self.parts]:
             w.by_node.pop(int(node), None)
+        if w.phys is not None:
+            w.phys.dirty.discard(self)  # its body went with its object
+            if w.driving is self:
+                w.driving = None
+                w.stop_chase()
 
     def solid(self, on=True):
         self.solid_ = self.rt.truthy(on)
+        if self.world.phys is not None:
+            self.world.phys.dirty.add(self)
         return self.native
 
     # ---- other objects
@@ -2814,7 +3265,7 @@ class Thing:
             if not t or not self.alive:
                 return self.native
             self.label_node = w.view.obj(w.scene, "label", text=t)
-            self.push()
+            self.push_label()
         else:
             self.send(self.label_node, text=t)
         self.send(self.label_node, visible=bool(t) and not self.hidden)
@@ -2848,7 +3299,7 @@ class Player:
         ("x", "get_x"), ("y", "get_y"), ("z", "get_z"), ("spot", "spot"), ("move_to", "move_to"),
         ("turn_to", "turn_to"), ("angle", "angle"), ("walk_speed", "walk_speed"), ("jump_height", "jump_height"),
         ("jump", "jump"), ("hold", "hold"), ("looking_at", "looking_at"), ("touches", "touches"),
-        ("distance", "distance"), ("hide", "hide"), ("show", "show"),
+        ("distance", "distance"), ("hide", "hide"), ("show", "show"), ("on_hit", "on_hit"),
     ]
     RADIUS = 0.32
     TALL = 1.75
@@ -2869,6 +3320,8 @@ class Player:
         self.hidden = False
         self.held = None
         self.body = None
+        self.hit_fns = []
+        self.teleported = False  # moved somewhere by the program: physics puts its capsule there (no walking there)
         if world is None:
             return
         self.cam_pos = None
@@ -2925,7 +3378,12 @@ class Player:
         self.x, self.y, self.z, _ = self.world.where([x, y, z], (), "move_to")
         self.y = self.world.above(self.x, self.y, self.z)
         self.vy = 0.0
+        self.teleported = True
         self.place_camera(1)
+        return self.native
+
+    def on_hit(self, fn):
+        self.hit_fns.append(self.world.lib.check_fn(fn, ":on_hit"))
         return self.native
 
     def turn_to(self, degrees):
@@ -3010,7 +3468,10 @@ class Player:
 
     # ---- walking, every frame
     def solids(self):
-        return [t for t in self.world.things if isinstance(t, Thing) and t.alive and t.solid_ and not t.hidden]
+        """What stops the player here: solid things, except what physics moves (the page's physics stops the player
+        at those, and pushes them)."""
+        return [t for t in self.world.things if isinstance(t, Thing) and t.alive and t.solid_ and not t.hidden
+                and t.phys_kind not in ("dynamic", "kinematic")]
 
     def blocked(self, x, z, y, solids):
         r = self.RADIUS
@@ -3043,6 +3504,8 @@ class Player:
 
     def update(self, dt, real):
         w = self.world
+        if w.driving is not None:  # in the car: the keys and the camera are the car's
+            return
         look = w.locked or w.fake_lock
         mdx, mdy = w.view.mouse_delta()
         if look and not w.is_paused:
@@ -3148,6 +3611,367 @@ class Player:
             w.cam = list(self.cam_pos)
             w.aim(self.x, self.y + 1.3, self.z)
         w.push_camera()
+
+
+# ---------------------------------------------------------------- physics (Rapier, in the page)
+
+def quat_mul(a, b):
+    """a then b... as three.js and Rapier do it: the rotation b, then a ([x, y, z, w])."""
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return [aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz]
+
+
+def yaw_quat(degrees):
+    """A turn about the up axis (counterclockwise from above, like three.js's ry)."""
+    h = math.radians(degrees) / 2
+    return [0.0, math.sin(h), 0.0, math.cos(h)]
+
+
+def heading_of(q):
+    """The way something turned by q faces (its -z), as tgame's heading: degrees clockwise from above."""
+    x, y, z, w = q
+    fx, fz = -2 * (x * z + w * y), -(1 - 2 * (x * x + y * y))
+    if abs(fx) < 1e-9 and abs(fz) < 1e-9:  # facing straight up or down: its up says where it faces
+        fx, fz = -2 * (x * y - w * z), -2 * (y * z + w * x)
+    return math.degrees(math.atan2(fx, -fz)) % 360
+
+
+def euler_of_quat(q):
+    """three.js rotation (x, y, z in degrees, XYZ order) for a quaternion."""
+    x, y, z, w = q
+    m11, m12, m13 = 1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)
+    m22, m23 = 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)
+    m32, m33 = 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)
+    ry = math.asin(clamp(m13, -1.0, 1.0))
+    if abs(m13) < 0.9999999:
+        rx, rz = math.atan2(-m23, m33), math.atan2(-m12, m11)
+    else:
+        rx, rz = math.atan2(m32, m22), 0.0
+    return math.degrees(rx), math.degrees(ry), math.degrees(rz)
+
+
+class Physics:
+    """A game's physics: Rapier, stepping in the game's page (tuff_view_web/physics.js), started by the first thing
+    that uses it. Python tells the page what each thing's body is (a `phys` property on its object: kind, shape,
+    size, mass, bounce...) and sends the program's kicks, twists and explosions. Every frame the page sends back
+    where the physics things went and what hit what (a "phys" event); the things keep those values and never send
+    them back. A thing moved by the program (move_to, glide...) goes on from there in the page.
+
+    In a 3D world, solid things (buildings, rocks, trees' trunks, things made solid), the land, the island and the
+    ground become bodies that don't move, and the player becomes a capsule that walks into physics things, pushes
+    them and stands on them: Python walks it as always, sends each step, and the page says where it ended up.
+
+    In Tuff Engine's preview (tuff.py --scene) nothing is sent: the settings are only kept, for its Inspector."""
+
+    def __init__(self, game):
+        self.game = game
+        self.d3 = game.three_d
+        self.live = SCENE is None
+        self.gravity_ = -9.8 if self.d3 else 900.0
+        self.walls_ = False
+        self.paused = False
+        self.dirty = set()  # things whose body may have changed: they're checked once, at the frame
+        # The player (3D): its moves the page hasn't made yet, [seq, (dx, dy, dz)], and where the page will have it
+        self.seq = self.first_seq = 0
+        self.moves = collections.deque()
+        self.sent = None
+        self.send("start", {"dim": 3 if self.d3 else 2, "gravity": self.gravity_})
+        if self.d3:
+            self.dirty.update(t for t in game.things if isinstance(t, Thing))
+            if game.land is not None:
+                self.dirty.add(game.land)
+
+    def send(self, op, *args):
+        if self.live and not self.game.closed:
+            self.game.view.call(0, "physics", op, *args)
+
+    def set_gravity(self, g):
+        self.gravity_ = g
+        self.send("gravity", g)
+
+    def sync(self, t):
+        """Tells the page what t's body is now, if that changed."""
+        self.dirty.discard(t)
+        spec = t.phys_spec() if t.alive else None
+        if spec != t.phys_sent:
+            t.phys_sent = spec
+            if self.live and t.alive:
+                self.game.view.set(t.node, phys=spec)
+
+    def frame(self):
+        """Before each frame goes: the bodies that changed, and pausing (physics stops while the game is paused)."""
+        for t in list(self.dirty):
+            self.sync(t)
+        paused = bool(self.game.is_paused)
+        if paused != self.paused:
+            self.paused = paused
+            self.send("pause", paused)
+
+    # ---- the player's capsule (3D)
+    def player_sync(self, p):
+        """After the player walked: its move goes to the page (a teleport when the program moved it)."""
+        at = (p.x, p.y, p.z)
+        if self.sent is None or p.teleported:
+            p.teleported = False
+            self.seq += 1
+            self.first_seq = self.seq  # reports from before it are about where it was
+            self.moves.clear()
+            self.sent = at
+            self.send("player_to", self.seq, *at)
+            return
+        d = (at[0] - self.sent[0], at[1] - self.sent[1], at[2] - self.sent[2])
+        if not any(d):
+            return
+        self.seq += 1
+        self.moves.append((self.seq, d))
+        self.sent = at
+        self.send("player", self.seq, *d, *at)
+
+    def player_report(self, p, rep):
+        """Where the page's capsule is after the moves up to `done`: the player is there, plus the moves the page
+        hasn't made yet. Standing on a physics thing, it's on the ground."""
+        done, x, y, z, grounded = rep
+        if done < self.first_seq or self.sent is None:
+            return
+        while self.moves and self.moves[0][0] <= done:
+            self.moves.popleft()
+        for _, d in self.moves:
+            x, y, z = x + d[0], y + d[1], z + d[2]
+        p.x, p.y, p.z = x, y, z
+        self.sent = (x, y, z)
+        if grounded and p.vy <= 0:
+            p.vy, p.on_ground = 0.0, True
+
+    # ---- what the page says
+    def who(self, i):
+        """The thing a body in a report belongs to (0: the player; -1: a wall)."""
+        g = self.game
+        if i == 0:
+            return getattr(g, "the_player", None)
+        land = getattr(g, "land", None)
+        if land is not None and i == int(land.node):
+            return land
+        return g.by_node.get(i)
+
+    def report(self, e):
+        g = self.game
+        for b in e.get("b") or ():
+            t = g.by_node.get(b[0])
+            if t is not None and t.alive and hasattr(t, "from_physics"):
+                t.from_physics(b)
+        p = e.get("p")
+        if p and getattr(g, "the_player", None) is not None:
+            self.player_report(g.the_player, p)
+        c = e.get("c")
+        if c and getattr(g, "cam_mode", None) == "drive":  # where the chase camera is
+            g.cam, g.cam_yaw, g.cam_pitch = list(c[:3]), c[3] % 360, c[4]
+        for a, b, strength in e.get("h") or ():
+            self.hit(a, b, strength)
+
+    def hit(self, a, b, strength):
+        """Something hit something: each one with an on_hit function gets it, with the other and how hard (N·s)."""
+        ta, tb = self.who(a), self.who(b)
+        for me, other, oid in ((ta, tb, b), (tb, ta, a)):
+            fns = getattr(me, "hit_fns", None)
+            if not fns or not getattr(me, "alive", True):
+                continue
+            value = "wall" if oid == -1 else getattr(other, "native", None)
+            for fn in list(fns):
+                self.game.fire(fn, value, tidy(strength))
+
+    def state(self):
+        """For the autopilot's reports."""
+        bodies = []
+        for t in self.game.things:
+            if not t.alive or t.phys_kind is None:
+                continue
+            if isinstance(t, Sprite):
+                bodies.append([t.phys_name(), round(t.x, 2), round(t.y, 2), round(t.rot, 1), round(math.hypot(*t.vel), 2)])
+            else:
+                q = t.quat or [0, 0, 0, 1]
+                up = 1 - 2 * (q[0] * q[0] + q[2] * q[2])  # 1: upright, 0: on its side, -1: upside down
+                bodies.append([t.kind, round(t.x, 2), round(t.y - t.ground(), 3), round(t.z, 2), round(math.hypot(*t.vel), 2),
+                               round(t.heading, 1), round(up, 3)])
+        return {"gravity": self.gravity_, "walls": self.walls_, "bodies": bodies}
+
+
+class Car(Thing):
+    """world:car: a car to drive. In the page it's Rapier's ray-cast vehicle: a body on four wheels that are rays with
+    springs, so it rolls over the land, leans in corners and can roll over (car:flip puts it back on its wheels).
+    car:drive gives it the keys (W or up goes, S or down brakes and then backs up, A and D or left and right steer,
+    Space brakes) and the camera, which follows it from behind. car:speed is how fast it goes, in km/h."""
+    KIND = "car"
+    NAMES = [(n, "car_speed" if n == "speed" else a) for n, a in Thing.NAMES] + [
+        ("drive", "drive"), ("engine", "engine"), ("flip", "flip")]
+    EXAMPLE = "car"
+    MASS = 150
+    WHEEL_R = 0.36
+    REST = 0.35  # the springs' length
+    CY = 0.79    # the body's middle above the car's position (the ground under its wheels)
+    HALF = [0.9, 0.32, 1.9]
+    WHEELS = ((-0.82, 0.64, -1.25), (0.82, 0.64, -1.25), (-0.82, 0.64, 1.25), (0.82, 0.64, 1.25))  # front first (-z)
+
+    def __init__(self, world, x, y, z, color):
+        c = world.color(color)
+        trim, light, back = "#2b2d31", "#fff6d8", "#d4202a"
+        paint = {"color": c, "metal": 0.35, "rough": 0.38, "shadow": True}
+        parts = [
+            ("box", {"w": 1.8, "h": 0.52, "d": 3.8, "y": 0.74, **paint}, True),
+            ("box", {"w": 1.46, "h": 0.44, "d": 1.8, "y": 1.2, "z": 0.2, "color": "#1f2a36", "metal": 0.6, "rough": 0.15,
+                     "shadow": True}, False),
+            ("box", {"w": 1.52, "h": 0.07, "d": 1.86, "y": 1.45, "z": 0.2, **paint}, True),
+            ("box", {"w": 1.84, "h": 0.16, "d": 0.14, "y": 0.52, "z": -1.92, "color": trim}, False),
+            ("box", {"w": 1.84, "h": 0.16, "d": 0.14, "y": 0.52, "z": 1.92, "color": trim}, False),
+        ] + [("box", {"w": 0.34, "h": 0.13, "d": 0.05, "x": sx * 0.6, "y": 0.84, "z": -1.91, "color": light,
+                      "emissive": "#fff2c0", "mat": "basic"}, False) for sx in (-1, 1)
+             ] + [("box", {"w": 0.3, "h": 0.12, "d": 0.05, "x": sx * 0.62, "y": 0.86, "z": 1.91, "color": back,
+                           "emissive": "#7a0a10"}, False) for sx in (-1, 1)]
+        wheels = [("group", {"x": wx, "y": wy - 0.28, "z": wz}, False) for wx, wy, wz in self.WHEELS]
+        super().__init__(world, "car", x, y, z, (1.9, 1.5, 3.9), parts + wheels)
+        self.wheel_nodes = [node for node, _ in self.parts[len(parts):]]
+        for wn in self.wheel_nodes:  # each wheel: a tyre and a hub, turned to roll along z
+            for part in (world.view.obj(wn, "cylinder", r=self.WHEEL_R, h=0.26, rz=90, seg=22, color="#24262b", rough=0.92, shadow=True),
+                         world.view.obj(wn, "cylinder", r=0.2, h=0.28, rz=90, seg=12, color="#c0c6cf", metal=0.7, rough=0.3)):
+                world.by_node[int(part)] = self
+        self.phys_kind = "dynamic"
+        self.kmh = 0.0
+        self.controls = (0, 0, 0)
+        world.physics_on().sync(self)
+
+    def can_have_physics(self, kind):
+        if kind != "dynamic":
+            raise self.rt.error("A car always uses physics (it drives on its wheels).")
+
+    def phys_spec(self):
+        if not self.alive or self.world.phys is None:
+            return None
+        return {"kind": "dynamic", "shape": "car", "size": self.HALF, "cy": self.CY, "wheel_r": self.WHEEL_R,
+                "rest": self.REST, "mass": self.mass_ or self.MASS, "bounce": self.bounce_, "friction": self.friction_,
+                "hits": bool(self.hit_fns), "wheels": [[int(n), *xyz] for n, xyz in zip(self.wheel_nodes, self.WHEELS)]}
+
+    def from_physics(self, b):
+        """Like an object's, and the car's speed (km/h, forward)."""
+        Thing.from_physics(self, b)
+        self.kmh = b[11] if len(b) > 11 else 0.0
+
+    def car_speed(self):
+        return tidy(self.kmh)
+
+    def drive(self, on=True):
+        w = self.world
+        ph = w.physics_on()
+        if self.rt.truthy(on):
+            if w.driving is not None and w.driving is not self:
+                w.driving.drive(False)
+            w.driving = self
+            if w.cam_mode != "player":
+                w.cam_mode = "drive"
+            w.camera_dirty = False
+            ph.send("chase", int(self.node))
+        elif w.driving is self:
+            w.driving = None
+            self.controls = (0, 0, 0)
+            ph.send("drive", int(self.node), 0, 0, 0)
+            ph.send("chase", None)
+            if w.cam_mode == "drive":
+                w.cam_mode = "fixed"
+                w.push_camera()  # the camera stays where it was, behind the car
+            p = w.the_player
+            if p is not None:  # out of the car, beside its door
+                h = math.radians(self.heading)
+                p.x, p.z = self.x - math.cos(h) * 2.2, self.z - math.sin(h) * 2.2
+                p.y, p.vy = w.ground_y(p.x, p.z), 0.0
+                p.teleported = True
+                p.place_camera(1)
+        return self.native
+
+    def engine(self, power):
+        n = self.num(power, ":engine")
+        if n < 0:
+            raise self.rt.error("car:engine needs a number of 0 or more (1 is normal), like car:engine(1.5).")
+        self.world.physics_on().send("engine", int(self.node), n)
+        return self.native
+
+    def flip(self):
+        self.world.physics_on().send("flip", int(self.node))
+        return self.native
+
+
+# A ragdoll's parts: name, shape, size (a ball's radius; a box's half sizes; a capsule's half length and radius), its
+# middle when it stands (feet at 0), mass (kg), and what it's dressed in. And its joints: the two parts, where they
+# meet, "ball" (turns any way) or "hinge" (bends one way, about x: forward is more), and how far a hinge bends.
+RAGDOLL = (
+    ("head", "ball", 0.13, (0, 1.56, 0), 1.0, "skin"),
+    ("chest", "box", (0.18, 0.17, 0.11), (0, 1.24, 0), 3.0, "shirt"),
+    ("hips", "box", (0.16, 0.12, 0.1), (0, 0.94, 0), 2.0, "pants"),
+    ("left arm", "capsule", (0.11, 0.055), (-0.25, 1.24, 0), 0.6, "shirt"),
+    ("right arm", "capsule", (0.11, 0.055), (0.25, 1.24, 0), 0.6, "shirt"),
+    ("left hand", "capsule", (0.1, 0.05), (-0.25, 0.94, 0), 0.4, "skin"),
+    ("right hand", "capsule", (0.1, 0.05), (0.25, 0.94, 0), 0.4, "skin"),
+    ("left leg", "capsule", (0.15, 0.07), (-0.09, 0.6, 0), 1.2, "pants"),
+    ("right leg", "capsule", (0.15, 0.07), (0.09, 0.6, 0), 1.2, "pants"),
+    ("left foot", "capsule", (0.15, 0.06), (-0.09, 0.21, 0), 0.8, "pants"),
+    ("right foot", "capsule", (0.15, 0.06), (0.09, 0.21, 0), 0.8, "pants"),
+)
+RAGDOLL_JOINTS = (
+    ("chest", "head", (0, 1.42, 0), "ball", None),
+    ("chest", "hips", (0, 1.06, 0), "hinge", (-0.8, 0.3)),
+    ("chest", "left arm", (-0.25, 1.39, 0), "ball", None),
+    ("chest", "right arm", (0.25, 1.39, 0), "ball", None),
+    ("left arm", "left hand", (-0.25, 1.09, 0), "hinge", (0, 2.0)),
+    ("right arm", "right hand", (0.25, 1.09, 0), "hinge", (0, 2.0)),
+    ("hips", "left leg", (-0.09, 0.82, 0), "hinge", (-0.5, 1.2)),
+    ("hips", "right leg", (0.09, 0.82, 0), "hinge", (-0.5, 1.2)),
+    ("left leg", "left foot", (-0.09, 0.38, 0), "hinge", (-2.0, 0)),
+    ("right leg", "right foot", (0.09, 0.38, 0), "hinge", (-2.0, 0)),
+)
+RAGDOLL_MASS = sum(p[4] for p in RAGDOLL)
+
+
+class Ragdoll(Thing):
+    """world:ragdoll: a person made of parts held together by joints (a ball for the head, boxes for the chest and
+    hips, capsules for the arms and legs). Made standing on the ground, it stands still until something hits it or
+    it's pushed, then flops over; made in the air, it falls. Its x and z are its chest's, its y its lowest part's; a
+    push goes to its chest."""
+    KIND = "ragdoll"
+    EXAMPLE = "dummy"
+
+    def __init__(self, world, x, y, z, color):
+        dress = {"skin": "#f1c9a5", "shirt": world.color(color), "pants": "#3b4252"}
+        parts = []
+        for name, shape, size, (px, py, pz), _mass, wear in RAGDOLL:
+            look = {"x": px, "y": py, "z": pz, "color": dress[wear], "rough": 0.7, "shadow": True}
+            if shape == "ball":
+                parts.append(("sphere", {"r": size, "seg": 16, **look}, wear == "shirt"))
+            elif shape == "box":
+                parts.append(("box", {"w": size[0] * 2, "h": size[1] * 2, "d": size[2] * 2, **look}, wear == "shirt"))
+            else:
+                parts.append(("capsule", {"r": size[1], "h": size[0] * 2, "seg": 10, **look}, wear == "shirt"))
+        super().__init__(world, "ragdoll", x, y, z, (0.6, 1.7, 0.3), parts)
+        head = self.parts[0][0]
+        for ex in (-0.045, 0.045):  # eyes, on the head (they turn with it)
+            world.by_node[int(world.view.obj(head, "sphere", r=0.022, x=ex, y=0.025, z=-0.115, seg=8, color="#1d2026"))] = self
+        self.phys_kind = "dynamic"
+        self.standing = self.y - self.ground() < 0.05  # on the ground: it stands until something knocks it over
+        world.physics_on().sync(self)
+
+    def can_have_physics(self, kind):
+        if kind != "dynamic":
+            raise self.rt.error("A ragdoll always uses physics (that's what makes it flop).")
+
+    def phys_spec(self):
+        if not self.alive or self.world.phys is None:
+            return None
+        names = [p[0] for p in RAGDOLL]
+        scale = (self.mass_ / RAGDOLL_MASS) if self.mass_ else 1.0
+        return {"kind": "dynamic", "shape": "ragdoll", "main": names.index("chest"), "bounce": self.bounce_,
+                "friction": self.friction_, "hits": bool(self.hit_fns), "stand": self.standing,
+                "parts": [[int(node), shape, size, list(at), round(mass * scale, 4)]
+                          for (node, _), (_, shape, size, at, mass, _) in zip(self.parts, RAGDOLL)],
+                "joints": [[names.index(a), names.index(b), list(at), kind, list(lim) if lim else None]
+                           for a, b, at, kind, lim in RAGDOLL_JOINTS]}
 
 
 # ---------------------------------------------------------------- menus, buttons and screens (atgui on a game)
@@ -3514,6 +4338,9 @@ class Scene:
             if land is not None and int(land.node) < item["ids"][0] and not any(x["kind"] == "terrain" for x in things):
                 things.append(self.land_item(land, names, len(things)))  # in the order things were made
             item.update(i=len(things), hidden=bool(t.hidden), made=self.made.get(int(t.node), []), var=names.get(id(t)))
+            physics = t.phys_dump()  # what thing:physics, :mass, :bounce and :friction set (nothing simulates here)
+            if physics is not None:
+                item["physics"] = physics
             things.append(item)
         if land is not None and not any(x["kind"] == "terrain" for x in things):
             things.append(self.land_item(land, names, len(things)))
@@ -3563,7 +4390,7 @@ def editor_tables():
     """The names Tuff Engine offers in its menus, from the same tables a run uses."""
     return {"colors": COLORS, "skies": list(SKIES), "kit": list(KIT), "hold": list(HOLDABLE), "sounds": list(SOUNDS),
             "edges": list(EDGE_MODES), "players": list(PLAYER_MODES), "terrain_styles": list(TERRAIN_STYLES),
-            "lightings": list(LIGHTINGS), "anchors": list(ANCHORS)}
+            "lightings": list(LIGHTINGS), "anchors": list(ANCHORS), "physics": list(PHYSICS_KINDS)}
 
 
 # ---------------------------------------------------------------- the autopilot (tests)
@@ -3786,6 +4613,9 @@ class Autopilot:
         out["sprites"] = [[s.shape, round(s.x, 2), round(s.y, 2)] for s in g.things if isinstance(s, Sprite) and s.alive][:400]
         out["objects"] = [[t.kind, round(t.x, 2), round(t.y, 2), round(t.z, 2), t.fallen, t.data]
                           for t in g.things if isinstance(t, Thing) and t.alive][:400]
+        out["physics"] = g.phys.state() if g.phys is not None else None
+        if g.three_d and g.the_player is not None:
+            out["on_ground"] = g.the_player.on_ground
         return out
 
 
@@ -3793,9 +4623,13 @@ class Autopilot:
 
 # What each method gives back, so the checker knows what a variable holds ("$number", "$text", "$bool",
 # "$list", or another tgame kind). Left out: it depends (like :touches, :get or :looking_at).
-_SETTERS = ("move", "move_to", "glide", "forward", "turn", "turn_to", "spin", "point_at", "speed", "on_edge", "size",
+# (:speed and :velocity are left out: with no inputs they give how fast it goes.)
+_SETTERS = ("move", "move_to", "glide", "forward", "turn", "turn_to", "spin", "point_at", "on_edge", "size",
             "scale", "color", "layer", "flip", "align", "hide", "show", "set", "clicked", "shake", "look_at", "fall",
-            "grow", "regrow", "swing", "glow", "solid", "label")
+            "grow", "regrow", "swing", "glow", "solid", "label", "physics", "mass", "bounce", "friction", "push",
+            "on_hit", "sleep", "wake")
+_OBJECT_GIVES = {"x": "$number", "y": "$number", "z": "$number", "spot": "$list", "angle": "$number",
+                 "distance": "$number", "fallen": "$bool"}
 # game:panel gives a "panel" and game:screen and game:start_screen a "screen": atgui containers (tables()["ui_kinds"] has
 # their methods; what those make is atgui's, as tuff_atgui.MAKES says).
 _MENUS = {"panel": "panel", "screen": "screen", "start_screen": "screen"}
@@ -3808,16 +4642,20 @@ GIVES = {
               "mouse_y": "$number", "time": "$number", "fps": "$number", "paused": "$bool", "width": "$number",
               "height": "$number", "random_spot": "$list", "group": "group", "hud": "hud", "light": "object",
               "ground": "object", "island": "object", "box": "object", "sphere": "object", "cylinder": "object",
-              "cone": "object", "plane": "object", "spawn": "object", "player": "player", "terrain": "terrain", **_MENUS},
+              "cone": "object", "plane": "object", "spawn": "object", "player": "player", "terrain": "terrain",
+              "car": "car", "ragdoll": "ragdoll", **_MENUS},
     "screen": {"shown": "$bool"},
     "terrain": {"height_at": "$number", **{m: "terrain" for m, _ in Terrain.NAMES if m != "height_at"}},
     "sprite": {"x": "$number", "y": "$number", "spot": "$list", "angle": "$number", "on_screen": "$bool",
                "distance": "$number", "value": "$text", **{m: "sprite" for m in _SETTERS}},
-    "object": {"x": "$number", "y": "$number", "z": "$number", "spot": "$list", "angle": "$number",
-               "distance": "$number", "fallen": "$bool", **{m: "object" for m in _SETTERS}},
+    "object": {**_OBJECT_GIVES, **{m: "object" for m in _SETTERS}},
+    "car": {**_OBJECT_GIVES, **{m: "car" for m in _SETTERS}, "speed": "$number", "drive": "car", "engine": "car",
+            "flip": "car"},
+    "ragdoll": {**_OBJECT_GIVES, **{m: "ragdoll" for m in _SETTERS}},
     "player": {"x": "$number", "y": "$number", "z": "$number", "spot": "$list", "angle": "$number",
                "distance": "$number", "hold": "object", "move_to": "player", "turn_to": "player",
-               "walk_speed": "player", "jump_height": "player", "jump": "player", "hide": "player", "show": "player"},
+               "walk_speed": "player", "jump_height": "player", "jump": "player", "hide": "player", "show": "player",
+               "on_hit": "player"},
     "hud": {"text": "sprite", "box": "sprite", "circle": "sprite", "line": "sprite", "image": "sprite"},
     "group": {"items": "$list", "count": "$number", "has": "$bool", "add": "group", "remove": "group",
               "move": "group", "hide": "group", "show": "group", "clear": "group", "color": "group"},
@@ -3825,11 +4663,15 @@ GIVES = {
 # Events: method -> (where the function goes, how many inputs the function is given, what they are).
 _EVENTS = {"every_frame": (0, 1, "1 input (the seconds since the last frame)"), "on_key": (1, 1, "1 input (the key's name)"),
            "after": (1, 0, "no inputs"), "every": (1, 0, "no inputs"), "game_over": (1, 0, "no inputs")}
+_HIT = (0, 2, "2 inputs (the thing that hit it and how hard)")
 HANDLERS = {
     "game": {**_EVENTS, "clicked": (0, 2, "2 inputs (x and y)")},
     "world": {**_EVENTS, "clicked": (0, 3, "3 inputs (the x, y and z it clicked)")},
-    "sprite": {"clicked": (0, 1, "1 input (the sprite)")},
-    "object": {"clicked": (0, 1, "1 input (the object)")},
+    "sprite": {"clicked": (0, 1, "1 input (the sprite)"), "on_hit": _HIT},
+    "object": {"clicked": (0, 1, "1 input (the object)"), "on_hit": _HIT},
+    "car": {"clicked": (0, 1, "1 input (the car)"), "on_hit": _HIT},
+    "ragdoll": {"clicked": (0, 1, "1 input (the ragdoll)"), "on_hit": _HIT},
+    "player": {"on_hit": _HIT},
 }
 # Inputs written as text that have to be one of a set of names: (kind, method) -> {input position: what}.
 _MAKERS_2D = {"box": {4: "color"}, "circle": {3: "color"}, "line": {4: "color"}, "text": {4: "color"}, "image": {0: "image"}}
@@ -3842,6 +4684,9 @@ VALUES = {
     ("object", "glow"): {0: "glow"}, ("group", "color"): {0: "color"}, ("sprite", "on_edge"): {0: "edge"},
     ("sprite", "align"): {0: "align"}, ("player", "hold"): {0: "hold"}, ("world", "terrain"): {1: "terrain style"},
     ("terrain", "style"): {0: "terrain style"}, ("world", "lighting"): {0: "lighting"},
+    **{(k, "physics"): {0: "physics"} for k in ("sprite", "object", "car", "ragdoll")},
+    **{("world", m): {1: "color", 3: "color"} for m in ("car", "ragdoll")},
+    **{(k, "color"): {0: "color"} for k in ("car", "ragdoll")}, **{(k, "glow"): {0: "glow"} for k in ("car", "ragdoll")},
     **{(k, m): {0: "key"} for k in ("game", "world") for m in ("held", "pressed")},
     **{(k, "on_key"): {0: "anykey"} for k in ("game", "world")},
     **{(k, "sound"): {0: "sound"} for k in ("game", "world")},
@@ -3899,6 +4744,8 @@ def check_value(kind, method, index, value, base_dir=None):
         return None if ok else f"The player can be \"first person\" or \"third person\", not \"{value}\"."
     if what == "hold":
         return None if low in HOLDABLE else f"The player can hold: {', '.join(HOLDABLE)}. Not \"{value}\"."
+    if what == "physics":
+        return None if PHYSICS_WORDS.get(low, low) in PHYSICS_KINDS else physics_problem(low)
     if what == "spawn":
         if low.endswith(MODEL_FILES):
             return file_problem(MODEL_FILES, "model")
@@ -3936,9 +4783,11 @@ def tables():
 
     kinds = {}
     for kind, cls in (("game", Game2D), ("world", World3D), ("sprite", Sprite), ("object", Thing),
-                      ("player", Player), ("hud", Hud), ("group", Group), ("terrain", Terrain)):
+                      ("player", Player), ("hud", Hud), ("group", Group), ("terrain", Terrain), ("car", Car),
+                      ("ragdoll", Ragdoll)):
         obj = probe(cls)
         kinds[kind] = {name: getattr(obj, attr) for name, attr in cls.NAMES}
     ui_kinds = {"panel": probe(Panel).methods(), "screen": probe(StartScreen).methods()}
     return {"lib": make_library(FakeRt()), "kinds": kinds, "gives": GIVES, "handlers": HANDLERS, "hints": HINTS,
-            "check": check_value, "ui_kinds": ui_kinds, "anchors": ANCHORS}
+            "check": check_value, "ui_kinds": ui_kinds, "anchors": ANCHORS, "physics_kinds": PHYSICS_KINDS,
+            "physics_words": PHYSICS_WORDS, "needs_3d": NEEDS_3D}

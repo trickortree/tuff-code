@@ -1,0 +1,32 @@
+mention tgame
+
+# Physics and the player: walking into a crate pushes it, the player can stand on a crate, and a ball that
+# falls on the player hits it.
+world = tgame.world("Physics Player", 900, 560)
+world:ground "grass"
+world:gravity(-9.8)
+player = world:player("first person")
+player:move_to(0, 0, 4)
+crate = world:spawn("crate", 0, 0, 1)
+crate:physics()
+step = world:box(-6, 0, 6, [1.6, 0.9, 1.6], "wood")
+step:physics()
+step:mass(40)
+wall = world:spawn("house", 8, 0, -8)
+ball = nil
+hits = 0
+
+func knocked(other, strength):
+    hits += 1
+    say "the player was hit by " + other
+
+player:on_hit knocked
+
+func drop():
+    ball = world:sphere(6, 4, 8, 0.6, "red"):physics()
+
+func where():
+    say "player " + player:spot() + " crate " + crate:spot()
+
+func stand():
+    player:move_to(-6, 2.5, 6)

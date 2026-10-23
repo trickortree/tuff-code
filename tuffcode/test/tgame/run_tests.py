@@ -11,6 +11,7 @@ drawing. Uses Pillow to read screenshots when it's installed, or a slower built-
 import base64
 import io
 import json
+import math
 import os
 import struct
 import subprocess
@@ -723,6 +724,201 @@ def t_no_webgl(c):
             f"one clear error, on the tgame.world line, instead of one for every object (exit {r.code})", r.err[-600:])
 
 
+# ---------------------------------------------------------------- physics (Rapier, in the page)
+
+def bodies(d, kind):
+    """A dump's physics things of a kind: 3D [kind, x, y above the land, z, speed, heading, up (1 upright, 0 on its
+    side)], 2D [shape, x, y, angle, speed]."""
+    return [b for b in ((d.get("physics") or {}).get("bodies") or []) if b[0] == kind]
+
+
+def said(r, start):
+    """The last line the game said that starts with these words, as its words, or []."""
+    lines = [line for line in r.lines if line.startswith(start)]
+    return lines[-1].split() if lines else []
+
+
+def page_physics(d):
+    return (d.get("page") or {}).get("physics")
+
+
+def t_physics(c):
+    """3D physics: a crate falls and lands on the land (and a box on a hill), a bouncy ball bounces lower each time,
+    pausing the game pauses physics, a tower of boxes stands until it's pushed, a crate's on_hit says what hit it, an
+    explosion scatters boxes, and ragdolls stand until they're pushed or hit, then flop and lie on the ground."""
+    r = play("physics_drop", game("physics_drop.tuf"), [
+        {"at": 0.3, "dump": "pd_start.json"},
+        {"at": 0.8, "tuff": "lifted = world:box(-3, 0, 4, 1, \"gold\"):physics()"},
+        {"at": 1.3, "tuff": "lifted:move_to(-3, 5, 4)"}, {"at": 1.4, "dump": "pd_lifted.json"},
+        {"at": 3.5, "call": "report"}, {"at": 3.55, "dump": "pd_end.json"}, {"at": 3.6, "shot": "physics_drop.png"},
+        {"at": 3.7, "tuff": "world:pause()"}, {"at": 3.8, "dump": "pd_pause1.json"}, {"at": 4.4, "dump": "pd_pause2.json"},
+        {"at": 4.5, "close": True}])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    start, end = r.dumps.get("pd_start.json", {}), r.dumps.get("pd_end.json", {})
+    c.check(page_physics(start) in ("loading", None) or page_physics(start).get("dim") == 3,
+            "the page loads 3D physics (Rapier) for a world that uses it", page_physics(start))
+    crate0, crate1 = (bodies(start, "crate") or [None])[0], (bodies(end, "crate") or [None])[0]
+    c.check(crate0 and crate1 and crate0[2] > 4.5 and abs(crate1[2]) < 0.03 and crate1[4] < 0.05,
+            f"a crate made 6 above the land falls and comes to rest on it (y {crate1 and crate1[2]})", (crate0, crate1))
+    box = (bodies(end, "box") or [None])[0]
+    c.check(box and abs(box[2]) < 0.3 and box[4] < 0.05 and "3.96" in " ".join(said(r, "hill crate")),
+            "a box dropped on a hill lands on the hill (the land is a heightfield of its own heights)", (box, said(r, "hill crate")))
+    lifted, landed = (bodies(r.dumps.get("pd_lifted.json", {}), "box") or [None, None])[-1], (bodies(end, "box") or [None, None])[-1]
+    c.check(lifted and landed and lifted[1] == -3 and 3 < lifted[2] <= 5 and abs(landed[2]) < 0.05 and abs(landed[1] + 3) < 0.3,
+            "move_to puts a physics thing somewhere (5 up) and it falls from there", (lifted, landed))
+    try:
+        peaks = json.loads(" ".join(said(r, "peaks")[1:]))
+    except ValueError:
+        peaks = []
+    c.check(len(peaks) >= 2 and peaks[0] > 7 and all(b < a * 0.7 for a, b in zip(peaks, peaks[1:])),
+            f"a ball with bounce 0.7 bounces lower each time ({peaks})", peaks)
+    c.check(int((said(r, "hits") or ["", "0"])[1]) >= 2, "its on_hit runs for each bounce", said(r, "hits"))
+    p1, p2 = page_physics(r.dumps.get("pd_pause1.json", {})) or {}, page_physics(r.dumps.get("pd_pause2.json", {})) or {}
+    c.check(p1.get("paused") and p1.get("steps") == p2.get("steps"), "world:pause() pauses physics too", (p1, p2))
+    shot = r.shots.get("physics_drop.png")
+    c.check(shot and color_share(shot, (125, 80, 45), 45, (0.3, 0.5, 0.5, 0.7)) > 0.01, "the screenshot shows the crate on the land", shot)
+
+    r = play("physics_tower", game("physics_tower.tuf"), [
+        {"at": 2.0, "call": "report"}, {"at": 2.05, "shot": "physics_tower.png"},
+        {"at": 2.1, "call": "topple"}, {"at": 2.2, "call": "boom"},
+        {"at": 4.2, "call": "report"}, {"at": 4.25, "call": "spread"}, {"at": 4.3, "shot": "physics_tower_after.png"},
+        {"at": 4.5, "close": True}])
+    clean_exit(c, r)
+    tops = [line.split() for line in r.lines if line.startswith("tower top")]
+    c.check(len(tops) == 2 and abs(float(tops[0][3]) - 3) < 0.05, "a tower of 4 boxes stands (its top stays 3 up)", tops)
+    c.check(len(tops) == 2 and float(tops[1][3]) < 1.5 and float(tops[1][5]) > 1, "pushed, it falls over", tops)
+    hits = [line for line in r.lines if line.startswith("the crate was hit by")]
+    c.check(hits and hits[0].startswith("the crate was hit by <sphere") and float(hits[0].split()[-1]) > 5,
+            "on_hit gets what hit it and how hard (a heavy ball falling on the crate; resting where it was made isn't a hit)", hits[:3])
+    near = said(r, "ring nearest")
+    c.check(near and float(near[-1]) > 4.5, f"world:explode throws the boxes around it away (the nearest went from 3 to {near and near[-1]})", near)
+
+    r = play("physics_ragdoll", game("physics_ragdoll.tuf"), [
+        {"at": 1.0, "dump": "pr_start.json"}, {"at": 1.05, "shot": "physics_ragdoll_stand.png"},
+        {"at": 1.2, "call": "shove"}, {"at": 1.3, "call": "drop"},
+        {"at": 4.5, "call": "report"}, {"at": 4.55, "dump": "pr_end.json"}, {"at": 4.6, "shot": "physics_ragdoll.png"},
+        {"at": 4.8, "close": True}])
+    clean_exit(c, r)
+    before, after = bodies(r.dumps.get("pr_start.json", {}), "ragdoll"), bodies(r.dumps.get("pr_end.json", {}), "ragdoll")
+    c.check(len(before) == 3 and before[0][4] == 0 and before[0][6] > 0.99 and before[2][6] > 0.99,
+            "ragdolls made on the ground stand still until something happens", before)
+    c.check(len(before) == 3 and (before[1][2] > 0.2 or before[1][4] > 1), "one made in the air falls", before)
+    c.check(len(after) == 3 and all(abs(b[2]) < 0.05 and b[6] < 0.5 for b in after),
+            "pushed, hit by a ball, or fallen, each one ends up lying on the ground", after)
+    shot = r.shots.get("physics_ragdoll.png")
+    c.check(shot and color_share(shot, (40, 90, 200), 50, (0.3, 0.4, 0.7, 0.7)) > 0.001, "the screenshot shows the blue one lying there", shot)
+
+
+def t_physics_player(c):
+    """The player and physics: walking into a crate pushes it, the player stands on a physics box and jumps off it,
+    and a ball falling on the player is an on_hit."""
+    r = play("physics_player", game("physics_player.tuf"), [
+        {"at": 0.6, "call": "where"},
+        {"at": 0.7, "hold": "w", "for": 1.5},
+        {"at": 2.4, "call": "where"}, {"at": 2.45, "dump": "pp_push.json"}, {"at": 2.5, "shot": "physics_player.png"},
+        {"at": 2.6, "call": "stand"},
+        {"at": 3.8, "call": "where"}, {"at": 3.85, "dump": "pp_stand.json"},
+        {"at": 3.9, "key": "space"}, {"at": 4.2, "dump": "pp_jump.json"},
+        {"at": 5.0, "tuff": "player:move_to(6, 0, 8)"}, {"at": 5.1, "call": "drop"},
+        {"at": 6.6, "close": True}])
+    clean_exit(c, r)
+    push = r.dumps.get("pp_push.json", {})
+    crate, p = (bodies(push, "crate") or [None])[0], push.get("player") or [0, 0, 0]
+    c.check(crate and crate[3] < -2 and p[2] < 0 and p[2] > crate[3] + 0.5,
+            f"walking into a crate pushes it along (it went from z 1 to {crate and crate[3]}, the player is behind it)", (crate, p))
+    stand = r.dumps.get("pp_stand.json", {})
+    sp = stand.get("player") or [0, 0, 0]
+    c.check(0.85 < sp[1] < 1.0 and stand.get("on_ground"), f"the player stands on a physics box (y {sp[1]}), on the ground there", stand.get("player"))
+    jump = (r.dumps.get("pp_jump.json", {}).get("player") or [0, 0, 0])
+    c.check(jump[1] > 1.5, f"and can jump off it (y {jump[1]})", jump)
+    c.check(any(line.startswith("the player was hit by <sphere") for line in r.lines), "a ball falling on the player: player:on_hit runs",
+            r.lines[-4:])
+    shot = r.shots.get("physics_player.png")
+    c.check(shot and color_share(shot, (125, 80, 45), 45, (0.35, 0.5, 0.65, 0.9)) > 0.05, "the screenshot shows the crate in front", shot)
+
+
+def t_physics_car(c):
+    """world:car: W drives it forward, W with A turns it left, S brakes and backs up, it stays on its wheels, and the
+    camera follows it."""
+    r = play("physics_car", game("physics_car.tuf"), [
+        {"at": 1.0, "call": "report"}, {"at": 1.05, "dump": "pc_start.json"},
+        {"at": 1.1, "hold": "w", "for": 3.0}, {"at": 3.0, "shot": "physics_car.png"},
+        {"at": 4.0, "call": "report"}, {"at": 4.05, "dump": "pc_fwd.json"},
+        {"at": 4.1, "hold": "w", "for": 1.6}, {"at": 4.15, "hold": "a", "for": 1.5},
+        {"at": 5.8, "call": "report"}, {"at": 5.85, "dump": "pc_turn.json"},
+        {"at": 6.0, "hold": "s", "for": 2.0}, {"at": 8.1, "call": "report"},
+        {"at": 8.3, "close": True}])
+    clean_exit(c, r)
+    car0 = (bodies(r.dumps.get("pc_start.json", {}), "car") or [None])[0]
+    fwd = (bodies(r.dumps.get("pc_fwd.json", {}), "car") or [None])[0]
+    turn = (bodies(r.dumps.get("pc_turn.json", {}), "car") or [None])[0]
+    c.check(car0 and abs(car0[2]) < 0.05 and car0[6] > 0.99, "the car stands on its wheels on the land", car0)
+    reports = [line.split() for line in r.lines if line.startswith("car ")]
+    speed = [float(w[-2]) for w in reports]
+    c.check(fwd and fwd[3] < -12 and len(speed) == 4 and speed[1] > 25,
+            f"holding W drives it forward (z {fwd and fwd[3]}, {speed[1] if len(speed) > 1 else '?'} km/h)", reports)
+    c.check(turn and 180 < turn[5] < 330 and turn[6] > 0.9, f"with A it turns left (facing {turn and turn[5]}) and stays on its wheels", turn)
+    c.check(len(speed) == 4 and speed[3] < 0, "S brakes, then backs up (km/h below 0)", speed)
+    camera = r.dumps.get("pc_fwd.json", {}).get("camera") or [0, 0, 0]
+    c.check(fwd and 4 < math.dist(camera[:3], [fwd[1], fwd[2], fwd[3]]) < 12, "the camera follows it from behind", (camera, fwd))
+    shot = r.shots.get("physics_car.png")
+    c.check(shot and color_share(shot, (200, 50, 60), 60, (0.3, 0.35, 0.7, 0.8)) > 0.02, "the screenshot shows the red car ahead", shot)
+
+
+def t_physics_2d(c):
+    """2D physics: a ball bounces on a static floor and its on_hit runs, a box lands on the floor, a line falls flat,
+    a push sends the ball up, and the window's edges are walls."""
+    r = play("physics_2d", game("physics_2d.tuf"), [
+        {"at": 3.0, "call": "report"}, {"at": 3.05, "dump": "p2_rest.json"}, {"at": 3.1, "shot": "physics_2d.png"},
+        {"at": 3.2, "call": "kick"}, {"at": 3.25, "tuff": "box:push(9000, 0)"},
+        {"at": 3.6, "call": "report"}, {"at": 4.6, "dump": "p2_wall.json"},
+        {"at": 4.8, "close": True}])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    rest = r.dumps.get("p2_rest.json", {})
+    c.check((page_physics(rest) or {}).get("dim") == 2, "the page loads 2D physics (rapier2d)", page_physics(rest))
+    balls = [line.split() for line in r.lines if line.startswith("ball ")]
+    c.check(balls and int(balls[0][-1]) >= 2, f"the ball bounces on the floor: its on_hit ran {balls and balls[0][-1]} times, "
+            "with the floor", balls)
+    box = (bodies(rest, "box") or [None, None])
+    c.check(len(box) == 2 and abs(box[1][2] - 530) < 2 and abs(box[1][3]) < 2, "the box lands flat on the floor (y 530)", box)
+    line = (bodies(rest, "line") or [None])[0]
+    c.check(line and abs(line[2] - 558) < 3, "a line falls and lies on the floor", line)
+    ys = [float(b[2].strip("[],")) for b in balls]
+    c.check(len(ys) == 2 and ys[1] < ys[0] - 50, f"ball:push(200, -300) sends it up (y {ys})", balls)
+    wall = (bodies(r.dumps.get("p2_wall.json", {}), "box") or [None, None])
+    c.check(len(wall) == 2 and 620 < wall[1][1] <= 771 and abs(wall[1][2] - 530) < 2,
+            f"game:walls(true): a box pushed hard bounces off the window's edge and stays on the floor (x {wall[1] and wall[1][1]})", wall)
+    shot = r.shots.get("physics_2d.png")
+    c.check(shot and color_share(shot, hexrgb("#f97316"), 30) > 0.003 and color_share(shot, hexrgb("#e5484d"), 30) > 0.001,
+            "the screenshot shows the ball and the box", shot)
+
+
+def t_physics_off(c):
+    """A game that never uses physics never loads it (no Rapier in its page), and Tuff Engine's preview (--scene)
+    keeps the physics settings without simulating anything."""
+    r = play("physics_off_3d", game("hud_3d.tuf"), [{"at": 0.8, "dump": "physics_off_3d.json"}, {"at": 0.9, "close": True}])
+    d = r.dumps.get("physics_off_3d.json", {})
+    c.check(r.code == 0 and "page" in d and page_physics(d) is None and d.get("physics") is None,
+            "a 3D world without physics doesn't load Rapier", (r.code, page_physics(d)))
+    r = play("physics_off_2d", game("snake.tuf"), [{"at": 0.5, "dump": "physics_off_2d.json"}, {"at": 0.6, "close": True}])
+    d = r.dumps.get("physics_off_2d.json", {})
+    c.check(r.code == 0 and "page" in d and page_physics(d) is None, "nor does a 2D game", (r.code, page_physics(d)))
+    for name, want in (("physics_2d.tuf", {"floor": ("static", None, None), "ball": ("dynamic", None, 0.8), "box": ("dynamic", 3, None)}),
+                       ("physics_drop.tuf", {"crate": ("dynamic", 2, None), "ball": ("dynamic", None, 0.7)})):
+        code, _out, err, dump, _secs = scene(game(name))
+        things = {t.get("var"): t for t in dump.get("things") or []}
+        got = {v: things.get(v, {}).get("physics") for v in want}
+        ok = all(g and (g["kind"], g["mass"], g["bounce"]) == w for g, w in zip(got.values(), want.values()))
+        c.check(code == 0 and ok, f"--scene {name}: things have their physics settings", got)
+        sent = [cmd for cmd in dump.get("batch") or [] if (cmd[0] == "k" and cmd[2] == "physics")
+                or (cmd[0] in ("c", "s") and isinstance(cmd[-1], dict) and "phys" in cmd[-1])]
+        c.check(code == 0 and not sent, f"--scene {name}: nothing for physics is sent (the preview doesn't simulate)", sent[:3])
+        start = things.get("crate") or things.get("ball") or {}
+        c.check(start.get("y") in (6, 100), f"--scene {name}: things are where the code puts them", start.get("y"))
+
+
 # ---------------------------------------------------------------- menus, buttons and screens (atgui on a game)
 
 ACCENT = (59, 130, 246)  # atgui's blue: primary buttons, the start screen's hint
@@ -1351,7 +1547,8 @@ def t_guide(c):
 GOOD = ["snake.tuf", "breakout.tuf", "snake3d.tuf", "axe_sim.tuf", "features_2d.tuf", "features_3d.tuf", "player_3d.tuf",
         "perf_2d.tuf", "perf_2d_speed.tuf", "perf_3d.tuf", "perf_3d_move.tuf", "callback.tuf", "errors.tuf", "top_error.tuf",
         "churn.tuf", "pause_key.tuf", "hud_3d.tuf", "terrain_walk.tuf", "terrain_look.tuf", "terrain_dig.tuf",
-        "ui_2d.tuf", "ui_3d.tuf"]
+        "ui_2d.tuf", "ui_3d.tuf", "physics_drop.tuf", "physics_tower.tuf", "physics_player.tuf", "physics_car.tuf",
+        "physics_ragdoll.tuf", "physics_2d.tuf"]
 BAD = [
     ('game = tgame.window("x")\ngame:rect(1, 2)\n', "A game doesn't have :rect. Use :box instead."),
     ('game = tgame.window("x")\nb = game:box(1, 2)\nb:moov(1, 2)\n', "A sprite doesn't have :moov. Did you mean :move?"),
@@ -1464,6 +1661,14 @@ BAD = [
     ('game = tgame.window("x")\nhud = game:hud()\nhud:button("Shop")\n', "A hud doesn't have :button. The HUD only draws."),
     ('game = tgame.window("x")\ngame:menu("Shop")\n', "A game doesn't have :menu. Use :screen instead."),
     ('w = tgame.world("x")\nw:title_screen("Go")\n', "A world doesn't have :title_screen. Use :start_screen instead."),
+    # physics
+    ('w = tgame.world("x")\ncrate = w:box(0, 0, 0)\ncrate:physics("dinamic")\n', 'not "dinamic". Did you mean "dynamic"?'),
+    ('game = tgame.window("x")\nb = game:box(1, 2)\nb:physics "bouncy"\n', 'Physics can be "dynamic" (it falls and gets pushed)'),
+    ('w = tgame.world("x")\ncrate = w:box(0, 0, 0)\ncrate:rigidbody()\n', "An object doesn't have :rigidbody. Use :physics instead."),
+    ('w = tgame.world("x")\ncrate = w:box(0, 0, 0)\ncrate:apply_impulse(0, 5, 0)\n', "An object doesn't have :apply_impulse. Use :push instead."),
+    ('game = tgame.window("x")\nb = game:circle(1, 2)\nb:restitution(0.5)\n', "A sprite doesn't have :restitution. Use :bounce instead."),
+    ('w = tgame.world("x")\ncrate = w:box(0, 0, 0)\ncrate:on_hit(go)\nfunc go(a, b, c):\n    nil\n', "go() needs 3 inputs"),
+    ('w = tgame.world("x")\nw:car(0, 0, 0, "redd")\n', "'redd' isn't a color tgame knows."),
 ]
 
 
@@ -1598,6 +1803,8 @@ TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": 
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
          "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "terrain": t_terrain,
          "terrain_look": t_terrain_look, "no_webgl": t_no_webgl, "ui_2d": t_ui_2d, "ui_3d": t_ui_3d,
+         "physics": t_physics, "physics_player": t_physics_player, "physics_car": t_physics_car, "physics_2d": t_physics_2d,
+         "physics_off": t_physics_off,
          "scene": t_scene, "notice": t_notice, "mcp": t_mcp, "checker": t_checker, "editor": t_editor, "guide": t_guide, "perf": t_perf}
 
 

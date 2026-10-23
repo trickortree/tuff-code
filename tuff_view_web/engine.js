@@ -173,6 +173,7 @@ function remove(id) {
   for (const k of [...n.kids]) remove(k);
   objs.delete(id);
   if (n.parent) n.parent.kids.delete(id);
+  if (n.phys) { n.dead = true; withPhysics((p) => p.detach(n)); }
   switch (n.kind) {
     case 'shape':
       n.dead = true;
@@ -259,6 +260,7 @@ const engineCalls = {
       apply_ms_per_batch: stats.batches ? stats.applyMs / stats.batches : 0,
       draw_ms_per_frame: stats.frames ? stats.drawMs / stats.frames : 0,
       objects: objs.size, waiting: Math.max(0, batches.length - 1),
+      physics: physics ? physics.info() : physicsJob ? 'loading' : null,
     };
     if (reset) Object.assign(stats, { since: now, frames: 0, gaps: [], batches: 0, cmds: 0, applyMs: 0, drawMs: 0 });
     return out;
@@ -269,7 +271,57 @@ const engineCalls = {
   sound_stop: soundStop,
   sound_volume: soundVolume,
   sound_state: soundState,
+  // tgame's physics: 'start' loads it (physics.js and Rapier); the rest go to physics.js's OPS, in order.
+  physics(op, ...args) {
+    if (op === 'start') startPhysics(args[0] || {});
+    else withPhysics((p) => p.call(op, args));
+    return null;
+  },
 };
+
+// ---------------------------------------------------------------- physics (physics.js), loaded on first use
+
+let physics = null;           // physics.js, once it and Rapier have loaded
+let physicsJob = null;
+let physicsFailed = false;    // a step went wrong: it stops (the error was reported)
+const physicsWaiting = [];    // what came for it while it loads, in order
+
+function startPhysics(opts) {
+  if (physicsJob) return;
+  physicsJob = import('./physics.js')
+    .then((m) => m.load({ emit, report, node: (id) => objs.get(id) }, opts))
+    .then((m) => {
+      physics = m;
+      for (const fn of physicsWaiting.splice(0)) runPhysics(fn);
+    }, (err) => { physicsWaiting.length = 0; report(err, 'loading physics'); });
+}
+
+function withPhysics(fn) {
+  if (physics) runPhysics(fn);
+  else if (physicsJob) physicsWaiting.push(fn);
+}
+
+function runPhysics(fn) {
+  try {
+    fn(physics);
+  } catch (err) {
+    report(err, 'physics');
+  }
+}
+
+// An object's `phys` (what its body is) came, or what it was moved by: physics.js puts its body there.
+const PHYS_MOVES = new Set(['x', 'y', 'z', 'rx', 'ry', 'rz', 'rot', 'visible', 'sx', 'sy', 'sz', 'scale']);
+
+function physicsChanged(n, props) {
+  if ('phys' in props) {
+    n.phys = props.phys;
+    withPhysics((p) => p.attach(n));
+  }
+  if (!n.phys) return;
+  for (const k in props) {
+    if (PHYS_MOVES.has(k)) { withPhysics((p) => p.moved(n, props)); return; }
+  }
+}
 
 // ---------------------------------------------------------------- DOM elements
 
@@ -348,10 +400,12 @@ function setShape(n, props) {
   const p = n.p;
   for (const k in props) {
     const v = props[k];
+    if (k === 'phys') continue;
     if (k === 'z' && v !== p.z) n.host.order = true;
     p[k] = v;
     if (k === 'text' || k === 'size' || k === 'font' || k === 'bold') n.fontStr = '';
   }
+  if (n.phys || 'phys' in props) physicsChanged(n, props);
   n.host.dirty = true;
 }
 
@@ -1465,6 +1519,7 @@ function setObj(n, props) {
         o.castShadow = !!v;
         if (o.isMesh) o.receiveShadow = !!v;
         break;
+      case 'phys': break;  // physicsChanged, below
       case 'intensity': if (o.isLight) { p.intensity = v; o.intensity = v * lightScale(n); } break;
       case 'distance': if (o.isLight) o.distance = v; break;
       case 'ground': if (o.groundColor) o.groundColor.set(v); break;
@@ -1497,6 +1552,8 @@ function setObj(n, props) {
   if (relabel) drawLabel(n);
   if (land) buildLand(n);
   if (water) buildWater(n);
+  if (n.phys || 'phys' in props) physicsChanged(n, props);
+  if (land && n.phys) withPhysics((ph) => ph.landChanged(n));
   if (n.water) n.host.recolor = true;  // the land by it gets its sand where the water is now
   n.host.dirty = true;
 }
@@ -1836,6 +1893,14 @@ function tick(now) {
   stats.last = now;
   stats.frames++;
   const t0 = performance.now();
+  if (physics && !physicsFailed) {
+    try {
+      physics.step(now);
+    } catch (err) {
+      physicsFailed = true;  // once: an error every frame would bury everything else
+      report(err, 'physics');
+    }
+  }
   for (const c of canvases) if (c.dirty) { c.dirty = false; try { draw2d(c); } catch (err) { report(err, 'drawing a canvas'); } }
   for (const s of scenes) if (s.dirty) { s.dirty = false; try { draw3d(s); } catch (err) { report(err, 'drawing a 3D scene'); } }
   stats.drawMs += performance.now() - t0;

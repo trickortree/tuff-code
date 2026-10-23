@@ -1,0 +1,15 @@
+mention tgame
+
+# Physics: a car to drive with the keys (W goes, A and D steer) on rolling land, the camera following it.
+world = tgame.world("Physics Car", 900, 560)
+world:sky "day"
+world:lighting "modern"
+land = world:terrain(400)
+land:hill(40, -60, 50, 4)
+for spot in [[-12, -20], [14, -30], [-20, -60], [10, -90]]:
+    world:spawn("tree", spot[0], 0, spot[1])
+car = world:car(0, 0, 0, "red")
+car:drive()
+
+func report():
+    say "car " + car:spot() + " facing " + round(car:angle()) + " speed " + round(car:speed()) + " km/h"

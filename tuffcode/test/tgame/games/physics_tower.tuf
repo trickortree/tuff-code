@@ -1,0 +1,45 @@
+mention tgame
+
+# Physics: a tower of boxes stands until it's pushed, a crate says when the ball hits it, and an explosion
+# throws a ring of boxes away.
+world = tgame.world("Physics Tower", 900, 560)
+world:ground "grass"
+world:camera_at(0, 5, 14)
+world:look_at(0, 1.5, -2)
+tower = []
+for level in range(0, 3):
+    tower:add(world:box(0, level, 0, 1, "wood"):physics())
+target = world:spawn("crate", 4, 0, 0)
+target:physics()
+ball = world:sphere(4, 6, 0, 0.6, "red")
+ball:physics()
+ball:mass(3)
+ring = []
+for spot in [[-7, -6], [-5, -6], [5, -6], [7, -6], [0, -9], [0, -3]]:
+    ring:add(world:box(spot[0], 0, spot[1], 0.8, "orange"):physics())
+hit_by = []
+
+func bumped(other, strength):
+    hit_by:add(other)
+    say "the crate was hit by " + other + " strength " + round(strength * 10) / 10
+
+target:on_hit bumped
+
+func report():
+    top = tower[3]
+    say "tower top y " + top:y() + " x " + top:x()
+
+func topple():
+    tower[2]:push(3, 0, 0)
+    tower[3]:push(3, 1, 0)
+
+func boom():
+    world:explode(0, 0, -6, 12, 8)
+
+func spread():
+    near = 100
+    for box in ring:
+        d = box:distance(0, 0, -6)
+        if d < near:
+            near = d
+    say "ring nearest " + round(near * 10) / 10
