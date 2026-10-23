@@ -90,7 +90,10 @@ main thread   tuff_view.run() → webview.start(): the window system. (On Window
 "tuff"        ALL program code: the Tuff program, every handler, every-frame function, frame(), loop().
 "tuff-view-send"  takes queued batches and calls window.run_js (blocks ~1 ms each). Daemon.
 pywebview's   one new thread per page→Python call (js_api) and per window event (closed...). They only
-threads       append to a queue under a lock and wake the Tuff thread.
+threads       append to a queue under a lock and wake the Tuff thread, and tell the mouse hold when the page
+              holds the mouse or lets go (so Escape lets go at once, even while the program is busy).
+"tuff-view-mouse" while a first-person game holds the mouse (Windows, Mac) and its window is in front: keeps the
+              cursor in the window and adds up its moves. Daemon.
 "tuff-view-files" a ThreadingHTTPServer on 127.0.0.1 serving the page and the program's assets.
 ```
 
