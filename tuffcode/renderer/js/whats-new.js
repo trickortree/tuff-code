@@ -24,7 +24,16 @@
 - **Rain and snow:** \`world:weather("rain")\` brings falling streaks, a darker sky and wet ground; \`"snow"\` brings drifting flakes.
 - **Day and night:** \`world:day_cycle(120)\` goes from morning to sunset to a starry night and back. \`world:time_of_day(18)\` jumps to 6 pm.
 
-### Game screens
+### Splash screens, menus and the mouse
+- **Splash screens:** \`game:splash("logo.png", 3)\` shows your logo or some text as the game starts. \`game:splash()\` shows "Made with Tuff".
+- **Main menus:** \`menu = game:main_menu("My Game")\` waits for Play, and the mouse stays free to click its buttons.
+- **Mouse controls:** \`world:unlock_mouse()\` frees the mouse in a first-person game (to read a note or use a shop), and \`world:lock_mouse()\` locks it again. \`world:mouse_locked()\` tells you which it is.
+- **No more "press Esc to show your cursor" banner** over your game. Games hold the mouse themselves now.
+
+### Saving
+- **Saved games:** \`game:save("best", score)\` keeps a high score, progress or settings for next time, even after the game closes. \`game:load("best", 0)\` gets it back, and \`game:forget("best")\` forgets it.
+
+### On the screen
 - **Health bars:** \`enemy:health_bar(100)\`, then \`enemy:hurt(10)\` and \`enemy:heal(5)\`. \`enemy:on_death(gone)\` runs when it reaches 0.
 - **A countdown:** \`game:countdown(60, times_up)\` ticks down in the corner and turns red at the end.
 - **An arrow to anything:** \`world:arrow_to(chest)\` points the way at the edge of the screen and says how far it is.
