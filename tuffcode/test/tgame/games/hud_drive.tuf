@@ -1,0 +1,22 @@
+mention tgame
+
+# The minimap and the arrow measure from the player: from its figure in third person (here they're made before the
+# player is), and from the car while it drives one.
+world = tgame.world("Minimap Drive", 900, 560)
+world:ground "grass"
+rock = world:spawn("rock", 0, 0, -60)
+map = world:minimap()
+arrow = world:arrow_to(rock)
+player = world:player("third person")
+player:move_to(4, 0, 6)
+car = world:car(0, 0, 0, "red")
+map:mark(car, "red")
+
+func get_in():
+    car:drive()
+
+func get_out():
+    car:drive(false)
+
+func report():
+    say "car " + car:spot() + " player " + player:spot()

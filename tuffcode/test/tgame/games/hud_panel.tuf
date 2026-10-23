@@ -1,0 +1,18 @@
+mention tgame
+
+# A panel in the top right stays where it is, and the countdown and the minimap there go under it (back up to the
+# top when it's hidden).
+world = tgame.world("HUD Panel", 900, 560)
+world:ground "grass"
+player = world:player("first person")
+bar = world:panel("top right")
+bar:button("Pause", stop)
+bar:text "Coins: 0"
+clock = world:countdown(90)
+map = world:minimap()
+
+func stop():
+    world:pause()
+
+func hide_bar():
+    bar:hide()

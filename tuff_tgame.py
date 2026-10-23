@@ -447,6 +447,8 @@ class Game:
         self.ui = None  # the game's menus (GameUI), once game:panel or a screen made them
         self.closed = self.close_seen = False
         self.down, self.just = set(), set()
+        self.input_paused = False  # the game was paused when this frame's keys and clicks came in (they were a screen's)
+        self.lock_click = False  # this frame's click is the one that locks the mouse for looking around
         self.ticks, self.key_fns, self.click_fns, self.timers = [], [], [], []
         self.clock = 0.0
         self.last = None
@@ -600,6 +602,7 @@ class Game:
         self.frames += 1
         self.just = set()
         self.wheel = 0.0
+        self.input_paused, self.lock_click = self.is_paused, False
         self.handle(self.view.events())
         if self.autopilot:
             self.autopilot.tick(t)
@@ -704,6 +707,8 @@ class Game:
                 name = MOUSE_BUTTONS.get(e.get("button", 0), "mouse")
                 self.down.add(name)
                 self.just.add(name)
+                if e.get("locks") and not self.fake_lock:  # the page asked to lock the mouse in this click
+                    self.lock_click = True
             elif t == "mouseup":
                 self.down.discard(MOUSE_BUTTONS.get(e.get("button", 0), "mouse"))
             elif t == "blur":  # the window lost focus: keys held now come up without telling us
@@ -883,11 +888,11 @@ class Game:
         return Group(self).native
 
     def clear(self):
-        """Removes every sprite and object the program made (the player stays)."""
+        """Removes every sprite and object the program made (the player and a countdown stay). What it removes stops
+        moving by itself as it goes (it leaves self.movers)."""
         for thing in list(self.things):
             thing.remove()
         self.things = {}
-        self.movers = set()
 
     # ---- physics
     def physics_on(self):
@@ -1588,8 +1593,10 @@ class Layer:
         return self.make("image", x, y, {"src": url, "w": w, "h": h, "file": g.rt.text(file)}).native
 
     def clear_layer(self):
+        """hud:clear(): removes what the program drew on it. tgame's own (the "E: Talk" hint, the crosshair, the pause
+        screen) stay, as with game:clear."""
         for s in list(self.sprites):
-            if s.layer is self:
+            if s.layer is self and s in self.game.things:
                 s.remove()
 
 
@@ -2615,6 +2622,8 @@ class World3D(Game):
         if SCENE is not None: SCENE.player_made = list(SCENE.interp.lines)
         self.cam_mode = "player"
         self.view.set(self.scene, clicklock=self.clicks_lock())
+        if getattr(self, "hud_js", None) is not None:  # a minimap or an arrow made first measures from the player now
+            self.hud_js.player()
         return self.the_player.native
 
     def camera_at(self, x=MISSING, y=MISSING, z=MISSING):
@@ -4786,6 +4795,8 @@ class Car(Thing):
                 if p.body is not None and not p.hidden:
                     p.body.show()
                 p.place_camera(1)
+        if getattr(w, "hud_js", None) is not None:
+            w.hud_js.player()  # the minimap and the arrow measure from the car while it's driven
         return self.native
 
     def engine(self, power):
@@ -4993,10 +5004,13 @@ class Interaction:
         if self.held is not None:
             self.carry(p)
         do, what = self.choice(p)
-        if "e" in w.just and do is not None:
+        # An E that hid a screen (a note the program closes with E) only hides it, and the click that locks the mouse
+        # again (after Escape) isn't a throw.
+        mine = not w.input_paused
+        if mine and "e" in w.just and do is not None:
             do(what)
             do, what = self.choice(p)
-        elif "mouse" in w.just and self.held is not None:
+        elif mine and "mouse" in w.just and self.held is not None and not w.lock_click:
             self.throw(p)
             do, what = self.choice(p)
         self.show_hint(self.hint_for(do, what))
@@ -6268,7 +6282,10 @@ m.lock = () => {
 };
 addEventListener('pointerdown', (e) => {
   const n = e.target && e.target._tv !== undefined ? tv.objs.get(e.target._tv) : null;
-  if (n && n.kind === 'scene' && !n.clicklock && n.el.hasAttribute('data-tg-want')) m.lock();
+  if (n && n.kind === 'scene' && !n.clicklock && n.el.hasAttribute('data-tg-want')) {
+    if (document.pointerLockElement !== n.el) e.tvLocks = true;  // its mousedown says it locks the mouse (engine.js)
+    m.lock();
+  }
 }, true);
 """
 
@@ -7271,10 +7288,11 @@ class HudPage:
         self.game.view.call(self.node, method, *args)
 
     def player(self):
-        """Tells the page who the player is (its figure, in third person), so the map and the arrow measure from it."""
-        p = getattr(self.game, "the_player", None)
-        if p is not None:
-            self.call("player", int(p.body.node) if p.body is not None else 0)
+        """Tells the page where the map and the arrow measure from: the car the player drives, the player's figure in
+        third person, or (0) the camera. Sent again when that changes (the player is made, gets in or out of a car)."""
+        car, p = getattr(self.game, "driving", None), getattr(self.game, "the_player", None)
+        body = p.body if p is not None else None
+        self.call("player", int(car.node) if car is not None else int(body.node) if body is not None else 0)
 
 
 def hud_page(game):

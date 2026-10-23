@@ -2313,6 +2313,18 @@ def t_ix_grab(c):
     shot = r.shots.get("ix_grab.png")
     c.check(shot and color_share(shot, (125, 80, 45), 45, (0.3, 0.2, 0.7, 0.8)) > 0.05, "the screenshot shows the crate held up in front", shot)
 
+    # Holding the crate, the mouse is let go (Escape, or another window); the click on the game that locks it again
+    # isn't a throw. The next click (locked) is.
+    r = play("ix_relock", game("ix_grab.tuf"), look + [
+        {"at": 1.6, "key": "e"}, {"at": 2.0, "dump": "ixr_held.json"}, {"at": 2.05, "lock": False},
+        {"at": 2.1, "click_center": True}, {"at": 2.5, "dump": "ixr_relocked.json"},
+        {"at": 2.6, "lock": True}, {"at": 2.7, "click_center": True}, {"at": 3.0, "dump": "ixr_thrown.json"},
+        {"at": 3.1, "close": True}])
+    clean_exit(c, r)
+    held, relocked, thrown = (ix(r.dumps.get(f"ixr_{n}.json", {})).get("held") for n in ("held", "relocked", "thrown"))
+    c.check(held == "crate" and relocked == "crate", "the click that locks the mouse again doesn't throw the crate", (held, relocked))
+    c.check(thrown is None, "the next click throws it", thrown)
+
 
 def t_ix_talk(c):
     """npc:say and npc:on_talk: a speech bubble over a person (for 4 s, or for good with 0), "E: Talk" near someone
@@ -2347,6 +2359,29 @@ def t_ix_talk(c):
     c.check(shot and color_share(shot, (255, 255, 255), 8, (0.3, 0.0, 0.7, 0.5)) > 0.01, "the screenshot shows a white speech bubble over the person", shot)
     shot = r.shots.get("ix_talk_thanks.png")
     c.check(shot and color_share(shot, (255, 255, 255), 10, (0.44, 0.84, 0.56, 0.9)) > 0.01, "and the \"E: Talk\" hint at the bottom", shot)
+
+    # games/ix_note.tuf: E talks to a sign, whose on_talk shows a note; the next E hides it in on_key, and only that.
+    r = play("ix_note", game("ix_note.tuf"), [
+        {"at": 0.8, "dump": "ixn_start.json"},
+        {"at": 1.0, "key": "e"}, {"at": 1.3, "call": "report"},
+        {"at": 1.5, "key": "e"}, {"at": 1.8, "call": "report"}, {"at": 1.85, "dump": "ixn_hidden.json"},
+        {"at": 2.0, "call": "to_door"}, {"at": 2.2, "key": "e"}, {"at": 2.7, "call": "report"}, {"at": 2.75, "dump": "ixn_door.json"},
+        {"at": 2.9, "key": "e"}, {"at": 3.4, "dump": "ixn_opened.json"}, {"at": 3.5, "close": True}])
+    clean_exit(c, r)
+    start = r.dumps.get("ixn_start.json", {})
+    c.check(ix(start).get("hint") == "E: Talk" and "E: Talk" in start.get("hud_texts", []) and "Talks: 0" in start.get("hud_texts", []),
+            "a HUD cleared and drawn again every frame (hud:clear) keeps the \"E: Talk\" hint", (ix(start).get("hint"), start.get("hud_texts")))
+    talks = [line for line in r.lines if line.startswith("talks ")]
+    c.check(talks[:1] == ["talks 1, note shown true"], "E talks to the sign, and its on_talk shows a note", talks)
+    c.check(talks[1:2] == ["talks 1, note shown false"] and "talk 2" not in r.lines,
+            "the E that hides the note (in on_key) only hides it: it doesn't talk again and show the note again", talks)
+    c.check("E: Talk" in r.dumps.get("ixn_hidden.json", {}).get("hud_texts", []), "and the hint is back once the note is gone",
+            r.dumps.get("ixn_hidden.json", {}).get("hud_texts"))
+    door = ix(r.dumps.get("ixn_door.json", {})).get("doors") or [{}]
+    c.check(talks[2:3] == ["talks 1, note shown false"] and not door[0].get("open"),
+            "next to a door, the E that hides the note doesn't open the door too", (talks, door))
+    opened = ix(r.dumps.get("ixn_opened.json", {})).get("doors") or [{}]
+    c.check(opened[0].get("open"), "the next E opens it", opened)
 
 
 def t_ix_door(c):
@@ -2502,7 +2537,7 @@ GOOD = ["snake.tuf", "breakout.tuf", "snake3d.tuf", "axe_sim.tuf", "features_2d.
         "ui_2d.tuf", "ui_3d.tuf", "physics_drop.tuf", "physics_tower.tuf", "physics_player.tuf", "physics_car.tuf",
         "physics_ragdoll.tuf", "physics_2d.tuf",
         "fx_slow_mo.tuf", "fx_shake_pop.tuf", "fx_weather.tuf", "fx_day.tuf", "fx_2d.tuf",
-        "ix_grab.tuf", "ix_talk.tuf", "ix_door.tuf",
+        "ix_grab.tuf", "ix_talk.tuf", "ix_door.tuf", "ix_note.tuf",
         "level_pads.tuf", "level_lift.tuf", "level_lift_physics.tuf",
         "menu_2d.tuf", "menu_3d.tuf", "menu_start.tuf"]
 BAD = [
@@ -3297,6 +3332,14 @@ def t_hud_health_2d(c):
     c.check(after and color_share(after, GREEN_BAR, 30, (0.55, 0.45, 0.85, 0.65), 2) < 0.0005,
             "the slime's bar went with it when :on_death hid it", after)
 
+    # games/hud_clock_clear.tuf: game:clear() (the next level) doesn't stop a countdown of 2 s.
+    r = play("hud_clock_clear", game("hud_clock_clear.tuf"), [
+        {"at": 0.5, "call": "next_level"}, {"at": 1.3, "call": "report"}, {"at": 2.6, "call": "report"}, {"at": 2.7, "close": True}])
+    clean_exit(c, r)
+    reports = [line for line in r.lines if line.startswith("left ")]
+    c.check(reports == ["left 1 ends 0", "left 0 ends 1"] and "times up 1" in r.lines,
+            "after game:clear() the countdown keeps going, and runs its function at 0", r.lines)
+
 
 def t_hud_arrow(c):
     """games/hud_arrow.tuf: the arrow over the chest in view, at the left edge when the camera looks right, along the
@@ -3362,11 +3405,63 @@ def t_hud_minimap(c):
             and lake(moved, (0.78, 0.12, 0.99, 0.32)) < 0.002,
             "world:minimap(220, \"bottom left\") moves it to the bottom left", moved)
 
+    # games/hud_drive.tuf: where the map and the arrow measure from (the page's TgHud.viewer), against where the
+    # player and the car are.
+    probe = ("const h = document.querySelector('tg-hud'); const v = h.viewer(tv.objs.get(h.opts.view)).at;"
+             "tv.emit('tg-autopilot', {message: 'viewer ' + v.x.toFixed(2) + ' ' + v.z.toFixed(2)});")
+    r = play("hud_drive", game("hud_drive.tuf"), [
+        {"at": 0.8, "call": "report"}, {"at": 0.8, "js": probe},
+        {"at": 0.9, "call": "get_in"}, {"at": 1.0, "hold": "w", "for": 2.4},
+        {"at": 3.6, "call": "report"}, {"at": 3.6, "js": probe},
+        {"at": 3.8, "call": "get_out"}, {"at": 4.1, "call": "report"}, {"at": 4.1, "js": probe},
+        {"at": 4.3, "close": True}])
+    clean_exit(c, r)
+    viewers = [[float(v) for v in line.split()[2:4]] for line in r.lines if line.startswith("[autopilot] viewer ")]
+    spots = [[float(v) for v in line.translate(str.maketrans("[],", "   ")).split()[1:] if v != "player"]
+             for line in r.lines if line.startswith("car [")]  # the car's x, y, z, then the player's
+    near = lambda i, at, most: len(viewers) > i and len(spots) > i and math.dist(viewers[i], (spots[i][at], spots[i][at + 2])) < most
+    c.check(near(0, 3, 0.3), "made before the third-person player, they measure from its figure (not the camera behind it)",
+            (viewers, spots))
+    c.check(near(1, 0, 2.5) and len(spots) > 1 and math.dist(spots[0][:3:2], spots[1][:3:2]) > 5,
+            "while it drives, from the car (not from where it got in)", (viewers, spots))
+    c.check(near(2, 3, 0.3), "and once it's out, from its figure again", (viewers, spots))
+
+    # games/hud_ragdoll.tuf: the minimap (180 px, top right, the player in its middle) with a ragdoll marked red at
+    # (12, 0, -12) and a rock gold at (-12, 0, -12): both dots 21.6 px up and 21.6 px to the side of the middle.
+    r = play("hud_ragdoll", game("hud_ragdoll.tuf"), [{"at": 1.2, "shot": "hud_ragdoll.png"}, {"at": 1.3, "close": True}])
+    clean_exit(c, r)
+    shot = r.shots.get("hud_ragdoll.png")
+    red = hexrgb("#e5484d")
+    c.check(shot and color_share(shot, GOLD, 40, (0.846, 0.125, 0.876, 0.172), 1) > 0.05, "the rock's dot is up and to the left", shot)
+    c.check(shot and color_share(shot, red, 40, (0.893, 0.125, 0.923, 0.172), 1) > 0.05,
+            "the ragdoll's dot is where it stands, up and to the right (not in the middle)", shot)
+
+    # games/hud_panel.tuf: a panel in the top right, a countdown and a minimap. In the top 200 pixels of the page's HUD,
+    # nothing is drawn under the panel (`under`), and the first row drawn on (`first`, the countdown's top) is just
+    # under the panel's bottom; once the panel's hidden, it's back at the top.
+    probe = ("const h = document.querySelector('tg-hud'); const d = document.querySelector('.tg-ui .tg-dock-top-right').getBoundingClientRect();"
+             "const c = h.canvas.getBoundingClientRect(); const k = h.canvas.width / c.width; const W = h.canvas.width, H = Math.round(200 * k);"
+             "const a = h.ctx.getImageData(0, 0, W, H).data; let under = 0, first = -1;"
+             "for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (a[(y * W + x) * 4 + 3] <= 8) continue;"
+             " const px = c.left + x / k, py = c.top + y / k; if (first < 0) first = Math.round(py - c.top);"
+             " if (px >= d.left && px <= d.right && py >= d.top && py <= d.bottom) under++; }"
+             "tv.emit('tg-autopilot', {message: 'panel ' + JSON.stringify({tall: Math.round(d.height), bottom: Math.round(d.bottom - c.top), under, first})});")
+    r = play("hud_panel", game("hud_panel.tuf"), [
+        {"at": 1.0, "js": probe}, {"at": 1.1, "shot": "hud_panel.png"},
+        {"at": 1.2, "call": "hide_bar"}, {"at": 1.5, "js": probe}, {"at": 1.6, "close": True}])
+    clean_exit(c, r)
+    panels = [json.loads(line.split("panel ", 1)[1]) for line in r.lines if line.startswith("[autopilot] panel ")]
+    shown, hidden = (panels + [{}, {}])[:2]
+    c.check(shown.get("tall", 0) > 20 and shown.get("under") == 0 and 0 < shown.get("first", 0) - shown.get("bottom", 0) < 20,
+            "the countdown and the minimap go under a panel in the top right, not under it", panels)
+    c.check(hidden.get("tall") == 0 and 10 <= hidden.get("first", 0) <= 18, "with the panel hidden, the countdown is at the top again", panels)
+
 
 def t_hud_checker(c):
     """--check knows the HUD's names, what they give back and what their functions get; their mistakes have
     kid-friendly messages, when checking and when running."""
-    for name in ("hud_health_3d.tuf", "hud_health_2d.tuf", "hud_arrow.tuf", "hud_minimap.tuf"):
+    for name in ("hud_health_3d.tuf", "hud_health_2d.tuf", "hud_arrow.tuf", "hud_minimap.tuf", "hud_clock_clear.tuf",
+                 "hud_drive.tuf", "hud_ragdoll.tuf", "hud_panel.tuf"):
         p = subprocess.run(tuff_cmd() + ["--check", game(name)], capture_output=True, text=True, encoding="utf-8", timeout=60)
         c.check(p.returncode == 0 and p.stdout.strip() == "OK", f"--check accepts {name}", (p.stdout + p.stderr)[:400])
     folder = os.path.join(OUT, "hud")

@@ -173,7 +173,7 @@ Methods (`call`/`ask`):
 
 | type | fields |
 | --- | --- |
-| `click` `dblclick` `mousedown` `mouseup` | `id` (the nearest object), `path` (that object, then its parents), `x y` (window CSS px), `button`, `shift ctrl alt meta`. Over a canvas also `cx cy` (world). Over a scene, the hit object leads `path`, plus `point dist`. |
+| `click` `dblclick` `mousedown` `mouseup` | `id` (the nearest object), `path` (that object, then its parents), `x y` (window CSS px), `button`, `shift ctrl alt meta`. Over a canvas also `cx cy` (world). Over a scene, the hit object leads `path`, plus `point dist`. A `mousedown` that locks the pointer (a click on a scene with `clicklock` that isn't locked yet) also has `locks: true`. |
 | `mousemove` | `x y dx dy` (merged per animation frame) |
 | `wheel` | `dx dy x y path` |
 | `keydown` / `keyup` | `key code` (+ `repeat` and `typing` on keydown: true when the key went to a text box, not a checkbox or slider), `shift ctrl alt meta` |

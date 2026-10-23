@@ -20,7 +20,7 @@ let W = null;               // three.js scratch objects, once three.js is here
 function three() {
   const T = tv() && tv().three();
   if (!T || T.failed || !T.Vector3) return null;
-  if (!W) W = { T, box: new T.Box3(), v: new T.Vector3(), c: new T.Vector3(), cam: new T.Vector3() };
+  if (!W) W = { T, box: new T.Box3(), c: new T.Vector3(), cam: new T.Vector3() };
   return T;
 }
 
@@ -231,7 +231,7 @@ class TgHud extends HTMLElement {
     this.pointer = null;       // the arrow: { id or at, shown, color }
     this.map = null;           // the minimap: { size, corner, zoom, floors }
     this.marks = new Map();    // id -> colour
-    this.playerId = 0;         // the player's figure (third person), or 0: the camera is where the player is
+    this.playerId = 0;         // the car the player drives or its figure (third person), or 0: the camera is where it is
     this.land = null;          // the minimap's picture of the land, and what it was made from
     this.canvas = document.createElement('canvas');
     this.ctx = this.canvas.getContext('2d');
@@ -350,8 +350,8 @@ class TgHud extends HTMLElement {
       if (b.kind === '2d') this.drawBar2d(g, b, api);
       else if (b.kind === 'player') this.drawPlayerBar(g, b, area);
     }
-    let top = 14;
-    if (this.clock) top = this.drawClock(g, now, area) + 10;
+    let top = this.topRight(area);  // the countdown, then a minimap in the top right, one under another
+    if (this.clock) top = this.drawClock(g, now, area, top) + 10;
     if (this.opts.three_d && three()) {
       if (this.map) this.drawMap(g, view, area, top, now);
       if (this.pointer && this.pointer.shown) this.drawArrow(g, view, cw, ch, now);
@@ -395,8 +395,18 @@ class TgHud extends HTMLElement {
     drawBar(g, x + 32, y + 6, 208, 14, b);
   }
 
-  // The countdown: m:ss in a dark pill at the top right, red under 10 seconds (it grows a little with each second then).
-  drawClock(g, now, area) {
+  // Where the top right starts: 14 pixels in, or under the game's panels there (a "top right" tgame panel, which
+  // stays where the program put it), so they don't cover the countdown or the minimap.
+  topRight(area) {
+    const dock = document.querySelector('.tg-ui .tg-dock-top-right');
+    const r = dock && dock.getBoundingClientRect();
+    if (!r || !r.height) return area[1] + 14;
+    return Math.max(area[1] + 14, r.bottom - this.canvas.getBoundingClientRect().top + 10);
+  }
+
+  // The countdown: m:ss in a dark pill at the top right (`top` down), red under 10 seconds (it grows a little with
+  // each second then).
+  drawClock(g, now, area, top) {
     const left = Math.max(0, this.clock.left);
     const m = Math.floor(left / 60);
     const s = left % 60;
@@ -407,7 +417,7 @@ class TgHud extends HTMLElement {
     const wide = tw + 58;
     const tall = 44;
     const x = area[0] + area[2] - 14 - wide;
-    const y = area[1] + 14;
+    const y = top;
     const pulse = hurry ? 1 + 0.16 * Math.max(0, 1 - (now - this.clock.at) / 350) : 1;
     g.save();
     g.translate(x + wide / 2, y + tall / 2);
@@ -438,7 +448,7 @@ class TgHud extends HTMLElement {
     return y + tall;
   }
 
-  // Where the player is and which way it looks: its figure in third person, the camera otherwise.
+  // Where the player is and which way it looks: the car it drives, its figure in third person, the camera otherwise.
   viewer(view) {
     const api = tv();
     const at = new W.T.Vector3();
@@ -448,7 +458,8 @@ class TgHud extends HTMLElement {
     return { at, yaw: view.yaw * DEG };
   }
 
-  // Where a thing is: the middle of everything it's made of, and its top. null when it's gone.
+  // Where a thing is: the middle of everything it's made of (a ragdoll's own object stays at the world's middle while
+  // physics moves its parts), and its top. null when it's gone. The arrow and the minimap's dots use it.
   spotOf(o) {
     const api = tv();
     if (o.at) return { mid: new W.T.Vector3(o.at[0], o.at[1], o.at[2]), top: o.at[1] };
@@ -589,15 +600,12 @@ class TgHud extends HTMLElement {
     for (let gz = Math.ceil((me.at.z - R / k) / step) * step; gz <= me.at.z + R / k; gz += step) { g.moveTo(cx - R, pz(gz)); g.lineTo(cx + R, pz(gz)); }
     g.stroke();
     // the marks: a dot each, at the edge when they're further than the map shows
-    const api = tv();
-    const at = W.v;
     for (const [id, color] of [...this.marks]) {
-      const n = api.objs.get(id);
-      if (!n) { this.marks.delete(id); continue; }
-      if (!seen(n.obj)) continue;
-      n.obj.getWorldPosition(at);
-      let mx = (at.x - me.at.x) * k;
-      let mz = (at.z - me.at.z) * k;
+      const spot = this.spotOf({ id });
+      if (!spot) { this.marks.delete(id); continue; }
+      if (spot.hidden) continue;
+      let mx = (spot.mid.x - me.at.x) * k;
+      let mz = (spot.mid.z - me.at.z) * k;
       const d = Math.hypot(mx, mz);
       const out = d > R - 7;
       if (out) { mx *= (R - 7) / d; mz *= (R - 7) / d; }

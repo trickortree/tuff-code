@@ -1,0 +1,12 @@
+mention tgame
+
+# A ragdoll marked on the minimap: its dot is where the ragdoll stands, like the rock's (physics moves a ragdoll's
+# parts, not the ragdoll's own object).
+world = tgame.world("Minimap Ragdoll", 900, 560)
+world:ground "grass"
+player = world:player("first person")
+dummy = world:ragdoll(12, 0, -12)
+rock = world:spawn("rock", -12, 0, -12)
+map = world:minimap()
+map:mark(dummy, "red")
+map:mark(rock, "gold")
