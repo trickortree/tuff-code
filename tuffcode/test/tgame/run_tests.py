@@ -65,10 +65,11 @@ def tuff_cmd():
     return [RUNTIME] if RUNTIME else [sys.executable, TUFF]
 
 
-def play(name, program, steps, timeout=60, seed=1, env=None):
-    """Run a game with a list of autopilot steps; returns Played."""
+def play(name, program, steps, timeout=60, seed=1, env=None, hold_mouse=False):
+    """Run a game with a list of autopilot steps; returns Played. hold_mouse: tuff_view holds the real mouse when
+    the game locks it (the tests leave it alone otherwise)."""
     os.makedirs(OUT, exist_ok=True)
-    plan = {"on_top": True, "out": OUT, "seed": seed, "steps": steps,
+    plan = {"on_top": True, "out": OUT, "seed": seed, "steps": steps, "hold_mouse": hold_mouse,
             "timeout": max([s.get("at", 0) for s in steps] + [0]) + 15}
     plan_file = os.path.join(OUT, f"{name}.plan.json")
     with open(plan_file, "w", encoding="utf-8") as f:
@@ -510,6 +511,53 @@ def t_pause_key(c):
     clean_exit(c, r)
     c.check(r.lines[1:] == ["paused true, ran while paused true", "paused false, ran while paused true"],
             "an every-frame function runs while paused, so its P key pauses and then resumes the game", r.lines)
+
+
+def t_mouse_hold(c):
+    """A first-person game holds the mouse itself, not with the browser's pointer lock (which shows "To show your
+    cursor, press Esc" over the game): a click holds it (world:mouse_locked is true, the cursor is hidden, kept inside
+    the window and put back in the middle), moving the real mouse turns the player, and Escape lets go of it."""
+    if os.name != "nt":
+        c.check(True, "not Windows: skipped (the Mac holds it with Quartz)")
+        return
+    real = os.environ.get("TUFF_TEST_REAL_MOUSE") == "1"  # it takes the real mouse for a second: only when asked
+    r = play("mouse_hold", game("mouse_hold.tuf"), [
+        {"at": 0.5, "front": real},
+        {"at": 0.6, "js": "tv.emit('tg-autopilot', {message: 'focus ' + document.hasFocus()})"},
+        {"at": 0.7, "click_center": True}, {"at": 0.9, "call": "report"}, {"at": 1.0, "hold_report": True},
+        {"at": 1.05, "js": "tv.emit('tg-autopilot', {message: 'look ' + JSON.stringify({held: document.pointerLockElement"
+                           " !== null, hidden: getComputedStyle(document.body).cursor, browser_lock: /native code/.test("
+                           "Element.prototype.requestPointerLock)})})"},
+        {"at": 1.1, "nudge_mouse": [120, 0]}, {"at": 1.3, "nudge_mouse": [120, 0]}, {"at": 1.5, "call": "report"},
+        {"at": 1.55, "hold_report": True},
+        {"at": 1.6, "key": "escape"}, {"at": 1.9, "call": "report"}, {"at": 2.0, "hold_report": True},
+        {"at": 2.1, "nudge_mouse": [120, 0]}, {"at": 2.3, "call": "report"},
+        {"at": 2.4, "close": True},
+    ], hold_mouse=True)
+    clean_exit(c, r)
+    holds = [json.loads(line.split("hold ", 1)[1]) for line in r.lines if line.startswith("[autopilot] hold ")]
+    said = [line for line in r.lines if line.startswith("locked ")]
+    look = next((json.loads(line.split("look ", 1)[1]) for line in r.lines if line.startswith("[autopilot] look ")), {})
+    print(f"         {autopilot_said(r, 'focus')} {holds} {said} {look}")
+    if len(holds) < 3 or len(said) < 4:
+        c.check(False, "the game reported how it holds the mouse", r.lines)
+        return
+    c.check(look == {"held": True, "hidden": "none", "browser_lock": False}, "a click on the game: the page acts as if the mouse were locked "
+            "(no browser lock, so no banner), and hides the cursor", look)
+    if not holds[0].get("front"):
+        c.check(not real, "the test window isn't in front: skipped the real mouse checks (TUFF_TEST_REAL_MOUSE=1 runs them)",
+                holds[0])
+        return
+    c.check(said[0].startswith("locked true") and holds[0] == {"page": True, "active": True, "front": True, "inside": True, "middle": True},
+            "a click on the game holds the mouse: world:mouse_locked is true, the cursor is kept inside the window, in its middle",
+            [said[0], holds[0]])
+    a0, a1 = (float(s.rsplit(" ", 1)[1]) for s in said[:2])
+    c.check(abs(a1 - a0) > 5 and holds[1].get("middle"), "moving the real mouse turns the player, and the cursor goes back to the middle",
+            [said[0], said[1], holds[1]])
+    c.check(said[2].startswith("locked false") and not holds[2]["page"] and not holds[2]["active"] and not holds[2]["inside"],
+            "Escape lets go of it: unlocked, and the cursor is free to leave the window", [said[2], holds[2]])
+    a2, a3 = (float(s.rsplit(" ", 1)[1]) for s in said[2:4])
+    c.check(abs(a3 - a2) < 0.5, "once it's let go, moving the mouse doesn't turn the player", [said[2], said[3]])
 
 
 def window_of(pid, title):
@@ -3359,7 +3407,7 @@ TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": 
          "models": t_models,
          "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "terrain": t_terrain,
          "terrain_look": t_terrain_look, "no_webgl": t_no_webgl, "ui_2d": t_ui_2d, "ui_3d": t_ui_3d,
-         "menu_2d": t_menu_2d, "menu_3d": t_menu_3d, "menu_start": t_menu_start,
+         "menu_2d": t_menu_2d, "menu_3d": t_menu_3d, "menu_start": t_menu_start, "mouse_hold": t_mouse_hold,
          "physics": t_physics, "physics_player": t_physics_player, "physics_car": t_physics_car, "physics_2d": t_physics_2d,
          "physics_off": t_physics_off,
          "saves": t_saves,

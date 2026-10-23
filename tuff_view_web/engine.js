@@ -2058,13 +2058,40 @@ addEventListener('pointerdown', (e) => {
   }
 }, true);
 addEventListener('keydown', wakeSound, true);
+
+// The mouse held for looking around without the browser's pointer lock, which shows "To show your cursor, press
+// Esc" over the game: Python holds it (tuff_view's _MouseHold keeps it in the window and measures its moves), and
+// the page stands in for the lock, so requestPointerLock, document.pointerLockElement, exitPointerLock and
+// 'pointerlockchange' work as before. Escape and the window losing the focus let go, as with the real lock. Python
+// turns this on (nativeMouse(true)) where it can hold the mouse.
+let heldBy = null;
+function holdMouse(el) {
+  if (heldBy === el) return;
+  heldBy = el;
+  document.documentElement.classList.toggle('tv-held', !!el);
+  emit('capture', { on: !!el });
+  document.dispatchEvent(new Event('pointerlockchange'));
+}
+function nativeMouse(on) {
+  if (!on || nativeMouse.on) return null;
+  nativeMouse.on = true;
+  Object.defineProperty(Document.prototype, 'pointerLockElement', { configurable: true, get() { return heldBy; } });
+  Element.prototype.requestPointerLock = function () { holdMouse(this.isConnected ? this : null); return Promise.resolve(); };
+  Document.prototype.exitPointerLock = function () { holdMouse(null); };
+  addEventListener('keydown', (e) => { if (e.key === 'Escape' && heldBy) holdMouse(null); }, true);
+  addEventListener('blur', () => holdMouse(null));
+  const s = document.createElement('style');
+  s.textContent = 'html.tv-held, html.tv-held * { cursor: none !important; }';
+  document.head.appendChild(s);
+  return null;
+}
 addEventListener('error', (e) => report(e.error || new Error(e.message), 'the page'));
 addEventListener('unhandledrejection', (e) => report(e.reason, 'the page'));
 
 // ---------------------------------------------------------------- start up
 
 // What custom JS (view.js(...) in Python) gets as `tv`.
-const api = { objs, node, emit, three: () => THREE, loadThree, root, gameKeys: true };
+const api = { objs, node, emit, three: () => THREE, loadThree, root, gameKeys: true, nativeMouse };
 window.__tv = { apply };
 window.tuffView = api;
 requestAnimationFrame(tick);

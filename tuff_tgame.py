@@ -6777,6 +6777,8 @@ class Autopilot:
     def __init__(self, game, plan, here):
         self.game = game
         self.on_top = plan.get("on_top", True)
+        if not plan.get("hold_mouse"):  # the tests leave the real mouse alone, unless they test holding it
+            os.environ["TUFF_VIEW_HOLD"] = "0"
         self.out = plan.get("out") or here
         os.makedirs(self.out, exist_ok=True)
         self.steps = sorted(plan.get("steps", []), key=lambda s: s.get("at", 0))
@@ -6815,6 +6817,45 @@ class Autopilot:
         key, code = KEY_EVENTS.get(name, (name, f"Key{name.upper()}" if len(name) == 1 and name.isalpha()
                                           else f"Digit{name}" if len(name) == 1 and name.isdigit() else name))
         return f"window.dispatchEvent(new KeyboardEvent({json.dumps(kind)}, {{key: {json.dumps(key)}, code: {json.dumps(code)}, bubbles: true}}));"
+
+    def hold_step(self, v, step):
+        """{"front": true} brings the window in front of the others (as a click on it would); {"nudge_mouse": [dx, dy]}
+        moves the real cursor as a hand would; {"hold_report": true} prints
+        "[autopilot] hold {...}": whether the page and the computer hold the mouse, the window is in front, the cursor
+        is kept inside the window, and it's back in the middle (Windows)."""
+        hold = getattr(v, "_hold", None)
+        if sys.platform != "win32" or hold is None:
+            if step.get("hold_report"):
+                print("[autopilot] hold " + json.dumps({"none": True}), flush=True)
+            return
+        import ctypes
+        from ctypes import wintypes
+        u = hold.u
+        if step.get("front") and v._hwnd:  # Windows lets the window in front give it away: borrow its input for that
+            k = ctypes.WinDLL("kernel32")
+            u.GetWindowThreadProcessId.restype = wintypes.DWORD
+            u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
+            them, me = u.GetWindowThreadProcessId(u.GetForegroundWindow(), None), k.GetCurrentThreadId()
+            u.AttachThreadInput(me, them, True)
+            try:
+                u.SetForegroundWindow(wintypes.HWND(v._hwnd))
+                u.BringWindowToTop(wintypes.HWND(v._hwnd))
+            finally:
+                u.AttachThreadInput(me, them, False)
+            return
+        if "nudge_mouse" in step:
+            x, y = hold.where()
+            hold.put(x + step["nudge_mouse"][0], y + step["nudge_mouse"][1])
+            return
+        clip = wintypes.RECT()
+        u.GetClipCursor.argtypes = [ctypes.POINTER(wintypes.RECT)]
+        u.GetClipCursor(ctypes.byref(clip))
+        area = hold.area() if v._hwnd else None
+        inside = area is not None and (clip.left, clip.top, clip.right, clip.bottom) == (area.left, area.top, area.right, area.bottom)
+        x, y = hold.where()
+        middle = area is not None and abs(x - (area.left + area.right) // 2) <= 1 and abs(y - (area.top + area.bottom) // 2) <= 1
+        print("[autopilot] hold " + json.dumps({"page": hold.on, "active": hold.active, "front": hold.ours(),
+                                                "inside": inside, "middle": middle}), flush=True)
 
     def click_js(self, x, y):
         # A real click somewhere else takes the keys from a text box: so does this one.
@@ -6907,6 +6948,8 @@ class Autopilot:
                 print(f"[autopilot] {step['tuff']}: {err.msg}", flush=True)
         if "js" in step:  # JavaScript in the page; tv.emit('tg-autopilot', {message}) prints what it finds
             v.js(step["js"])
+        if "nudge_mouse" in step or step.get("hold_report") or step.get("front"):  # the real mouse (plan "hold_mouse")
+            self.hold_step(v, step)
         if "say" in step:
             print(step["say"], flush=True)
         if step.get("mark"):

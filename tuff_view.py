@@ -51,6 +51,203 @@ NO_HANDLERS = {}
 FAILED = object()
 
 
+class _MouseHold:
+    """The mouse held in the window for looking around (a first-person game), done here instead of with the
+    browser's pointer lock and its "To show your cursor, press Esc" banner. The page hides the cursor and stands in
+    for the lock (engine.js, nativeMouse); this keeps the cursor in the window, puts it back in the middle after every
+    move and adds up how far it went, for View.mouse_delta. Windows: user32 (the cursor kept inside the window too);
+    macOS: Quartz. Elsewhere, or with TUFF_VIEW_POINTER_LOCK=1, None, and the browser's own lock is used.
+
+    TUFF_VIEW_HOLD=0 (the tests' autopilot) leaves the real mouse alone: the page still stands in for the lock, and
+    the moves come from the page's events."""
+
+    RATE = 1 / 240  # how often it looks where the cursor went
+
+    @classmethod
+    def make(cls, view):
+        if os.environ.get("TUFF_VIEW_POINTER_LOCK") == "1":
+            return None
+        try:
+            if sys.platform == "win32":
+                return _WinHold(view)
+            if sys.platform == "darwin":
+                return _MacHold(view)
+        except Exception:
+            pass
+        return None
+
+    def __init__(self, view):
+        self.view = view
+        self.real = os.environ.get("TUFF_VIEW_HOLD") != "0"
+        self.on = False      # the page holds the mouse
+        self.active = False  # ...and so does the computer: the moves come from here, not from the page
+        self.stop_ev = threading.Event()
+        self.thread = None
+
+    def hold(self, on):
+        if on == self.on:
+            return
+        self.on = on
+        if on and self.real:
+            self.stop_ev.clear()
+            self.thread = threading.Thread(target=self.run, name="tuff-view-mouse", daemon=True)
+            self.thread.start()
+        elif not on:
+            self.stop_ev.set()
+            if self.thread is not None and self.thread is not threading.current_thread():
+                self.thread.join(1.0)
+            self.thread = None
+            self.active = False
+            self.let_go()
+
+    def run(self):
+        home = None
+        try:
+            while not self.stop_ev.is_set():
+                if not self.ours():  # another window is in front: let go until ours is again
+                    if home is not None:
+                        self.let_go()
+                        home = None
+                        self.active = False
+                elif home is None:
+                    home = self.start()
+                    self.active = home is not None
+                else:
+                    x, y = self.where()
+                    dx, dy = x - home[0], y - home[1]
+                    if dx or dy:
+                        self.put(home[0], home[1])
+                        self.view._moved(dx / home[2], dy / home[2])
+                    home = self.refresh(home)
+                self.stop_ev.wait(self.RATE)
+        except Exception:
+            pass  # held no more; the page's moves are used again
+        finally:
+            self.active = False
+            self.let_go()
+
+
+class _WinHold(_MouseHold):
+    def __init__(self, view):
+        super().__init__(view)
+        import ctypes
+        from ctypes import wintypes
+        self.ct, self.wt = ctypes, wintypes
+        self.u = u = ctypes.WinDLL("user32", use_last_error=True)
+        u.GetForegroundWindow.restype = wintypes.HWND
+        for name in ("GetClientRect", "ClientToScreen", "GetCursorPos"):
+            getattr(u, name).restype = wintypes.BOOL
+        u.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        u.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+        u.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+        u.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+        u.ClipCursor.argtypes = [ctypes.POINTER(wintypes.RECT)]
+        self.dpi = getattr(u, "GetDpiForWindow", None)  # Windows 10 and later
+        if self.dpi is not None:
+            self.dpi.restype, self.dpi.argtypes = ctypes.c_uint, [wintypes.HWND]
+        self.checked = 0.0
+
+    def ours(self):
+        hwnd = self.view._hwnd
+        return bool(hwnd) and (self.u.GetForegroundWindow() or 0) == hwnd
+
+    def area(self):
+        """The window's inside, on the screen: its rectangle and its middle."""
+        hwnd, w = self.view._hwnd, self.wt
+        r, tl, br = w.RECT(), w.POINT(0, 0), w.POINT(0, 0)
+        if not self.u.GetClientRect(hwnd, self.ct.byref(r)) or r.right - r.left < 4 or r.bottom - r.top < 4:
+            return None
+        br.x, br.y = r.right, r.bottom
+        self.u.ClientToScreen(hwnd, self.ct.byref(tl))
+        self.u.ClientToScreen(hwnd, self.ct.byref(br))
+        return w.RECT(tl.x, tl.y, br.x, br.y)
+
+    def start(self):
+        r = self.area()
+        if r is None:
+            return None
+        self.u.ClipCursor(self.ct.byref(r))
+        scale = (self.dpi(self.view._hwnd) or 96) / 96 if self.dpi else 1.0  # screen pixels to the page's
+        home = ((r.left + r.right) // 2, (r.top + r.bottom) // 2, max(0.5, scale), (r.left, r.top, r.right, r.bottom))
+        self.put(home[0], home[1])
+        self.checked = time.monotonic()
+        return home
+
+    def refresh(self, home):
+        """Now and then: the window moved or changed size, so it's held in its new place."""
+        if time.monotonic() - self.checked < 0.25:
+            return home
+        self.checked = time.monotonic()
+        r = self.area()
+        if r is None or (r.left, r.top, r.right, r.bottom) == home[3]:
+            return home
+        return self.start()
+
+    def where(self):
+        p = self.wt.POINT()
+        self.u.GetCursorPos(self.ct.byref(p))
+        return p.x, p.y
+
+    def put(self, x, y):
+        self.u.SetCursorPos(int(x), int(y))
+
+    def let_go(self):
+        try:
+            self.u.ClipCursor(None)
+        except Exception:
+            pass
+
+
+class _MacHold(_MouseHold):
+    def __init__(self, view):
+        super().__init__(view)
+        import ctypes
+        import ctypes.util
+
+        class CGPoint(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+        self.ct, self.Point = ctypes, CGPoint
+        self.cg = cg = ctypes.cdll.LoadLibrary(ctypes.util.find_library("ApplicationServices")
+                                               or "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices")
+        self.cf = cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation")
+                                               or "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        cg.CGEventCreate.restype, cg.CGEventCreate.argtypes = ctypes.c_void_p, [ctypes.c_void_p]
+        cg.CGEventGetLocation.restype, cg.CGEventGetLocation.argtypes = CGPoint, [ctypes.c_void_p]
+        cg.CGWarpMouseCursorPosition.restype, cg.CGWarpMouseCursorPosition.argtypes = ctypes.c_int32, [CGPoint]
+        cg.CGAssociateMouseAndMouseCursorPosition.restype = ctypes.c_int32
+        cg.CGAssociateMouseAndMouseCursorPosition.argtypes = [ctypes.c_int32]
+        cf.CFRelease.restype, cf.CFRelease.argtypes = None, [ctypes.c_void_p]
+        self.where()  # it works here, or the browser's lock is used
+
+    def ours(self):
+        return True  # the page lets go when the window loses the focus (its blur)
+
+    def start(self):
+        x, y = self.where()  # where the click that locked it was: inside the window
+        return (x, y, 1.0)   # Quartz counts in points, as the page does
+
+    def refresh(self, home):
+        return home
+
+    def where(self):
+        e = self.cg.CGEventCreate(None)
+        if not e:
+            raise OSError("no mouse")
+        try:
+            p = self.cg.CGEventGetLocation(e)
+            return p.x, p.y
+        finally:
+            self.cf.CFRelease(e)
+
+    def put(self, x, y):
+        self.cg.CGWarpMouseCursorPosition(self.Point(x, y))
+        self.cg.CGAssociateMouseAndMouseCursorPosition(1)  # without this, a warp freezes the mouse for a moment
+
+    def let_go(self):
+        pass
+
+
 class ViewError(Exception):
     """Something went wrong with a window (it couldn't open, a file is missing...)."""
 
@@ -374,6 +571,9 @@ class View:
     """
 
     max_ahead = 2  # batches Python may be ahead of the page before frame() waits for it
+    _hold = None  # the mouse held for looking around (_MouseHold), where the computer can do that
+    _hwnd = 0  # the window's handle (Windows)
+    _mlock = threading.Lock()  # the mouse's moves are added up on two threads
 
     def __init__(self, title="Tuff", width=900, height=600, icon=None, resizable=True, frameless=False, fps=60,
                  background="#0b0e14", assets=None, on_error=None, debug=False, **options):
@@ -448,6 +648,9 @@ class View:
         # closed one, rather than raising ViewClosed: the program can then register its close handlers (atgui's
         # app:closed), and the first frame() or loop() runs them before the program ends.
         threading.Thread(target=self._send_loop, name="tuff-view-send", daemon=True).start()
+        self._hold = _MouseHold.make(self)
+        if self._hold is not None:
+            self.js("tv.nativeMouse(true)")  # the page stands in for the browser's pointer lock (no banner)
 
     # ------------------------------------------------ the window (main thread and pywebview's threads)
 
@@ -514,7 +717,7 @@ class View:
             return
         try:
             import ctypes
-            hwnd = int((window or self._win).native.Handle.ToInt64())
+            hwnd = self._hwnd = int((window or self._win).native.Handle.ToInt64())
             user32 = ctypes.windll.user32
             if not user32.IsWindowVisible(hwnd):
                 user32.ShowWindow(hwnd, 5)  # SW_SHOW
@@ -568,6 +771,8 @@ class View:
             self._closed = True
             self._inbox.append({"type": "close"})
             self._cond.notify_all()
+        if self._hold is not None:
+            self._hold.hold(False)
         if not self._debug:
             # pywebview answers the page's last calls on threads of its own, and one that lands after the window
             # is gone logs "Cannot access a disposed object" with a traceback. That's only noise once it's closed.
@@ -768,9 +973,15 @@ class View:
 
     def mouse_delta(self):
         """How far the mouse moved since the last call (works with the pointer locked, for mouse look)."""
-        d = (self._mdx, self._mdy)
-        self._mdx = self._mdy = 0.0
+        with self._mlock:
+            d = (self._mdx, self._mdy)
+            self._mdx = self._mdy = 0.0
         return d
+
+    def _moved(self, dx, dy):
+        with self._mlock:
+            self._mdx += dx
+            self._mdy += dy
 
     def _collect(self):
         with self._cond:
@@ -783,8 +994,10 @@ class View:
             t = e.get("type")
             if t == "mousemove":
                 self.mouse = (e["x"], e["y"])
-                self._mdx += e.get("dx", 0)
-                self._mdy += e.get("dy", 0)
+                if not (self._hold is not None and self._hold.active):  # (held, it measures the moves itself)
+                    self._moved(e.get("dx", 0), e.get("dy", 0))
+            elif t == "capture" and self._hold is not None:  # the page holds the mouse for looking around, or lets go
+                self._hold.hold(bool(e.get("on")))
             elif t == "keydown":
                 self._keys[str(e.get("code") or e.get("key")).lower()] = str(e.get("key")).lower()
             elif t == "keyup":
