@@ -2188,7 +2188,7 @@
 
     window.TuffStudio.init(window.TuffIDE);
     window.TuffEngine?.init(window.TuffIDE);
-    window.TuffWhatsNew?.init({ openWeb: (url) => api.openWeb(url) });
+    window.TuffWhatsNew?.init({ openWeb: (url) => api.openWeb(url), focusEditor: () => editor?.focus() });
     if (firstRun) {
       const introDone = playIntro();
       await openFolder(root);

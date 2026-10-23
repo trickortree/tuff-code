@@ -800,7 +800,7 @@ TuffCode's Tuff Engine tab (`Ctrl+Shift+G`) builds tgame games by clicking and d
 - Put new lines **above** any `while game:open():` loop.
 - Make the land with one line (`land = game:terrain(200)`) and change it with **one top-level line per edit**, like `land:hill(20, -10, 30, 8)`, so Tuff Engine can list them under the land, change their numbers and remove them.
 - Give a thing its physics with **one top-level line each, right after it**, like `crate:physics()`, `crate:mass(2)`, `crate:bounce(0.6)` or `crate:friction(0.4)`, so its Physics section in Tuff Engine shows and changes them.
-- Make a door, a key, a jump pad, a boost pad or a talking person with **one top-level line**, like `door = game:door(0, 0, -5)`, and put its `door:needs(key)`, `npc:say("Hi!")` or `lift:path(...)` line **right after it**, so Tuff Engine's 3D Add tab and its Objects list show them.
+- Make a door, a key, a jump pad, a boost pad or a talking person with **one top-level line**, like `door = game:door(0, 0, -5)`, and put its `door:needs(key)`, `npc:say("Hi!")` or `lift:path(...)` line **right after it**, so Tuff Engine's 3D Add tab and its Objects list show them. Write a path's spots as numbers, like `lift:path([[0, 1, -6], [8, 1, -6]], 3)`, so moving the platform in Tuff Engine moves its spots with it.
 - Add behaviour as a **func registered with one line**, like `game:every_frame coin_spin` or `coin:clicked coin_clicked`. Functions under a `# Tuff Engine:` comment were written by Tuff Engine, and it keeps that comment and `play_again` up to date as the game changes. Changing one is fine: Tuff Engine then shows it as the person's own code.
 
 ## App windows (tgui / mtgui)
