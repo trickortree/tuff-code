@@ -77,10 +77,18 @@
     car: svg('<path d="M1.5 11V8.8c0-.4.3-.8.7-.8h1.3l1.6-2.6c.2-.3.5-.4.8-.4h4.4c.3 0 .6.1.8.4L13 8h.8c.4 0 .7.4.7.8V11"/><circle cx="4.8" cy="11.3" r="1.6"/><circle cx="11.2" cy="11.3" r="1.6"/><path d="M6.4 11.3h3.2M5.6 8h4.8"/>'),
     ragdoll: svg('<circle cx="8" cy="3.3" r="1.8"/><path d="M8 5.1v5M4 7.6l4-1.2 4 1.8M8 10.1l-2.6 3.9M8 10.1l3 3.4"/>'),
     physics: svg('<circle cx="9.8" cy="9.8" r="3.7"/><path d="M2.5 2.5l3.2 3.2M2 6.8h2.6M6.8 2v2.6"/>'),
+    // The game kit's level pieces: a door, a key, a jump pad, a boost pad, a moving platform and a person who talks.
+    door: svg('<path d="M3.5 14.5V2.5h9v12"/><path d="M5.5 14.5V4.5h5v10"/><path d="M9 9.5h.01"/>'),
+    key: svg('<circle cx="5" cy="8" r="2.8"/><path d="M7.8 8h6.7M12 8v2.5M14 8v2"/>'),
+    jump_pad: svg('<path d="M2 13.5h12"/><rect x="3.5" y="10.5" width="9" height="3" rx="1"/><path d="M8 8V2.2M5.8 4.4L8 2.2l2.2 2.2"/>'),
+    boost_pad: svg('<path d="M2 13.5h12"/><path d="M3 4.5l4 3.5-4 3.5M8.5 4.5l4 3.5-4 3.5"/>'),
+    platform: svg('<rect x="3" y="8" width="10" height="2.5" rx="1"/><path d="M1.5 5h4M10.5 5h4M3.5 3l-2 2 2 2M12.5 3l2 2-2 2"/>'),
+    person: svg('<circle cx="6" cy="4" r="2"/><path d="M2.5 14v-3a3.5 3.5 0 017 0v3"/><path d="M10 2.5h4.5v3.5h-2l-1.5 1.5V6H10z"/>'),
   };
   ICON.terrain = ICON.land;
   ICON.sphere = ICON.ball;
   ICON.spawn = ICON.model;
+  ICON.lift = ICON.platform;
 
   // ---------------------------------------------------------------- reading the file
   const IMPORT_RE = /^(?:import|mention)\s+tgame\b/;
@@ -92,26 +100,31 @@
   const TERRAIN_RE = /^([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*):terrain\b\s*(.*)$/;
   const LAND_RE = /^([A-Za-z_]\w*):(style|hill|mountain|dip|lake|valley|raise|lower|smooth|flatten|water)\b\s*(.*)$/;
   const REG_RE = /^([A-Za-z_]\w*):(every_frame|on_key|every|after|clicked)\b\s*(.*)$/;
-  const MAKE_RE = /^(?:([A-Za-z_]\w*)\s*=\s*)?([A-Za-z_]\w*):(box|circle|line|text|image|sphere|cylinder|cone|plane|spawn|light|player|hud|hold|car|ragdoll)\b\s*(.*)$/;
-  const PROP_RE = /^([A-Za-z_]\w*):(speed|spin|on_edge|layer|turn_to|hide|label|solid|glow|align|scale|clicked|walk_speed|jump_height|move_to|physics|mass|bounce|friction|drive|engine)\b\s*(.*)$/;
+  const MAKE_RE = /^(?:([A-Za-z_]\w*)\s*=\s*)?([A-Za-z_]\w*):(box|circle|line|text|image|sphere|cylinder|cone|plane|spawn|light|player|hud|hold|car|ragdoll|door|jump_pad|boost_pad)\b\s*(.*)$/;
+  const PROP_RE = /^([A-Za-z_]\w*):(speed|spin|on_edge|layer|turn_to|hide|label|solid|glow|align|scale|clicked|walk_speed|jump_height|move_to|physics|mass|bounce|friction|drive|engine|say|path|needs)\b\s*(.*)$/;
   const FUNC_RE = /^func\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*:\s*$/;
   const SCORE_RE = /^score\s*=\s*(-?\d+)\s*$/;
   const MARK_RE = /^#\s*Tuff Engine:/;
   const NAME_RE = /^[A-Za-z_]\w*$/;
   const K2D = ['box', 'circle', 'line', 'text', 'image', 'hud'];
-  const K3D = ['box', 'sphere', 'cylinder', 'cone', 'plane', 'spawn', 'light', 'player', 'hud', 'car', 'ragdoll'];
+  const K3D = ['box', 'sphere', 'cylinder', 'cone', 'plane', 'spawn', 'light', 'player', 'hud', 'car', 'ragdoll', 'door', 'jump_pad', 'boost_pad'];
   const KHUD = ['text', 'box', 'circle', 'line', 'image'];
   // The lines that belong to a thing (after its own line), by what it is. Physics lines (crate:physics(),
   // crate:mass(2), crate:bounce(0.6), crate:friction(0.4)) belong to a 3D object; a car has drive and engine.
   const PHYSICS_PROPS = ['physics', 'mass', 'bounce', 'friction'];
+  // The game kit's: a person's speech bubble (npc:say("Hi!")), a moving platform's spots (lift:path(...)) and the key
+  // a door needs (door:needs(key)). A jump pad and a boost pad are objects.
+  const KIT_PROPS = ['say', 'path'];
+  const PIECES = ['door', 'jump_pad', 'boost_pad'];
   const FAMILY = {
     sprite: ['speed', 'spin', 'on_edge', 'layer', 'turn_to', 'hide', 'align', 'clicked'],
-    object: ['speed', 'spin', 'turn_to', 'hide', 'label', 'solid', 'glow', 'scale', 'clicked', ...PHYSICS_PROPS],
+    object: ['speed', 'spin', 'turn_to', 'hide', 'label', 'solid', 'glow', 'scale', 'clicked', ...PHYSICS_PROPS, ...KIT_PROPS],
     player: ['move_to', 'turn_to', 'walk_speed', 'jump_height'],
     car: ['drive', 'engine', 'clicked'],
     ragdoll: ['clicked'],
+    door: ['needs', 'turn_to', 'hide', 'clicked'],
   };
-  const family = (n) => (n.kind === 'player' || n.kind === 'car' || n.kind === 'ragdoll' ? n.kind : n.layer === 'world' ? 'object' : 'sprite');
+  const family = (n) => (['player', 'car', 'ragdoll', 'door'].includes(n.kind) ? n.kind : n.layer === 'world' ? 'object' : 'sprite');
   // The things the Inspector's Physics section is for, and the kinds of physics it writes (Off is no line).
   const PHYSICS_THINGS = ['box', 'sphere', 'cylinder', 'spawn'];
   const PHYSICS_KINDS = ['off', 'dynamic', 'static', 'kinematic'];
@@ -223,6 +236,9 @@
       if (node.kind === 'light') return { pre: 0, dim: 3, rest: [['color', 'white']] };
       if (node.kind === 'car') return { pre: 0, dim: 3, rest: [['color', 'red']] };
       if (node.kind === 'ragdoll') return { pre: 0, dim: 3, rest: [['color', 'blue']] };
+      if (node.kind === 'door') return { pre: 0, dim: 3, rest: [['color', 'wood']] };
+      if (node.kind === 'jump_pad') return { pre: 0, dim: 3, rest: [['power', 15]] };
+      if (node.kind === 'boost_pad') return { pre: 0, dim: 3, rest: [['power', 20]] };
       return { pre: 0, dim: 3, rest: [['size', node.kind === 'plane' ? 4 : 1], ['color', 'white']] };
     }
     switch (node.kind) {
@@ -755,7 +771,7 @@
     if (step?.model && !step.model.isDisposed()) step.model.pushStackElement();
   }
 
-  const BASE = { box: 'box', circle: 'circle', line: 'line', text: 'words', image: 'picture', sphere: 'ball', cylinder: 'cylinder', cone: 'cone', plane: 'plane', spawn: 'thing', light: 'lamp', player: 'player', car: 'car', ragdoll: 'dummy' };
+  const BASE = { box: 'box', circle: 'circle', line: 'line', text: 'words', image: 'picture', sphere: 'ball', cylinder: 'cylinder', cone: 'cone', plane: 'plane', spawn: 'thing', light: 'lamp', player: 'player', car: 'car', ragdoll: 'dummy', door: 'door', jump_pad: 'pad', boost_pad: 'boost' };
   const baseFor = (n) => (n.kind === 'spawn' && typeof n.args[0] === 'string' ? n.args[0].replace(/\.glb$/i, '').split(/[\\/]/).pop() : BASE[n.kind] || 'thing');
 
   // An edit in progress: one makeEditor, names that stay free inside it, and what goes at the end of the file.
@@ -837,7 +853,7 @@
     walk_speed: (a) => a[0] === 5, jump_height: (a) => a[0] === 1.2, physics: (a) => a[0] === 'off', drive: (a) => a[0] === false, engine: (a) => a[0] === 1,
   };
   // Physics and car lines always have brackets, like crate:physics() and crate:bounce(0.6).
-  const PAREN = new Set([...PHYSICS_PROPS, 'drive', 'engine']);
+  const PAREN = new Set([...PHYSICS_PROPS, 'drive', 'engine', ...KIT_PROPS, 'needs']);
   const propLine = (V, method, args) => (!args.length ? `${V}:${method}()` : args.length === 1 && !PAREN.has(method) ? `${V}:${method} ${fmt(args[0])}` : `${V}:${method}(${args.map(fmt).join(', ')})`);
 
   // A prop line (coin:spin 90): replaced where it is, or put after the thing's own lines; a default value removes it.
@@ -947,6 +963,10 @@
   const KIT_BUILDINGS = ['house', 'hut', 'sign', 'crate', 'fence'];
   const SHAPES3 = { box: ['box', 'box', 'orange'], ball: ['sphere', 'ball', 'teal'], cylinder: ['cylinder', 'cylinder', 'gray'], cone: ['cone', 'cone', 'red'], plane: ['plane', 'plane', 'sand'] };
 
+  // A key no door needs yet (spawn("key")), for a new door.
+  const freeKey = (P) => P.nodes.find((m) => m.kind === 'spawn' && m.args[0] === 'key' && m.var
+    && !P.nodes.some((d) => d.kind === 'door' && d.props.needs?.args[0]?.raw === m.var));
+
   const Edits = {
     // A tile from Add (spec §9.1, §9.2): its lines, its behaviours and what it needs, as one undo step. Gives the new key.
     add(P, id) {
@@ -1055,6 +1075,35 @@
             break;
           }
           case 'ragdoll': put(nm('dummy'), ''); lines = [`${V} = ${G}:ragdoll(${num(X)}, 0, ${num(Z)}, "blue")`]; break;
+          // The game kit's level pieces. A door and a key find each other: a new door needs a key no door needs yet,
+          // and a new key opens a door that doesn't need one yet (its door:needs line goes after the key's).
+          case 'door': {
+            const n = nm('door');
+            const key = freeKey(P);
+            put(n, `${n} = ${G}:door(${num(X)}, 0, ${num(Z)}, "wood")`);
+            if (key) { lines.push(`${n}:needs(${key.var})`); say = `${cap(n)} needs ${key.var} now: it's locked until the player picks it up.`; }
+            break;
+          }
+          case 'key': {
+            const n = nm('key');
+            const door = P.nodes.find((m) => m.kind === 'door' && m.var && !m.props.needs);
+            put(n, `${n} = ${G}:spawn("key", ${num(X)}, 0, ${num(Z)})`);
+            if (door) { lines.push(`${door.var}:needs(${n})`); say = `${cap(door.var)} needs ${n} now: it's locked until the player picks it up.`; }
+            else say = 'Add a Door for the key to open.';
+            break;
+          }
+          case 'jump_pad': put(nm('pad'), ''); lines = [`${V} = ${G}:jump_pad(${num(X)}, 0, ${num(Z)}, 15)`]; break;
+          case 'boost_pad': put(nm('boost'), ''); lines = [`${V} = ${G}:boost_pad(${num(X)}, 0, ${num(Z)}, 20)`]; break;
+          case 'platform': {
+            const n = nm('lift');
+            put(n, `${n} = ${G}:box(${num(X)}, 1, ${num(Z)}, [4, 0.4, 4], "stone")`, `${n}:path([[${num(X)}, 1, ${num(Z)}], [${num(X + 8)}, 1, ${num(Z)}]], 3)`);
+            break;
+          }
+          case 'person': {
+            const n = nm('person');
+            put(n, `${n} = ${G}:spawn("person", ${num(X)}, 0, ${num(Z)})`, `${n}:say("Hi there!", 0)`);
+            break;
+          }
           case 'island': case 'ground':
             if (P.settings.island || P.settings.ground || P.land) return null;
             settingEdit(pl, id, id === 'island' ? [80] : ['grass', 400]);
@@ -1663,7 +1712,7 @@ func coin_collect(dt):
 
   const KIND_LABEL = (n) => {
     if (n.kind === 'spawn') { const m = typeof n.args[0] === 'string' ? n.args[0] : ''; return /\.glb$/i.test(m) ? 'Model' : cap(m || 'Model'); }
-    return { box: 'Box', circle: 'Circle', line: 'Line', text: 'Text', image: 'Picture', sphere: 'Ball', cylinder: 'Cylinder', cone: 'Cone', plane: 'Plane', light: 'Light', player: 'Player', car: 'Car', ragdoll: 'Ragdoll' }[n.kind] || cap(n.kind);
+    return { box: 'Box', circle: 'Circle', line: 'Line', text: 'Text', image: 'Picture', sphere: 'Ball', cylinder: 'Cylinder', cone: 'Cone', plane: 'Plane', light: 'Light', player: 'Player', car: 'Car', ragdoll: 'Ragdoll', door: 'Door', jump_pad: 'Jump pad', boost_pad: 'Boost pad' }[n.kind] || cap(n.kind);
   };
   // What kind of physics a thing's code gives it: 'off' (no line), 'dynamic', 'static', 'kinematic', or 'code' (worked
   // out by code). A car and a ragdoll always use physics.
@@ -2335,6 +2384,14 @@ func coin_collect(dt):
         { id: 'car', label: 'Car', icon: ICON.car, tip: 'A car the arrow keys drive, with wheels and springs (press Play)' },
         { id: 'ragdoll', label: 'Ragdoll', icon: ICON.ragdoll, tip: 'A floppy person that falls over when it\'s hit (press Play)' },
       ]],
+      ['Level pieces', [
+        { id: 'door', label: 'Door', icon: ICON.door, tip: 'A door that swings open when the player walks into it (a Key can lock it)' },
+        { id: 'key', label: 'Key', icon: ICON.key, tip: 'A key the player picks up to open a locked door' },
+        { id: 'jump_pad', label: 'Jump pad', icon: ICON.jump_pad, tip: 'Launches the player up into the air (press Play)' },
+        { id: 'boost_pad', label: 'Boost pad', icon: ICON.boost_pad, tip: 'Shoots the player forward the way it faces (press Play)' },
+        { id: 'platform', label: 'Moving platform', icon: ICON.platform, tip: 'A platform that moves there and back, and the player rides it (press Play)' },
+        { id: 'person', label: 'Talking person', icon: ICON.person, tip: 'A person with a speech bubble over them' },
+      ]],
       ['Nature', kit(KIT_NATURE)],
       ['Buildings', kit(KIT_BUILDINGS)],
       ['Shapes', [
@@ -2889,8 +2946,9 @@ func coin_collect(dt):
     // What it does comes first (Chases → speed), then how it looks, its physics, and how it moves by itself (not for a
     // thing physics moves, unless its code moves it already: that fights the physics, so it can be taken out here).
     const physical = node.kind === 'car' || node.kind === 'ragdoll';
-    const moves = !physical && (physicsOf(node) !== 'dynamic' || node.props.speed || node.props.spin);
-    if (!hud && !physical && node.kind !== 'player' && node.kind !== 'light') form.append(behSection(P, node));
+    const piece = PIECES.includes(node.kind);  // a door and the pads stay where they're put
+    const moves = !physical && !piece && (physicsOf(node) !== 'dynamic' || node.props.speed || node.props.spin);
+    if (!hud && !physical && !piece && node.kind !== 'player' && node.kind !== 'light') form.append(behSection(P, node));
     if (node.kind !== 'player') form.append(lookSection(P, node, setA, setP));
     if (is3 && (PHYSICS_THINGS.includes(node.kind) || physical)) form.append(physicsSection(node, setP));
     if (!hud && moves && node.kind !== 'player' && node.kind !== 'light') form.append(movesSection(node, setP));
@@ -2958,11 +3016,15 @@ func coin_collect(dt):
         }, true)), k === 'box' ? 'Width, height and depth' : k === 'plane' ? 'Width and depth' : 'Width and height'));
       }
     }
-    if (k !== 'image') {
+    if (k !== 'image' && k !== 'jump_pad' && k !== 'boost_pad') {  // a pad glows its own colors
       const c = f('color');
       kids.push(fieldEl(colorLabel('Color', c), colorPick(c, (v) => setA({ color: v }))));
     }
-    if (k === 'light' || k === 'car' || k === 'ragdoll') return sec('Look', kids);
+    if (k === 'jump_pad' || k === 'boost_pad') {
+      kids.push(numbers([['Power', f('power'), (v) => v > 0 && setA({ power: v3(v) }), { step: 1, min: 1, title: k === 'jump_pad' ? 'How hard it launches the player up, in metres a second' : 'How hard it shoots the player forward, in metres a second' }]]));
+      return sec('Pad', kids);
+    }
+    if (k === 'light' || k === 'car' || k === 'ragdoll' || k === 'door') return sec('Look', kids);
     if (!is3) {
       kids.push(numbers([
         ['Layer', isNum(node.props.layer?.args[0]) ? node.props.layer.args[0] : 0, (v) => setP('layer', [v2(v)]), { title: 'Higher layers are drawn on top' }],

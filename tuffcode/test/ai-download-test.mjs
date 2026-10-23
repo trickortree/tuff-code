@@ -540,10 +540,14 @@ try {
   // went into a quarter of Tuff Bench's console messages. "Land and lighting (3D)" is under tgame too.
   const consoleMsgs = ['Make a program that shows these three lines:\nGood morning, campers!\nBreakfast is at 8', 'Make a program that adds up the numbers in a list and shows the total.', 'Make a guessing game where the secret number is 42.'].map((q) => ai.buildMessage({ question: q }, ai.improve({ question: q })));
   const windowMsg = ai.buildMessage({ question: 'Make an mtgui window with a heading and a button' }, ai.improve({ question: 'Make an mtgui window with a heading and a button' }));
-  check('A console or window request never gets the guide\'s tgame sections', [...consoleMsgs, windowMsg].every((t) => !/^#+ (tgame|Menus, buttons and screens in games|Land and lighting \(3D\)|Physics|Games Tuff Engine can edit)/m.test(t)), [...consoleMsgs, windowMsg].map((t) => t.match(/^#+ .*/gm)));
+  check('A console or window request never gets the guide\'s tgame sections', [...consoleMsgs, windowMsg].every((t) => !/^#+ (tgame|Menus, buttons and screens in games|Land and lighting \(3D\)|Physics|Game kit|Games Tuff Engine can edit)/m.test(t)), [...consoleMsgs, windowMsg].map((t) => t.match(/^#+ .*/gm)));
   // "Physics" is under tgame too: a game with physics in it gets it.
   const physicsAsk = { question: 'Make a 3D game with physics where a car crashes into a tower of crates and a ragdoll flops over' };
   const physicsMsg = ai.buildMessage(physicsAsk, ai.improve(physicsAsk));
+  // So is "Game kit": a game with health bars, a countdown, a minimap or a door and a key gets it.
+  const kitAsk = { question: 'Make a 3D game with a minimap, a countdown, an enemy with a health bar and a locked door that needs a key' };
+  const kitMsg = ai.buildMessage(kitAsk, ai.improve(kitAsk));
+  check('A game with a minimap, a countdown, a health bar and a door with a key gets the tgame and Game kit sections', ai.improve(kitAsk).target === 'game' && /^### tgame/m.test(kitMsg) && /^#### Game kit$/m.test(kitMsg), kitMsg.match(/^#+ .*/gm));
   check('A game with physics (a car, crates, a ragdoll) gets the tgame and Physics sections', ai.improve(physicsAsk).target === 'game' && /^### tgame/m.test(physicsMsg) && /^#### Physics$/m.test(physicsMsg), physicsMsg.match(/^#+ .*/gm));
   const fixIn = { question: 'It should count to 3. Can you fix it?', file: 'C:\\p\\count.tuf', code: 'say "Counting"\nfor n in range(1, 3)\n    say n\n', runError: 'Tuff error on line 2: expected ":"\n  2 | for n in range(1, 3)\n                       ^' };
   const card = ai.improve(fixIn);
