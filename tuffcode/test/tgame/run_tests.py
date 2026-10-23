@@ -1176,6 +1176,244 @@ def t_ui_3d(c):
     preview_leaves_menus_out(c, "ui_3d.tuf")
 
 
+# ---------------------------------------------------------------- splash screens, main menus and the mouse
+
+def splash_of(d):
+    return ui_of(d).get("splash") or {}
+
+
+def dumps_by_name(r):
+    """A run's dumps by their name without the prefix ("m3d_note.json" -> "note"); a missing one is {}."""
+    import collections
+    return collections.defaultdict(dict, {k.split("_", 1)[1][:-5]: v for k, v in r.dumps.items()})
+
+
+def menu_shown(d, title):
+    return any(s["title"] == title and s["shown"] and s.get("main") for s in ui_of(d).get("screens", []))
+
+
+def t_menu_2d(c):
+    """games/menu_2d.tuf: three splash screens (a picture, some text, "Made with Tuff") play in order over a black
+    window, Space skips the first, the others end by themselves; the main menu waits behind them and shows after them
+    with the game paused; its clicks aren't the game's; How to play changes its text and Play starts the game; P
+    brings the menu back; Quit closes the game."""
+    r = play("menu_2d", game("menu_2d.tuf"), [
+        {"at": 0.6, "dump": "m2d_logo.json"}, {"at": 0.65, "shot": "m2d_logo.png"},
+        {"at": 0.9, "key": "space"},
+        {"at": 1.6, "dump": "m2d_text.json"}, {"at": 1.65, "shot": "m2d_text.png"},
+        {"at": 3.0, "dump": "m2d_tuff.json"}, {"at": 3.05, "shot": "m2d_tuff.png"},
+        {"at": 4.8, "dump": "m2d_menu.json"}, {"at": 4.85, "shot": "m2d_menu.png"},
+        {"at": 4.9, "hold": "right", "for": 0.3},
+        {"at": 5.3, "click": [60, 470]},
+        {"at": 5.4, "click_ui": "How to play"},
+        {"at": 5.6, "dump": "m2d_how.json"},
+        {"at": 5.7, "click_ui": "Play"},
+        {"at": 5.9, "dump": "m2d_play.json"},
+        {"at": 6.0, "hold": "right", "for": 0.4},
+        {"at": 6.6, "dump": "m2d_moved.json"},
+        {"at": 6.7, "click": [700, 120]},
+        {"at": 6.8, "key": "p"},
+        {"at": 7.0, "dump": "m2d_back.json"}, {"at": 7.05, "call": "report"},
+        {"at": 7.2, "click_ui": "Quit"},
+    ])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    d = dumps_by_name(r)
+    x = {k: (v.get("sprites") or [[None, None]])[0][1] for k, v in d.items()}  # the player is the first sprite made
+    logo, text, tuff, menu = d["logo"], d["text"], d["tuff"], d["menu"]
+    c.check(splash_of(logo).get("items") == ["logo.png", "Pip Studio presents", "Made with Tuff"],
+            "game:splash queues a picture, some text and game:splash() (\"Made with Tuff\"), in order", splash_of(logo).get("items"))
+    c.check(splash_of(logo).get("playing") and splash_of(logo).get("ended") == [] and logo.get("paused") and logo.get("time") == 0
+            and menu_shown(logo, "Star Hopper"),
+            "the first plays at the start, with the game paused (time 0) and the main menu waiting behind it",
+            (splash_of(logo), logo.get("paused"), logo.get("time")))
+    c.check(splash_of(text).get("ended") == ["skipped"], "Space skips the picture (3 s) to the text", splash_of(text).get("ended"))
+    c.check(splash_of(tuff).get("ended") == ["skipped", "timed"] and splash_of(tuff).get("playing"),
+            "the text ends by itself after its 1.2 s, and Made with Tuff plays", splash_of(tuff))
+    c.check(not splash_of(menu).get("playing") and splash_of(menu).get("ended") == ["skipped", "timed", "timed"]
+            and menu_shown(menu, "Star Hopper") and menu.get("paused") and menu.get("time") == 0,
+            "after the last one the main menu shows, and the game stays paused", (splash_of(menu), menu.get("paused"), menu.get("time")))
+    how = d.get("how", {})
+    c.check("Arrow keys move. Catch the gold stars." in ui_of(how).get("texts", []) and menu_shown(how, "Star Hopper")
+            and how.get("time") == 0 and x.get("how") == x.get("menu") == 400,
+            "How to play changes the menu's text; the menu stays and holding right doesn't move the player",
+            (ui_of(how).get("texts"), x.get("menu"), x.get("how")))
+    playing = d.get("play", {})
+    c.check(not menu_shown(playing, "Star Hopper") and playing.get("paused") is False, "Play hides the menu and the game runs",
+            ui_of(playing).get("screens"))
+    c.check((x.get("moved") or 0) > (x.get("play") or 0) + 40, f"then the player moves (x {x.get('moved')})", (x.get("play"), x.get("moved")))
+    back = d.get("back", {})
+    c.check(menu_shown(back, "Star Hopper") and back.get("paused"), "P shows the main menu again (menu:show), pausing the game",
+            ui_of(back).get("screens"))
+    c.check("plays 1, game clicks 1" in r.lines, "the clicks on the splash screens and the menu aren't the game's (1 game click: the one on the game)",
+            r.lines)
+    shots = r.shots
+    s = shots.get("m2d_logo.png")
+    c.check(s and color_share(s, (51, 120, 239), 60, (0.36, 0.3, 0.64, 0.7)) > 0.05 and color_share(s, (0, 0, 0), 6, (0, 0, 0.2, 0.2)) > 0.95,
+            "the picture splash: the logo in the middle, on black", s)
+    s = shots.get("m2d_text.png")
+    c.check(s and color_share(s, (255, 255, 255), 30, (0.2, 0.43, 0.8, 0.58)) > 0.08 and color_share(s, (0, 0, 0), 6, (0, 0, 1, 0.35)) > 0.98,
+            "the text splash: big white words in the middle, on black", s)
+    s = shots.get("m2d_tuff.png")
+    c.check(s and color_share(s, (44, 158, 239), 70, (0.36, 0.4, 0.46, 0.6)) > 0.05 and color_share(s, (230, 238, 252), 50, (0.48, 0.47, 0.64, 0.58)) > 0.08,
+            "Made with Tuff: the dotted T in Tuff's blue, and the word Tuff", s)
+    s = shots.get("m2d_menu.png")
+    c.check(s and color_share(s, ACCENT, 50, (0.3, 0.5, 0.7, 0.56)) > 0.5, "the main menu's Play button is wide, in the middle, in atgui's blue", s)
+    preview_leaves_menus_out(c, "menu_2d.tuf")
+
+
+MOUSE_PROBE = ("const s = [...tv.objs.values()].find((n) => n.kind === 'scene');"
+               "tv.emit('tg-autopilot', { message: 'mouse ' + JSON.stringify({ clicklock: !!s.clicklock, "
+               "want: s.el.hasAttribute('data-tg-want'), locked: !!document.pointerLockElement }) });")
+# The browser saying no to locking the mouse (as one does outside a click), and then allowing it again.
+REFUSE_LOCK = ("window.__lockWas = Element.prototype.requestPointerLock;"
+               "Element.prototype.requestPointerLock = function () { return Promise.reject(new DOMException('not now', 'NotAllowedError')); };")
+ALLOW_LOCK = "Element.prototype.requestPointerLock = window.__lockWas;"
+
+
+def t_menu_3d(c):
+    """games/menu_3d.tuf, a first-person world: a click skips the splash; the main menu shows with the world paused and
+    the mouse free, and its clicks (Settings and its Back, the backdrop) never lock it or reach the game; Play hides
+    it and asks to lock the mouse in that click; E opens a note that lets go of the mouse, and Close locks it again;
+    world:unlock_mouse frees it for good (a note no longer locks it again), world:auto_lock(false) stops clicks from
+    locking it (and Play), world:lock_mouse asks for it (or the next click on the game does), world:mouse_locked."""
+    r = play("menu_3d", game("menu_3d.tuf"), [
+        {"at": 0.7, "dump": "m3d_splash.json"}, {"at": 0.75, "shot": "m3d_splash.png"},
+        {"at": 0.9, "click_center": True},
+        {"at": 1.8, "dump": "m3d_menu.json"}, {"at": 1.85, "shot": "m3d_menu.png"},
+        {"at": 1.9, "hold": "w", "for": 0.3},
+        {"at": 2.3, "click": [480, 580]},
+        {"at": 2.4, "click_ui": "Settings"},
+        {"at": 2.6, "dump": "m3d_settings.json"}, {"at": 2.65, "shot": "m3d_settings.png"},
+        {"at": 2.8, "click_ui": "Back"},
+        {"at": 3.0, "dump": "m3d_back.json"},
+        {"at": 3.1, "click_ui": "Play"},
+        {"at": 3.3, "dump": "m3d_play.json"},
+        {"at": 3.35, "lock": True},
+        {"at": 3.4, "hold": "w", "for": 0.4},
+        {"at": 3.9, "dump": "m3d_walked.json"},
+        {"at": 3.95, "key": "escape"},
+        {"at": 4.0, "key": "e"},
+        {"at": 4.2, "dump": "m3d_note.json"}, {"at": 4.25, "shot": "m3d_note.png"},
+        {"at": 4.3, "click_ui": "Close"},
+        {"at": 4.5, "dump": "m3d_closed.json"},
+        {"at": 4.6, "call": "free"},
+        {"at": 4.7, "dump": "m3d_free.json"},
+        {"at": 4.8, "key": "e"},
+        {"at": 4.9, "click_ui": "Close"},
+        {"at": 5.1, "dump": "m3d_free_note.json"},
+        {"at": 5.2, "call": "manual"},
+        {"at": 5.25, "js": REFUSE_LOCK},
+        {"at": 5.3, "call": "grab"},
+        {"at": 5.5, "dump": "m3d_grab.json"}, {"at": 5.55, "js": MOUSE_PROBE},
+        {"at": 5.6, "click_center": True},
+        {"at": 5.7, "js": ALLOW_LOCK},
+        {"at": 5.8, "dump": "m3d_next.json"},
+        {"at": 5.9, "call": "free"},
+        {"at": 6.0, "click_center": True},
+        {"at": 6.2, "dump": "m3d_nolock.json"},
+        {"at": 6.3, "key": "m"},
+        {"at": 6.4, "click_ui": "Play"},
+        {"at": 6.6, "dump": "m3d_manual.json"}, {"at": 6.65, "call": "report"},
+        {"at": 6.8, "close": True},
+    ])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    d = dumps_by_name(r)
+    names = ("splash", "menu", "settings", "back", "play", "walked", "note", "closed", "free", "free_note", "grab", "next",
+             "nolock", "manual")
+    z = {k: (d[k].get("player") or [None] * 5)[2] for k in names}
+    mouse = {k: d[k].get("mouse") or {} for k in names}
+    asks = {k: mouse[k].get("asks") for k in names}
+    splash, menu = d["splash"], d["menu"]
+    c.check(splash_of(splash).get("playing") and splash.get("paused") and splash.get("time") == 0 and not mouse["splash"].get("locked"),
+            "the splash plays first: the world is paused and the mouse free", (splash_of(splash), splash.get("paused"), mouse["splash"]))
+    c.check(splash_of(menu).get("ended") == ["skipped"] and menu_shown(menu, "Forest Notes") and menu.get("paused") and menu.get("time") == 0,
+            "a click skips it, and the main menu shows with the world paused", (splash_of(menu), ui_of(menu).get("screens")))
+    c.check(not mouse["menu"].get("locked") and not menu.get("locked") and asks["menu"] == 0,
+            "the click on the splash didn't lock the mouse (or ask to)", (mouse["menu"], menu.get("locked")))
+    settings, back = d.get("settings", {}), d.get("back", {})
+    c.check(screen_shown(settings, "Settings") and menu_shown(settings, "Forest Notes") and settings.get("paused"),
+            "Settings opens a screen over the main menu", ui_of(settings).get("screens"))
+    c.check(not screen_shown(back, "Settings") and menu_shown(back, "Forest Notes") and back.get("time") == 0 and z.get("back") == z.get("menu") == 0,
+            "Back closes it, the menu stays, and W held on the menu didn't walk", (ui_of(back).get("screens"), z.get("menu"), z.get("back")))
+    c.check(all(asks[k] == 0 and not mouse[k].get("locked") and not d[k].get("locked") for k in ("settings", "back")),
+            "the menu's clicks (its backdrop, Settings, Back) never lock the mouse or ask to", {k: (mouse[k], d[k].get("locked")) for k in ("settings", "back")})
+    playing = d.get("play", {})
+    m = mouse["play"]
+    c.check(not menu_shown(playing, "Forest Notes") and playing.get("paused") is False, "Play hides the main menu and the world runs",
+            ui_of(playing).get("screens"))
+    c.check(asks["play"] == 1 and (m.get("locked") or m.get("want")),
+            "and that click asks the page to lock the mouse for looking around (locked now, or on the next click)", m)
+    c.check((z.get("walked") or 0) < (z.get("play") or 0) - 0.5, f"W walks (z {z.get('walked')})", (z.get("play"), z.get("walked")))
+    note = d.get("note", {})
+    c.check(screen_shown(note, "A note") and note.get("paused") and not mouse["note"].get("locked") and not note.get("locked")
+            and mouse["note"].get("relock"), "E opens the note: the world pauses and the mouse is let go", (mouse["note"], note.get("locked")))
+    closed = d.get("closed", {})
+    c.check(not screen_shown(closed, "A note") and closed.get("paused") is False and asks["closed"] == asks["note"] + 1
+            and mouse["closed"].get("locked"), "Close hides it and locks the mouse again, as it was", (mouse["note"], mouse["closed"]))
+    free = mouse["free"]
+    c.check(not free.get("locked") and not free.get("want") and not free.get("relock") and not d["free"].get("locked"),
+            "world:unlock_mouse frees it (mouse_locked() is false)", free)
+    c.check(asks["free_note"] == asks["free"] and not mouse["free_note"].get("locked"),
+            "and keeps it free: the note opens and closes without locking it again", (mouse["free"], mouse["free_note"]))
+    grab = mouse["grab"]
+    probe = next((json.loads(line.split("mouse ", 1)[1]) for line in r.lines if line.startswith("[autopilot] mouse ")), {})
+    c.check(grab.get("auto") is False and probe.get("clicklock") is False,
+            "world:auto_lock(false): clicks on the game no longer lock the mouse (the page's scene too)", (grab, probe))
+    c.check(asks["grab"] == asks["free_note"] + 1 and grab.get("want") and probe.get("want") and not grab.get("locked"),
+            "world:lock_mouse asks to lock it now; when the browser says no, the next click on the game will", (grab, probe))
+    c.check(asks["next"] == asks["grab"] + 1, "... and that next click does ask, even with auto_lock(false)", (asks["grab"], asks["next"]))
+    nolock = d.get("nolock", {})
+    c.check(asks["nolock"] == asks["next"] and not nolock.get("locked") and not mouse["nolock"].get("locked"),
+            "after world:unlock_mouse with auto_lock(false), a click on the game leaves the mouse free", mouse["nolock"])
+    manual = d.get("manual", {})
+    c.check(not menu_shown(manual, "Forest Notes") and asks["manual"] == asks["nolock"] and not manual.get("locked"),
+            "M shows the menu again, and with auto_lock(false) Play doesn't lock the mouse", (mouse["manual"], ui_of(manual).get("screens")))
+    c.check("plays 2, game clicks 2, locked false" in r.lines,
+            "world:mouse_locked() says false; only the two clicks on the world were the game's (not Escape, the menus' or the splash's)",
+            [x for x in r.lines if x.startswith("plays")])
+    shots = r.shots
+    s = shots.get("m3d_splash.png")
+    c.check(s and color_share(s, (255, 255, 255), 30, (0.2, 0.44, 0.8, 0.58)) > 0.08 and color_share(s, (0, 0, 0), 6, (0, 0, 1, 0.35)) > 0.98,
+            "the splash covers the world in black, with its words in the middle", s)
+    s = shots.get("m3d_menu.png")
+    c.check(s and color_share(s, ACCENT, 50, (0.33, 0.51, 0.67, 0.57)) > 0.5, "the main menu's Play button over the dimmed world", s)
+    s = shots.get("m3d_settings.png")
+    c.check(s and color_share(s, CARD, 12, (0.3, 0.36, 0.7, 0.64)) > 0.3, "the Settings screen is a card over the main menu", s)
+    s = shots.get("m3d_note.png")
+    c.check(s and color_share(s, CARD, 12, (0.3, 0.38, 0.7, 0.62)) > 0.3, "the note is a card in the middle", s)
+    preview_leaves_menus_out(c, "menu_3d.tuf")
+
+
+def t_menu_start(c):
+    """games/menu_start.tuf: a splash screen before a start screen (game:start_screen works as before): Enter during
+    the splash only skips it (the start screen stays, nothing locks), then Enter starts the game, runs start:clicked
+    and asks the page to lock the mouse."""
+    r = play("menu_start", game("menu_start.tuf"), [
+        {"at": 0.5, "dump": "mst_splash.json"},
+        {"at": 0.6, "key": "enter"},
+        {"at": 1.4, "dump": "mst_start.json"}, {"at": 1.45, "shot": "mst_start.png"},
+        {"at": 1.6, "key": "enter"},
+        {"at": 1.8, "dump": "mst_play.json"}, {"at": 1.85, "call": "report"},
+        {"at": 2.0, "close": True},
+    ])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    d = dumps_by_name(r)
+    splash, start, playing = d["splash"], d["start"], d["play"]
+    c.check(splash_of(splash).get("playing") and screen_shown(splash, "Cave Run") and splash.get("paused"),
+            "the splash plays over the start screen, which waits", (splash_of(splash), ui_of(splash).get("screens")))
+    c.check(splash_of(start).get("ended") == ["skipped"] and screen_shown(start, "Cave Run") and start.get("paused") and start.get("time") == 0
+            and ui_of(start).get("lock_asks") == 0, "Enter skips the splash only: the start screen still shows, and nothing asked to lock the mouse",
+            (splash_of(start), ui_of(start).get("screens"), ui_of(start).get("lock_asks")))
+    c.check(not screen_shown(playing, "Cave Run") and playing.get("paused") is False and ui_of(playing).get("lock_asks", 0) >= 1
+            and "starts 1" in r.lines, "then Enter starts the game as before: start:clicked runs and the page is asked to lock the mouse",
+            (ui_of(playing).get("screens"), ui_of(playing).get("lock_asks"), r.lines[-2:]))
+    s = r.shots.get("mst_start.png")
+    c.check(s and color_share(s, ACCENT, 50, (0.4, 0.6, 0.6, 0.72)) > 0.15, "the start screen's hint shows once the splash is gone", s)
+
+
 # ---------------------------------------------------------------- Tuff Engine's preview (tuff.py --scene)
 
 def scene(program, source=None, env=None, timeout=30):
@@ -1571,6 +1809,11 @@ def t_editor(c):
     c.check(all(m in t["methods"] and "tgame" in t["methods"][m][1] for m in ui), "game:panel, :screen, :start_screen and :shown have tgame hover docs",
             [m for m in ui if m not in t["methods"]])
     c.check(all(m in t["games"] for m in ui), "a tgame file offers them after a ':'", [m for m in ui if m not in t["games"]])
+    intro = ("splash", "main_menu", "lock_mouse", "unlock_mouse", "mouse_locked", "auto_lock")
+    c.check(all(m in t["methods"] and t["methods"][m][1].startswith("tgame") for m in intro) and all(m in t["games"] for m in intro)
+            and not any(m in t["plain"] for m in intro),
+            "game:splash, :main_menu and the world's mouse methods have tgame hover docs, offered in tgame files only",
+            [m for m in intro if m not in t["methods"] or m not in t["games"] or m in t["plain"]])
     # The physics methods, from the checker's own tables (they're there before tgame's tables list them).
     import tuff
     physics = sorted({m for kind in tuff.PHYSICS_INPUTS.values() for m in kind})
@@ -1628,7 +1871,7 @@ GOOD = ["snake.tuf", "breakout.tuf", "snake3d.tuf", "axe_sim.tuf", "features_2d.
         "perf_2d.tuf", "perf_2d_speed.tuf", "perf_3d.tuf", "perf_3d_move.tuf", "callback.tuf", "errors.tuf", "top_error.tuf",
         "churn.tuf", "pause_key.tuf", "hud_3d.tuf", "terrain_walk.tuf", "terrain_look.tuf", "terrain_dig.tuf",
         "ui_2d.tuf", "ui_3d.tuf", "physics_drop.tuf", "physics_tower.tuf", "physics_player.tuf", "physics_car.tuf",
-        "physics_ragdoll.tuf", "physics_2d.tuf"]
+        "physics_ragdoll.tuf", "physics_2d.tuf", "menu_2d.tuf", "menu_3d.tuf", "menu_start.tuf"]
 BAD = [
     ('game = tgame.window("x")\ngame:rect(1, 2)\n', "A game doesn't have :rect. Use :box instead."),
     ('game = tgame.window("x")\nb = game:box(1, 2)\nb:moov(1, 2)\n', "A sprite doesn't have :moov. Did you mean :move?"),
@@ -1703,8 +1946,8 @@ BAD = [
     ('game = tgame.window("x")\ngame:terrain(100)\n', "A game doesn't have :terrain."),
     ('game = tgame.window("x")\ngame:panel "top lft"\n', 'not "top lft". Did you mean "top left"?'),
     ('w = tgame.world("x")\nw:panel("middle", 3)\n', "w:panel got the wrong number of inputs (2)."),
-    ('game = tgame.window("x")\ngame:menu "Shop"\n', "A game doesn't have :menu. Use :screen instead."),
-    ('w = tgame.world("x")\nw:title_screen "Go"\n', "A world doesn't have :title_screen. Use :start_screen instead."),
+    ('game = tgame.window("x")\ngame:menu "Shop"\n', "A game doesn't have :menu. Use :main_menu instead."),
+    ('w = tgame.world("x")\nw:title_screen "Go"\n', "A world doesn't have :title_screen. Use :splash instead."),
     # Menus, buttons and screens: where a panel goes (with "did you mean"), the inputs of game:panel, game:screen
     # and game:start_screen, the widgets on them (checked like atgui's), and widgets asked of the game or the HUD.
     ('game = tgame.window("x")\nbar = game:panel("top-centre")\n',
@@ -1739,8 +1982,31 @@ BAD = [
      "A game doesn't have :button. Buttons, text boxes and other widgets go on a panel or a screen: bar = game:panel(\"top left\"), then bar:button(...)"),
     ('w = tgame.world("x")\nw:slider(0, 10, 5)\n', "A world doesn't have :slider. Buttons, text boxes and other widgets go on a panel or a screen"),
     ('game = tgame.window("x")\nhud = game:hud()\nhud:button("Shop")\n', "A hud doesn't have :button. The HUD only draws."),
-    ('game = tgame.window("x")\ngame:menu("Shop")\n', "A game doesn't have :menu. Use :screen instead."),
-    ('w = tgame.world("x")\nw:title_screen("Go")\n', "A world doesn't have :title_screen. Use :start_screen instead."),
+    ('game = tgame.window("x")\ngame:menu("Shop")\n', "A game doesn't have :menu. Use :main_menu instead."),
+    ('w = tgame.world("x")\nw:title_screen("Go")\n', "A world doesn't have :title_screen. Use :splash instead."),
+    # Splash screens, main menus and the mouse: names people guess, each one's inputs, and the mouse in a 2D game.
+    ('game = tgame.window("x")\ngame:intro("logo.png")\n', "A game doesn't have :intro. Use :splash instead."),
+    ('w = tgame.world("x")\nhome = w:home_screen("Go")\n', "A world doesn't have :home_screen. Use :main_menu instead."),
+    ('game = tgame.window("x")\ngame:splash("nope.png")\n', "Couldn't find the picture 'nope.png'."),
+    ('game = tgame.window("x")\ngame:splash("intro.mp4", 3)\n', "'intro.mp4' can't be a splash screen. Use a picture from your project folder"),
+    ('game = tgame.window("x")\nfunc go():\n    nil\ngame:splash(go)\n', "game:splash takes a picture file or some text, then how many seconds it shows"),
+    ('game = tgame.window("x")\ngame:splash("Pip Studio", "long")\n', "game:splash's second input is how many seconds it shows: a number above 0"),
+    ('w = tgame.world("x")\nw:splash("Pip Studio", 0)\n', "w:splash's second input is how many seconds it shows: a number above 0"),
+    ('game = tgame.window("x")\ngame:splash("a", 2, 3)\n', "game:splash got the wrong number of inputs (3)."),
+    ('game = tgame.window("x")\nmenu = game:main_menu("Go", "Play")\n',
+     'game:main_menu got the wrong number of inputs (2). It takes its title, like: menu = game:main_menu("My Game")'),
+    ('w = tgame.world("x")\nfunc play():\n    nil\nmenu = w:main_menu(play)\n', "A main menu's input is its title, like: menu = w:main_menu(\"My Game\")."),
+    ('game = tgame.window("x")\nmenu = game:main_menu("Go")\nmenu:buton("Play")\n', "A screen doesn't have :buton. Did you mean :button?"),
+    ('game = tgame.window("x")\nmenu = game:main_menu("Go")\nmenu:close()\n', "A screen doesn't have :close. Use :hide instead."),
+    ('w = tgame.world("x")\nw:release_mouse()\n', "A world doesn't have :release_mouse. Use :unlock_mouse instead."),
+    ('w = tgame.world("x")\nw:capture_mouse()\n', "A world doesn't have :capture_mouse. Use :lock_mouse instead."),
+    ('w = tgame.world("x")\nw:hide_cursor()\n', "A world doesn't have :hide_cursor. Use :lock_mouse instead."),
+    ('w = tgame.world("x")\nif w:is_locked():\n    nil\n', "A world doesn't have :is_locked. Use :mouse_locked instead."),
+    ('w = tgame.world("x")\nw:lock_mouse true\n', "w:lock_mouse doesn't take an input"),
+    ('w = tgame.world("x")\nw:auto_lock "off"\n', "w:auto_lock takes true or false (without quotes), like: w:auto_lock(false)"),
+    ('w = tgame.world("x")\nlocked = w:mouse_locked()\nlocked:add(1)\n', "True/false doesn't have any :methods."),
+    ('game = tgame.window("x")\ngame:lock_mouse()\n', "Locking the mouse is for looking around in a 3D world. Make the game with tgame.world(...)"),
+    ('game = tgame.window("x")\nif game:mouse_locked():\n    nil\n', "Locking the mouse is for looking around in a 3D world."),
     # physics
     ('w = tgame.world("x")\ncrate = w:box(0, 0, 0)\ncrate:physics("dinamic")\n', 'not "dinamic". Did you mean "dynamic"?'),
     ('game = tgame.window("x")\nb = game:box(1, 2)\nb:physics "bouncy"\n', 'A thing\'s physics can be "dynamic" (it falls and can be pushed)'),
@@ -1857,6 +2123,19 @@ GOOD_SNIPPETS = [
     'ball:bounce(0.8)\nball:push(200, -300)\nball:push([200, -300])\nball:velocity(0, -200)\nsay ball:velocity()\n'
     'ball:on_hit(boing)\ngame:explode(400, 300, 600, 200)\nfunc boing(other, strength):\n    game:sound "pop"\n'
     'game:every_frame step\nfunc step(dt):\n    nil\n',
+    # Splash screens, a main menu and the mouse: every way they're written (a picture in a folder, text, nothing,
+    # nil with seconds), the menu's widgets, mouse_locked as true or false, auto_lock with a variable.
+    'world = tgame.world("Forest Notes")\nplayer = world:player("first person")\nworld:splash("art/star.png", 2.5)\n'
+    'world:splash("Pip Studio presents")\nworld:splash()\nworld:splash(nil, 1)\nmenu = world:main_menu("Forest Notes")\n'
+    'menu:text "Find the note."\nmenu:button("Play", play)\nrow = menu:row()\nrow:button("Settings", settings, "secondary")\n'
+    'menu:button("Quit", quit, "ghost")\nnote = world:screen("A note")\nnote:button("Close", close_note)\nnote:hide()\n'
+    'free = false\nworld:auto_lock(not free)\nworld:auto_lock false\n'
+    'func play():\n    menu:hide()\n    world:lock_mouse()\nfunc settings():\n    nil\nfunc quit():\n    world:close()\n'
+    'func close_note():\n    note:hide()\nfunc key(name):\n    if name is "e" and not note:shown():\n        world:unlock_mouse()\n'
+    '        note:show()\n    if name is "m":\n        menu:show()\n    if world:mouse_locked() == false:\n        say "free"\n'
+    'world:on_key("any", key)\nwhile world:open():\n    world:frame()\n',
+    'game = tgame.window("Star Hopper", 800, 500)\ngame:splash("Made by me", 3)\nmenu = game:main_menu()\nmenu:button("Play", go)\n'
+    'func go():\n    menu:hide()\ngame:every_frame step\nfunc step(dt):\n    if game:paused():\n        say "menu"\n',
 ]
 
 
@@ -1942,6 +2221,7 @@ TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": 
          "models": t_models,
          "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "terrain": t_terrain,
          "terrain_look": t_terrain_look, "no_webgl": t_no_webgl, "ui_2d": t_ui_2d, "ui_3d": t_ui_3d,
+         "menu_2d": t_menu_2d, "menu_3d": t_menu_3d, "menu_start": t_menu_start,
          "physics": t_physics, "physics_player": t_physics_player, "physics_car": t_physics_car, "physics_2d": t_physics_2d,
          "physics_off": t_physics_off,
          "scene": t_scene, "notice": t_notice, "mcp": t_mcp, "checker": t_checker, "editor": t_editor, "guide": t_guide, "perf": t_perf}

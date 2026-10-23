@@ -498,6 +498,60 @@ while game:open():
     game:frame()
 ```
 
+#### Splash screens, main menus and the mouse
+Splash screens play when the game starts, then a main menu waits for Play. In 3D, the mouse is free on menus and screens (to click buttons and read notes) and locked for looking around in the game.
+```tuff
+mention tgame
+
+world = tgame.world("Forest Notes")
+world:sky "sunset"
+world:island(60)
+player = world:player("first person")
+sign = world:spawn("sign", 0, 0, -6)
+sign:label "Press E to read"
+for i in range(1, 10):
+    world:spawn("pine")
+
+world:splash("logo.png", 3)               # a picture next to your .tuf file, for 3 seconds
+world:splash("Pip Studio presents")       # big text, for 2 seconds
+world:splash()                            # "Made with Tuff"
+
+menu = world:main_menu("Forest Notes")    # after the splashes: the game waits and the mouse is free
+menu:text "Find the note by the old sign."
+menu:button("Play", play)
+menu:button("Quit", quit, "secondary")
+
+note = world:screen("A note")             # a screen frees the mouse while it shows
+note:text "Meet me by the old hut at sunset."
+note:button("Close", close_note)
+note:hide()
+
+func play():
+    menu:hide()                           # the game starts, and the mouse locks for looking around
+
+func quit():
+    world:close()
+
+func close_note():
+    note:hide()                           # the mouse locks again, as it was before the note
+
+func key(name):
+    if name is "e" and player:distance(sign) < 4:
+        note:show()
+    if name is "m":
+        menu:show()                       # back to the main menu, with the mouse free
+
+world:on_key("any", key)
+
+while world:open():
+    world:frame()
+```
+- **Splash screens:** `game:splash("logo.png", 3)` shows a picture from your project folder (.png, .jpg or .gif, fitted on black), and `game:splash("Pip Studio presents")` shows big text, each for its seconds (2 if you leave them out). Several play in order when the game starts, before the main menu or start screen. Each fades in and out, and a click or any key skips to the next. `game:splash()` shows "Made with Tuff". While they play the game is paused and the mouse is free.
+- **Main menu:** `menu = game:main_menu("My Game")` is a screen styled as a game's main menu: a big title, and what you add under it (`menu:button`, `menu:text`, `menu:image`, rows, cards...) in a column with wide buttons. It shows when the game starts (after the splash screens), with the game paused and the mouse free: its clicks never reach the game or lock the mouse. `menu:hide()` starts the game; in a 3D world with a player, the click that hid it also locks the mouse for looking around. `menu:show()` brings it back, like from a pause menu. Other screens (Settings, How to play) show over it.
+- **The mouse (3D):** with a player, a click on the game locks the mouse for looking around, and Escape frees it. Every screen, the main menu and the splash screens free it while they show, and lock it again when the last one hides if it was locked before. Panels don't.
+- **Your own control:** `world:unlock_mouse()` frees it and keeps it free until `world:lock_mouse()` or a click on the game. `world:lock_mouse()` locks it (right away inside a click or a key press, or else on the next click on the game). `world:mouse_locked()` is true or false. `world:auto_lock(false)` stops clicks on the game from locking it, so only your code does; `world:auto_lock(true)` turns it back on.
+- `game:start_screen` still works as before, and splash screens play before it too.
+
 #### Land and lighting (3D)
 `game:terrain(size)` makes land you shape with hills, mountains, dips, lakes and valleys, or paint with brushes.
 ```tuff

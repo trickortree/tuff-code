@@ -100,7 +100,13 @@ window.TUFF_METHOD_DOCS = {
   panel: ['bar = game:panel("top left")', 'tgame: real buttons, text boxes and every other atgui widget, pinned to a place on the game: "top left", "top", "top right", "left", "center", "right", "bottom left", "bottom" or "bottom right". bar:button("Shop", open_shop), bar:heading "Coins: 0", bar:progress(100)... Clicks on its widgets go to them; clicks anywhere else reach the game. bar:hide, bar:show, bar:clear.'],
   screen: ['shop = game:screen("Shop")', 'tgame: a layer over the whole game for a menu, a shop, a pause menu or game over, with the title on top. Add any atgui widget to it (shop:button, shop:input, shop:slider...). It pauses the game while it shows (game:screen("Map", false) doesn\'t). shop:show, shop:hide, shop:shown().'],
   start_screen: ['start = game:start_screen("My Game", "Click to play")', 'tgame: a title screen over the game, which waits until it\'s clicked (or Enter or Space). In a 3D world with a player, that click also locks the mouse for looking around. Add more to it like a screen (start:text "..."), and start:show() brings it back, like after game over.'],
-  shown: ['shop:shown()', 'tgame: true while a screen (game:screen or game:start_screen) is showing.'],
+  shown: ['shop:shown()', 'tgame: true while a screen (game:screen, game:start_screen or game:main_menu) is showing.'],
+  splash: ['game:splash("logo.png", 3)', 'tgame: a splash screen when the game starts, before the main menu or start screen: a picture from your project folder (.png, .jpg or .gif, fitted on black) or some text, for that many seconds (2 by default). Several play in order, each fading in and out, and a click or any key skips to the next. game:splash() shows "Made with Tuff". The game is paused and the mouse free while they play.'],
+  main_menu: ['menu = game:main_menu("My Game")', 'tgame: a main menu: a big title over the paused game, with wide buttons under it (menu:button("Play", play), menu:text, menu:image...). It shows when the game starts, after any splash screens, and the mouse stays free: its clicks never reach the game. menu:hide() starts the game (in 3D with a player, that click also locks the mouse for looking around), and menu:show() brings it back, like from a pause menu.'],
+  lock_mouse: ['world:lock_mouse()', 'tgame (3D): locks the mouse for looking around: now, inside a click or a key press, or else on the next click on the game. While a screen shows, it locks once the screen hides.'],
+  unlock_mouse: ['world:unlock_mouse()', 'tgame (3D): frees the mouse (the pointer shows again), and keeps it free until world:lock_mouse() or a click on the game. Screens, the main menu and splash screens free it by themselves while they show.'],
+  mouse_locked: ['world:mouse_locked()', 'tgame (3D): true while the mouse is locked for looking around, false while it\'s free.'],
+  auto_lock: ['world:auto_lock(false)', 'tgame (3D): with false, clicks on the game no longer lock the mouse, so your code decides with world:lock_mouse() and world:unlock_mouse(). true turns it back on (the default once there\'s a player).'],
   box: ['game:box(x, y, width, height, color)', 'tgame: a rectangle. x and y are its middle. In 3D: world:box(x, y, z, size, color), with its bottom at y (0 is the ground); size is a number or [width, height, depth].'],
   circle: ['game:circle(x, y, radius, color)', 'tgame: a circle.'],
   line: ['game:line(x1, y1, x2, y2, color)', 'tgame: a line. :size changes how thick it is.'],
@@ -501,7 +507,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
         // that use that library. A game with a panel or a screen uses atgui's widgets too.
         const src = model.getValue();
         const games = /^\s*(import|mention)\s+tgame\b/m.test(src);
-        const modern = /^\s*(import|mention)\s+atgui\b/m.test(src) || (games && /:\s*(panel|screen|start_screen)\b/.test(src));
+        const modern = /^\s*(import|mention)\s+atgui\b/m.test(src) || (games && /:\s*(panel|screen|start_screen|main_menu)\b/.test(src));
         const names = Object.keys(window.TUFF_METHOD_DOCS).filter((m) => {
           const doc = window.TUFF_METHOD_DOCS[m][1] || '';
           return (games || !/^tgame\b/.test(doc)) && (modern || !/^atgui\b/.test(doc));

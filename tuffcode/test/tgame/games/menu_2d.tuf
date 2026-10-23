@@ -1,0 +1,51 @@
+mention tgame
+
+# Splash screens and a main menu in a 2D game: a picture, some text and "Made with Tuff" play in turn (a key or a
+# click skips one), then the main menu shows with the game paused. Play starts the game, and P brings the menu back.
+game = tgame.window("Star Hopper", 800, 500)
+game:background "#151a2e"
+player = game:box(400, 380, 44, 44, "teal")
+star = game:circle(560, 200, 14, "gold")
+game_clicks = 0
+plays = 0
+
+game:splash("logo.png", 3)
+game:splash("Pip Studio presents", 1.2)
+game:splash(nil, 1.6)
+
+menu = game:main_menu("Star Hopper")
+menu:text "Hop between the stars before they fade."
+menu:button("Play", play)
+menu:button("How to play", how, "secondary")
+menu:button("Quit", quit, "ghost")
+tip = menu:small ""
+
+func play():
+    plays += 1
+    menu:hide()
+
+func how():
+    tip:set "Arrow keys move. Catch the gold stars."
+
+func quit():
+    game:close()
+
+func clicked_game(x, y):
+    game_clicks += 1
+
+func key(name):
+    if name is "p":
+        menu:show()
+
+func report():
+    say "plays " + plays + ", game clicks " + game_clicks
+
+func step(dt):
+    if game:held("left"):
+        player:move(-240 * dt, 0)
+    if game:held("right"):
+        player:move(240 * dt, 0)
+
+game:clicked clicked_game
+game:on_key("any", key)
+game:every_frame step

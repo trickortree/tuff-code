@@ -1,0 +1,74 @@
+mention tgame
+
+# A first-person world with a splash screen, a main menu and a note: the menu's clicks never lock the mouse, Play
+# locks it for looking around, E opens a note that frees the mouse, and closing the note locks it again. Then the
+# program's own controls: world:unlock_mouse, world:lock_mouse, world:mouse_locked and world:auto_lock(false).
+world = tgame.world("Forest Notes", 960, 600)
+world:sky "sunset"
+world:ground "grass"
+for i in range(0, 8):
+    world:spawn("pine", -12 + i * 3.2, 0, -14 - (i % 3) * 3)
+sign = world:spawn("sign", 0, 0, -4)
+sign:label "Press E"
+player = world:player("first person")
+game_clicks = 0
+plays = 0
+
+world:splash("Deep in the woods...", 3)
+
+menu = world:main_menu("Forest Notes")
+menu:text "Find the note by the old sign."
+menu:button("Play", play)
+menu:button("Settings", open_settings, "secondary")
+menu:button("Quit", quit, "ghost")
+
+settings = world:screen("Settings")
+settings:switch("Music", true)
+settings:slider(0, 100, 70)
+settings:button("Back", close_settings)
+settings:hide()
+
+note = world:screen("A note")
+note:text "Meet me by the old hut at sunset. Bring the axe."
+note:button("Close", close_note)
+note:hide()
+
+func play():
+    plays += 1
+    menu:hide()
+
+func open_settings():
+    settings:show()
+
+func close_settings():
+    settings:hide()
+
+func quit():
+    world:close()
+
+func close_note():
+    note:hide()
+
+func key(name):
+    if name is "e":
+        note:show()
+    if name is "m":
+        menu:show()
+
+func clicked_world(x, y, z):
+    game_clicks += 1
+
+func report():
+    say "plays " + plays + ", game clicks " + game_clicks + ", locked " + world:mouse_locked()
+
+func free():
+    world:unlock_mouse()
+
+func grab():
+    world:lock_mouse()
+
+func manual():
+    world:auto_lock(false)
+
+world:on_key("any", key)
+world:clicked clicked_world
