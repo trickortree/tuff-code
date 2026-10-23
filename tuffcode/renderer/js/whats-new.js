@@ -134,7 +134,9 @@
       dots.forEach((d, k) => d.classList.toggle('on', k === i));
     });
     dots.forEach((d) => (d.onclick = () => strip.scrollTo({ left: +d.dataset.dot * strip.clientWidth, behavior: 'smooth' })));
-    box.addEventListener('mousedown', (e) => { if (e.target === box) close(); });
+    // A click on the backdrop closes it. preventDefault: the mousedown would move the focus to the page right after
+    // close() gave it back.
+    box.addEventListener('mousedown', (e) => { if (e.target === box) { e.preventDefault(); close(); } });
     box.addEventListener('click', (e) => {
       const a = e.target.closest('a[data-web]');
       if (a) { e.preventDefault(); ide?.openWeb?.(a.dataset.web); }

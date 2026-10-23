@@ -85,4 +85,20 @@ export default async (t, ctx) => {
   const codeAfter = await ev(`window.TuffIDE.editor().getValue()`);
   check('and typing goes into the code editor again', await editorFocus() && codeAfter.length === codeBefore.length + 1 && codeAfter.includes('#'), { focus: await focusName(), typed: codeAfter.length - codeBefore.length });
   await ev(`window.TuffIDE.editor().trigger('test', 'undo', null); 1`);
+
+  // A real click on the dark backdrop round the card closes it too, and the code editor gets the focus back (the
+  // mousedown mustn't move it to the page after that).
+  await ev(`window.TuffIDE.editor().focus(); window.TuffWhatsNew.show(${JSON.stringify(version)}); 1`);
+  await waitFor(`!!document.querySelector('#whatsnew.in')`, 3000);
+  await t.sleep(300);
+  const spot = await ev(`(() => { const b = document.querySelector('#whatsnew'); for (const [x, y] of [[6, innerHeight - 6], [innerWidth - 6, innerHeight - 6], [6, 60]]) if (document.elementFromPoint(x, y) === b) return [x, y]; return null; })()`);
+  if (spot) await t.click(spot[0], spot[1]);
+  await t.sleep(300);
+  const beforeBack = await ev(`window.TuffIDE.editor().getValue()`);
+  await t.type('#', 0);
+  await t.sleep(200);
+  const afterBack = await ev(`window.TuffIDE.editor().getValue()`);
+  check('A click on the backdrop closes it, and typing goes into the code editor again', !!spot && !(await box()) && await editorFocus() && afterBack.length === beforeBack.length + 1,
+    { spot, open: !!(await box()), focus: await focusName(), typed: afterBack.length - beforeBack.length });
+  if (afterBack.length > beforeBack.length) await ev(`window.TuffIDE.editor().trigger('test', 'undo', null); 1`);
 };
