@@ -365,6 +365,7 @@ function moved(n, props) {
       r.body.setRotation({ x: q[0], y: q[1], z: q[2], w: q[3] }, true);
     } else {
       const c = add(vec(o.position), qrot(q, [0, r.cy, 0]));
+      if (r.kind === 'kinematic' && Array.isArray(props.vel)) { r.glide = { at: c, v: props.vel.map(Number) }; return; }  // on a path: glide()
       if (r.kind === 'kinematic') {
         r.body.setNextKinematicTranslation({ x: c[0], y: c[1], z: c[2] });
         r.body.setNextKinematicRotation({ x: q[0], y: q[1], z: q[2], w: q[3] });
@@ -377,6 +378,19 @@ function moved(n, props) {
   world.propagateModifiedBodyPositionsToColliders();
   r.cur = r.prev = state(r.body);
   if (r.kind === 'dynamic') { draw(r, 1); r.moved = true; dirty = true; }
+}
+
+// A thing moving along a path (tgame's thing:path): Python sends where it is and how fast it's going (vel) every
+// frame, but its frames and the steps here don't line up, so a step would get two moves or none, and what rides on it
+// would be kicked up or left behind. Instead it goes on at that speed every step, pulled gently toward where Python
+// has it (that spot goes on at the same speed until the next frame says where it is).
+function glide(r) {
+  const g = r.glide;
+  if (r.kind !== 'kinematic' || !r.body) { r.glide = null; return; }
+  const now = vec(r.body.translation());
+  const next = now.map((v, i) => v + g.v[i] * STEP + (g.at[i] - v) * 0.15);
+  g.at = g.at.map((v, i) => v + g.v[i] * STEP);
+  r.body.setNextKinematicTranslation(vecObj(next));
 }
 
 // A ragdoll moved by the program: every part moves by as much as its reported spot did (and it's drawn there).
@@ -590,6 +604,7 @@ function fixedStep() {
   for (const r of recs.values()) {
     if (r.landDirty) makeLand(r);
     if (r.vehicle) driveCar(r);
+    if (r.glide) glide(r);
   }
   if (player) movePlayer();
   world.step(queue);

@@ -1804,6 +1804,7 @@ class World3D(Game):
         ("look_at", "look_at"), ("follow", "follow"), ("orbit", "orbit"), ("looking_at", "looking_at"),
         ("terrain", "terrain"), ("lighting", "lighting"), ("gravity", "gravity"), ("explode", "explode"),
         ("car", "car"), ("ragdoll", "ragdoll"),
+        ("jump_pad", "jump_pad"), ("boost_pad", "boost_pad"),
     ]
 
     def setup(self):
@@ -2062,6 +2063,19 @@ class World3D(Game):
         x, y, z, (color,) = self.where([x, y, z, color], ("blue",), "ragdoll")
         return Ragdoll(self, x, self.above(x, y, z), z, color).native
 
+    # ---- level pieces: jump pads, boost pads and things on paths (Level, after the ragdoll)
+    def level(self):
+        """The world's level pieces, made by the first one."""
+        if getattr(self, "level_", None) is None:
+            self.level_ = Level(self)
+        return self.level_
+
+    def jump_pad(self, x=MISSING, y=MISSING, z=MISSING, power=MISSING):
+        return self.level().make_pad("jump", [x, y, z, power])
+
+    def boost_pad(self, x=MISSING, y=MISSING, z=MISSING, power=MISSING):
+        return self.level().make_pad("boost", [x, y, z, power])
+
     def stop_chase(self):
         """The camera stops following the car it drives (the program put the camera somewhere else)."""
         if self.cam_mode == "drive":
@@ -2252,6 +2266,8 @@ class World3D(Game):
             self.hint.hide() if (self.locked or self.fake_lock or covered) else self.hint.show()
 
     def update(self, dt, real):
+        if getattr(self, "level_", None) is not None:  # platforms move and pads launch, before the player walks
+            self.level_.frame(dt)
         if self.driving is not None:
             self.drive_keys()
         p = self.the_player
@@ -2918,6 +2934,7 @@ class Thing(Physical):
         ("clicked", "clicked"), ("set", "set"), ("get", "get"),
         ("physics", "physics"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
         ("velocity", "velocity"), ("on_hit", "on_hit"), ("sleep", "sleep"), ("wake", "wake"),
+        ("path", "path"),
     ]
 
     def __init__(self, world, kind, x, y, z, size, parts, body=None, parent=None, pick=True, camera=False):
@@ -3042,6 +3059,8 @@ class Thing(Physical):
             if not self.solid_ or self.fallen:
                 return None
             kind = "static"
+        if kind == "static" and getattr(self, "route", None) is not None:  # on a path (Route): it carries what's on it
+            kind = "kinematic"
         shape, size, cy = self.phys_shape(kind)
         return {**base, "kind": kind, "shape": shape, "size": size, "cy": cy}
 
@@ -3458,6 +3477,10 @@ class Thing(Physical):
 
     def get(self, name):
         return self.data.get(self.rt.plain(name))
+
+    # ---- moving along a path by itself (Route, with the level pieces)
+    def path(self, spots=MISSING, speed=MISSING, how=MISSING):
+        return self.world.level().set_route(self, spots, speed, how)
 
 
 def boxes_touch(a, b):
@@ -4143,6 +4166,422 @@ class Ragdoll(Thing):
                           for (node, _), (_, shape, size, at, mass, _) in zip(self.parts, RAGDOLL)],
                 "joints": [[names.index(a), names.index(b), list(at), kind, list(lim) if lim else None]
                            for a, b, at, kind, lim in RAGDOLL_JOINTS]}
+
+
+# ---------------------------------------------------------------- level pieces: jump pads, boost pads, moving platforms
+
+# How thing:path goes along its spots: there and back again ("ping-pong", what it does by itself) or round and round
+# ("loop"), and other words people use for them.
+PATH_MODES = ("ping-pong", "loop")
+PATH_WORDS = {"pingpong": "ping-pong", "ping pong": "ping-pong", "back and forth": "ping-pong", "there and back": "ping-pong",
+              "back": "ping-pong", "bounce": "ping-pong", "round": "loop", "around": "loop", "round and round": "loop",
+              "circle": "loop", "cycle": "loop", "repeat": "loop", "loops": "loop", "looping": "loop"}
+# A pad's whoosh when it launches something: a rush of air (noise opening up) over a tone that rises.
+WHOOSH = {"jump": [[500, 0, 0.42, "noise", 1, 4200], [190, 0, 0.32, "sine", 0.55, 760]],
+          "boost": [[900, 0, 0.5, "noise", 1, 6500], [240, 0, 0.38, "sawtooth", 0.22, 980]]}
+# A pad's colours: its dark rim, its glow, and the lighter trim (a jump pad's ring, a boost pad's arrows).
+PAD_LOOK = {"jump": ("#2b2f36", "#2ee6a6", "#b6ffe4"), "boost": ("#2b2f36", "#ff8a1f", "#ffe066")}
+PAD_POWER = {"jump": 15, "boost": 20}
+# Names people guess for the level pieces, and the tgame name.
+HINTS["world"].update({"trampoline": "jump_pad", "jumppad": "jump_pad", "bounce_pad": "jump_pad", "launch_pad": "jump_pad",
+                       "launcher": "jump_pad", "spring": "jump_pad", "springboard": "jump_pad", "booster": "boost_pad",
+                       "boostpad": "boost_pad", "speed_pad": "boost_pad", "speed_boost": "boost_pad", "dash_pad": "boost_pad",
+                       "boost": "boost_pad", "accelerator": "boost_pad", "speed_strip": "boost_pad"})
+HINTS["object"].update({"waypoints": "path", "route": "path", "patrol": "path", "follow_path": "path", "move_along": "path",
+                        "set_path": "path", "move_path": "path", "ping_pong": "path", "oscillate": "path",
+                        "move_between": "path"})
+
+
+def path_mode(text):
+    """"ping-pong" or "loop" for what a program wrote ("Loop", "ping pong", "round and round"...), or None."""
+    t = re.sub(r"[\s_]+", " ", str(text).strip().lower())
+    t = PATH_WORDS.get(t, t)
+    return t if t in PATH_MODES else None
+
+
+def path_problem(name):
+    return (f"A path can go \"ping-pong\" (there and back again) or \"loop\" (round and round, back to the first spot), "
+            f"not \"{name}\".{did_you_mean(str(name).strip().lower(), PATH_MODES)}")
+
+
+class Level:
+    """A 3D world's level pieces, made by the first one: jump pads and boost pads (Pad), and things that move along a
+    path by themselves (Route, thing:path), like a lift. Every frame, before the player walks (World3D.update), the
+    things on paths move, carrying the player that stands on them and pushing it out of their way, then the pads launch
+    whoever is on them, then a boost carries the player on until it fades. All of it holds still while the game is
+    paused, and none of it needs physics. With physics on, a thing on a path is a kinematic body in the page, so the
+    physics things on it ride along too, and a pad launches physics things as well as the player."""
+
+    def __init__(self, world):
+        self.world, self.rt = world, world.rt
+        self.pads = []     # jump pads and boost pads, oldest first
+        self.routes = {}   # thing -> its Route, in the order they started
+        self.boost = None  # the player's speed from a boost pad ([x, z], metres a second) until it fades
+
+    # ---- making them
+    def make_pad(self, how, args):
+        w = self.world
+        what = f"{how}_pad"
+        x, y, z, (power,) = w.where(args, (PAD_POWER[how],), what)
+        p = self.rt.number(power, f":{what}")
+        if p <= 0:
+            raise self.rt.error(f":{what} needs a power above 0 (how fast it launches things, in metres a second), like "
+                                f"world:{what}(0, 0, 5, {PAD_POWER[how]}).")
+        pad = Pad(w, how, x, w.above(x, y, z), z, p)
+        self.pads.append(pad)
+        return pad.native
+
+    def set_route(self, t, spots, speed, how):
+        """thing:path(spots, speed, how): it moves along the spots by itself. thing:path() stops it where it is."""
+        rt, n = self.rt, t.kind
+        if spots is MISSING:
+            self.stop(t)
+            return t.native
+        if not t.on_land:
+            raise rt.error("Only things in the world can move along a path, not something the player holds.")
+        if t.phys_kind == "dynamic":
+            raise rt.error(f"{n}:path moves things that stay up by themselves, but this {n} has physics (it falls and "
+                           f"gets pushed). Turn that off first with {n}:physics(\"off\"), or move it with {n}:push.")
+        raw = rt.plain(spots)
+        example = f"{n}:path([[0, 2, 0], [10, 2, 0]], 3)"
+        if not isinstance(raw, list) or not raw:
+            raise rt.error(f"{n}:path needs a list of spots to go to, like {example}.")
+        if all(not isinstance(rt.plain(s), list) for s in raw) and len(raw) in (2, 3):
+            raise rt.error(f"{n}:path needs a list of spots, each one [x, y, z], so one spot is [[x, y, z]]. Like {example}.")
+        w = self.world
+        at = []
+        for i, s in enumerate(raw, 1):
+            s = rt.plain(s)
+            if isinstance(s, list) and len(s) == 2:  # [x, z]: on the land
+                s = [s[0], 0, s[1]]
+            if not isinstance(s, list) or len(s) != 3:
+                got = f"has {len(s)} numbers" if isinstance(s, list) else f"is {rt.what(s)}"
+                raise rt.error(f"Each spot on a path is [x, y, z] (y is the height above the ground), like [10, 2, 0]. "
+                               f"Spot {i} {got}.")
+            x, y, z = (rt.number(v, f"Spot {i} of {n}:path") for v in s)
+            at.append((x, w.above(x, y, z), z))
+        v = 3 if speed is MISSING else rt.number(speed, f"{n}:path's speed")
+        if v <= 0:
+            raise rt.error(f"{n}:path needs a speed above 0 (metres a second), like {example}.")
+        loop = False
+        if how is not MISSING:
+            word = rt.text(how)
+            mode = path_mode(word)
+            if mode is None:
+                raise rt.error(path_problem(word))
+            loop = mode == "loop"
+        if t.phys_kind == "kinematic":
+            t.phys_kind = None  # it's kinematic for physics while it's on its path anyway; the player walks on it as on a solid thing
+        t.route = Route(t, at, v, loop)
+        self.routes.pop(t, None)
+        self.routes[t] = t.route
+        t.phys_changed()
+        return t.native
+
+    def stop(self, t):
+        self.routes.pop(t, None)
+        if getattr(t, "route", None) is not None:
+            t.route = None
+            if self.world.phys is not None:
+                t.send(t.node, vel=[0, 0, 0])
+            t.phys_changed()  # a fixed body again, where it stopped
+
+    # ---- every frame
+    def frame(self, dt):
+        if not dt:  # paused
+            return
+        w = self.world
+        p = w.the_player if w.driving is None else None
+        for t, route in list(self.routes.items()):
+            if not t.alive or getattr(t, "route", None) is not route:
+                self.routes.pop(t, None)
+            else:
+                self.move(t, route, dt, p)
+        if self.pads:
+            self.check_pads(dt, p)
+        if p is not None and self.boost is not None:
+            self.glide(p, dt)
+
+    def move(self, t, route, dt, p):
+        x0, y0, z0 = t.x, t.y, t.z
+        solid = p is not None and t.solid_ and not t.hidden
+        rides = solid and self.stands_on(p, t)
+        (t.x, t.y, t.z), done = route.step(dt)
+        t.push()
+        if self.world.phys is not None:  # how fast it goes, so physics moves it smoothly between frames (physics.js's glide)
+            t.send(t.node, vel=[tidy(v) for v in route.velocity()])
+        if done:  # a path to one spot: it's there now
+            self.stop(t)
+        if not solid:
+            return
+        d = (t.x - x0, t.y - y0, t.z - z0)
+        if rides:
+            p.x, p.y, p.z = p.x + d[0], t.box3(body=True)[4], p.z + d[2]  # on its top, where it is now
+        elif not self.shove(p, t, d):
+            return
+        if self.world.phys is not None:
+            p.teleported = True  # the page's capsule goes there with it (walking it there would bump into the platform)
+
+    def stands_on(self, p, t):
+        """Is the player standing on t's top (feet on it, not jumping off)?"""
+        b = t.box3(body=True)
+        r = p.RADIUS * 0.8
+        return (p.x + r > b[0] and p.x - r < b[3] and p.z + r > b[2] and p.z - r < b[5] and abs(p.y - b[4]) < 0.08
+                and p.vy <= 0.5)
+
+    def shove(self, p, t, d):
+        """t moved into the player: if its top came up past the player's feet (no higher than a step), the player is
+        on it now; if it came from the side, the player is pushed out of its way. True if the player moved."""
+        b = t.box3(body=True)
+        r = p.RADIUS
+        if not (p.x + r > b[0] and p.x - r < b[3] and p.z + r > b[2] and p.z - r < b[5]):
+            return False
+        if p.y + p.TALL <= b[1] or p.y >= b[4]:  # over it or under it
+            return False
+        if b[4] - p.y <= 0.45 or (d[1] > 0 and b[1] <= p.y + 0.05):
+            p.y, p.vy, p.on_ground = b[4], max(p.vy, 0.0), True
+            return True
+        if not (d[0] or d[2]):
+            return False
+        if d[0]:
+            p.x = b[3] + r + 0.01 if d[0] > 0 else b[0] - r - 0.01
+        if d[2]:
+            p.z = b[5] + r + 0.01 if d[2] > 0 else b[2] - r - 0.01
+        p.keep_inside()
+        return True
+
+    def check_pads(self, dt, p):
+        w = self.world
+        self.pads = [pad for pad in self.pads if pad.alive]
+        things = None
+        for pad in self.pads:
+            for k in list(pad.cool):
+                pad.cool[k] -= dt
+                if pad.cool[k] <= 0:
+                    del pad.cool[k]
+            if pad.hidden:
+                continue
+            low, top = pad.y - 0.1, pad.y + pad.height()
+            if (p is not None and "player" not in pad.cool and p.vy <= 0.5 and low <= p.y <= top + 0.12
+                    and pad.over(p.x, p.z, p.RADIUS)):
+                pad.throw_player(p, self)
+            if w.phys is None:
+                continue
+            if things is None:  # the physics things, once a frame
+                things = [t for t in w.things if isinstance(t, Thing) and t.alive and not t.hidden and t.dynamic()]
+            for t in things:
+                if t not in pad.cool and t.vel[1] < 1 and low - 0.05 <= t.y <= top + 0.25 and pad.over(t.x, t.z):
+                    pad.throw(t)
+
+    def glide(self, p, dt):
+        """A boost pad's push: the player keeps going that way, slowing down (faster on the ground than in the air),
+        stopped by walls."""
+        vx, vz = self.boost
+        solids = p.solids()
+        nx, nz = p.x + vx * dt, p.z + vz * dt
+        if not p.blocked(nx, p.z, p.y, solids):
+            p.x = nx
+        elif not p.try_step(nx, p.z, solids):
+            vx = 0.0
+        if not p.blocked(p.x, nz, p.y, solids):
+            p.z = nz
+        elif not p.try_step(p.x, nz, solids):
+            vz = 0.0
+        p.keep_inside()
+        k = math.exp(-(2.2 if p.on_ground else 0.45) * dt)
+        vx, vz = vx * k, vz * k
+        self.boost = [vx, vz] if math.hypot(vx, vz) > 0.4 else None
+
+
+class Route:
+    """thing:path: a thing going along spots by itself at a speed, there and back again or round and round, in a
+    straight line from each spot to the next (first from where it is to the first spot). It gets going and slows down
+    gently where the path turns sharply (at the ends, at a corner), so what rides on it doesn't slide off, and goes
+    straight on through gentle bends. Every spot is where it is in the world (its height above the land when the path
+    was given)."""
+    EASE = 0.8   # seconds to get up to speed, or to stop
+    SHARP = 45   # a turn of more degrees than this stops it at the spot
+
+    def __init__(self, thing, spots, speed, loop):
+        self.speed = speed
+        self.last = spots[0]  # where it stays once it's there, on a path to one spot
+        order = spots + ([spots[0]] if loop else spots[-2::-1])
+        self.cycle = [(a, b) for a, b in zip(order, order[1:]) if math.dist(a, b) > 1e-6]
+        here = (thing.x, thing.y, thing.z)
+        first = (here, spots[0])
+        self.k = -1  # which leg of the cycle it's on (-1: on its way to the first spot)
+        self.leg = None
+        if math.dist(*first) > 1e-6:
+            self.enter(first, None, self.cycle[0] if self.cycle else None)
+        elif self.cycle:
+            self.k = 0
+            self.enter(self.cycle[0], None, self.cycle[1 % len(self.cycle)])
+        self.t = 0.0
+
+    def turn(self, a, b):
+        """How many degrees the path turns going from leg a to leg b."""
+        u = [a[1][i] - a[0][i] for i in range(3)]
+        v = [b[1][i] - b[0][i] for i in range(3)]
+        n = math.hypot(*u) * math.hypot(*v)
+        return math.degrees(math.acos(clamp(sum(x * y for x, y in zip(u, v)) / n, -1.0, 1.0))) if n else 0.0
+
+    def enter(self, leg, before, after):
+        """Starts a leg: before and after are the legs either side of it (None: it starts from still, or stops)."""
+        length = math.dist(*leg)
+        ease = min(self.EASE, length / self.speed)
+        start = before is None or self.turn(before, leg) > self.SHARP
+        end = after is None or self.turn(leg, after) > self.SHARP
+        self.leg = (leg, length, length / self.speed + ease / 2 * (start + end), ease, start, end)
+
+    def along(self, t):
+        """How far along its leg it is t seconds in."""
+        _, length, secs, ease, start, end = self.leg
+        v, a = self.speed, self.speed / ease if ease else 0.0
+        if start and t < ease:
+            return 0.5 * a * t * t
+        if end and t > secs - ease:
+            return length - 0.5 * a * (secs - t) ** 2
+        return (0.5 * v * ease if start else 0.0) + v * (t - (ease if start else 0.0))
+
+    def velocity(self):
+        """How fast it's going each way now (metres a second)."""
+        if self.leg is None:
+            return 0.0, 0.0, 0.0
+        (a, b), length, secs, ease, start, end = self.leg
+        t, v = self.t, self.speed
+        if start and t < ease:
+            v *= t / ease
+        elif end and t > secs - ease:
+            v *= max(0.0, secs - t) / ease
+        return tuple((b[i] - a[i]) / length * v for i in range(3))
+
+    def step(self, dt):
+        """Goes on dt seconds: (where it is now, whether it has finished: a path to one spot)."""
+        if self.leg is None:
+            return self.last, True
+        self.t += dt
+        while self.t >= self.leg[2]:
+            self.t -= self.leg[2]
+            if not self.cycle:  # it only had to get to its one spot
+                self.leg = None
+                return self.last, True
+            before = self.leg[0]
+            self.k = (self.k + 1) % len(self.cycle)
+            self.enter(self.cycle[self.k], before, self.cycle[(self.k + 1) % len(self.cycle)])
+        (a, b), length = self.leg[0], self.leg[1]
+        f = clamp(self.along(self.t) / length, 0.0, 1.0) if length else 1.0
+        return tuple(a[i] + (b[i] - a[i]) * f for i in range(3)), False
+
+
+class Pad(Thing):
+    """world:jump_pad and world:boost_pad: a glowing pad on the ground. It's an object, so it can be moved, turned,
+    hidden, coloured or put on a path. Whoever touches a jump pad, the player or a physics thing, is launched up at its
+    power (metres a second); a boost pad shoots them forward the way it faces (pad:turn aims it), a little up too. The
+    page makes them look alive (level.js): a jump pad's glow breathes and rings rise from it, a boost pad's arrows light
+    up one after another the way it points, and each flashes with a whoosh when it launches something."""
+    COOL = 0.4  # seconds before a pad launches the same thing again (it's still leaving)
+
+    def __init__(self, world, how, x, y, z, power):
+        rim, glow, trim = PAD_LOOK[how]
+        base = {"color": rim, "metal": 0.5, "rough": 0.4, "shadow": True}
+        lit = {"color": glow, "emissive": glow, "rough": 0.35}
+        if how == "jump":
+            size = (2.2, 0.16, 2.2)
+            parts = [("cylinder", {"r": 1.1, "h": 0.12, "y": 0.06, "seg": 40, **base}, False),
+                     ("cylinder", {"r": 0.86, "h": 0.05, "y": 0.135, "seg": 40, **lit}, True),
+                     ("torus", {"r": 0.98, "tube": 0.05, "seg": 48, "rx": 90, "y": 0.13, "color": trim, "emissive": trim}, False)]
+        else:
+            size = (2.0, 0.16, 3.2)
+            parts = [("box", {"w": 2.0, "h": 0.12, "d": 3.2, "y": 0.06, **base}, False),
+                     ("box", {"w": 1.56, "h": 0.04, "d": 2.9, "y": 0.13, **lit}, True)]
+            for tip in (0.45, -0.35, -1.15):  # three arrows, back to front, pointing the way it faces (-z)
+                for side in (-1, 1):
+                    parts.append(("box", {"w": 0.15, "h": 0.03, "d": 0.67, "x": side * 0.25, "y": 0.165, "z": tip + 0.225,
+                                          "ry": side * 48, "color": trim, "emissive": trim}, False))
+        super().__init__(world, "pad", x, y, z, size, parts)
+        self.how, self.power = how, power
+        self.cool = {}  # what it launched lately ("player", or the thing): the seconds before it can again
+        self.whooshed = -1.0  # the game's clock at its last whoosh
+        ids = [int(node) for node, _ in self.parts]
+        glows, arrows = (ids[1:3], []) if how == "jump" else (ids[1:2], ids[2:])
+        world.view.js(f"window.tuffLevel && window.tuffLevel.pad(tv.node({int(self.node)}), {json.dumps(how)}, "
+                      f"{json.dumps(glows)}, {json.dumps(arrows)})")
+
+    def show_text(self, nested=False):
+        return f"<{self.how} pad at {tidy(self.x)}, {tidy(self.y)}, {tidy(self.z)}>"
+
+    def can_have_physics(self, kind):
+        if kind in ("dynamic", "kinematic"):
+            raise self.rt.error("A pad stays where it's put, so it can't fall or be pushed. Move it with pad:move_to, "
+                                "or make it move by itself with pad:path.")
+        Thing.can_have_physics(self, kind)
+
+    def phys_shape(self, kind):
+        if self.how == "jump":  # round
+            kx, ky, kz = self.k
+            hy = self.dims[1] * ky / 2
+            return "cylinder", [tidy(hy), tidy(self.dims[0] * max(kx, kz) / 2)], tidy(hy)
+        return Thing.phys_shape(self, kind)
+
+    def size(self, w, h=MISSING, d=MISSING):
+        if h is MISSING and d is MISSING and not isinstance(self.rt.plain(w), list):  # one number: how wide, still flat
+            n = self.num(w, ":size")
+            return Thing.size(self, n, self.dims[1], n * self.dims[2] / self.dims[0])
+        return Thing.size(self, w, h, d)
+
+    def set_color(self, color):
+        c = self.world.color(color)
+        for node, main in self.parts:
+            if main:
+                self.send(node, color=c, emissive=c)  # it glows in its new colour
+        return self.native
+
+    def facing(self):
+        h = math.radians(self.heading)
+        return math.sin(h), -math.cos(h)
+
+    def over(self, x, z, r=0.0):
+        """Is x, z (something r across... its radius) over the pad?"""
+        dx, dz = x - self.x, z - self.z
+        kx, _, kz = self.k
+        if self.how == "jump":
+            return math.hypot(dx, dz) <= self.dims[0] * max(kx, kz) / 2 + r * 0.5
+        h = math.radians(self.heading)
+        across, along = dx * math.cos(h) + dz * math.sin(h), dx * math.sin(h) - dz * math.cos(h)
+        return abs(across) <= self.dims[0] * kx / 2 + r * 0.5 and abs(along) <= self.dims[2] * kz / 2 + r * 0.5
+
+    def throw_player(self, p, level):
+        if self.how == "jump":
+            p.vy = self.power
+        else:
+            fx, fz = self.facing()
+            level.boost = [fx * self.power, fz * self.power]
+            p.vy = max(p.vy, min(7.0, 2.5 + self.power * 0.12))  # a little hop: it flies, rather than slides
+            self.world.view.js(f"window.tuffLevel && window.tuffLevel.streak(tv.node({int(self.world.scene)}))")
+        p.on_ground = False
+        self.cool["player"] = self.COOL
+        self.whoosh()
+
+    def throw(self, t):
+        """A physics thing on it: launched like the player (it keeps its speed across a jump pad)."""
+        vx, vy, vz = (list(t.vel) + [0.0, 0.0, 0.0])[:3]
+        if self.how == "jump":
+            v = [vx, self.power, vz]
+        else:
+            fx, fz = self.facing()
+            v = [fx * self.power, max(vy, 3.0), fz * self.power]
+        t.vel = v
+        self.world.phys.send("velocity", int(t.node), *v)
+        self.cool[t] = self.COOL
+        self.whoosh()
+
+    def whoosh(self):
+        w = self.world
+        if w.clock - self.whooshed < 0.15:  # a few at once (a pile of boxes) make one whoosh
+            return
+        self.whooshed = w.clock
+        w.view.call(0, "tones", WHOOSH[self.how], 0.3)
+        w.view.js(f"window.tuffLevel && window.tuffLevel.whoosh({int(self.node)})")
 
 
 # ---------------------------------------------------------------- menus, buttons and screens (atgui on a game)
@@ -4864,6 +5303,11 @@ VALUES = {
     **{(k, "music"): {0: "music"} for k in ("game", "world")},
     **{(k, "panel"): {0: "anchor"} for k in ("game", "world")},
 }
+# The level pieces: world:jump_pad and world:boost_pad make objects, thing:path gives the thing back, and its third
+# input is how it goes ("ping-pong" or "loop").
+GIVES["world"].update({"jump_pad": "object", "boost_pad": "object"})
+GIVES["object"]["path"] = "object"
+VALUES[("object", "path")] = {2: "path"}
 
 
 def check_value(kind, method, index, value, base_dir=None):
@@ -4936,6 +5380,8 @@ def check_value(kind, method, index, value, base_dir=None):
         return file_problem(SOUND_FILES, "music")
     if what == "image":
         return file_problem(IMAGE_FILES, "picture")
+    if what == "path":
+        return None if path_mode(value) else path_problem(value.strip())
     return None
 
 

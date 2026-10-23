@@ -1,0 +1,62 @@
+mention tgame
+
+# Moving platforms: a lift goes along its path and back again (ping-pong) and the player standing on it rides along,
+# across and up and down, without falling through; a platform goes round its spots (loop); one stops when its path
+# is taken away (path()); one goes to its one spot and stays there.
+world = tgame.world("Level Lift", 900, 560)
+world:ground "grass"
+player = world:player("third person")
+lift = world:box(0, 2, 0, [4, 0.4, 4], "stone")
+lift:path([[0, 2, 0], [10, 2, 0], [10, 6, 0]], 3)
+player:move_to(0, 2.4, 0)
+ring = world:box(-8, 1, -8, [2, 0.3, 2], "gold")
+ring:path([[-8, 1, -8], [-4, 1, -8], [-4, 1, -4], [-8, 1, -4]], 4, "loop")
+stopper = world:box(6, 0.5, -10, [2, 0.3, 2], "red")
+stopper:path([[6, 0.5, -10], [14, 0.5, -10]], 2)
+slide = world:box(-6, 0, 6, [1.5, 0.3, 1.5], "blue")
+slide:path([[-10, 0, 6]], 2)
+corners = [[-8, -8], [-4, -8], [-4, -4], [-8, -4]]
+lift_spots = [[0, 2], [10, 2], [10, 6]]
+ring_seen = []
+lift_seen = []
+gap_low = 99
+gap_high = -99
+drift = 0
+dx0 = player:x() - lift:x()
+
+func near(a, b):
+    return abs(a - b) < 0.05
+
+func watch(dt):
+    gap = player:y() - (lift:y() + 0.4)
+    if gap < gap_low:
+        gap_low = gap
+    if gap > gap_high:
+        gap_high = gap
+    d = abs(player:x() - lift:x() - dx0)
+    if d > drift:
+        drift = d
+    for i in range(0, 3):
+        c = corners[i]
+        if near(ring:x(), c[0]) and near(ring:z(), c[1]):
+            if len(ring_seen) == 0 or ring_seen[len(ring_seen) - 1] != i:
+                ring_seen:add(i)
+    for i in range(0, 2):
+        s = lift_spots[i]
+        if near(lift:x(), s[0]) and near(lift:y(), s[1]):
+            if len(lift_seen) == 0 or lift_seen[len(lift_seen) - 1] != i:
+                lift_seen:add(i)
+
+world:every_frame watch
+
+func report():
+    say "gap " + gap_low + " " + gap_high + " drift " + drift
+    say "lift " + lift:spot() + " player " + player:spot()
+    say "ring seen " + ring_seen
+    say "lift seen " + lift_seen
+    say "stopper " + stopper:spot()
+    say "slide " + slide:spot()
+
+func stop_it():
+    stopper:path()
+    say "stopped at " + stopper:spot()
