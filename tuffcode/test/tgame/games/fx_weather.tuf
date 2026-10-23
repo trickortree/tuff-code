@@ -1,0 +1,24 @@
+mention tgame
+
+# The weather: rain (streaks, a grey sky, thick fog, the ground wet), snow (flakes, a pale sky), then clear again.
+world = tgame.world("Weather", 900, 560)
+land = world:terrain(160)
+land:hill(14, -20, 18, 5)
+land:lake(-12, -10, 9, 2)
+world:camera_at(0, 3, 14)
+world:look_at(0, 1, -6)
+for i in range(12):
+    world:spawn("tree", -30 + i * 5, 0, -18)
+world:spawn("house", 6, 0, -6)
+
+func rain():
+    world:weather("rain")
+
+func storm():
+    world:weather("rain", 2)
+
+func snow():
+    world:weather("snow", 1.5)
+
+func clear():
+    world:weather("none")

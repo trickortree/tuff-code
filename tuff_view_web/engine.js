@@ -3,6 +3,7 @@
 // frame, at the display's own rate. Input goes back to Python as batched events.
 
 import * as anim from './anim.js';  // models that move by themselves: swaying trees, spinning coins, walking people, water
+import * as fx from './fx.js';      // tgame's effects: a shake, pop text, rain and snow, stars; its clock runs at the game's speed
 
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
@@ -273,6 +274,7 @@ const engineCalls = {
   sound_stop: soundStop,
   sound_volume: soundVolume,
   sound_state: soundState,
+  fx(op, ...args) { return fx.call(op, args); },  // tgame's effects (fx.js)
   // tgame's physics: 'start' loads it (physics.js and Rapier); the rest go to physics.js's OPS, in order.
   physics(op, ...args) {
     if (op === 'start') startPhysics(args[0] || {});
@@ -1889,7 +1891,7 @@ function wakeSound() {
 
 function tick(now) {
   requestAnimationFrame(tick);
-  try { anim.frame(now, scenes); } catch (err) { report(err, 'animating'); }  // anim.js: before the scenes are drawn
+  try { anim.frame(fx.time(now), scenes); } catch (err) { report(err, 'animating'); }  // anim.js: before the scenes are drawn
   if (stats.last) {
     stats.gaps.push(now - stats.last);
     if (stats.gaps.length > 4000) stats.gaps.splice(0, 1000);
@@ -1899,7 +1901,7 @@ function tick(now) {
   const t0 = performance.now();
   if (physics && !physicsFailed) {
     try {
-      physics.step(now);
+      physics.step(fx.time(now));  // at the game's speed (slow motion)
     } catch (err) {
       physicsFailed = true;  // once: an error every frame would bury everything else
       report(err, 'physics');

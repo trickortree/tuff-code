@@ -1,0 +1,25 @@
+mention tgame
+
+# Effects in 2D: slow motion (a ball moving by :speed slows down), a shake of the game (not its HUD), and pop text.
+game = tgame.window("2D Effects", 640, 400)
+game:background("navy")
+ball = game:circle(60, 200, 20, "orange")
+ball:speed(200, 0)
+ball:on_edge("bounce")
+star = game:box(320, 300, 60, 60, "gold")
+score = game:hud():text("Score: 0", 80, 24, 20, "white")
+for i in range(8):
+    game:box(40 + i * 80, 120, 50, 20, "teal")
+
+func slow():
+    game:slow_mo(0.25, 1.5)
+
+func boom():
+    game:shake(2, 1)
+
+func pops():
+    game:pop_text("+100", 320, 200, "gold", 48)
+    game:pop_text("over the box", star)
+
+func report():
+    say "at " + game:time() + " ball " + ball:x()

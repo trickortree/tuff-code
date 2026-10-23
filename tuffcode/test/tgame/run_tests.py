@@ -991,6 +991,237 @@ def t_physics_off(c):
         c.check(start.get("y") in (6, 100), f"--scene {name}: things are where the code puts them", start.get("y"))
 
 
+# ---------------------------------------------------------------- effects: slow motion, a shake, pop text, weather, the time of day
+
+def mean_rgb(path, box=(0, 0, 1, 1), step=4):
+    """The average color (r, g, b) in box=(x0, y0, x1, y1), as fractions of the picture."""
+    try:
+        w, h, get = png_rgb(path)
+    except Exception:
+        return (0, 0, 0)
+    px = [get(x, y) for y in range(int(box[1] * h), int(box[3] * h), step) for x in range(int(box[0] * w), int(box[2] * w), step)]
+    return tuple(round(sum(p[k] for p in px) / max(1, len(px))) for k in range(3))
+
+
+def greyness(rgb):
+    return max(rgb) - min(rgb)  # 0 for grey, more the more colourful
+
+
+def fx_of(d):
+    return d.get("effects") or {}
+
+
+def reports(r, start="at "):
+    """The game's report lines ("at 1.2 ticks 3 slider ...") as dicts of their numbers."""
+    out = []
+    for line in r.lines:
+        if line.startswith(start):
+            words = line.split()
+            out.append({words[i]: float(words[i + 1]) for i in range(0, len(words) - 1, 2)})
+    return out
+
+
+def t_fx_slow_mo(c):
+    """Slow motion: world:slow_mo(0.3, 2) slows the game clock, its timers, things that glide by themselves and physics
+    to 30% for 2 s, then it eases back; slow_mo(0.5) with no seconds lasts until slow_mo(1); pausing holds the slow
+    motion's time; a speed out of range is a kid-friendly error."""
+    r = play("fx_slow_mo", game("fx_slow_mo.tuf"), [
+        {"at": 0.5, "call": "report"}, {"at": 0.55, "dump": "fxs_start.json"},
+        {"at": 0.6, "call": "slow"}, {"at": 0.9, "call": "report"}, {"at": 0.95, "dump": "fxs_slow1.json"},
+        {"at": 1.9, "call": "report"}, {"at": 1.95, "dump": "fxs_slow2.json"},
+        {"at": 3.5, "call": "report"}, {"at": 3.55, "dump": "fxs_back1.json"},
+        {"at": 4.5, "call": "report"}, {"at": 4.55, "dump": "fxs_back2.json"},
+        {"at": 4.6, "call": "forever"}, {"at": 6.0, "dump": "fxs_forever.json"},
+        {"at": 6.1, "call": "normal"}, {"at": 7.0, "dump": "fxs_normal.json"},
+        {"at": 7.1, "tuff": "world:slow_mo(0.3, 5)"}, {"at": 7.2, "tuff": "world:pause()"}, {"at": 7.4, "dump": "fxs_pause1.json"},
+        {"at": 8.4, "dump": "fxs_pause2.json"}, {"at": 8.5, "tuff": "world:resume()"},
+        {"at": 8.6, "tuff": "world:slow_mo(0)"}, {"at": 8.7, "tuff": "world:shake(5)"},
+        {"at": 8.8, "close": True}])
+    first_line_is_notice(c, r)
+    c.check(r.code == 0 and "Traceback" not in r.err, f"it ran and closed by itself (exit {r.code}, {r.seconds:.1f} s)", r.err[-800:])
+    rep = reports(r)
+    c.check(len(rep) == 5, "the game reported five times", r.lines)
+    if len(rep) == 5:
+        normal, slow, back = rep[0]["at"], rep[2]["at"] - rep[1]["at"], rep[4]["at"] - rep[3]["at"]
+        c.check(0.22 <= slow <= 0.42, f"in slow motion the game clock goes about 0.3 s a second ({slow:.2f})", rep)
+        c.check(0.85 <= back <= 1.15, f"after 2 s it's back to normal speed ({back:.2f} s a second)", rep)
+        c.check(normal > 0.35, "before it, the clock went at normal speed", rep[0])
+        ticks = rep[2]["ticks"] - rep[1]["ticks"]
+        c.check(ticks <= 2, f"a timer every 0.25 s ran {ticks:.0f} times in that slow second (not 4)", rep)
+        slid, slid_back = rep[2]["slider"] - rep[1]["slider"], rep[4]["slider"] - rep[3]["slider"]
+        c.check(0 < slid < slid_back * 0.5, f"a box gliding by itself slowed down too ({slid:.2f} m, then {slid_back:.2f} m a second)", rep)
+        fell, fell_back = rep[1]["ball"] - rep[2]["ball"], rep[3]["ball"] - rep[4]["ball"]
+        c.check(0 < fell < fell_back * 0.5, f"so did a ball falling with physics ({fell:.2f} m, then {fell_back:.2f} m a second)", rep)
+    s1, s2 = fx_of(r.dumps.get("fxs_slow1.json", {})), fx_of(r.dumps.get("fxs_slow2.json", {}))
+    c.check(abs(s1.get("speed", 0) - 0.3) < 0.02 and (s1.get("page") or {}).get("speed") == s1.get("speed"),
+            "the game's speed is 0.3, in tgame and in the page (physics and animation use its clock)", s1)
+    p1, p2 = page_physics(r.dumps.get("fxs_slow1.json", {})) or {}, page_physics(r.dumps.get("fxs_slow2.json", {})) or {}
+    steps = (p2.get("steps") or 0) - (p1.get("steps") or 0)
+    c.check(8 <= steps <= 30, f"physics took {steps} steps of 1/60 s in that second (about 18, not 60)", (p1, p2))
+    c.check(fx_of(r.dumps.get("fxs_back2.json", {})).get("speed") == 1 and s2.get("slow"),
+            "slow motion ends by itself after its seconds", (s2, fx_of(r.dumps.get("fxs_back2.json", {}))))
+    c.check(fx_of(r.dumps.get("fxs_forever.json", {})).get("speed") == 0.5, "slow_mo(0.5) with no seconds keeps going",
+            fx_of(r.dumps.get("fxs_forever.json", {})))
+    c.check(fx_of(r.dumps.get("fxs_normal.json", {})).get("speed") == 1, "and slow_mo(1) ends it", fx_of(r.dumps.get("fxs_normal.json", {})))
+    a, b = fx_of(r.dumps.get("fxs_pause1.json", {})), fx_of(r.dumps.get("fxs_pause2.json", {}))
+    c.check(a.get("slow") and a.get("slow") == b.get("slow") and (b.get("page") or {}).get("paused"),
+            "while the game is paused, slow motion's seconds wait too", (a.get("slow"), b.get("slow")))
+    c.check(any(":slow_mo needs a speed from 0.05 to 1 (0.3 is 30%, 1 is normal speed), like world:slow_mo(0.3, 2)." in line for line in r.lines),
+            "world:slow_mo(0) says what speeds it takes", r.lines[-4:])
+    c.check(any(":shake needs a strength from 0 to 2" in line for line in r.lines), "world:shake(5) says what strengths it takes", r.lines[-4:])
+
+
+def t_fx_shake_pop(c):
+    """world:shake shakes the camera for its seconds and stops; world:pop_text floats text up from a thing or a spot,
+    on top of everything, and it's gone after about a second (it waits while the game is paused)."""
+    r = play("fx_shake_pop", game("fx_shake_pop.tuf"), [
+        {"at": 0.5, "shot": "fx_still1.png"}, {"at": 0.55, "shot": "fx_still2.png"},
+        {"at": 0.6, "call": "boom"}, {"at": 0.75, "shot": "fx_shake1.png"}, {"at": 0.8, "shot": "fx_shake2.png"},
+        {"at": 0.85, "dump": "fx_shaking.json"},
+        {"at": 1.9, "dump": "fx_shaken.json"}, {"at": 1.95, "shot": "fx_after1.png"}, {"at": 2.0, "shot": "fx_after2.png"},
+        {"at": 2.1, "call": "got"}, {"at": 2.3, "shot": "fx_pop.png"}, {"at": 2.35, "dump": "fx_pops.json"},
+        {"at": 3.6, "dump": "fx_popped.json"},
+        {"at": 3.7, "call": "got"}, {"at": 3.75, "tuff": "world:pause()"}, {"at": 5.0, "dump": "fx_pop_paused.json"},
+        {"at": 5.1, "tuff": "world:resume()"}, {"at": 6.6, "dump": "fx_pop_resumed.json"},
+        {"at": 6.7, "close": True}])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    still = changed_pixels(r.shots.get("fx_still1.png"), r.shots.get("fx_still2.png"))
+    shaking = changed_pixels(r.shots.get("fx_shake1.png"), r.shots.get("fx_shake2.png"))
+    after = changed_pixels(r.shots.get("fx_after1.png"), r.shots.get("fx_after2.png"))
+    c.check(shaking > max(2000, still * 5), f"world:shake moves the view ({shaking} pixels changed in 0.05 s, {still} without it)", (still, shaking))
+    c.check(0 <= after < max(400, shaking * 0.1), f"and stops after its second ({after} pixels changed)", after)
+    c.check((fx_of(r.dumps.get("fx_shaking.json", {})).get("page") or {}).get("shaking") == 1
+            and (fx_of(r.dumps.get("fx_shaken.json", {})).get("page") or {}).get("shaking") == 0,
+            "the page shakes it for that long", (fx_of(r.dumps.get("fx_shaking.json", {})), fx_of(r.dumps.get("fx_shaken.json", {}))))
+    pop = r.shots.get("fx_pop.png")
+    c.check(pop and color_share(pop, hexrgb(tuff_tgame_color("gold")), 40, (0.5, 0.1, 0.9, 0.7)) > 0.004,
+            "the screenshot shows the gold +10 over the coin", pop)
+    c.check(pop and color_share(pop, hexrgb(tuff_tgame_color("pink")), 40, (0.3, 0.0, 0.7, 0.6)) > 0.003,
+            "and the pink text from a spot", pop)
+    n = lambda name: (fx_of(r.dumps.get(name, {})).get("page") or {}).get("pops")
+    c.check(n("fx_pops.json") == 3 and n("fx_popped.json") == 0, f"three pop texts float up and are gone after about a second ({n('fx_pops.json')}, then {n('fx_popped.json')})",
+            (n("fx_pops.json"), n("fx_popped.json")))
+    c.check(n("fx_pop_paused.json") == 3 and n("fx_pop_resumed.json") == 0, "while the game is paused they wait, then finish",
+            (n("fx_pop_paused.json"), n("fx_pop_resumed.json")))
+
+
+def tuff_tgame_color(name):
+    import tuff_tgame
+    return tuff_tgame.COLORS[name]
+
+
+def t_fx_weather(c):
+    """world:weather: rain falls (streaks) from a grey, darker sky into thicker fog and the ground looks wet; a
+    stronger rain has more drops; snow drifts down from a pale sky; "none" clears it. Wrong weather names are
+    caught with "did you mean", and a 2D game is told the weather needs a 3D world."""
+    r = play("fx_weather", game("fx_weather.tuf"), [
+        {"at": 0.5, "shot": "fx_weather_clear.png"},
+        {"at": 0.6, "call": "rain"}, {"at": 1.2, "shot": "fx_weather_rain.png"}, {"at": 1.25, "dump": "fxw_rain.json"},
+        {"at": 1.3, "call": "storm"}, {"at": 1.8, "shot": "fx_weather_storm.png"}, {"at": 1.85, "dump": "fxw_storm.json"},
+        {"at": 1.9, "call": "snow"}, {"at": 2.6, "shot": "fx_weather_snow.png"}, {"at": 2.65, "dump": "fxw_snow.json"},
+        {"at": 2.7, "call": "clear"}, {"at": 3.2, "shot": "fx_weather_after.png"}, {"at": 3.25, "dump": "fxw_clear.json"},
+        {"at": 3.3, "call": "rain"}, {"at": 3.4, "tuff": 'world:sky "sunset"'}, {"at": 3.8, "shot": "fx_weather_rain_sunset.png"},
+        {"at": 3.9, "tuff": 'world:weather("hail")'},
+        {"at": 4.0, "close": True}])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    top = (0, 0, 1, 0.12)
+    clear, rain, snow, after = (mean_rgb(r.shots.get(f"fx_weather_{k}.png", ""), top) for k in ("clear", "rain", "snow", "after"))
+    c.check(greyness(clear) > 60 and clear[2] > clear[0] + 40, f"the clear sky is blue {clear}", clear)
+    c.check(greyness(rain) < greyness(clear) * 0.5 and sum(rain) < sum(clear), f"in the rain it's greyer and darker {rain}", (clear, rain))
+    c.check(greyness(snow) < greyness(clear) * 0.6 and sum(snow) > sum(rain), f"in the snow it's paler {snow}", (rain, snow))
+    c.check(abs(sum(after) - sum(clear)) < 30, f"weather \"none\" brings the clear sky back {after}", (clear, after))
+    w = lambda name: (fx_of(r.dumps.get(name, {})).get("page") or {})
+    c.check(w("fxw_rain.json").get("weather") == ["rain"] and w("fxw_rain.json").get("drops") == 1700 and w("fxw_rain.json").get("wet") == [1],
+            "rain: 1,700 drops fall around the camera and the ground is wet", w("fxw_rain.json"))
+    c.check(w("fxw_storm.json").get("drops") == 3400, "rain at strength 2 has twice the drops", w("fxw_storm.json"))
+    c.check(w("fxw_snow.json").get("weather") == ["snow"] and w("fxw_snow.json").get("wet") == [], "snow: flakes, and the ground dries",
+            w("fxw_snow.json"))
+    c.check(w("fxw_clear.json").get("weather") == [] and w("fxw_clear.json").get("drops") == 0, "\"none\" stops it", w("fxw_clear.json"))
+    sunset = mean_rgb(r.shots.get("fx_weather_rain_sunset.png", ""), (0, 0.25, 1, 0.4))
+    c.check(greyness(sunset) < 90, f"a sky picked while it rains is rainy too {sunset}", sunset)
+    c.check(any('The weather can be "rain", "snow" or "none", not "hail".' in line for line in r.lines), "world:weather(\"hail\") says what it can be",
+            r.lines[-3:])
+    r = play("fx_weather_2d", game("pause_key.tuf"), [{"at": 0.3, "tuff": 'game:weather("rain")'}, {"at": 0.4, "close": True}])
+    c.check(any("The weather needs a 3D world. Make the game with tgame.world(...) for rain or snow." in line for line in r.lines),
+            "game:weather in a 2D game says it needs a 3D world", r.lines[-3:])
+
+
+def t_fx_day(c):
+    """world:time_of_day jumps to an hour (noon is blue, sunset is orange, midnight is dark with stars) and
+    world:time_of_day() gives it back; world:day_cycle(4) goes round a whole day in 4 s (it waits while the game is
+    paused) and day_cycle(0) stops it; world:sky picks a sky and stops the day."""
+    r = play("fx_day", game("fx_day.tuf"), [
+        {"at": 0.3, "call": "report"},
+        {"at": 0.4, "call": "noon"}, {"at": 0.8, "shot": "fx_day_noon.png"},
+        {"at": 0.9, "call": "sunset"}, {"at": 1.3, "shot": "fx_day_sunset.png"},
+        {"at": 1.4, "call": "midnight"}, {"at": 1.8, "shot": "fx_day_night.png"}, {"at": 1.85, "dump": "fxd_night.json"},
+        {"at": 1.9, "call": "report"},
+        {"at": 2.0, "call": "fast"}, {"at": 3.0, "call": "report"}, {"at": 3.05, "dump": "fxd_fast.json"},
+        {"at": 3.1, "call": "stop"}, {"at": 3.2, "call": "report"}, {"at": 4.2, "call": "report"},
+        {"at": 4.3, "call": "pick"}, {"at": 4.4, "dump": "fxd_pick.json"}, {"at": 4.45, "call": "report"},
+        {"at": 4.5, "call": "fast"}, {"at": 4.6, "tuff": "world:pause()"}, {"at": 4.7, "call": "report"}, {"at": 5.5, "call": "report"},
+        {"at": 5.6, "tuff": "world:day_cycle(1)"}, {"at": 5.7, "tuff": "world:time_of_day(30)"},
+        {"at": 5.8, "close": True}])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    hours = [float(line.split()[1]) for line in r.lines if line.startswith("hour ")]
+    c.check(len(hours) == 8, "the game reported the hour eight times", hours)
+    if len(hours) == 8:
+        c.check(hours[0] == 9 and hours[1] == 0, f"time_of_day() gives the hour (9 for a day sky, then 0 at midnight) {hours[:2]}", hours)
+        c.check(10.5 <= hours[2] <= 13.5, f"day_cycle(4) went from 6 to about noon in a second ({hours[2]})", hours)
+        c.check(hours[3] == hours[4], f"day_cycle(0) stops the time where it is ({hours[3]}, a second later {hours[4]})", hours)
+        c.check(hours[5] == 9, "world:sky(\"day\") picks the sky (and the day stops)", hours)
+        c.check(abs(hours[6] - hours[7]) < 0.05, f"while the game is paused the day waits ({hours[6]}, then {hours[7]})", hours)
+    noon, sunset, night = (r.shots.get(f"fx_day_{k}.png") for k in ("noon", "sunset", "night"))
+    sky_noon, glow = mean_rgb(noon, (0, 0, 1, 0.12)), mean_rgb(sunset, (0, 0.28, 1, 0.38))
+    c.check(sky_noon[2] > sky_noon[0] + 60, f"noon's sky is blue {sky_noon}", sky_noon)
+    c.check(glow[0] > glow[2] + 30, f"sunset's sky glows orange by the horizon {glow}", glow)
+    dark = mean_rgb(night, (0, 0, 1, 0.3))
+    c.check(sum(dark) < 120, f"midnight is dark {dark}", dark)
+    stars = color_share(night, (230, 235, 245), 60, (0, 0, 1, 0.3), step=1) if night else 0
+    c.check(stars > 0.0005, f"with stars in it ({stars * 100:.2f}% of the sky)", stars)
+    d = fx_of(r.dumps.get("fxd_night.json", {}))
+    c.check(d.get("stars") == 1 and (d.get("page") or {}).get("stars") == [1], "the page shows its stars at full brightness", d)
+    pick = fx_of(r.dumps.get("fxd_pick.json", {}))
+    c.check(pick.get("hour") is None and pick.get("stars") == 0, "a sky picked has no stars", pick)
+    c.check(any(":day_cycle needs how many seconds a whole day takes (2 or more)" in line for line in r.lines), "world:day_cycle(1) says what it takes", r.lines[-3:])
+    c.check(any(":time_of_day needs an hour from 0 to 24 (18 is 6 pm)" in line for line in r.lines), "world:time_of_day(30) says what it takes", r.lines[-3:])
+
+
+def t_fx_2d(c):
+    """2D: game:slow_mo slows sprites that move by themselves and the clock, game:shake shakes the game (not its
+    HUD), and game:pop_text floats text up from a spot or over a sprite, and it's gone after about a second."""
+    r = play("fx_2d", game("fx_2d.tuf"), [
+        {"at": 0.4, "call": "report"}, {"at": 1.4, "call": "report"},
+        {"at": 1.5, "call": "slow"}, {"at": 1.7, "call": "report"}, {"at": 2.7, "call": "report"},
+        {"at": 3.6, "call": "report"}, {"at": 4.6, "call": "report"},
+        {"at": 4.7, "shot": "fx_2d_still.png"}, {"at": 4.8, "call": "boom"}, {"at": 4.95, "shot": "fx_2d_shake1.png"},
+        {"at": 5.0, "shot": "fx_2d_shake2.png"}, {"at": 6.0, "shot": "fx_2d_after.png"},
+        {"at": 6.1, "call": "pops"}, {"at": 6.3, "shot": "fx_2d_pop.png"}, {"at": 6.35, "dump": "fx2_pops.json"},
+        {"at": 7.6, "dump": "fx2_popped.json"},
+        {"at": 7.7, "close": True}])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    rep = reports(r)
+    c.check(len(rep) == 6, "the game reported six times", r.lines)
+    if len(rep) == 6:
+        normal, slow, back = rep[1]["at"] - rep[0]["at"], rep[3]["at"] - rep[2]["at"], rep[5]["at"] - rep[4]["at"]
+        c.check(0.9 <= normal <= 1.1 and 0.18 <= slow <= 0.35 and 0.9 <= back <= 1.1,
+                f"the game clock goes 1 s a second, then about 0.25 in slow motion, then 1 again ({normal:.2f}, {slow:.2f}, {back:.2f})", rep)
+    still, shake1, shake2 = r.shots.get("fx_2d_still.png"), r.shots.get("fx_2d_shake1.png"), r.shots.get("fx_2d_shake2.png")
+    moved = changed_pixels(shake1, shake2, box=(0, 0.2, 1, 1))
+    c.check(moved > 1500, f"game:shake moves the game ({moved} pixels changed in 0.05 s)", moved)
+    hud = changed_pixels(still, shake1, box=(0.04, 0.02, 0.22, 0.1), step=1)
+    c.check(0 <= hud < 40, f"but not its HUD ({hud} pixels of the score changed)", hud)
+    pop = r.shots.get("fx_2d_pop.png")
+    c.check(pop and color_share(pop, hexrgb(tuff_tgame_color("gold")), 40, (0.35, 0.3, 0.65, 0.55)) > 0.01,
+            "the screenshot shows the gold +100 floating up", pop)
+    p1, p2 = fx_of(r.dumps.get("fx2_pops.json", {})).get("pops"), fx_of(r.dumps.get("fx2_popped.json", {})).get("pops")
+    c.check(p1 == 2 and p2 == 0, f"two pop texts, gone after about a second ({p1}, then {p2})", (p1, p2))
+
+
 # ---------------------------------------------------------------- menus, buttons and screens (atgui on a game)
 
 ACCENT = (59, 130, 246)  # atgui's blue: primary buttons, the start screen's hint
@@ -1628,7 +1859,8 @@ GOOD = ["snake.tuf", "breakout.tuf", "snake3d.tuf", "axe_sim.tuf", "features_2d.
         "perf_2d.tuf", "perf_2d_speed.tuf", "perf_3d.tuf", "perf_3d_move.tuf", "callback.tuf", "errors.tuf", "top_error.tuf",
         "churn.tuf", "pause_key.tuf", "hud_3d.tuf", "terrain_walk.tuf", "terrain_look.tuf", "terrain_dig.tuf",
         "ui_2d.tuf", "ui_3d.tuf", "physics_drop.tuf", "physics_tower.tuf", "physics_player.tuf", "physics_car.tuf",
-        "physics_ragdoll.tuf", "physics_2d.tuf"]
+        "physics_ragdoll.tuf", "physics_2d.tuf",
+        "fx_slow_mo.tuf", "fx_shake_pop.tuf", "fx_weather.tuf", "fx_day.tuf", "fx_2d.tuf"]
 BAD = [
     ('game = tgame.window("x")\ngame:rect(1, 2)\n', "A game doesn't have :rect. Use :box instead."),
     ('game = tgame.window("x")\nb = game:box(1, 2)\nb:moov(1, 2)\n', "A sprite doesn't have :moov. Did you mean :move?"),
@@ -1789,6 +2021,16 @@ BAD = [
     ('w = tgame.world("x")\nhero = w:spawn("hut")\nhero:animate("dance")\n',
      'A character\'s animation can be "auto", "walk", "idle", "wave" or "none", not "dance".'),
     ('w = tgame.world("x")\nhero = w:spawn("hut")\nhero:animate "running"\n', 'not "running". Did you mean "walk"?'),
+    # the effects
+    ('w = tgame.world("x")\nw:weather("hail")\n', 'The weather can be "rain", "snow" or "none", not "hail".'),
+    ('w = tgame.world("x")\nw:weather "snwo"\n', 'not "snwo". Did you mean "snow"?'),
+    ('w = tgame.world("x")\nw:slowmo(0.3, 2)\n', "A world doesn't have :slowmo. Use :slow_mo instead."),
+    ('game = tgame.window("x")\ngame:screen_shake(1)\n', "A game doesn't have :screen_shake. Use :shake instead."),
+    ('w = tgame.world("x")\nw:day_night_cycle(60)\n', "A world doesn't have :day_night_cycle. Use :day_cycle instead."),
+    ('w = tgame.world("x")\nw:pop_text("+1", 0, 1, 0, "golden")\n', "'golden' isn't a color tgame knows."),
+    ('game = tgame.window("x")\ngame:pop_text("+1", 10, 20, "purpel")\n', "'purpel' isn't a color tgame knows."),
+    ('w = tgame.world("x")\nw:shake(1, 2, 3)\n', "world:shake got the wrong number of inputs (3)."),
+    ('game = tgame.window("x")\ngame:weather("rain")\n', "A game doesn't have :weather."),
 ]
 
 
@@ -1857,6 +2099,12 @@ GOOD_SNIPPETS = [
     'ball:bounce(0.8)\nball:push(200, -300)\nball:push([200, -300])\nball:velocity(0, -200)\nsay ball:velocity()\n'
     'ball:on_hit(boing)\ngame:explode(400, 300, 600, 200)\nfunc boing(other, strength):\n    game:sound "pop"\n'
     'game:every_frame step\nfunc step(dt):\n    nil\n',
+    'w = tgame.world("x")\ncoin = w:spawn("coin")\nw:slow_mo(0.3, 2)\nw:slow_mo(1)\nw:shake(0.5)\nw:shake(1, 1.5)\n'
+    'w:pop_text("+10", 0, 1, 0)\nw:pop_text("+10", [0, 1, 0], "gold", 40)\nw:pop_text("+1", coin, "gold")\n'
+    'w:weather("rain")\nw:weather("snow", 1.5)\nw:weather "none"\nw:day_cycle(120)\nw:day_cycle(0)\nw:time_of_day(18)\n'
+    'hour = w:time_of_day()\nsay hour + 1\n'
+    'game = tgame.window("x")\nball = game:circle(100, 100, 10)\ngame:slow_mo(0.5)\ngame:shake(2, 1)\n'
+    'game:pop_text("+1", 100, 50)\ngame:pop_text("+1", 100, 50, "gold", 40)\ngame:pop_text("hit", ball)\n',
 ]
 
 
@@ -2128,6 +2376,7 @@ TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": 
          "physics": t_physics, "physics_player": t_physics_player, "physics_car": t_physics_car, "physics_2d": t_physics_2d,
          "physics_off": t_physics_off,
          "saves": t_saves,
+         "fx_slow_mo": t_fx_slow_mo, "fx_shake_pop": t_fx_shake_pop, "fx_weather": t_fx_weather, "fx_day": t_fx_day, "fx_2d": t_fx_2d,
          "scene": t_scene, "notice": t_notice, "mcp": t_mcp, "checker": t_checker, "editor": t_editor, "guide": t_guide, "perf": t_perf}
 
 
