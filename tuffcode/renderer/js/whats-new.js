@@ -66,13 +66,33 @@
     box.setAttribute('role', 'dialog');
     box.setAttribute('aria-modal', 'true');
     box.setAttribute('aria-labelledby', 'wn-title');
+    // Everything scrolls together (so the scrollbar runs the whole height); the bar with "Let's go" stays put. Until
+    // the end is reached, a fade and "Scroll for more" say there's more below.
     box.innerHTML = `<div class="wn-card">
-      ${hero(version, entry.images)}
-      <div class="wn-head"><h2 id="wn-title">Here's what's changed!</h2><span class="wn-ver">TuffCode ${esc(version)}</span></div>
-      <div class="wn-body">${render(entry.notes)}</div>
-      <div class="wn-foot"><button class="btn primary" data-a="close">Let's go</button></div>
+      <div class="wn-scroll">
+        ${hero(version, entry.images)}
+        <div class="wn-head"><h2 id="wn-title">Here's what's changed!</h2><span class="wn-ver">TuffCode ${esc(version)}</span></div>
+        <div class="wn-body">${render(entry.notes)}</div>
+        <div class="wn-end">
+          <span class="wn-end-mark" aria-hidden="true"></span>
+          <b>That's everything new in TuffCode ${esc(version)}.</b>
+          <span>Have fun making things! Every update's notes are on <a href="https://github.com/trickortree/tuff-code/releases" data-web="https://github.com/trickortree/tuff-code/releases">GitHub</a>, and Help &gt; What's New brings this back.</span>
+        </div>
+        <div class="wn-fade" aria-hidden="true"></div>
+      </div>
+      <div class="wn-foot">
+        <span class="wn-more" aria-hidden="true">Scroll for more<svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span>
+        <button class="btn primary" data-a="close">Let's go</button>
+      </div>
     </div>`;
     document.body.appendChild(box);
+    const card = box.querySelector('.wn-card');
+    const scroller = box.querySelector('.wn-scroll');
+    const atEnd = () => card.classList.toggle('at-end', scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4);
+    scroller.addEventListener('scroll', atEnd, { passive: true });
+    new ResizeObserver(atEnd).observe(scroller);
+    box.querySelectorAll('img').forEach((img) => img.addEventListener('load', atEnd));
+    atEnd();
     const strip = box.querySelector('.wn-strip');
     const dots = [...box.querySelectorAll('[data-dot]')];
     strip?.addEventListener('scroll', () => {

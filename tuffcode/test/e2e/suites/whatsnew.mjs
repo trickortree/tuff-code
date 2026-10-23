@@ -26,6 +26,30 @@ export default async (t, ctx) => {
   check('Its pictures (when it has any) load and have rounded corners', !!b && b.imgs.every((i) => parseFloat(i.radius) >= 8 && i.w > 0 && i.shown > 0), b?.imgs);
   await t.sleep(400);
   await t.shot('whatsnew.png');
+
+  // One scroll area from the picture down (the scrollbar runs the whole height). Until the end, a fade and "Scroll for
+  // more" show; at the end they go, and the end note is there. A picture of every scroll.
+  const look = () => ev(`(() => { const c = document.querySelector('#whatsnew .wn-card'), s = c.querySelector('.wn-scroll');
+    return { top: s.scrollTop, max: s.scrollHeight - s.clientHeight, end: c.classList.contains('at-end'), hint: getComputedStyle(c.querySelector('.wn-more')).opacity,
+      fade: getComputedStyle(c.querySelector('.wn-fade')).opacity, heroInScroll: !!s.querySelector('.wn-hero') || !c.querySelector('.wn-hero'),
+      note: c.querySelector('.wn-end')?.textContent.trim() || '' }; })()`);
+  const card = await ev(`(() => { const r = document.querySelector('#whatsnew .wn-card').getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; })()`);
+  const first = await look();
+  check('The picture, title and notes scroll together, and it starts at the top', first.heroInScroll && first.top === 0, first);
+  check('With more below, "Scroll for more" and the fade show', first.max > 0 && !first.end && first.hint === '1' && first.fade === '1', first);
+  let n = 0;
+  await ev(`document.querySelector('#whatsnew .wn-scroll').style.scrollBehavior = 'auto'; 1`);
+  for (;;) {
+    n++;
+    await t.shot(`whatsnew_scroll_${n}.png`, card);
+    const now = await look();
+    if (now.end || n > 12) break;
+    await ev(`(() => { const s = document.querySelector('#whatsnew .wn-scroll'); s.scrollTop += Math.round(s.clientHeight * 0.8); return 1; })()`);
+    await t.sleep(450);
+  }
+  const last = await look();
+  t.info(`${n} scroll pictures`);
+  check('At the end, "Scroll for more" and the fade are gone, and the end note says that\'s everything', last.end && last.hint === '0' && last.fade === '0' && /That's everything new in TuffCode/.test(last.note), last);
   await ev(`document.querySelector('#whatsnew [data-a="close"]').click()`);
   await t.sleep(300);
   check('"Let\'s go" closes it, and it is remembered as seen', !(await box()) && settings().whatsNewSeen === version, settings().whatsNewSeen);
