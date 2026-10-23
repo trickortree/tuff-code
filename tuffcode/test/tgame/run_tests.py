@@ -34,6 +34,9 @@ def arg(name, default=None):
 
 OUT = os.path.abspath(arg("--out-dir", os.path.join(HERE, "out")))
 RUNTIME = os.path.abspath(arg("--runtime")) if arg("--runtime") else None
+# The games' windows open out of sight, never take the focus and make no sound (tuff_view's _quiet_window), so the
+# tests can run while someone uses the computer. TUFF_TEST_QUIET=0 shows them.
+os.environ.setdefault("TUFF_TEST_QUIET", "1")
 
 
 class Checks:
@@ -79,6 +82,8 @@ def play(name, program, steps, timeout=60, seed=1, env=None, hold_mouse=False):
             if key in s and os.path.exists(os.path.join(OUT, s[key])):
                 os.remove(os.path.join(OUT, s[key]))
     full_env = {**os.environ, "TUFF_TGAME_AUTOPILOT": plan_file, "PYTHONIOENCODING": "utf-8", **(env or {})}
+    if hold_mouse and os.environ.get("TUFF_TEST_REAL_MOUSE") == "1":
+        full_env["TUFF_TEST_QUIET"] = "0"  # it holds the real mouse: a window in front, for real
     full_env.pop("TUFF_IDE", None)
     t0 = time.perf_counter()
     try:

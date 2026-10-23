@@ -162,7 +162,17 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  win.once('ready-to-show', () => win.show());
+  if (process.env.TUFF_TEST_QUIET === '1') {
+    // The tests (TUFF_TEST_QUIET=1): past the right of every screen, never taking the focus, and silent, so they
+    // can run while someone uses the computer. The games it runs inherit it (tuff_view's _quiet_window).
+    const { screen } = require('electron');
+    const right = Math.max(...screen.getAllDisplays().map((d) => d.bounds.x + d.bounds.width));
+    win.setPosition(right + 400, 0);
+    win.webContents.setAudioMuted(true);
+    win.once('ready-to-show', () => win.showInactive());
+  } else {
+    win.once('ready-to-show', () => win.show());
+  }
   win.on('maximize', () => send('window:maximized', true));
   win.on('unmaximize', () => send('window:maximized', false));
   win.on('blur', () => {

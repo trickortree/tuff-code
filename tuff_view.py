@@ -387,6 +387,31 @@ def _no_pywebview():
     return f"App and game windows need pywebview. Install it with:  {python} -m pip install pywebview"
 
 
+QUIET_FLAGS = ["--mute-audio", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
+               "--disable-background-timer-throttling"]
+
+
+def _quiet_window():
+    """The window options for a test's window (TUFF_TEST_QUIET=1, which the test runners set), so the tests can run
+    while someone uses the computer: past the right of every screen, never taking the focus or staying on top, and
+    silent. The page still draws there (Chromium would pause a window it thinks is hidden) and acts as if it had the
+    focus (View.__init__)."""
+    args = os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "").split()
+    off = [a for a in args if a.startswith("--disable-features=")]
+    features = [f for a in off for f in a.split("=", 1)[1].split(",") if f] + ["CalculateNativeWinOcclusion"]
+    args = [a for a in args if a not in off and a not in QUIET_FLAGS] + QUIET_FLAGS
+    os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = " ".join(args + ["--disable-features=" + ",".join(dict.fromkeys(features))])
+    x, y = 20000, 0
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            metric = ctypes.windll.user32.GetSystemMetrics
+            x, y = metric(76) + metric(78) + 400, metric(77)  # the virtual screen's left + its width, its top
+        except Exception:
+            pass
+    return {"x": x, "y": y, "focus": False, "on_top": False}
+
+
 def _prepare_process(title):
     if sys.platform != "win32":
         return
@@ -670,6 +695,9 @@ class View:
         self._assets = os.path.abspath(assets) if assets else None
         icon = icon or os.environ.get("TUFF_APP_ICON") or DEFAULT_ICON
         self._icon = icon if os.path.isfile(icon) else None
+        self._quiet = os.environ.get("TUFF_TEST_QUIET") == "1"
+        if self._quiet:
+            options = {**options, **_quiet_window()}
         self._window_args = dict(width=int(width), height=int(height), resizable=bool(resizable),
                                  frameless=bool(frameless), easy_drag=False, background_color=background, **options)
         files = _file_server()
@@ -690,6 +718,8 @@ class View:
         # closed one, rather than raising ViewClosed: the program can then register its close handlers (atgui's
         # app:closed), and the first frame() or loop() runs them before the program ends.
         threading.Thread(target=self._send_loop, name="tuff-view-send", daemon=True).start()
+        if self._quiet:
+            self.js("document.hasFocus = () => true;")  # a quiet test's window never gets the focus: act as if it had
         self._hold = _MouseHold.make(self)
         if self._hold is not None:
             self.js("tv.nativeMouse(true)")  # the page stands in for the browser's pointer lock (no banner)

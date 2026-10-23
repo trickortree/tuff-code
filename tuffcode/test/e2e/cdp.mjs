@@ -73,6 +73,8 @@ export async function connect(app, { timeout = 90000 } = {}) {
     ws.send(JSON.stringify({ id: mid, method, params }));
   });
   await send('Runtime.enable');
+  // A quiet run's window never gets the focus (launch.mjs): the page acts as if it had it, as when it's in front.
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
 
   const t = {
     send,

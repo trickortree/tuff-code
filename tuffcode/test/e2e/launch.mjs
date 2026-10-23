@@ -80,6 +80,8 @@ export async function launch({ name = 'manual', project = 'project', app = null,
     });
     if (!WIN) for (const who of ['claude', 'codex', 'agy']) fs.chmodSync(mockBin(who), 0o755);
   }
+  // Out of sight, never taking the focus and silent (main.js and tuff_view), unless TUFF_TEST_QUIET=0.
+  childEnv.TUFF_TEST_QUIET = process.env.TUFF_TEST_QUIET ?? '1';
   Object.assign(childEnv, env);
 
   const log = fs.openSync(path.join(out, 'app.log'), 'a');
