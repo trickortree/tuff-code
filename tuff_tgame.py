@@ -5527,7 +5527,7 @@ class Level:
         if getattr(t, "route", None) is not None:
             t.route = None
             if self.world.phys is not None:
-                t.send(t.node, vel=[0, 0, 0])
+                t.send(t.node, vel=[0, 0, 0], acc=[0, 0, 0, 0])
             t.phys_changed()  # a fixed body again, where it stopped
 
     # ---- every frame
@@ -5553,7 +5553,7 @@ class Level:
         (t.x, t.y, t.z), done = route.step(dt)
         t.push()
         if self.world.phys is not None:  # how fast it goes, so physics moves it smoothly between frames (physics.js's glide)
-            t.send(t.node, vel=[tidy(v) for v in route.velocity()])
+            t.send(t.node, vel=[tidy(v) for v in route.velocity()], acc=[tidy(a) for a in route.acceleration()] + [route.speed])
         if done:  # a path to one spot: it's there now
             self.stop(t)
         if not solid:
@@ -5699,6 +5699,16 @@ class Route:
         elif end and t > secs - ease:
             v *= max(0.0, secs - t) / ease
         return tuple((b[i] - a[i]) / length * v for i in range(3))
+
+    def acceleration(self):
+        """How fast its speed changes each way now (metres a second, each second): getting going or slowing down at
+        the ends and corners, else nothing."""
+        if self.leg is None:
+            return 0.0, 0.0, 0.0
+        (a, b), length, secs, ease, start, end = self.leg
+        k = self.speed / ease if ease else 0.0
+        f = k if start and self.t < ease else -k if end and self.t > secs - ease else 0.0
+        return tuple((b[i] - a[i]) / length * f for i in range(3))
 
     def step(self, dt):
         """Goes on dt seconds: (where it is now, whether it has finished: a path to one spot)."""

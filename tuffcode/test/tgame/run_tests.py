@@ -1596,15 +1596,35 @@ def t_level_lift(c):
     c.check(shot and color_share(shot, hexrgb("#9a9a92"), 40, (0.2, 0.3, 0.8, 1)) > 0.03 and color_share(shot, (40, 85, 170), 45) > 0.001,
             "the screenshot shows the player (blue) riding the stone lift", shot)
 
+    # The crate on the lift as the page draws it, every display frame: how far it sinks into it or lifts off it, from
+    # where it sat at the start. (Python's crate:y() comes from a physics report a frame or two old, while lift:y() is
+    # now, so in Python a rising lift seems to have the crate a few centimetres sunk into it.) The lift is drawn where
+    # Python puts it, 60 times a second, and the crate smoothly by physics, so on a faster screen the two can be one
+    # Python frame of the lift's move apart (2.5 m/s / 60: 4 cm, a little more when a Python frame is late); a
+    # screenshot holds Python up for longer, so the crate is measured before the screenshot. A crate that bounced or
+    # sank would be a good deal further off than that. The same goes for sliding along it.
+    record = ("const ph = [...tv.objs.values()].filter((n) => n.phys && n.obj && !n.dead);"
+              "const crate = ph.find((n) => n.phys.kind === 'dynamic'), lift = ph.find((n) => n.phys.kind === 'kinematic');"
+              "const w = window.__llp = {low: 99, high: -99, slid: 0, frames: 0, found: !!(crate && lift)}; let d0 = null, x0 = null;"
+              "const tick = () => { if (crate && lift) { const d = crate.obj.position.y - lift.obj.position.y;"
+              " const dx = crate.obj.position.x - lift.obj.position.x; if (d0 === null) { d0 = d; x0 = dx; }"
+              " w.low = Math.min(w.low, d - d0); w.high = Math.max(w.high, d - d0); w.slid = Math.max(w.slid, Math.abs(dx - x0)); w.frames++; }"
+              " requestAnimationFrame(tick); }; requestAnimationFrame(tick);")
     r = play("level_lift_physics", game("level_lift_physics.tuf"), [
-        {"at": 4.6, "shot": "level_lift_physics.png"}, {"at": 7.0, "call": "report"}, {"at": 7.05, "dump": "llp_end.json"},
+        {"at": 0.8, "js": record},
+        {"at": 6.85, "js": "tv.emit('tg-autopilot', {message: 'drawn ' + JSON.stringify(window.__llp)})"},
+        {"at": 6.9, "shot": "level_lift_physics.png"}, {"at": 7.0, "call": "report"}, {"at": 7.05, "dump": "llp_end.json"},
         {"at": 7.2, "close": True}])
     clean_exit(c, r)
     g = numbers_after(r, "gap")  # the player's lowest and highest over the lift's top, the crate's, how far the crate slid
     c.check(len(g) == 5 and g[0] > -0.05 and g[1] < 0.05, f"with physics on, the player rides it too (gap {g[:2]})", g)
-    c.check(len(g) == 5 and g[2] > -0.05 and g[3] < 0.08,
-            f"a physics crate on it rides along, across, up and back down, staying on its top: no bouncing (y {g[2:4]})", g)
-    c.check(len(g) == 5 and g[4] < 0.15, f"... without sliding along it (it slid {g[4:]})", g)
+    drawn = next((json.loads(line.split("drawn ", 1)[1]) for line in r.lines if line.startswith("[autopilot] drawn ")), {})
+    c.check(drawn.get("found") and drawn.get("frames", 0) > 100 and drawn["low"] > -0.08 and drawn["high"] < 0.08,
+            f"a physics crate on it rides along, across, up and back down, staying on its top as it's drawn: no bouncing "
+            f"(from where it sat: {drawn.get('low', 0):.3f} to {drawn.get('high', 0):.3f} m in {drawn.get('frames')} frames)", drawn)
+    c.check(drawn.get("slid", 1) < 0.12, f"... without sliding along it (it slid {drawn.get('slid', 0):.3f} m as it's drawn)", drawn)
+    c.check(len(g) == 5 and g[2] > -0.2 and g[3] < 0.2 and g[4] < 0.3,
+            f"... and in Python too, give or take a frame or two of the lift's move (y {g[2:4]}, slid {g[4:]})", g)
     shot = r.shots.get("level_lift_physics.png")
     c.check(shot and color_share(shot, (125, 80, 45), 50, (0.2, 0.2, 0.8, 0.9)) > 0.005, "the screenshot shows the crate on the lift", shot)
 
@@ -1617,6 +1637,15 @@ def t_level_lift(c):
             f"riding a moving platform, the player walks into a physics crate on it and pushes it along (it went from z -2 "
             f"to {g[5:6]}, the player is behind it)", g)
     c.check(len(g) == 9 and g[6] > 0.5 and g[0] > 0.5, f"... and rides along with the platform (x {g[:1]}, the lift's {g[6:7]})", g)
+
+    # A Python frame 0.2 s late as the platform slows down to stop: the page slows it down and stops it there itself,
+    # rather than going on past the end and being pulled back (that jolt slid the crate 26 cm).
+    r = play("level_lift_hitch", game("level_lift_hitch.tuf"), [
+        {"at": 1.0, "call": "go"}, {"at": 6.5, "call": "report"}, {"at": 6.7, "close": True}])
+    clean_exit(c, r)
+    slid = numbers_after(r, "slid")  # how far the crate slid on it, where the lift stopped, where the crate is
+    c.check(len(slid) == 3 and slid[1] == 8 and abs(slid[0]) < 0.15,
+            f"a late frame as a platform stops doesn't jolt it: a physics crate on it slides {slid[:1]} m (it slid 0.26)", slid)
 
 
 # ---------------------------------------------------------------- menus, buttons and screens (atgui on a game)

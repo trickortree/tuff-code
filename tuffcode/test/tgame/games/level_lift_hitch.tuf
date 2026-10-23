@@ -1,0 +1,30 @@
+mention tgame
+
+# A moving platform with a physics crate on it, and a Python frame that comes 0.2 s late just as the platform slows
+# down to stop. The page keeps the platform going between frames: it should slow down and stop where the path ends,
+# not go on past it and get pulled back with a jolt that slides the crate.
+world = tgame.world("Level Lift Hitch", 900, 560)
+world:ground "grass"
+lift = world:box(0, 1, 0, [4, 0.4, 4], "stone")
+crate = world:spawn("crate", 0, 1.4, 0)
+crate:physics()
+moving = false
+late = false
+start = 0
+
+func go():
+    start = crate:x() - lift:x()
+    lift:path([[8, 1, 0]], 2.5)
+
+func watch(dt):
+    if lift:x() > 7.2 and not late:
+        late = true
+        wait(0.2)
+
+func report():
+    say "slid " + (crate:x() - lift:x() - start) + " lift " + lift:x() + " crate " + crate:x()
+
+world:every_frame watch
+
+while world:open():
+    world:frame()

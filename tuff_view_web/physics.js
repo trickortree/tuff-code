@@ -373,7 +373,16 @@ function moved(n, props) {
       r.body.setRotation({ x: q[0], y: q[1], z: q[2], w: q[3] }, true);
     } else {
       const c = add(vec(o.position), qrot(q, [0, r.cy, 0]));
-      if (r.kind === 'kinematic' && Array.isArray(props.vel)) { r.glide = { at: c, v: props.vel.map(Number) }; return; }  // on a path: glide()
+      if (r.kind === 'kinematic' && Array.isArray(props.vel)) {  // on a path: glide()
+        const acc = Array.isArray(props.acc) ? props.acc.map(Number) : [0, 0, 0, 0];
+        // Python's speed was measured at its frame, a moment off this step's, so getting going or slowing down it
+        // differs a little from the one glide() has reached: keep that one (smooth, so what rides on it doesn't
+        // slip), and take Python's when it's really different (a new speed, a turn, a stop).
+        const v = props.vel.map(Number), was = r.glide && r.glide.v;
+        const near = was && Math.hypot(v[0] - was[0], v[1] - was[1], v[2] - was[2]) < 0.25 && (v.some(Boolean) || !was.some(Boolean));
+        r.glide = { at: c, v: near ? was : v, a: acc.slice(0, 3), top: acc[3] || 0 };
+        return;
+      }
       if (r.kind === 'kinematic') {
         r.body.setNextKinematicTranslation({ x: c[0], y: c[1], z: c[2] });
         r.body.setNextKinematicRotation({ x: q[0], y: q[1], z: q[2], w: q[3] });
@@ -391,13 +400,24 @@ function moved(n, props) {
 // A thing moving along a path (tgame's thing:path): Python sends where it is and how fast it's going (vel) every
 // frame, but its frames and the steps here don't line up, so a step would get two moves or none, and what rides on it
 // would be kicked up or left behind. Instead it goes on at that speed every step, pulled gently toward where Python
-// has it (that spot goes on at the same speed until the next frame says where it is).
+// has it (that spot goes on at the same speed until the next frame says where it is). It also gets going and slows
+// down as Python says (acc: x, y, z, then the path's speed), never past that speed, and a slowing one stops rather
+// than turning back: so when a Python frame is late at a corner it waits there, instead of going on past it and
+// being pulled back with a jolt that slides what rides on it.
 function glide(r) {
   const g = r.glide;
   if (r.kind !== 'kinematic' || !r.body) { r.glide = null; return; }
+  const v0 = g.v, a = g.a;
+  let v1 = v0.map((v, i) => v + a[i] * STEP);
+  const dot = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+  if (dot(a, v0) < 0 && dot(v1, v0) <= 0) { v1 = [0, 0, 0]; g.a = [0, 0, 0]; }  // slowed to a stop
+  const fast = Math.hypot(...v1);
+  if (g.top > 0 && fast > g.top) { v1 = v1.map((v) => v * g.top / fast); g.a = [0, 0, 0]; }  // up to speed
+  const step = v0.map((v, i) => (v + v1[i]) / 2 * STEP);
+  g.v = v1;
   const now = vec(r.body.translation());
-  const next = now.map((v, i) => v + g.v[i] * STEP + (g.at[i] - v) * 0.15);
-  g.at = g.at.map((v, i) => v + g.v[i] * STEP);
+  const next = now.map((v, i) => v + step[i] + (g.at[i] - v) * 0.15);
+  g.at = g.at.map((v, i) => v + step[i]);
   r.body.setNextKinematicTranslation(vecObj(next));
 }
 
