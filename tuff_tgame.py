@@ -80,7 +80,7 @@ SKIES = {
     "space": {"sky": ["#000000", "#05060d", "#000000"], "fog": None, "sun": ("#ffffff", 2.4),
               "hemi": ("#4050a0", "#101010", 0.35), "at": (40, 30, 30), "far": 0},
 }
-KIT = ("tree", "pine", "rock", "bush", "flower", "house", "hut", "sign", "crate", "fence", "coin", "chest", "person")
+KIT = ("tree", "pine", "rock", "bush", "flower", "house", "hut", "sign", "crate", "fence", "coin", "chest", "person", "key")
 # How a model from the kit can move by itself (thing:animate): "auto" is the model's own (a person walks while it
 # moves and stands breathing when it doesn't; trees sway; coins spin), "none" holds it still.
 ANIMATIONS = ("auto", "walk", "idle", "wave", "none")
@@ -1804,6 +1804,7 @@ class World3D(Game):
         ("look_at", "look_at"), ("follow", "follow"), ("orbit", "orbit"), ("looking_at", "looking_at"),
         ("terrain", "terrain"), ("lighting", "lighting"), ("gravity", "gravity"), ("explode", "explode"),
         ("car", "car"), ("ragdoll", "ragdoll"),
+        ("door", "door"),
     ]
 
     def setup(self):
@@ -1834,6 +1835,7 @@ class World3D(Game):
         self.camera_dirty = True
         self.crosshair = None
         self.hint = None
+        self.interact = None  # talking, grabbing, doors and keys (Interaction), once something uses them
 
     def hud(self):
         if self.hud_layer is None:
@@ -2062,6 +2064,16 @@ class World3D(Game):
         x, y, z, (color,) = self.where([x, y, z, color], ("blue",), "ragdoll")
         return Ragdoll(self, x, self.above(x, y, z), z, color).native
 
+    # ---- talking, grabbing, doors and keys (see Interaction)
+    def interaction(self):
+        if self.interact is None:
+            self.interact = Interaction(self)
+        return self.interact
+
+    def door(self, x=MISSING, y=MISSING, z=MISSING, color=MISSING):
+        x, y, z, (color,) = self.where([x, y, z, color], ("wood",), "door")
+        return Door(self, x, self.above(x, y, z), z, color).native
+
     def stop_chase(self):
         """The camera stops following the car it drives (the program put the camera somewhere else)."""
         if self.cam_mode == "drive":
@@ -2252,6 +2264,8 @@ class World3D(Game):
             self.hint.hide() if (self.locked or self.fake_lock or covered) else self.hint.show()
 
     def update(self, dt, real):
+        if self.interact is not None:
+            self.interact.update(dt)
         if self.driving is not None:
             self.drive_keys()
         p = self.the_player
@@ -2838,6 +2852,16 @@ def _kit(name):
         ], True)
     if name == "person":
         return ((0.7, 1.75, 0.5), None, person_parts(), True)
+    if name == "key":
+        # An old gold key floating upright (it spins and bobs like a coin): a ring to hold, a shaft and its teeth.
+        gold = {"color": "#f2c230", "emissive": "#5a4200", "metal": 0.55, "rough": 0.3}
+        return ((0.4, 1.2, 0.1), None, [
+            ("torus", {"r": 0.11, "tube": 0.032, "y": 1.0, "seg": 28, **gold, "anim": "coin"}, True),
+            ("sphere", {"r": 0.045, "y": 0.87, "seg": 10, **gold}, True),
+            ("cylinder", {"r": 0.026, "h": 0.4, "y": 0.66, "seg": 10, **gold}, True),
+            ("box", {"w": 0.1, "h": 0.045, "d": 0.035, "x": 0.06, "y": 0.5, **gold}, True),
+            ("box", {"w": 0.07, "h": 0.04, "d": 0.035, "x": 0.045, "y": 0.58, **gold}, True),
+        ], False)
     raise KeyError(name)
 
 
@@ -2918,6 +2942,7 @@ class Thing(Physical):
         ("clicked", "clicked"), ("set", "set"), ("get", "get"),
         ("physics", "physics"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
         ("velocity", "velocity"), ("on_hit", "on_hit"), ("sleep", "sleep"), ("wake", "wake"),
+        ("say", "say"), ("on_talk", "on_talk"),
     ]
 
     def __init__(self, world, kind, x, y, z, size, parts, body=None, parent=None, pick=True, camera=False):
@@ -3459,6 +3484,15 @@ class Thing(Physical):
     def get(self, name):
         return self.data.get(self.rt.plain(name))
 
+    # ---- talking (see Interaction)
+    def say(self, text, seconds=4):
+        self.world.interaction().say(self, text, seconds)
+        return self.native
+
+    def on_talk(self, fn):
+        self.world.interaction().on_talk(self, fn)
+        return self.native
+
 
 def boxes_touch(a, b):
     return a[0] < b[3] and b[0] < a[3] and a[1] < b[4] and b[1] < a[4] and a[2] < b[5] and b[2] < a[5]
@@ -3474,6 +3508,7 @@ class Player:
         ("turn_to", "turn_to"), ("angle", "angle"), ("walk_speed", "walk_speed"), ("jump_height", "jump_height"),
         ("jump", "jump"), ("hold", "hold"), ("looking_at", "looking_at"), ("touches", "touches"),
         ("distance", "distance"), ("hide", "hide"), ("show", "show"), ("on_hit", "on_hit"),
+        ("can_grab", "can_grab"), ("holding", "holding"),
     ]
     RADIUS = 0.32
     TALL = 1.75
@@ -3600,6 +3635,15 @@ class Player:
 
     def looking_at(self, reach=None):
         return self.world.looking_at(reach)
+
+    # ---- grabbing (see Interaction)
+    def can_grab(self, on=True):
+        self.world.interaction().can_grab(self.rt.truthy(on))
+        return self.native
+
+    def holding(self):
+        it = self.world.interact
+        return it.held.native if it is not None and it.held is not None else None
 
     def touches(self, other):
         v = self.rt.plain(other)
@@ -4143,6 +4187,512 @@ class Ragdoll(Thing):
                           for (node, _), (_, shape, size, at, mass, _) in zip(self.parts, RAGDOLL)],
                 "joints": [[names.index(a), names.index(b), list(at), kind, list(lim) if lim else None]
                            for a, b, at, kind, lim in RAGDOLL_JOINTS]}
+
+
+# ---------------------------------------------------------------- talking, grabbing, doors and keys (3D)
+
+TALK_REACH = 3.0  # how near the player has to be to talk to someone (npc:on_talk) or to grab something
+DOOR_REACH = 2.5  # how near a door has to be for E to open or close it
+HOLD_AT = 2.2     # how far in front of the player's eyes a held thing floats
+THROW = 13.0      # how fast a thrown thing flies off (metres a second)
+# Little sounds for the page's synth (like SOUNDS): a door swinging open, banging shut, rattling when it's locked, a
+# thing picked up and thrown.
+INTERACT_SOUNDS = {
+    "open": [[300, 0, 0.22, "triangle", 0.45, 150], [700, 0, 0.12, "noise", 0.18, 200]],
+    "shut": [[120, 0, 0.14, "sine", 1, 55], [900, 0, 0.06, "noise", 0.5, 150]],
+    "locked": [[220, 0, 0.06, "square", 0.45], [180, 0.08, 0.07, "square", 0.45]],
+    "grab": [[440, 0, 0.07, "sine", 0.7, 760]],
+    "throw": [[1100, 0, 0.2, "noise", 0.55, 250]],
+}
+
+
+def name_of(t):
+    """What a message calls a thing: its label ("Gold Key"), or what it is ("key")."""
+    return t.label_text.strip() or t.kind
+
+
+def door_local(heading, dx, dz):
+    """A world offset in a door's own space (x along the door, z through it), for a door facing `heading`."""
+    h = math.radians(heading)
+    return dx * math.cos(h) + dz * math.sin(h), -dx * math.sin(h) + dz * math.cos(h)
+
+
+def door_world(heading, lx, lz):
+    """A door's own offset as a world one (door_local the other way)."""
+    h = math.radians(heading)
+    return lx * math.cos(h) - lz * math.sin(h), lx * math.sin(h) + lz * math.cos(h)
+
+
+class Interaction:
+    """A world's talking, grabbing, doors and keys: made by the first npc:say, npc:on_talk, world:door or
+    player:can_grab, and run every frame by World3D.update.
+
+    E does the first of these that it can: talk to the nearest one with an on_talk within 3 m, open or close the
+    nearest door within 2.5 m, or grab the physics thing the player is looking at within 3 m (with player:can_grab).
+    A hint at the bottom says what E will do ("E: Talk"). A held thing floats in front of the player (its speed is set
+    toward that spot every frame, so it still bumps into things), a click throws it and E drops it. Walking into a key
+    (the kit's "key", or anything a door needs) picks it up, and walking into a door opens it, away from the player.
+    Speech bubbles are drawn by the page (tuff_view_web/interact.js); this keeps them over whoever's talking."""
+
+    def __init__(self, world):
+        self.world = world
+        self.grab_on = False
+        self.held = None
+        self.talkers = {}  # thing -> its on_talk functions
+        self.doors = []
+        self.keys = {}     # things the player picked up (a dict used as an ordered set)
+        self.wanted = {}   # things a door needs: walking into them picks them up, like a key
+        self.bubbles = {}  # thing -> [its bubble's node, when it goes (the game's clock) or None, its words, where it is]
+        self.hint = self.hint_bg = self.note = self.note_bg = None
+        self.hint_text = self.note_text = None
+        self.note_until = 0.0
+
+    # ---- what the program asks for
+    def say(self, t, text, seconds):
+        w = self.world
+        words = w.rt.text(text)
+        secs = w.num(seconds, ":say")
+        if secs < 0:
+            raise w.rt.error(":say needs how many seconds the bubble shows (0 keeps it), like npc:say(\"Hi!\", 3).")
+        if not words.strip():
+            self.unsay(t)
+            return
+        b = self.bubbles.get(t)
+        if b is None:
+            b = self.bubbles[t] = [w.view.obj(w.scene, "group", pick=False), None, "", None]
+        b[1] = w.clock + secs if secs > 0 else None
+        b[2] = words
+        b[3] = None  # placed again below
+        w.view.js(f"window.tgInteract && window.tgInteract.say(tv, {int(b[0])}, {json.dumps(words)})")
+        self.follow(t, b)
+
+    def unsay(self, t):
+        b = self.bubbles.pop(t, None)
+        if b is not None and not self.world.closed:
+            self.world.view.remove(b[0])
+
+    def on_talk(self, t, fn):
+        self.talkers.setdefault(t, []).append(self.world.lib.check_fn(fn, ":on_talk"))
+
+    def can_grab(self, on):
+        self.grab_on = on
+        if on:
+            self.world.physics_on()  # what it grabs are physics things
+        elif self.held is not None:
+            self.drop()
+
+    def is_locked(self, door):
+        return door.locked_ or (door.need is not None and door.need not in self.keys)
+
+    # ---- every frame
+    def update(self, dt):
+        w = self.world
+        for t, b in list(self.bubbles.items()):
+            if not t.alive or (b[1] is not None and w.clock >= b[1]):
+                self.unsay(t)
+            else:
+                self.follow(t, b)
+        if self.note_text is not None and w.clock >= self.note_until:
+            self.show_note(None)
+        p = w.the_player
+        if p is None or w.driving is not None or w.closed:
+            self.show_hint(None)
+            return
+        if w.is_paused:
+            return
+        self.pick_up(p)
+        for d in self.doors:
+            if d.alive:
+                d.near_player(p, self)
+        if self.held is not None:
+            self.carry(p)
+        do, what = self.choice(p)
+        if "e" in w.just and do is not None:
+            do(what)
+            do, what = self.choice(p)
+        elif "mouse" in w.just and self.held is not None:
+            self.throw(p)
+            do, what = self.choice(p)
+        self.show_hint(self.hint_for(do, what))
+
+    def follow(self, t, b):
+        """A bubble stays over the one talking (and hides with it)."""
+        at = (t.x, t.y + (0.9 if t.fallen else t.height()) + 0.3, t.z, t.hidden)
+        if at != b[3]:
+            b[3] = at
+            self.world.view.set(b[0], x=at[0], y=at[1], z=at[2], visible=not t.hidden)
+
+    def choice(self, p):
+        """What E does now: (a function, what it's given), or (None, None)."""
+        if self.held is not None:
+            return self.drop, None
+        near = [(math.hypot(t.x - p.x, t.z - p.z), i, t) for i, t in enumerate(self.talkers)
+                if t.alive and not t.hidden and self.talkers[t]]
+        near = [n for n in near if n[0] <= TALK_REACH]
+        if near:
+            return self.talk, min(near)[2]
+        doors = [(math.hypot(d.x - p.x, d.z - p.z), i, d) for i, d in enumerate(self.doors) if d.alive and not d.hidden]
+        doors = [n for n in doors if n[0] <= DOOR_REACH]
+        if doors:
+            return self.use_door, min(doors)[2]
+        if self.grab_on:
+            t = self.aimed_at(p)
+            if t is not None:
+                return self.grab, t
+        return None, None
+
+    def hint_for(self, do, what):
+        if do is None:
+            return None
+        if do == self.drop:
+            return "E: Drop     Click: Throw"
+        if do == self.talk:
+            return "E: Talk"
+        if do == self.use_door:
+            return "E: Close" if what.want else "E: Open"
+        return "E: Grab"
+
+    # ---- talking
+    def talk(self, t):
+        for fn in list(self.talkers.get(t, ())):
+            self.world.fire(fn)
+
+    # ---- grabbing and throwing
+    def eyes(self, p):
+        """Where the player looks from and which way: (x, y, z) and a direction (first person: the way it looks;
+        third person: level, the way it faces)."""
+        pitch = math.radians(clamp(p.pitch, -60, 60)) if p.mode == "first person" else 0.0
+        h = math.radians(p.heading)
+        f = (math.sin(h) * math.cos(pitch), math.sin(pitch), -math.cos(h) * math.cos(pitch))
+        return (p.x, p.y + (p.EYE if p.mode == "first person" else 1.1), p.z), f
+
+    def middle(self, t):
+        return t.x, t.y + t.height() / 2, t.z
+
+    def aimed_at(self, p):
+        """The physics thing nearest along the player's view within reach (a thing counts if the view passes within
+        its own size of its middle)."""
+        o, f = self.eyes(p)
+        best = None
+        for t in self.world.things:
+            if not isinstance(t, Thing) or isinstance(t, Car) or not t.alive or t.hidden or not t.dynamic():
+                continue
+            m = self.middle(t)
+            d = (m[0] - o[0], m[1] - o[1], m[2] - o[2])
+            along = d[0] * f[0] + d[1] * f[1] + d[2] * f[2]
+            r = max(0.3, max(t.dims[0] * t.k[0], t.dims[1] * t.k[1], t.dims[2] * t.k[2]) / 2)
+            if along <= 0 or along > TALK_REACH + r:
+                continue
+            off = math.dist(d, (f[0] * along, f[1] * along, f[2] * along))
+            if off <= r * 0.9 + (0.15 if p.mode == "first person" else 0.6) and (best is None or along < best[0]):
+                best = (along, t)
+        return best[1] if best else None
+
+    def grab(self, t):
+        self.held = t
+        self.world.view.call(0, "tones", INTERACT_SOUNDS["grab"], 0.2)
+
+    def drop(self, _=None):
+        self.held = None
+
+    def carry(self, p):
+        """The held thing goes toward its spot in front of the player: its speed is set that way every frame."""
+        t = self.held
+        if not t.alive or t.hidden or not t.dynamic():
+            self.held = None
+            return
+        o, f = self.eyes(p)
+        want = (o[0] + f[0] * HOLD_AT, max(o[1] + f[1] * HOLD_AT, p.y + 0.2 + t.height() / 2), o[2] + f[2] * HOLD_AT)
+        gap = [a - b for a, b in zip(want, self.middle(t))]
+        if math.hypot(*gap) > 4.5:  # stuck behind something, or left behind: it's let go
+            self.held = None
+            return
+        v = [g * 12 for g in gap]
+        speed = math.hypot(*v)
+        if speed > 18:
+            v = [c * 18 / speed for c in v]
+        t.vel = v
+        self.world.phys.send("velocity", int(t.node), *v)
+
+    def throw(self, p):
+        t, self.held = self.held, None
+        _, f = self.eyes(p)
+        v = [f[0] * THROW, f[1] * THROW + (2.0 if p.mode == "first person" else 3.5), f[2] * THROW]
+        t.vel = v
+        self.world.phys.send("velocity", int(t.node), *v)
+        self.world.view.call(0, "tones", INTERACT_SOUNDS["throw"], 0.2)
+
+    # ---- doors and keys
+    def use_door(self, d):
+        if d.want:
+            d.swing_to(0)
+        elif self.is_locked(d):
+            self.locked(d)
+        else:
+            d.open_from(self.world.the_player, auto=True)
+
+    def locked(self, d):
+        need = f" You need the {name_of(d.need)}." if d.need is not None and d.need not in self.keys else ""
+        self.show_note("Locked!" + need)
+        self.world.view.call(0, "tones", INTERACT_SOUNDS["locked"], 0.25)
+
+    def pick_up(self, p):
+        """Walking into a key (or something a door needs) picks it up: it disappears."""
+        box = p.box3()
+        for t in list(self.world.things):
+            if not isinstance(t, Thing) or t in self.keys or not t.alive or t.hidden:
+                continue
+            if (t.kind == "key" or t in self.wanted) and boxes_touch(box, t.box3()):
+                self.keys[t] = None
+                if self.held is t:
+                    self.held = None
+                t.hide()
+                self.world.view.call(0, "tones", SOUNDS["coin"], 0.3)
+                self.show_note(f"You got the {name_of(t)}!")
+
+    # ---- the hint and the messages on the HUD
+    def pill(self, words, y, size, fg, sprites):
+        """A line of words on a dark rounded box in the middle of the window, at y: (box, text), made or changed."""
+        hud = self.world.hud()
+        w, h = len(words) * size * 0.56 + 30, size + 18
+        box, text = sprites
+        if box is None:
+            box = hud.make("rect", self.world.W / 2, y, {"w": w, "h": h, "radius": h / 2, "color": "#11141a",
+                                                         "alpha": 0.62, "z": 5e5 + 1}, own=False)
+            text = hud.make("text", self.world.W / 2, y, {"text": words, "size": size, "bold": True, "color": fg,
+                                                          "ax": 0.5, "ay": 0.5, "z": 5e5 + 2}, own=False)
+        else:
+            box.w = w
+            box.send(w=w, visible=True)
+            text.words = words
+            text.send(text=words, visible=True)
+            box.hidden = text.hidden = False
+        return box, text
+
+    def show_hint(self, words):
+        if words == self.hint_text:
+            return
+        self.hint_text = words
+        if words is None:
+            for s in (self.hint_bg, self.hint):
+                if s is not None:
+                    s.hide()
+            return
+        self.hint_bg, self.hint = self.pill(words, self.world.H - 70, 17, "#ffffff", (self.hint_bg, self.hint))
+
+    def show_note(self, words):
+        self.note_text = words
+        if words is None:
+            for s in (self.note_bg, self.note):
+                if s is not None:
+                    s.hide()
+            return
+        self.note_until = self.world.clock + 1.8
+        self.note_bg, self.note = self.pill(words, self.world.H / 2 + 64, 22, "#ffe9a8", (self.note_bg, self.note))
+
+    def state(self):
+        """For the autopilot's reports."""
+        return {"grab": self.grab_on, "held": self.held.kind if self.held is not None else None,
+                "bubbles": [b[2] for t, b in self.bubbles.items() if t.alive], "hint": self.hint_text,
+                "note": self.note_text, "keys": [t.kind for t in self.keys],
+                "doors": [{"angle": round(d.angle, 1), "open": bool(d.want), "locked": self.is_locked(d)}
+                          for d in self.doors if d.alive]}
+
+
+class Door(Thing):
+    """world:door: a door in its frame. The door itself swings on a hinge at its left side (seen from the front, which
+    faces -z like everything; door:turn turns the whole doorway). tgame swings it a little every frame and, since a
+    door turns physics on, it's a kinematic body there: it pushes physics things out of its way, and shut, the player
+    can't walk through it. The player walking into it, or pressing E near it, opens it away from the player, and it
+    shuts again a few seconds after the player's gone through; door:open() opens it until door:close(). A locked one
+    (door:lock(), or door:needs(key) until the player has picked up that key) stays shut and says "Locked!"."""
+    KIND = "door"
+    NAMES = Thing.NAMES + [("open", "open"), ("close", "close"), ("needs", "needs"), ("lock", "lock"),
+                           ("unlock", "unlock")]
+    EXAMPLE = "door"
+    WIDE, TALL, THICK = 1.0, 2.0, 0.08  # the door itself (its frame is a little bigger)
+    SWING = 100  # how far it opens (degrees)
+    STAYS = 3.0  # seconds it stays open after the player went through
+
+    def __init__(self, world, x, y, z, color):
+        c = world.color(color)
+        frame = {"color": _shade(c, -0.3), "rough": 0.85}
+        parts = [
+            ("box", {"w": 0.14, "h": 2.14, "d": 0.2, "x": -0.58, "y": 1.07, **frame}, False),
+            ("box", {"w": 0.14, "h": 2.14, "d": 0.2, "x": 0.58, "y": 1.07, **frame}, False),
+            ("box", {"w": 1.3, "h": 0.14, "d": 0.22, "y": 2.1, **frame}, False),
+            ("box", {"w": 1.02, "h": 0.03, "d": 0.24, "y": 0.015, "color": "#8f8a80", "rough": 0.95}, False),
+        ]
+        super().__init__(world, "door", x, y, z, (1.3, 2.17, 0.24), [(t, {"shadow": True, **p}, m) for t, p, m in parts])
+        self.solid_ = False   # the doorway is open: the door itself is what's in the way
+        self.angle = 0.0      # how far it has swung (degrees, one way or the other)
+        self.want = 0.0       # where it's swinging to (0: shut)
+        self.swinging = None  # [from, to, seconds so far, seconds it takes]
+        self.locked_ = False
+        self.need = None
+        self.close_at = None  # opened by the player: when it may shut again (the game's clock)
+        self.at_door = False  # the player is in the doorway (so a locked door says so once each time)
+        ph = world.physics_on()
+        wood = {"rough": 0.8}
+        knob = {"color": "#d9b45a", "metal": 0.8, "rough": 0.3, "emissive": "#3a2a00"}
+        W, T, D = self.WIDE, self.TALL, self.THICK
+        panel = [("box", {"w": W, "h": T, "d": D, "y": T / 2, "color": c, **wood}, True)]
+        for py in (0.5, 1.45):  # two sunk panels on each side
+            for pz in (-D / 2 - 0.005, D / 2 + 0.005):
+                panel.append(("box", {"w": W * 0.66, "h": 0.66, "d": 0.012, "y": py, "z": pz, "color": _shade(c, -0.16),
+                                      **wood}, False))
+        for pz in (-D / 2 - 0.035, D / 2 + 0.035):
+            panel.append(("sphere", {"r": 0.045, "x": W / 2 - 0.12, "y": 1.0, "z": pz, "seg": 10, **knob}, False))
+        self.panel = Thing(world, "door panel", x, y, z, (W, T, D), [(t, {"shadow": True, **p}, m) for t, p, m in panel])
+        world.things.pop(self.panel, None)  # it's the door's: a program only sees the door
+        for node in [self.panel.node] + [n for n, _ in self.panel.parts]:
+            world.by_node[int(node)] = self  # clicking it, looking at it or hitting it is the door
+        self.panel.phys_kind = "kinematic"
+        ph.dirty.add(self.panel)
+        world.interaction().doors.append(self)
+        self.place_panel()
+
+    def can_have_physics(self, kind):
+        raise self.rt.error("A door swings on its hinge by itself: it doesn't need :physics.")
+
+    def place_panel(self):
+        """The door where its hinge and its swing put it."""
+        p = getattr(self, "panel", None)
+        if p is None:
+            return
+        hx, hz = door_world(self.heading, -self.WIDE / 2, 0)
+        ox, oz = door_world(self.heading + self.angle, self.WIDE / 2, 0)
+        p.x, p.y, p.z = self.x + hx + ox, self.y, self.z + hz + oz
+        p.heading = (self.heading + self.angle) % 360
+        p.push()
+        p.push_rotation()
+
+    def push(self):
+        super().push()
+        self.place_panel()
+
+    def push_rotation(self):
+        super().push_rotation()
+        self.place_panel()
+
+    def swing_to(self, angle):
+        if angle == self.want:
+            return
+        if not angle:
+            self.close_at = None
+            self.world.view.call(0, "tones", INTERACT_SOUNDS["shut"], 0.25)
+        elif not self.want:
+            self.world.view.call(0, "tones", INTERACT_SOUNDS["open"], 0.25)
+        self.want = angle
+        self.swinging = [self.angle, angle, 0.0, 0.75 if angle else 0.9]
+        self.busy()
+
+    def open_from(self, who, auto=False):
+        """Opens away from who (the player), or one way if there's nobody."""
+        side = door_local(self.heading, who.x - self.x, who.z - self.z)[1] if who is not None else -1.0
+        self.swing_to(-self.SWING if side > 0 else self.SWING)
+        self.close_at = self.world.clock + self.STAYS if auto else None
+
+    def near_player(self, p, it):
+        """The player walking into it opens it (or hears it's locked); opened by the player, it shuts again once the
+        player has been gone a few seconds."""
+        lx, lz = door_local(self.heading, p.x - self.x, p.z - self.z)
+        at = abs(lx) < self.WIDE / 2 + 0.25 and abs(lz) < 1.1
+        if at and not self.want:
+            if it.is_locked(self):
+                if not self.at_door:
+                    it.locked(self)
+            else:
+                self.open_from(p, auto=True)
+        self.at_door = at
+        if self.close_at is not None:
+            if abs(lx) < self.WIDE + 0.4 and abs(lz) < 1.4:
+                self.close_at = self.world.clock + self.STAYS  # not while the player's in the way
+            elif self.world.clock >= self.close_at:
+                self.swing_to(0)
+
+    def busy(self):
+        if self.swinging is not None:
+            self.world.movers.add(self)
+        else:
+            super().busy()
+
+    def tick(self, dt):
+        s = self.swinging
+        if s is not None:
+            s[2] += dt
+            t = min(1.0, s[2] / s[3])
+            # Opening, it swings a little past and settles back; shutting, it slows into its frame.
+            k = 1.0 + 2.2 * (t - 1) ** 3 + 1.2 * (t - 1) ** 2 if s[1] else ease(t)
+            self.angle = s[0] + (s[1] - s[0]) * k
+            if t >= 1:
+                self.angle, self.swinging = s[1], None
+            self.place_panel()
+        super().tick(dt)
+
+    # ---- what a program can do with it
+    def open(self):
+        if not self.want:
+            self.open_from(self.world.the_player)
+        self.close_at = None
+        return self.native
+
+    def close(self):
+        self.swing_to(0)
+        return self.native
+
+    def needs(self, key):
+        t = thing_of(key)
+        if not isinstance(t, Thing) or isinstance(t, Door):
+            raise self.rt.error("door:needs needs the thing that opens it, like door:needs(key) after "
+                                f"key = world:spawn(\"key\", 3, 0, 3). Not {self.rt.what(key)}.")
+        it = self.world.interaction()
+        self.need = t
+        it.wanted[t] = None
+        if self.want and t not in it.keys:
+            self.swing_to(0)
+        return self.native
+
+    def lock(self):
+        self.locked_ = True
+        self.swing_to(0)
+        return self.native
+
+    def unlock(self):
+        self.locked_ = False
+        self.need = None
+        return self.native
+
+    # ---- the door itself goes with its frame
+    def set_color(self, color):
+        self.panel.set_color(color)
+        return self.native
+
+    def hide(self):
+        super().hide()
+        self.panel.hide()
+        return self.native
+
+    def show(self):
+        super().show()
+        self.panel.show()
+        return self.native
+
+    def remove(self):
+        if self.alive:
+            super().remove()
+            self.panel.remove()
+
+
+HINTS["object"].update({"talk": "on_talk", "on_interact": "on_talk", "interact": "on_talk", "on_speak": "on_talk",
+                        "on_chat": "on_talk", "speak": "say", "chat": "say", "bubble": "say", "speech": "say",
+                        "dialog": "say", "dialogue": "say", "tell": "say"})
+HINTS["door"] = {**HINTS["object"], "requires": "needs", "require": "needs", "need": "needs", "key": "needs",
+                 "set_key": "needs", "needs_key": "needs", "shut": "close", "slam": "close", "swing_open": "open"}
+HINTS["player"].update({"grab": "can_grab", "pick_up": "can_grab", "pickup": "can_grab", "carry": "can_grab",
+                        "lift": "can_grab", "can_pick_up": "can_grab", "held_item": "holding", "carrying": "holding",
+                        "held_thing": "holding", "grabbed": "holding", "throw": "can_grab"})
+HINTS["world"].update({"gate": "door", "doorway": "door", "add_door": "door", "make_door": "door"})
 
 
 # ---------------------------------------------------------------- menus, buttons and screens (atgui on a game)
@@ -4785,6 +5335,8 @@ class Autopilot:
         out["objects"] = [[t.kind, round(t.x, 2), round(t.y, 2), round(t.z, 2), t.fallen, t.data]
                           for t in g.things if isinstance(t, Thing) and t.alive][:400]
         out["physics"] = g.phys.state() if g.phys is not None else None
+        if getattr(g, "interact", None) is not None:
+            out["interact"] = g.interact.state()
         if g.three_d and g.the_player is not None:
             out["on_ground"] = g.the_player.on_ground
         return out
@@ -4864,6 +5416,17 @@ VALUES = {
     **{(k, "music"): {0: "music"} for k in ("game", "world")},
     **{(k, "panel"): {0: "anchor"} for k in ("game", "world")},
 }
+# Talking, grabbing, doors and keys (Interaction, Door).
+for _k in ("object", "car", "ragdoll"):
+    GIVES[_k].update({"say": _k, "on_talk": _k})
+GIVES["world"]["door"] = "door"
+GIVES["player"]["can_grab"] = "player"
+GIVES["door"] = {**_OBJECT_GIVES, **{m: "door" for m in _SETTERS}, "say": "door", "on_talk": "door",
+                 **{m: "door" for m in ("open", "close", "needs", "lock", "unlock")}}
+for _k in ("object", "car", "ragdoll", "door"):
+    HANDLERS.setdefault(_k, {})["on_talk"] = (0, 0, "no inputs")
+HANDLERS["door"].update({"clicked": (0, 1, "1 input (the door)"), "on_hit": _HIT})
+VALUES.update({("world", "door"): {3: "color", 1: "color"}, ("door", "color"): {0: "color"}, ("door", "glow"): {0: "glow"}})
 
 
 def check_value(kind, method, index, value, base_dir=None):
@@ -4955,7 +5518,7 @@ def tables():
     kinds = {}
     for kind, cls in (("game", Game2D), ("world", World3D), ("sprite", Sprite), ("object", Thing),
                       ("player", Player), ("hud", Hud), ("group", Group), ("terrain", Terrain), ("car", Car),
-                      ("ragdoll", Ragdoll)):
+                      ("ragdoll", Ragdoll), ("door", Door)):
         obj = probe(cls)
         kinds[kind] = {name: getattr(obj, attr) for name, attr in cls.NAMES}
     ui_kinds = {"panel": probe(Panel).methods(), "screen": probe(StartScreen).methods()}

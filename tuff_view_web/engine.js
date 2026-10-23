@@ -3,6 +3,7 @@
 // frame, at the display's own rate. Input goes back to Python as batched events.
 
 import * as anim from './anim.js';  // models that move by themselves: swaying trees, spinning coins, walking people, water
+import './interact.js';  // tgame's speech bubbles (npc:say), drawn for Python's view.js as window.tgInteract
 
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;

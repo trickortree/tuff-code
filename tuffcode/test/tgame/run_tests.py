@@ -1547,6 +1547,147 @@ console.log(JSON.stringify({ libs: window.TUFF_LIBS, docs: window.TUFF_DOCS, met
 """
 
 
+# ---------------------------------------------------------------- talking, grabbing, doors and keys
+
+def ix(d):
+    """A dump's talking, grabbing, doors and keys (Interaction.state)."""
+    return d.get("interact") or {}
+
+
+def t_ix_grab(c):
+    """player:can_grab: looking at a physics crate, E picks it up and it floats in front of the player (following the
+    view), a click throws it far, E drops what's held, and with can_grab(false) E grabs nothing."""
+    look = [{"at": 0.4, "lock": True}, {"at": 0.5, "look": [0, 200]}]
+    r = play("ix_grab", game("ix_grab.tuf"), look + [
+        {"at": 1.6, "dump": "ixg_aim.json"}, {"at": 1.7, "key": "e"},
+        {"at": 2.6, "call": "report"}, {"at": 2.65, "dump": "ixg_held.json"},
+        {"at": 2.7, "look": [0, -200]}, {"at": 3.6, "call": "report"}, {"at": 3.65, "dump": "ixg_up.json"},
+        {"at": 3.7, "shot": "ix_grab.png"},
+        {"at": 3.8, "click_center": True}, {"at": 3.9, "dump": "ixg_thrown.json"},
+        {"at": 5.4, "call": "report"}, {"at": 5.45, "dump": "ixg_landed.json"},
+        {"at": 5.5, "tuff": "player:move_to(-3, 0, 3)"}, {"at": 5.6, "look": [0, 230]},
+        {"at": 6.3, "key": "e"}, {"at": 6.8, "dump": "ixg_ball.json"}, {"at": 6.9, "key": "e"},
+        {"at": 7.0, "dump": "ixg_dropped.json"}, {"at": 7.1, "call": "no_grab"}, {"at": 7.2, "key": "e"},
+        {"at": 7.4, "dump": "ixg_off.json"}, {"at": 7.5, "close": True}])
+    clean_exit(c, r)
+    aim = ix(r.dumps.get("ixg_aim.json", {}))
+    c.check(aim.get("grab") and aim.get("hint") == "E: Grab", "looking at a physics crate within 3 m, the hint says \"E: Grab\"", aim)
+    held = r.dumps.get("ixg_held.json", {})
+    crate = (bodies(held, "crate") or [None])[0]
+    c.check(ix(held).get("held") == "crate" and any(line.startswith("holding <crate") for line in r.lines),
+            "E picks it up: player:holding() gives the crate", (ix(held), r.lines[-3:]))
+    c.check(crate and crate[2] > 0.1 and abs(crate[1]) < 0.3 and 1.6 < crate[3] < 2.6, f"it floats in front of the player (y {crate and crate[2]})", crate)
+    c.check(ix(held).get("hint") == "E: Drop     Click: Throw", "the hint says E drops it and a click throws it", ix(held).get("hint"))
+    up = (bodies(r.dumps.get("ixg_up.json", {}), "crate") or [None])[0]
+    c.check(up and crate and up[2] > crate[2] + 0.7, f"looking up, it goes up with the view (y {up and up[2]})", (crate, up))
+    thrown = r.dumps.get("ixg_thrown.json", {})
+    landed = (bodies(r.dumps.get("ixg_landed.json", {}), "crate") or [None])[0]
+    c.check(ix(thrown).get("held") is None and landed and landed[3] < -6,
+            f"a click throws it: it flies off and lands far away (z {landed and landed[3]})", (ix(thrown), landed))
+    c.check(any(line.startswith("holding nothing") for line in r.lines), "then player:holding() gives nil", r.lines[-3:])
+    c.check(ix(r.dumps.get("ixg_ball.json", {})).get("held") == "sphere", "E picks up a ball too", ix(r.dumps.get("ixg_ball.json", {})))
+    c.check(ix(r.dumps.get("ixg_dropped.json", {})).get("held") is None, "E again drops it", ix(r.dumps.get("ixg_dropped.json", {})))
+    off = ix(r.dumps.get("ixg_off.json", {}))
+    c.check(off.get("held") is None and not off.get("grab") and off.get("hint") is None,
+            "with player:can_grab(false), E grabs nothing and there's no hint", off)
+    shot = r.shots.get("ix_grab.png")
+    c.check(shot and color_share(shot, (125, 80, 45), 45, (0.3, 0.2, 0.7, 0.8)) > 0.05, "the screenshot shows the crate held up in front", shot)
+
+
+def t_ix_talk(c):
+    """npc:say and npc:on_talk: a speech bubble over a person (for 4 s, or for good with 0), "E: Talk" near someone
+    with an on_talk and E runs it; E talks first, then opens a door in reach, then grabs."""
+    r = play("ix_talk", game("ix_talk.tuf"), [
+        {"at": 0.8, "dump": "ixt_start.json"}, {"at": 0.85, "shot": "ix_talk.png"},
+        {"at": 1.0, "key": "e"}, {"at": 1.3, "dump": "ixt_talked.json"}, {"at": 1.35, "shot": "ix_talk_thanks.png"},
+        {"at": 1.4, "call": "short"}, {"at": 1.6, "dump": "ixt_short.json"}, {"at": 2.8, "dump": "ixt_gone.json"},
+        {"at": 2.9, "call": "leave"}, {"at": 3.1, "dump": "ixt_door.json"}, {"at": 3.15, "key": "e"},
+        {"at": 3.5, "dump": "ixt_opened.json"},
+        {"at": 3.6, "call": "no_door"}, {"at": 3.7, "lock": True}, {"at": 3.75, "look": [0, 250]},
+        {"at": 4.5, "dump": "ixt_grab.json"}, {"at": 4.6, "close": True}])
+    clean_exit(c, r)
+    start = ix(r.dumps.get("ixt_start.json", {}))
+    c.check(start.get("bubbles") == ["Hi! Find my lost cat.", "I'm too far away to talk to."], "npc:say shows a speech bubble over each one", start)
+    c.check(start.get("hint") == "E: Talk", "near someone with an on_talk (and a door and a crate), the hint says \"E: Talk\"", start.get("hint"))
+    talked = ix(r.dumps.get("ixt_talked.json", {}))
+    c.check("talked 1" in r.lines and "the far one talked" not in r.lines, "E runs the near one's on_talk (not the far one's)", r.lines[-3:])
+    c.check("Thanks! It ran into the woods." in talked.get("bubbles", []) and "Hi! Find my lost cat." not in talked.get("bubbles", []),
+            "saying something new changes the bubble", talked)
+    c.check("Bye!" in ix(r.dumps.get("ixt_short.json", {})).get("bubbles", []) and
+            ix(r.dumps.get("ixt_gone.json", {})).get("bubbles") == ["I'm too far away to talk to."],
+            "npc:say(text, 1) goes after a second; npc:say(text, 0) stays", (ix(r.dumps.get("ixt_short.json", {})), ix(r.dumps.get("ixt_gone.json", {}))))
+    door = ix(r.dumps.get("ixt_door.json", {}))
+    c.check(door.get("hint") == "E: Open", "with nobody to talk to, a door in reach comes next: \"E: Open\"", door.get("hint"))
+    opened = ix(r.dumps.get("ixt_opened.json", {}))
+    c.check(opened.get("doors") and opened["doors"][0]["open"] and opened.get("hint") == "E: Close",
+            "E opens it (and then the hint says \"E: Close\")", opened)
+    c.check(ix(r.dumps.get("ixt_grab.json", {})).get("hint") == "E: Grab", "with no door either, looking at the crate: \"E: Grab\"",
+            ix(r.dumps.get("ixt_grab.json", {})).get("hint"))
+    shot = r.shots.get("ix_talk.png")
+    c.check(shot and color_share(shot, (255, 255, 255), 8, (0.3, 0.0, 0.7, 0.5)) > 0.01, "the screenshot shows a white speech bubble over the person", shot)
+    shot = r.shots.get("ix_talk_thanks.png")
+    c.check(shot and color_share(shot, (255, 255, 255), 10, (0.44, 0.84, 0.56, 0.9)) > 0.01, "and the \"E: Talk\" hint at the bottom", shot)
+
+
+def t_ix_door(c):
+    """world:door: walking into it swings it open away from the player, the player walks through and it shuts again;
+    a door that needs a key says "Locked!" with the key's name until the player walks into the key (it disappears),
+    then E opens it; door:turn, door:open() (pushing a physics crate), door:close(), door:lock() and door:unlock()."""
+    r = play("ix_door", game("ix_door.tuf"), [
+        {"at": 0.6, "dump": "ixd_start.json"},
+        {"at": 0.8, "hold": "w", "for": 1.4}, {"at": 1.6, "dump": "ixd_opening.json"},
+        {"at": 2.4, "call": "report"}, {"at": 2.45, "dump": "ixd_through.json"}, {"at": 2.5, "tuff": "player:turn_to(180)"},
+        {"at": 2.7, "shot": "ix_door_open.png"},
+        {"at": 6.6, "dump": "ixd_shut.json"},
+        {"at": 6.7, "tuff": "player:move_to(6, 0, 2.2)"}, {"at": 6.8, "tuff": "player:turn_to(0)"},
+        {"at": 7.0, "key": "e"}, {"at": 7.2, "dump": "ixd_locked.json"}, {"at": 7.25, "shot": "ix_door_locked.png"},
+        {"at": 7.4, "tuff": "player:move_to(3, 0, 4)"}, {"at": 7.7, "dump": "ixd_key.json"},
+        {"at": 7.8, "tuff": "player:move_to(6, 0, 2.2)"}, {"at": 8.0, "key": "e"}, {"at": 8.9, "dump": "ixd_unlocked.json"},
+        {"at": 8.95, "shot": "ix_door_gate.png"},
+        {"at": 9.0, "call": "push_crate"}, {"at": 10.0, "dump": "ixd_side.json"}, {"at": 10.1, "call": "shut_side"},
+        {"at": 10.2, "call": "lock_door"}, {"at": 10.3, "tuff": "player:move_to(0, 0, 2.2)"}, {"at": 10.5, "key": "e"},
+        {"at": 10.7, "dump": "ixd_relocked.json"}, {"at": 10.8, "call": "unlock_door"}, {"at": 10.9, "key": "e"},
+        {"at": 11.5, "dump": "ixd_reopened.json"}, {"at": 11.6, "close": True}])
+    clean_exit(c, r)
+    doors = lambda name: ix(r.dumps.get(name, {})).get("doors") or [{}, {}, {}]
+    start = doors("ixd_start.json")
+    c.check(len(start) == 3 and all(d["angle"] == 0 and not d["open"] for d in start) and start[1]["locked"] and not start[0]["locked"],
+            "three doors start shut; the one that needs a key is locked", start)
+    opening = doors("ixd_opening.json")[0]
+    c.check(opening.get("open") and opening.get("angle", 0) < -40, f"walking into a door swings it open, away from the player (angle {opening.get('angle')})", opening)
+    through = (r.dumps.get("ixd_through.json", {}).get("player") or [0, 0, 0])
+    c.check(through[2] < -1.5, f"the player walks through the doorway (z {through[2]})", through)
+    shut = doors("ixd_shut.json")[0]
+    c.check(not shut.get("open") and shut.get("angle") == 0, "a few seconds after the player's gone through, it shuts again", shut)
+    locked = r.dumps.get("ixd_locked.json", {})
+    c.check(ix(locked).get("note") == "Locked! You need the gold key." and not doors("ixd_locked.json")[1].get("open"),
+            "E at a locked door says \"Locked!\" and the key's name, and it stays shut", ix(locked).get("note"))
+    key = ix(r.dumps.get("ixd_key.json", {}))
+    c.check(key.get("keys") == ["key"] and key.get("note") == "You got the gold key!" and not doors("ixd_key.json")[1].get("locked"),
+            "walking into the key picks it up (and the door it opens isn't locked any more)", key)
+    objs = [o for o in r.dumps.get("ixd_key.json", {}).get("objects", []) if o[0] == "key"]
+    c.check(objs and "gold key" not in r.dumps.get("ixd_key.json", {}).get("labels", ["gold key"]) or objs, "the key is still the program's, hidden", objs)
+    gate = doors("ixd_unlocked.json")[1]
+    c.check(gate.get("open") and abs(gate.get("angle", 0)) > 90, "then E opens it", gate)
+    side = doors("ixd_side.json")[2]
+    crate = (bodies(r.dumps.get("ixd_side.json", {}), "crate") or [None])[0]
+    c.check(side.get("open") and crate and (abs(crate[1] + 6.6) > 0.3 or abs(crate[3] + 0.4) > 0.3),
+            f"door:open() on a turned door swings it, and it pushes a physics crate out of its way ({crate})", (side, crate))
+    relocked = r.dumps.get("ixd_relocked.json", {})
+    c.check(doors("ixd_relocked.json")[0].get("locked") and not doors("ixd_relocked.json")[0].get("open") and ix(relocked).get("note") == "Locked!",
+            "door:lock() locks it (E says \"Locked!\")", (doors("ixd_relocked.json")[0], ix(relocked).get("note")))
+    c.check(doors("ixd_reopened.json")[0].get("open"), "door:unlock() and it opens again", doors("ixd_reopened.json")[0])
+    shot = r.shots.get("ix_door_open.png")
+    c.check(shot and color_share(shot, (110, 75, 40), 45, (0.2, 0.1, 0.8, 0.9)) > 0.02, "the screenshot shows the wooden door open behind the player", shot)
+    shot = r.shots.get("ix_door_locked.png")
+    c.check(shot and color_share(shot, (229, 72, 77), 50, (0.2, 0.0, 0.8, 0.9)) > 0.05, "the locked one is red, shut in front of the player", shot)
+    code, _, err, d, _ = scene(game("ix_door.tuf"))
+    things = {t.get("var"): t for t in d.get("things", [])}
+    c.check(code == 0 and d.get("stopped") == "end" and all(things.get(v, {}).get("kind") == "door" for v in ("door", "gate", "side"))
+            and things.get("key", {}).get("kind") == "key" and len(things.get("door", {}).get("ids", [])) > 10,
+            "Tuff Engine's preview shows the doors (with their swinging part) and the key", (code, err[-300:], list(things)))
+
+
 def t_editor(c):
     import tuff_tgame
     lang = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")
@@ -1628,8 +1769,12 @@ GOOD = ["snake.tuf", "breakout.tuf", "snake3d.tuf", "axe_sim.tuf", "features_2d.
         "perf_2d.tuf", "perf_2d_speed.tuf", "perf_3d.tuf", "perf_3d_move.tuf", "callback.tuf", "errors.tuf", "top_error.tuf",
         "churn.tuf", "pause_key.tuf", "hud_3d.tuf", "terrain_walk.tuf", "terrain_look.tuf", "terrain_dig.tuf",
         "ui_2d.tuf", "ui_3d.tuf", "physics_drop.tuf", "physics_tower.tuf", "physics_player.tuf", "physics_car.tuf",
-        "physics_ragdoll.tuf", "physics_2d.tuf"]
+        "physics_ragdoll.tuf", "physics_2d.tuf",
+        "ix_grab.tuf", "ix_talk.tuf", "ix_door.tuf"]
 BAD = [
+    ('world = tgame.world("x")\nd = world:door(0, 0, 0)\nd:shut()\n', "A door doesn't have :shut. Use :close instead."),
+    ('world = tgame.world("x")\nworld:door(0, 0, 0, "purpel")\n', "'purpel' isn't a color tgame knows."),
+    ('world = tgame.world("x")\np = world:player()\np:pick_up()\n', "A player doesn't have :pick_up. Use :can_grab instead."),
     ('game = tgame.window("x")\ngame:rect(1, 2)\n', "A game doesn't have :rect. Use :box instead."),
     ('game = tgame.window("x")\nb = game:box(1, 2)\nb:moov(1, 2)\n', "A sprite doesn't have :moov. Did you mean :move?"),
     ('game = tgame.window("x")\nb = game:box(1, 2)\nb:move(1, 2, 3)\n', "sprite:move got the wrong number of inputs (3)."),
@@ -1944,6 +2089,7 @@ TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": 
          "terrain_look": t_terrain_look, "no_webgl": t_no_webgl, "ui_2d": t_ui_2d, "ui_3d": t_ui_3d,
          "physics": t_physics, "physics_player": t_physics_player, "physics_car": t_physics_car, "physics_2d": t_physics_2d,
          "physics_off": t_physics_off,
+         "ix_grab": t_ix_grab, "ix_talk": t_ix_talk, "ix_door": t_ix_door,
          "scene": t_scene, "notice": t_notice, "mcp": t_mcp, "checker": t_checker, "editor": t_editor, "guide": t_guide, "perf": t_perf}
 
 
