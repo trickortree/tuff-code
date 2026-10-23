@@ -1,0 +1,57 @@
+mention tgame
+
+# The kit's people from every side, for a close look at how they're made (tests: people_showcase takes the same
+# pictures every time, so a change to person_parts can be compared): three standing, one walking, one waving, two
+# ragdolls (one pushed over), on plain grass under a soft sky.
+world = tgame.world("People", 1100, 620)
+world:sky "day"
+world:ground "grass"
+world:gravity(-9.8)
+
+left = world:spawn("person", -0.9, 0, -2)
+middle = world:spawn("person", 0, 0, -2)
+right = world:spawn("person", 0.9, 0, -2)
+for p in [left, middle, right]:
+    p:turn_to(180)
+    p:animate "idle"
+
+walker = world:spawn("person", 3.2, 0, -2)
+walker:turn_to(270)
+walker:animate "walk"
+
+waver = world:spawn("person", -3.2, 0, -2)
+waver:turn_to(200)
+waver:animate "wave"
+
+standing = world:ragdoll(-7, 0, -2, "teal")
+fallen = world:ragdoll(-9, 0, -2, "orange")
+
+func push():
+    fallen:push(0, 2, -5)
+
+func front():
+    world:camera_at(0, 1.25, 1.6)
+    world:look_at(0, 0.95, -2)
+
+func close():
+    world:camera_at(0, 1.4, -0.75)
+    world:look_at(0, 1.22, -2)
+
+func side():
+    world:camera_at(3.2, 1.1, 0.4)
+    world:look_at(3.2, 0.95, -2)
+
+func wave():
+    world:camera_at(-1.9, 1.45, -0.4)
+    world:look_at(-3.2, 1.15, -2)
+
+func back():
+    world:camera_at(0, 1.5, -4.6)
+    world:look_at(0, 1.0, -2)
+
+func ragdolls():
+    world:camera_at(-8, 1.6, 1.4)
+    world:look_at(-8, 0.5, -2)
+
+while world:open():
+    world:frame()

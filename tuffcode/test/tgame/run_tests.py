@@ -774,6 +774,25 @@ def changed_pixels(a, b, box=(0, 0, 1, 1), step=2):
                if max(abs(p - q) for p, q in zip(get_a(x, y), get_b(x, y))) > 12)
 
 
+def t_people(c):
+    """The kit's people from every side, the same pictures every time (out/people_*.png: look at them after a change
+    to person_parts): three standing from the front, a close-up of the shoulders and arms, one walking from the side,
+    one waving, from the back, two ragdolls (one pushed over), and the player in third person holding an axe."""
+    shots = ["people_front.png", "people_close.png", "people_side.png", "people_wave.png", "people_back.png", "people_ragdoll.png"]
+    steps = [{"at": 0.4, "call": "push"}]
+    for i, (fn, shot) in enumerate(zip(["front", "close", "side", "wave", "back", "ragdolls"], shots)):
+        steps += [{"at": 0.7 + i * 0.35, "call": fn}, {"at": 0.95 + i * 0.35, "shot": shot}]
+    r = play("people", game("people_showcase.tuf"), steps + [{"at": 3.0, "close": True}])
+    clean_exit(c, r)
+    c.check(all(r.shots.get(s) for s in shots), "a picture from every side", [s for s in shots if not r.shots.get(s)])
+    r = play("people_player", game("people_player.tuf"), [
+        {"at": 0.7, "shot": "people_player.png"}, {"at": 0.8, "hold": "w", "for": 0.6}, {"at": 1.2, "shot": "people_player_walk.png"},
+        {"at": 1.6, "close": True}])
+    clean_exit(c, r)
+    c.check(r.shots.get("people_player.png") and r.shots.get("people_player_walk.png"), "the player holding an axe, standing and walking",
+            r.shots)
+
+
 def t_models(c):
     """games/models.tuf, every model in the kit (the pictures, out/models_*.png, are worth a look after a change to the
     kit); they move by themselves in the page (anim.js): people breathe, wave and walk, trees sway, coins spin and bob,
@@ -3784,7 +3803,7 @@ def t_hud_checker(c):
 
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
-         "models": t_models,
+         "models": t_models, "people": t_people,
          "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "terrain": t_terrain,
          "terrain_look": t_terrain_look, "no_webgl": t_no_webgl, "ui_2d": t_ui_2d, "ui_3d": t_ui_3d,
          "menu_2d": t_menu_2d, "menu_3d": t_menu_3d, "menu_start": t_menu_start, "mouse_hold": t_mouse_hold,
