@@ -3,9 +3,10 @@
 // night. Python (Effects in tuff_tgame.py) works out the rest: slow motion, the sky's colours for the weather and the
 // time of day, and pop text in 2D (sprites).
 //
-// engine.js sends tgame's 'fx' calls here (call), and steps anim.js and physics.js by time(): a clock that runs at the
-// game's speed, so in slow motion models, physics and these effects all slow down together. Everything here holds
-// still while the game is paused. This file draws from its own animation frame, which runs just before engine.js's.
+// engine.js sends tgame's 'fx' calls here (call), and steps anim.js, level.js and physics.js by time(): a clock that
+// runs at the game's speed, so in slow motion models, pads, physics and these effects all slow down together.
+// Everything here holds still while the game is paused. This file draws from its own animation frame, which runs
+// just before engine.js's.
 
 const DEG = Math.PI / 180;
 const POP = { life: 1100, rise: 70, outline: 'rgba(10,12,18,0.7)' };   // pop text: ms it lasts, px it floats up

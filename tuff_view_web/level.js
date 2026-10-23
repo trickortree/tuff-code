@@ -3,13 +3,12 @@
 // matters itself: who stands on a pad, the launch, where a moving platform is and who rides it. This file only makes
 // them look alive: a jump pad's glow breathes and rings rise from it, a boost pad's arrows light up one after another
 // the way it points, a pad flashes and sends out a ring when it launches something, and speed lines streak across the
-// screen when the player is boosted. Nothing moves while the game is paused (tgame puts data-paused on the scene's
-// canvas, as anim.js reads it).
+// screen when the player is boosted. It all goes at the game's speed (slow in slow motion), and nothing moves while
+// the game is paused (tgame puts data-paused on the scene's canvas, as anim.js reads it).
 //
-// engine.js imports this file. Python reaches it through view.js: window.tuffLevel.pad(group, kind, glows, arrows)
-// when it makes a pad, .whoosh(id) when a pad launches something, .streak(scene) when the player is boosted. It has
-// its own animation frame, asked for before engine.js asks for its own, so it comes first and its changes are drawn
-// in the same frame.
+// engine.js imports this file and calls frame() every frame, right after anim.js's, so its changes are drawn in the
+// same frame. Python reaches it through view.js: window.tuffLevel.pad(group, kind, glows, arrows) when it makes a
+// pad, .whoosh(id) when a pad launches something, .streak(scene) when the player is boosted.
 
 const pads = new Map();     // a pad's group id -> { n, kind, glows, arrows (pairs of meshes), rings, burst, flash, t }
 const streaks = new Map();  // a scene node -> its speed lines: { c (a canvas over the scene), g, left (seconds), lines }
@@ -18,7 +17,7 @@ const FAR = 120;            // pads further from the camera than this (metres) h
 const TAU = Math.PI * 2;
 let THREE = null;
 let ringShape = null;       // the rings' geometry, shared
-let then = 0;
+let then = 0;               // the game's clock (ms) at the last frame
 let broken = false;
 
 const tv = () => window.tuffView;
@@ -72,6 +71,12 @@ function streak(scene) {
 
 window.tuffLevel = { pad, whoosh, streak };
 
+// For the page's stats (the tests): each pad's own clock (the seconds it has moved), and the speed lines showing.
+export function info() {
+  return { pads: [...pads.values()].map((p) => Math.round(p.t * 1000) / 1000),
+    streaks: [...streaks.values()].filter((s) => s.left > 0).length };
+}
+
 // A glowing ring that lies flat on a pad (it rises, or bursts outward). It's the pad's own: it moves, turns and hides
 // with it, and is never in the way of a click or :looking_at.
 function ring(p) {
@@ -94,13 +99,15 @@ function forget(id, p) {
 
 // ---------------------------------------------------------------- every frame
 
-function frame(now) {
-  requestAnimationFrame(frame);
-  const dt = then ? Math.min(0.1, (now - then) / 1000) : 0;
-  then = now;
+// game: the game's clock (fx.js's time, ms). A pad moves when anim.js steps its scene, by the game's time since its
+// last step (the scene's animDt: 0 between steps and while the game is paused), so a pad in view gets the world
+// drawn about 60 times a second, as a swaying tree does, not at a fast screen's full rate.
+export function frame(game) {
+  const dt = then ? Math.min(0.1, (game - then) / 1000) : 0;
+  then = game;
   if (broken || (!pads.size && !streaks.size)) return;
   try {
-    for (const [id, p] of pads) animate(id, p, dt);
+    for (const [id, p] of pads) animate(id, p);
     for (const [scene, s] of streaks) speedLines(scene, s, dt);
   } catch (err) {
     broken = true;  // once: the game goes on with still pads
@@ -118,11 +125,12 @@ function shown(o) {
   return true;
 }
 
-function animate(id, p, dt) {
+function animate(id, p) {
   const n = p.n;
   if (!tv().objs.has(id) || !n.obj.parent) { forget(id, p); return; }  // removed
   const s = n.host;
-  if (paused(s) || !shown(n.obj)) return;
+  const dt = s.animDt;
+  if (!dt || !shown(n.obj)) return;
   const at = n.obj.position;
   const cam = s.camera.position;
   if (n.parent === s && (at.x - cam.x) ** 2 + (at.z - cam.z) ** 2 > FAR * FAR) return;
@@ -208,5 +216,3 @@ function speedLines(scene, s, dt) {
     g.fill();
   }
 }
-
-requestAnimationFrame(frame);

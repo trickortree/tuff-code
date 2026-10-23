@@ -875,7 +875,8 @@ def page_physics(d):
 def t_physics(c):
     """3D physics: a crate falls and lands on the land (and a box on a hill), a bouncy ball bounces lower each time,
     pausing the game pauses physics, a tower of boxes stands until it's pushed, a crate's on_hit says what hit it, an
-    explosion scatters boxes, and ragdolls stand until they're pushed or hit, then flop and lie on the ground."""
+    explosion scatters boxes, and ragdolls stand until they're pushed or hit, then flop and lie on the ground. Things
+    asleep, hidden or fallen off the world aren't drawn again."""
     r = play("physics_drop", game("physics_drop.tuf"), [
         {"at": 0.3, "dump": "pd_start.json"},
         {"at": 0.8, "tuff": "lifted = world:box(-3, 0, 4, 1, \"gold\"):physics()"},
@@ -975,6 +976,14 @@ def t_physics(c):
     awake = (rest.get("physics") or {}).get("awake")
     c.check(awake == 0 and rest["page_draws_per_s"] < 5,
             f"48 boxes asleep ({awake} awake): the page draws {rest['page_draws_per_s']} times a second", rest)
+    # Nor once they've gone: hidden (settled, or as it falls) or fallen off the world, their bodies are switched off.
+    gone = perf(c, "physics_gone", "physics_gone.tuf", [{"at": 1.2, "call": "hide_faller"}, {"at": 3.0, "call": "hide_boxes"},
+                                                       {"at": 3.5, "mark": True}, {"at": 4.5, "dump": "physics_gone.json"},
+                                                       {"at": 4.6, "close": True}], "8 boxes gone")
+    awake = (gone.get("physics") or {}).get("awake")
+    c.check(awake == 0 and gone["page_draws_per_s"] < 5,
+            f"7 boxes hidden and one fallen off the world aren't moving ({awake} awake): the page draws "
+            f"{gone['page_draws_per_s']} times a second", gone)
 
 
 def t_physics_player(c):
@@ -1164,7 +1173,8 @@ def reports(r, start="at "):
 def t_fx_slow_mo(c):
     """Slow motion: world:slow_mo(0.3, 2) slows the game clock, its timers, things that glide by themselves and physics
     to 30% for 2 s, then it eases back; slow_mo(0.5) with no seconds lasts until slow_mo(1); pausing holds the slow
-    motion's time; a speed out of range is a kid-friendly error."""
+    motion's time; a speed out of range is a kid-friendly error. Models that move by themselves move as smoothly in slow
+    motion."""
     r = play("fx_slow_mo", game("fx_slow_mo.tuf"), [
         {"at": 0.5, "call": "report"}, {"at": 0.55, "dump": "fxs_start.json"},
         {"at": 0.6, "call": "slow"}, {"at": 0.9, "call": "report"}, {"at": 0.95, "dump": "fxs_slow1.json"},
@@ -1209,6 +1219,16 @@ def t_fx_slow_mo(c):
     c.check(any(":slow_mo needs a speed from 0.05 to 1 (0.3 is 30%, 1 is normal speed), like world:slow_mo(0.3, 2)." in line for line in r.lines),
             "world:slow_mo(0) says what speeds it takes", r.lines[-4:])
     c.check(any(":shake needs a strength from 0 to 2" in line for line in r.lines), "world:shake(5) says what strengths it takes", r.lines[-4:])
+
+    r = play("fx_slow_sway", game("fx_slow_sway.tuf"), [
+        {"at": 1.0, "mark": True}, {"at": 3.0, "dump": "fxs_sway.json"}, {"at": 3.1, "tuff": "world:slow_mo(0.2)"},
+        {"at": 3.3, "mark": True}, {"at": 5.3, "dump": "fxs_sway_slow.json"}, {"at": 5.4, "close": True}])
+    clean_exit(c, r)
+    rate = lambda d: round((d.get("page") or {}).get("draws", 0) / max(0.001, (d.get("page") or {}).get("seconds", 1)), 1)
+    normal, slow = rate(r.dumps.get("fxs_sway.json", {})), rate(r.dumps.get("fxs_sway_slow.json", {}))
+    c.check(normal > 25 and slow > normal * 0.75 and fx_of(r.dumps.get("fxs_sway_slow.json", {})).get("speed") == 0.2,
+            f"in slow motion a swaying tree and a breathing person move as smoothly as before: the page draws them {slow} "
+            f"times a second ({normal} at normal speed)", (normal, slow))
 
 
 def t_fx_shake_pop(c):
@@ -1395,7 +1415,9 @@ def light_share(path, box, step=3):
 
 def t_level_pads(c):
     """A jump pad launches the player up (power 15: about 5 m, with physics on) and a physics crate dropped on another
-    one, a paused game launches nobody (resuming does), and a boost pad turned to face +x shoots the player that way."""
+    one, a paused game launches nobody (resuming does), and a boost pad turned to face +x shoots the player that way.
+    A pad in view glows at the game's speed (slower in slow motion), drawn about 60 times a second, not at the display's
+    full rate."""
     r = play("level_pads", game("level_pads.tuf"), [
         {"at": 0.5, "shot": "level_pads.png"},
         {"at": 0.6, "hold": "w", "for": 0.9},
@@ -1428,11 +1450,28 @@ def t_level_pads(c):
     c.check(boosted and light_share(boosted, (0, 0.62, 1, 1), step=1) > 0.0005,  # plain grass there has none
             "boosted, the screen streaks: light speed lines over the grass at its edges", boosted)
 
+    r = play("level_pad_idle", game("level_pad_idle.tuf"), [
+        {"at": 1.0, "mark": True}, {"at": 1.05, "dump": "lpi_start.json"}, {"at": 3.0, "dump": "lpi_normal.json"},
+        {"at": 3.05, "tuff": "world:slow_mo(0.2)"}, {"at": 3.2, "mark": True}, {"at": 3.25, "dump": "lpi_slow1.json"},
+        {"at": 5.25, "dump": "lpi_slow2.json"}, {"at": 5.4, "close": True}])
+    clean_exit(c, r)
+    page = lambda name: r.dumps.get(name, {}).get("page") or {}
+    rate = lambda name: round(page(name).get("draws", 0) / max(0.001, page(name).get("seconds", 1)), 1)
+    clock = lambda name: ((page(name).get("level") or {}).get("pads") or [0])[0]
+    c.check(rate("lpi_normal.json") <= 80 and rate("lpi_slow2.json") <= 80,
+            f"a jump pad in view glows and its rings rise about 60 times a second, not at a fast screen's full rate (the page "
+            f"draws {rate('lpi_normal.json')} times a second, {page('lpi_normal.json').get('fps', 0):.0f} frames)",
+            (page("lpi_normal.json"), page("lpi_slow2.json")))
+    normal, slow = clock("lpi_normal.json") - clock("lpi_start.json"), clock("lpi_slow2.json") - clock("lpi_slow1.json")
+    c.check(1.5 < normal < 2.3 and 0.2 < slow < 0.7,
+            f"... at the game's speed: in 2 s its glow goes on {normal:.2f} s, and {slow:.2f} s in slow motion (0.2)", (normal, slow))
+
 
 def t_level_lift(c):
     """thing:path: a lift goes along its path and back (ping-pong) with the player standing on it, across and up and
     down, never falling through or sliding off; a platform goes round its spots (loop); path() stops one where it is;
-    a path to one spot goes there and stays; and a path with the wrong inputs says what's wrong."""
+    a path to one spot goes there and stays; and a path with the wrong inputs says what's wrong. With physics on, a crate
+    rides it too, and the player riding it pushes a physics crate on it by walking into it."""
     r = play("level_lift", game("level_lift.tuf"), [
         {"at": 2.0, "call": "stop_it"}, {"at": 3.0, "dump": "ll_stopped.json"},
         {"at": 3.5, "tuff": "lift:path(5, 3)"}, {"at": 3.55, "tuff": "lift:path([[1, 2]], 0)"},
@@ -1471,6 +1510,16 @@ def t_level_lift(c):
     c.check(len(g) == 5 and g[4] < 0.15, f"... without sliding along it (it slid {g[4:]})", g)
     shot = r.shots.get("level_lift_physics.png")
     c.check(shot and color_share(shot, (125, 80, 45), 50, (0.2, 0.2, 0.8, 0.9)) > 0.005, "the screenshot shows the crate on the lift", shot)
+
+    r = play("level_lift_push", game("level_lift_push.tuf"), [
+        {"at": 0.8, "call": "report"}, {"at": 1.0, "hold": "w", "for": 1.2}, {"at": 2.4, "call": "report"},
+        {"at": 2.6, "close": True}])
+    clean_exit(c, r)
+    g = numbers_after(r, "player")  # the player's spot, the crate's and the lift's
+    c.check(len(g) == 9 and g[5] < -3 and g[2] > g[5] + 0.5,
+            f"riding a moving platform, the player walks into a physics crate on it and pushes it along (it went from z -2 "
+            f"to {g[5:6]}, the player is behind it)", g)
+    c.check(len(g) == 9 and g[6] > 0.5 and g[0] > 0.5, f"... and rides along with the platform (x {g[:1]}, the lift's {g[6:7]})", g)
 
 
 # ---------------------------------------------------------------- menus, buttons and screens (atgui on a game)
@@ -2351,8 +2400,9 @@ def t_ix_talk(c):
 
 def t_ix_door(c):
     """world:door: walking into it swings it open away from the player, the player walks through and it shuts again;
-    a door that needs a key says "Locked!" with the key's name until the player walks into the key (it disappears),
-    then E opens it; door:turn, door:open() (pushing a physics crate), door:close(), door:lock() and door:unlock()."""
+    a door that needs a key says "Locked!" with the key's name and is in the player's way until the player walks into
+    the key (it disappears), then E opens it; door:turn, door:open() (pushing a physics crate), door:close(), door:lock()
+    (in the way again) and door:unlock()."""
     r = play("ix_door", game("ix_door.tuf"), [
         {"at": 0.6, "dump": "ixd_start.json"},
         {"at": 0.8, "hold": "w", "for": 1.4}, {"at": 1.6, "dump": "ixd_opening.json"},
@@ -2361,13 +2411,15 @@ def t_ix_door(c):
         {"at": 6.6, "dump": "ixd_shut.json"},
         {"at": 6.7, "tuff": "player:move_to(6, 0, 2.2)"}, {"at": 6.8, "tuff": "player:turn_to(0)"},
         {"at": 7.0, "key": "e"}, {"at": 7.2, "dump": "ixd_locked.json"}, {"at": 7.25, "shot": "ix_door_locked.png"},
-        {"at": 7.4, "tuff": "player:move_to(3, 0, 4)"}, {"at": 7.7, "dump": "ixd_key.json"},
-        {"at": 7.8, "tuff": "player:move_to(6, 0, 2.2)"}, {"at": 8.0, "key": "e"}, {"at": 8.9, "dump": "ixd_unlocked.json"},
-        {"at": 8.95, "shot": "ix_door_gate.png"},
-        {"at": 9.0, "call": "push_crate"}, {"at": 10.0, "dump": "ixd_side.json"}, {"at": 10.1, "call": "shut_side"},
-        {"at": 10.2, "call": "lock_door"}, {"at": 10.3, "tuff": "player:move_to(0, 0, 2.2)"}, {"at": 10.5, "key": "e"},
-        {"at": 10.7, "dump": "ixd_relocked.json"}, {"at": 10.8, "call": "unlock_door"}, {"at": 10.9, "key": "e"},
-        {"at": 11.5, "dump": "ixd_reopened.json"}, {"at": 11.6, "close": True}])
+        {"at": 7.3, "hold": "w", "for": 0.8}, {"at": 8.2, "dump": "ixd_gate_wall.json"},
+        {"at": 8.3, "tuff": "player:move_to(3, 0, 4)"}, {"at": 8.6, "dump": "ixd_key.json"},
+        {"at": 8.7, "tuff": "player:move_to(6, 0, 2.2)"}, {"at": 8.9, "key": "e"}, {"at": 9.8, "dump": "ixd_unlocked.json"},
+        {"at": 9.85, "shot": "ix_door_gate.png"},
+        {"at": 9.9, "call": "push_crate"}, {"at": 10.9, "dump": "ixd_side.json"}, {"at": 11.0, "call": "shut_side"},
+        {"at": 11.1, "call": "lock_door"}, {"at": 11.2, "tuff": "player:move_to(0, 0, 2.2)"}, {"at": 11.4, "key": "e"},
+        {"at": 11.6, "dump": "ixd_relocked.json"}, {"at": 11.7, "hold": "w", "for": 0.8}, {"at": 12.6, "dump": "ixd_door_wall.json"},
+        {"at": 12.65, "tuff": "player:move_to(0, 0, 2.2)"}, {"at": 12.7, "call": "unlock_door"}, {"at": 12.8, "key": "e"},
+        {"at": 13.4, "dump": "ixd_reopened.json"}, {"at": 13.5, "close": True}])
     clean_exit(c, r)
     doors = lambda name: ix(r.dumps.get(name, {})).get("doors") or [{}, {}, {}]
     start = doors("ixd_start.json")
@@ -2382,6 +2434,9 @@ def t_ix_door(c):
     locked = r.dumps.get("ixd_locked.json", {})
     c.check(ix(locked).get("note") == "Locked! You need the gold key." and not doors("ixd_locked.json")[1].get("open"),
             "E at a locked door says \"Locked!\" and the key's name, and it stays shut", ix(locked).get("note"))
+    wall = r.dumps.get("ixd_gate_wall.json", {}).get("player") or [0, 0, 0]
+    c.check(wall[2] > 0.3 and not doors("ixd_gate_wall.json")[1].get("open"),
+            f"walking into it doesn't get the player through: a shut door is in the way (z {wall[2]}, the door's at 0)", wall)
     key = ix(r.dumps.get("ixd_key.json", {}))
     c.check(key.get("keys") == ["key"] and key.get("note") == "You got the gold key!" and not doors("ixd_key.json")[1].get("locked"),
             "walking into the key picks it up (and the door it opens isn't locked any more)", key)
@@ -2396,6 +2451,9 @@ def t_ix_door(c):
     relocked = r.dumps.get("ixd_relocked.json", {})
     c.check(doors("ixd_relocked.json")[0].get("locked") and not doors("ixd_relocked.json")[0].get("open") and ix(relocked).get("note") == "Locked!",
             "door:lock() locks it (E says \"Locked!\")", (doors("ixd_relocked.json")[0], ix(relocked).get("note")))
+    wall = r.dumps.get("ixd_door_wall.json", {}).get("player") or [0, 0, 0]
+    c.check(wall[2] > 0.3 and not doors("ixd_door_wall.json")[0].get("open"),
+            f"... and walking into it, the player stays in front of it (z {wall[2]})", wall)
     c.check(doors("ixd_reopened.json")[0].get("open"), "door:unlock() and it opens again", doors("ixd_reopened.json")[0])
     shot = r.shots.get("ix_door_open.png")
     c.check(shot and color_share(shot, (110, 75, 40), 45, (0.2, 0.1, 0.8, 0.9)) > 0.02, "the screenshot shows the wooden door open behind the player", shot)

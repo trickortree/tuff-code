@@ -6,7 +6,7 @@ import * as anim from './anim.js';  // models that move by themselves: swaying t
 import * as fx from './fx.js';      // tgame's effects: a shake, pop text, rain and snow, stars; its clock runs at the game's speed
 import './hud.js';  // tgame's HUD: health bars, the countdown, the arrow and the minimap (the <tg-hud> element)
 import './interact.js';  // tgame's speech bubbles (npc:say), drawn for Python's view.js as window.tgInteract
-import './level.js';  // tgame's level pieces looking alive: jump pads and boost pads glowing, whooshing and streaking
+import * as level from './level.js';  // tgame's level pieces looking alive: jump pads and boost pads glowing, whooshing
 
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
@@ -268,7 +268,7 @@ const engineCalls = {
       apply_ms_per_batch: stats.batches ? stats.applyMs / stats.batches : 0,
       draw_ms_per_frame: stats.frames ? stats.drawMs / stats.frames : 0,
       objects: objs.size, waiting: Math.max(0, batches.length - 1),
-      physics: physics ? physics.info() : physicsJob ? 'loading' : null, anim: anim.info(),
+      physics: physics ? physics.info() : physicsJob ? 'loading' : null, anim: anim.info(), level: level.info(),
     };
     if (reset) Object.assign(stats, { since: now, frames: 0, draws: 0, gaps: [], batches: 0, cmds: 0, applyMs: 0, drawMs: 0 });
     return out;
@@ -1899,7 +1899,9 @@ function wakeSound() {
 
 function tick(now) {
   requestAnimationFrame(tick);
-  try { anim.frame(fx.time(now), scenes); } catch (err) { report(err, 'animating'); }  // anim.js: before the scenes are drawn
+  const game = fx.time(now);  // the game's clock: physics, models and pads go at the game's speed (slow motion)
+  try { anim.frame(now, game, scenes); } catch (err) { report(err, 'animating'); }  // anim.js: before the scenes are drawn
+  level.frame(game);  // level.js's pads, on anim.js's steps (it reports its own errors)
   if (stats.last) {
     stats.gaps.push(now - stats.last);
     if (stats.gaps.length > 4000) stats.gaps.splice(0, 1000);
@@ -1909,7 +1911,7 @@ function tick(now) {
   const t0 = performance.now();
   if (physics && !physicsFailed) {
     try {
-      physics.step(fx.time(now));  // at the game's speed (slow motion)
+      physics.step(game);  // at the game's speed (slow motion)
     } catch (err) {
       physicsFailed = true;  // once: an error every frame would bury everything else
       report(err, 'physics');

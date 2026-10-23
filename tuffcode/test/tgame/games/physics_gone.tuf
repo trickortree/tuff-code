@@ -1,0 +1,22 @@
+mention tgame
+
+# Physics things that have gone from the world: boxes hidden once they've settled, a box hidden as it falls, and one
+# that fell off the world (below -300, where its body is switched off). None of them moves any more, so there's
+# nothing to draw.
+world = tgame.world("Physics Gone", 900, 560)
+world:ground "grass"
+world:camera_at(0, 9, 15)
+world:look_at(0, 0, -1)
+boxes = []
+for i in range(0, 6):
+    boxes:add(world:box(i * 2 - 5, 0, 0, 1, "wood"):physics())
+faller = world:box(0, 8, -4, 1, "gold"):physics()
+lost = world:box(300, 0, 0, 1, "red"):physics()  # past the grass's edge: nothing under it
+lost:velocity(0, -200, 0)
+
+func hide_faller():
+    faller:hide()
+
+func hide_boxes():
+    for b in boxes:
+        b:hide()

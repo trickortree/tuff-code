@@ -1,0 +1,9 @@
+mention tgame
+
+# A jump pad in view and nothing else: it glows and its rings rise (level.js), at the game's speed, and the page
+# draws it about 60 times a second, not at a fast screen's full rate.
+world = tgame.world("Pad Idle", 900, 560)
+world:ground "grass"
+player = world:player("first person")
+player:move_to(0, 0, 8)
+pad = world:jump_pad(0, 0, 2, 15)

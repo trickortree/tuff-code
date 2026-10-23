@@ -6,8 +6,9 @@
 // can choose with `anim` too (thing:animate): "auto" (its own way), "walk", "idle", "wave" or "none" (still).
 // Everything holds still while the game is paused (tgame puts data-paused on the scene's canvas).
 //
-// engine.js calls add() when an object gets an `anim`, and frame() before it draws each frame; it sets a model's
-// `kids` to -1 when a part is added or removed (a held axe swapped for a sword), so its parts are looked at again.
+// engine.js calls add() when an object gets an `anim`, and frame() before it draws each frame (with the real time
+// and the game's clock, which slow motion slows); it sets a model's `kids` to -1 when a part is added or removed (a
+// held axe swapped for a sword), so its parts are looked at again. level.js's pads move on the same steps.
 // Python never moves a model's parts after making them (only the model's group), so each part's pose is worked out
 // from the one it was made with.
 
@@ -44,20 +45,21 @@ export function info() {
   return { live: live.size, held, stale };
 }
 
-// Moves everything for this frame. If it ever fails, it stops (the error goes out once) and the game goes on still.
+// Moves everything for this frame: now is the real time, game the game's clock (fx.js's, slow in slow motion). If it
+// ever fails, it stops (the error goes out once) and the game goes on still.
 let broken = false;
 
-export function frame(now, scenes) {
-  if (broken) return;
+export function frame(now, game, scenes) {
+  if (broken) { for (const s of scenes) s.animDt = 0; return; }
   try {
-    step(now, scenes);
+    step(now, game, scenes);
   } catch (err) {
     broken = true;
     throw err;
   }
 }
 
-function step(now, scenes) {
+function step(now, game, scenes) {
   if (!THREE) {
     const t = window.tuffView && window.tuffView.three();
     if (!t || t.failed || !t.Quaternion) return;
@@ -68,12 +70,14 @@ function step(now, scenes) {
   for (const s of scenes) {
     // A scene's models move with each frame it's drawn anyway (Python changed something), and on their own at most
     // about 60 times a second, less while something else is drawing it: a screen faster than 60 Hz doesn't draw the
-    // whole world again on every refresh just because a tree sways.
+    // whole world again on every refresh just because a tree sways. That's real time; each step goes on by the
+    // game's time, so in slow motion they move slower, as smoothly.
     if (s.dirty) s.busyAt = now;
-    const since = s.animAt ? now - s.animAt : 0;
     s.animDt = 0;
-    if (s.animAt && !s.dirty && since < (now - s.busyAt < 50 ? 33 : 15)) continue;
+    if (s.animAt && !s.dirty && now - s.animAt < (now - s.busyAt < 50 ? 33 : 15)) continue;
+    const since = s.animAt ? game - s.animGame : 0;
     s.animAt = now;
+    s.animGame = game;
     if (!s.paused && !s.el.hasAttribute('data-paused')) s.animDt = Math.min(0.1, since / 1000);
     s.animT = (s.animT || 0) + s.animDt;
     if (s.waters && s.waters.size && ripple(s)) s.dirty = true;

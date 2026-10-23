@@ -4347,9 +4347,14 @@ class Player:
     # ---- walking, every frame
     def solids(self):
         """What stops the player here: solid things, except what physics moves (the page's physics stops the player
-        at those, and pushes them). A kinematic thing is here: the program moves it, so a lift carries the player."""
-        return [t for t in self.world.things if isinstance(t, Thing) and t.alive and t.solid_ and not t.hidden
-                and t.phys_kind != "dynamic"]
+        at those, and pushes them). A kinematic thing is here: the program moves it, so a lift carries the player.
+        So is a door that's shut (a locked one stays shut), unless it shut on the player: then it can walk out."""
+        out = [t for t in self.world.things if isinstance(t, Thing) and t.alive and t.solid_ and not t.hidden
+               and t.phys_kind != "dynamic"]
+        it = self.world.interact
+        if it is not None:
+            out += [d.panel for d in it.doors if d.shut() and not boxes_touch(self.box3(), d.panel.box3())]
+        return out
 
     def blocked(self, x, z, y, solids):
         r = self.RADIUS
@@ -5188,10 +5193,11 @@ class Interaction:
 class Door(Thing):
     """world:door: a door in its frame. The door itself swings on a hinge at its left side (seen from the front, which
     faces -z like everything; door:turn turns the whole doorway). tgame swings it a little every frame and, since a
-    door turns physics on, it's a kinematic body there: it pushes physics things out of its way, and shut, the player
-    can't walk through it. The player walking into it, or pressing E near it, opens it away from the player, and it
-    shuts again a few seconds after the player's gone through; door:open() opens it until door:close(). A locked one
-    (door:lock(), or door:needs(key) until the player has picked up that key) stays shut and says "Locked!"."""
+    door turns physics on, it's a kinematic body there: it pushes physics things out of its way. Shut, it stops the
+    player like anything solid (Player.solids). The player walking into it, or pressing E near it, opens it away from
+    the player, and it shuts again a few seconds after the player's gone through; door:open() opens it until
+    door:close(). A locked one (door:lock(), or door:needs(key) until the player has picked up that key) stays shut
+    and says "Locked!"."""
     KIND = "door"
     NAMES = Thing.NAMES + [("open", "open"), ("close", "close"), ("needs", "needs"), ("lock", "lock"),
                            ("unlock", "unlock")]
@@ -5278,6 +5284,11 @@ class Door(Thing):
         side = door_local(self.heading, who.x - self.x, who.z - self.z)[1] if who is not None else -1.0
         self.swing_to(-self.SWING if side > 0 else self.SWING)
         self.close_at = self.world.clock + self.STAYS if auto else None
+
+    def shut(self):
+        """Shut (or nearly): the player can't walk through it (Player.solids). One that isn't locked opens as the
+        player comes up to it, before the player gets to it."""
+        return self.alive and not self.hidden and abs(self.angle) < 15
 
     def near_player(self, p, it):
         """The player walking into it opens it (or hears it's locked); opened by the player, it shuts again once the
@@ -5527,11 +5538,12 @@ class Level:
             return
         d = (t.x - x0, t.y - y0, t.z - z0)
         if rides:
-            p.x, p.y, p.z = p.x + d[0], t.box3(body=True)[4], p.z + d[2]  # on its top, where it is now
-        elif not self.shove(p, t, d):
-            return
-        if self.world.phys is not None:
-            p.teleported = True  # the page's capsule goes there with it (walking it there would bump into the platform)
+            # On its top, where it is now. With physics on, the ride goes to the page with the player's walk, as one
+            # move (the capsule doesn't bump into the platform: kinematic things are Python's), so riding, the player
+            # still pushes the physics things it walks into.
+            p.x, p.y, p.z = p.x + d[0], t.box3(body=True)[4], p.z + d[2]
+        elif self.shove(p, t, d) and self.world.phys is not None:
+            p.teleported = True  # pushed out of its way: the page's capsule goes there too, whatever's in the way
 
     def stands_on(self, p, t):
         """Is the player standing on t's top (feet on it, not jumping off)?"""

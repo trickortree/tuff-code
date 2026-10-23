@@ -645,7 +645,7 @@ function fixedStep() {
   for (const r of recs.values()) {
     if (r.kind !== 'dynamic' || !r.body) continue;
     if (r.still && r.still-- && !r.pushed) for (const p of r.parts) p.body.sleep();
-    const asleep = r.body.isSleeping();
+    const asleep = r.body.isSleeping() || !r.body.isEnabled();  // switched off (hidden, or fallen out of the world): still
     if (!asleep || !r.asleep) r.moved = true;  // awake, or it just fell asleep: report where it stopped
     r.asleep = asleep;
     r.moving = !asleep;
