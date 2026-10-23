@@ -1864,7 +1864,8 @@ class Checker:
                    "every": (0, ":every"), "after": (0, ":after"), "change": (1, ":change"), "enter": (1, ":enter")}
     HANDLER_POS = {"click": 0, "opened": 0, "change": 0, "enter": 0, "button": 1, "every": 1, "after": 1,
                    "every_frame": 0, "on_key": 1, "clicked": 0, "game_over": 1, "on_hit": 0}
-    TGAME_KINDS = ("game", "world", "sprite", "object", "player", "hud", "group", "terrain", "car", "ragdoll")  # what tgame makes
+    TGAME_KINDS = ("game", "world", "sprite", "object", "player", "hud", "group", "terrain", "car", "ragdoll",
+                   "door")  # what tgame makes
     TGAME_KINDS += ("countdown", "arrow", "minimap")  # the HUD's (game:countdown, world:arrow_to, world:minimap)
     # tgame inputs written as text that the checker checks itself: (kind, method, input position) -> what it is.
     LAND_VALUES = {("world", "terrain", 1): "style", ("terrain", "style", 0): "style", ("world", "lighting", 0): "lighting",

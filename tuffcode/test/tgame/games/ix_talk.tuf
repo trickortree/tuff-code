@@ -1,0 +1,38 @@
+mention tgame
+
+# Talking: a person says something in a speech bubble, and pressing E near them (the hint says "E: Talk") runs their
+# on_talk. With a door and a crate near too, E talks first, then opens the door, then grabs.
+world = tgame.world("Talk", 900, 560)
+world:sky "day"
+world:ground "grass"
+player = world:player("first person")
+player:move_to(0, 0, 4.5)
+player:can_grab()
+npc = world:spawn("person", 0, 0, 2)
+npc:say("Hi! Find my lost cat.")
+far = world:spawn("person", 9, 0, -6)
+far:say("I'm too far away to talk to.", 0)
+talks = 0
+
+func talk():
+    talks += 1
+    say "talked " + talks
+    npc:say("Thanks! It ran into the woods.", 0)
+
+func shy():
+    say "the far one talked"
+
+npc:on_talk(talk)
+far:on_talk(shy)
+door = world:door(-1.2, 0, 3)
+crate = world:spawn("crate", 0, 0, 3)
+crate:physics()
+
+func short():
+    npc:say("Bye!", 1)
+
+func leave():
+    npc:remove()
+
+func no_door():
+    door:remove()

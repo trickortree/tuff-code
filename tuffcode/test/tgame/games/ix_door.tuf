@@ -1,0 +1,33 @@
+mention tgame
+
+# Doors: walking into one opens it (away from the player) and it shuts again after a while; a locked one needs its
+# key, which the player picks up by walking into it.
+world = tgame.world("Doors", 900, 560)
+world:sky "sunset"
+world:ground "grass"
+player = world:player("first person")
+player:move_to(0, 0, 4)
+door = world:door(0, 0, 0)
+gate = world:door(6, 0, 0, "red")
+key = world:spawn("key", 3, 0, 4)
+key:label "gold key"
+gate:needs(key)
+side = world:door(-6, 0, 0, "stone")
+side:turn(90)
+crate = world:spawn("crate", -6.6, 0, -0.4)
+crate:physics()
+
+func report():
+    say "player " + player:spot()
+
+func push_crate():
+    side:open()
+
+func shut_side():
+    side:close()
+
+func lock_door():
+    door:lock()
+
+func unlock_door():
+    door:unlock()
