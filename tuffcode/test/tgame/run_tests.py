@@ -1220,6 +1220,117 @@ def t_fx_2d(c):
             "the screenshot shows the gold +100 floating up", pop)
     p1, p2 = fx_of(r.dumps.get("fx2_pops.json", {})).get("pops"), fx_of(r.dumps.get("fx2_popped.json", {})).get("pops")
     c.check(p1 == 2 and p2 == 0, f"two pop texts, gone after about a second ({p1}, then {p2})", (p1, p2))
+# ---------------------------------------------------------------- level pieces: jump pads, boost pads, moving platforms
+
+def numbers_after(r, start):
+    """The numbers in the last line the game said that starts with these words."""
+    out = []
+    for w in said(r, start)[len(start.split()):]:
+        try:
+            out.append(float(w.strip("[],")))
+        except ValueError:
+            pass
+    return out
+
+
+def autopilot_said(r, words):
+    return [line for line in r.lines if line.startswith("[autopilot]") and words in line]
+
+
+def light_share(path, box, step=3):
+    """The share of pixels in a box that are much lighter than grass (red over 150 and green over 190)."""
+    try:
+        w, h, get = png_rgb(path)
+    except Exception:
+        return 0.0
+    x0, y0, x1, y1 = box
+    hits = total = 0
+    for y in range(int(y0 * h), int(y1 * h), step):
+        for x in range(int(x0 * w), int(x1 * w), step):
+            p = get(x, y)
+            total += 1
+            hits += p[0] > 150 and p[1] > 190
+    return hits / max(1, total)
+
+
+def t_level_pads(c):
+    """A jump pad launches the player up (power 15: about 5 m, with physics on) and a physics crate dropped on another
+    one, a paused game launches nobody (resuming does), and a boost pad turned to face +x shoots the player that way."""
+    r = play("level_pads", game("level_pads.tuf"), [
+        {"at": 0.5, "shot": "level_pads.png"},
+        {"at": 0.6, "hold": "w", "for": 0.9},
+        {"at": 2.6, "call": "report"},
+        {"at": 2.7, "tuff": "world:pause()"}, {"at": 2.8, "tuff": "player:move_to(0, 0, 2)"}, {"at": 2.85, "call": "reset"},
+        {"at": 3.3, "dump": "lp_paused.json"},
+        {"at": 3.4, "tuff": "world:resume()"}, {"at": 3.8, "dump": "lp_resumed.json"},
+        {"at": 4.6, "call": "to_boost"}, {"at": 4.72, "shot": "level_pads_boost.png"},
+        {"at": 6.2, "call": "report"}, {"at": 6.25, "dump": "lp_end.json"},
+        {"at": 6.4, "close": True}])
+    clean_exit(c, r)
+    first = [line.split() for line in r.lines if line.startswith("peak ")]
+    peak = float(first[0][1]) if first else 0
+    c.check(4.6 < peak < 6, f"walking onto a jump pad (power 15) launches the player about 5 m up (peak {peak})", first[:1])
+    crate = float(first[-1][4]) if first else 0
+    c.check(crate > 4.2, f"a physics crate dropped on a jump pad (power 10) is launched up too (it fell from 3, got to {crate})", first[-1:])
+    paused, resumed = r.dumps.get("lp_paused.json", {}), r.dumps.get("lp_resumed.json", {})
+    py0, py1 = (paused.get("player") or [0, 9])[1], (resumed.get("player") or [0, 0])[1]
+    c.check(paused.get("paused") and py0 < 0.3, f"in a paused game a jump pad launches nobody (the player stays at y {py0})", paused.get("player"))
+    c.check(py1 > 1.5, f"... and once it's resumed, it does (y {py1})", resumed.get("player"))
+    end = numbers_after(r, "player")
+    c.check(len(end) == 3 and end[0] > 3 and abs(end[2] + 4) < 1,
+            f"a boost pad turned to face +x shoots the player along +x (from x -6 to {end[:1]})", end)
+    shot = r.shots.get("level_pads.png")
+    c.check(shot and color_share(shot, (60, 235, 170), 70, (0.3, 0.55, 0.7, 1)) > 0.004,
+            "the screenshot shows the jump pad glowing green", shot)
+    c.check(shot and color_share(shot, (255, 140, 40), 70, (0, 0.45, 0.5, 0.8)) > 0.0008,
+            "... and the boost pad glowing orange", shot)
+    boosted = r.shots.get("level_pads_boost.png")
+    c.check(boosted and light_share(boosted, (0, 0.62, 1, 1), step=1) > 0.0005,  # plain grass there has none
+            "boosted, the screen streaks: light speed lines over the grass at its edges", boosted)
+
+
+def t_level_lift(c):
+    """thing:path: a lift goes along its path and back (ping-pong) with the player standing on it, across and up and
+    down, never falling through or sliding off; a platform goes round its spots (loop); path() stops one where it is;
+    a path to one spot goes there and stays; and a path with the wrong inputs says what's wrong."""
+    r = play("level_lift", game("level_lift.tuf"), [
+        {"at": 2.0, "call": "stop_it"}, {"at": 3.0, "dump": "ll_stopped.json"},
+        {"at": 3.5, "tuff": "lift:path(5, 3)"}, {"at": 3.55, "tuff": "lift:path([[1, 2]], 0)"},
+        {"at": 3.6, "tuff": "lift:path([[1, 2, 3]], 2, \"zigzag\")"},
+        {"at": 5.4, "shot": "level_lift.png"},
+        {"at": 8.6, "call": "report"}, {"at": 8.65, "dump": "ll_end.json"}, {"at": 8.8, "close": True}])
+    clean_exit(c, r)
+    gap = numbers_after(r, "gap")
+    c.check(len(gap) == 3 and gap[0] > -0.05 and gap[1] < 0.05,
+            f"the player rides the lift across, up and back down without sinking into it or lifting off it (gap {gap[:2]})", gap)
+    c.check(len(gap) == 3 and gap[2] < 0.05, f"... and moves along with it, staying where it stood on it (drift {gap[2:]})", gap)
+    c.check(said(r, "lift seen")[2:] == ["[0,", "1,", "2,", "1]"], "the lift goes to each spot, then back (ping-pong)", said(r, "lift seen"))
+    c.check(said(r, "ring seen")[2:] == ["[0,", "1,", "2,", "3,", "0]"], "the loop platform goes round its spots, back to the first", said(r, "ring seen"))
+    stopped, still = numbers_after(r, "stopped at"), numbers_after(r, "stopper")
+    c.check(len(stopped) == 3 and 7 < stopped[0] < 13 and stopped == still, f"path() stops it where it is (x {stopped[:1]}, later {still[:1]})",
+            (stopped, still))
+    slide = numbers_after(r, "slide")
+    c.check(slide == [-10, 0, 6], "a path to one spot goes there and stays", slide)
+    c.check(autopilot_said(r, "box:path needs a list of spots to go to, like box:path([[0, 2, 0], [10, 2, 0]], 3)."),
+            "lift:path(5, 3) says it needs a list of spots", r.lines[-8:])
+    c.check(autopilot_said(r, "box:path needs a speed above 0 (metres a second)"), "a speed of 0 says it needs one above 0", r.lines[-8:])
+    c.check(autopilot_said(r, 'A path can go "ping-pong" (there and back again) or "loop"'), "a mode it doesn't know says the two it can be",
+            r.lines[-8:])
+    shot = r.shots.get("level_lift.png")
+    c.check(shot and color_share(shot, hexrgb("#9a9a92"), 40, (0.2, 0.3, 0.8, 1)) > 0.03 and color_share(shot, (40, 85, 170), 45) > 0.001,
+            "the screenshot shows the player (blue) riding the stone lift", shot)
+
+    r = play("level_lift_physics", game("level_lift_physics.tuf"), [
+        {"at": 4.6, "shot": "level_lift_physics.png"}, {"at": 7.0, "call": "report"}, {"at": 7.05, "dump": "llp_end.json"},
+        {"at": 7.2, "close": True}])
+    clean_exit(c, r)
+    g = numbers_after(r, "gap")  # the player's lowest and highest over the lift's top, the crate's, how far the crate slid
+    c.check(len(g) == 5 and g[0] > -0.05 and g[1] < 0.05, f"with physics on, the player rides it too (gap {g[:2]})", g)
+    c.check(len(g) == 5 and g[2] > -0.05 and g[3] < 0.08,
+            f"a physics crate on it rides along, across, up and back down, staying on its top: no bouncing (y {g[2:4]})", g)
+    c.check(len(g) == 5 and g[4] < 0.15, f"... without sliding along it (it slid {g[4:]})", g)
+    shot = r.shots.get("level_lift_physics.png")
+    c.check(shot and color_share(shot, (125, 80, 45), 50, (0.2, 0.2, 0.8, 0.9)) > 0.005, "the screenshot shows the crate on the lift", shot)
 
 
 # ---------------------------------------------------------------- menus, buttons and screens (atgui on a game)
@@ -2002,7 +2113,8 @@ GOOD = ["snake.tuf", "breakout.tuf", "snake3d.tuf", "axe_sim.tuf", "features_2d.
         "ui_2d.tuf", "ui_3d.tuf", "physics_drop.tuf", "physics_tower.tuf", "physics_player.tuf", "physics_car.tuf",
         "physics_ragdoll.tuf", "physics_2d.tuf",
         "fx_slow_mo.tuf", "fx_shake_pop.tuf", "fx_weather.tuf", "fx_day.tuf", "fx_2d.tuf",
-        "ix_grab.tuf", "ix_talk.tuf", "ix_door.tuf"]
+        "ix_grab.tuf", "ix_talk.tuf", "ix_door.tuf",
+        "level_pads.tuf", "level_lift.tuf", "level_lift_physics.tuf"]
 BAD = [
     ('world = tgame.world("x")\nd = world:door(0, 0, 0)\nd:shut()\n', "A door doesn't have :shut. Use :close instead."),
     ('world = tgame.world("x")\nworld:door(0, 0, 0, "purpel")\n', "'purpel' isn't a color tgame knows."),
@@ -2176,6 +2288,16 @@ BAD = [
     ('game = tgame.window("x")\ngame:pop_text("+1", 10, 20, "purpel")\n', "'purpel' isn't a color tgame knows."),
     ('w = tgame.world("x")\nw:shake(1, 2, 3)\n', "world:shake got the wrong number of inputs (3)."),
     ('game = tgame.window("x")\ngame:weather("rain")\n', "A game doesn't have :weather."),
+    # Level pieces: how a path goes (with "did you mean"), the inputs of a pad and a path, and names people guess.
+    ('w = tgame.world("x")\nlift = w:box(0, 2, 0)\nlift:path([[0, 2, 0], [5, 2, 0]], 3, "zigzag")\n',
+     'A path can go "ping-pong" (there and back again) or "loop" (round and round, back to the first spot), not "zigzag".'),
+    ('w = tgame.world("x")\nlift = w:box(0, 2, 0)\nlift:path([[0, 2, 0], [5, 2, 0]], 3, "loopp")\n', 'not "loopp". Did you mean "loop"?'),
+    ('w = tgame.world("x")\nlift = w:box(0, 2, 0)\nlift:path([[0, 2, 0]], 3, "loop", 2)\n', "object:path got the wrong number of inputs (4)."),
+    ('w = tgame.world("x")\npad = w:jump_pad(0, 0, 0, 15, 2)\n', "world:jump_pad got the wrong number of inputs (5)."),
+    ('w = tgame.world("x")\nw:trampoline(0, 0, 0)\n', "A world doesn't have :trampoline. Use :jump_pad instead."),
+    ('w = tgame.world("x")\nw:speed_pad(0, 0, 0)\n', "A world doesn't have :speed_pad. Use :boost_pad instead."),
+    ('w = tgame.world("x")\nlift = w:box(0, 2, 0)\nlift:waypoints([[0, 2, 0]])\n', "An object doesn't have :waypoints. Use :path instead."),
+    ('game = tgame.window("x")\ngame:jump_pad(1, 2)\n', "A game doesn't have :jump_pad."),
 ]
 
 
@@ -2250,6 +2372,14 @@ GOOD_SNIPPETS = [
     'hour = w:time_of_day()\nsay hour + 1\n'
     'game = tgame.window("x")\nball = game:circle(100, 100, 10)\ngame:slow_mo(0.5)\ngame:shake(2, 1)\n'
     'game:pop_text("+1", 100, 50)\ngame:pop_text("+1", 100, 50, "gold", 40)\ngame:pop_text("hit", ball)\n',
+    # Level pieces: pads with and without a power (a spot for x, y and z), turned, recoloured and on a path, and paths
+    # in every way they're written (a speed, a mode in any case, spots built in a loop, path() to stop, chained).
+    'world = tgame.world("Parkour", 960, 600)\nland = world:terrain(200)\npad = world:jump_pad(0, 0, 5, 15)\n'
+    'boost = world:boost_pad([0, 0, 10], 20)\nboost:turn(90)\nboost:color("purple")\nworld:jump_pad(4, 0, 4):path([[4, 0, 4], [8, 0, 4]], 1)\n'
+    'lift = world:box(0, 2, 0, [4, 0.4, 4], "stone")\nlift:path([[0, 2, 0], [10, 2, 0], [10, 6, 0]], 3)\n'
+    'lift:path([[0, 2, 0], [10, 2, 0]], 3, "loop")\nlift:path([[0, 2, 0], [10, 2, 0]], 3, "Ping-Pong")\nspots = []\n'
+    'for i in range(1, 4):\n    spots:add([i * 3, 1, 0])\nring = world:box(0, 1, 0, 2):path(spots, 2, "round and round")\n'
+    'say ring:x() + lift:spot()[1]\nlift:path()\nplayer = world:player()\n',
 ]
 
 
@@ -2704,6 +2834,7 @@ TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": 
          "saves": t_saves,
          "fx_slow_mo": t_fx_slow_mo, "fx_shake_pop": t_fx_shake_pop, "fx_weather": t_fx_weather, "fx_day": t_fx_day, "fx_2d": t_fx_2d,
          "ix_grab": t_ix_grab, "ix_talk": t_ix_talk, "ix_door": t_ix_door,
+         "physics_off": t_physics_off, "level_pads": t_level_pads, "level_lift": t_level_lift,
          "scene": t_scene, "notice": t_notice, "mcp": t_mcp, "checker": t_checker, "editor": t_editor, "guide": t_guide, "perf": t_perf}
 TESTS.update({"hud_health_3d": t_hud_health_3d, "hud_health_2d": t_hud_health_2d, "hud_arrow": t_hud_arrow,
               "hud_minimap": t_hud_minimap, "hud_checker": t_hud_checker})

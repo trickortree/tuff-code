@@ -6,6 +6,7 @@ import * as anim from './anim.js';  // models that move by themselves: swaying t
 import * as fx from './fx.js';      // tgame's effects: a shake, pop text, rain and snow, stars; its clock runs at the game's speed
 import './hud.js';  // tgame's HUD: health bars, the countdown, the arrow and the minimap (the <tg-hud> element)
 import './interact.js';  // tgame's speech bubbles (npc:say), drawn for Python's view.js as window.tgInteract
+import './level.js';  // tgame's level pieces looking alive: jump pads and boost pads glowing, whooshing and streaking
 
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
