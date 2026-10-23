@@ -423,6 +423,7 @@ class Game:
         self.tv = tuff_view
         self.lib, self.rt = lib, lib.rt
         self.W, self.H = width, height
+        self.save_file = SavedData(self, title)  # game:save and game:load (saved game data) keep this first title
         self.ui = None  # the game's menus (GameUI), once game:panel or a screen made them
         self.closed = self.close_seen = False
         self.down, self.just = set(), set()
@@ -4564,6 +4565,266 @@ def editor_tables():
             "lightings": list(LIGHTINGS), "anchors": list(ANCHORS), "physics": list(PHYSICS_KINDS)}
 
 
+# ---------------------------------------------------------------- saved game data (game:save, game:load)
+
+SAVE_ENV = "TUFF_SAVE_DIR"  # a folder to keep every game's saves in instead of the usual one (the tests use it)
+SAVE_KEEPS = "numbers, text, true/false, lists and tables"
+# Names people guess for the four (from other engines, and from Python's files), with the tgame name. game:clear isn't
+# here: it's tgame's own (it removes everything the program made).
+SAVE_HINTS = {
+    "store": "save", "write": "save", "save_data": "save", "save_game": "save", "savegame": "save", "set_data": "save",
+    "persist": "save", "remember": "save", "read": "load", "get_data": "load", "load_data": "load", "load_game": "load",
+    "loadgame": "load", "read_data": "load", "recall": "load", "restore": "load", "has_save": "saved",
+    "has_saved": "saved", "is_saved": "saved", "has_data": "saved", "save_exists": "saved", "delete": "forget",
+    "delete_save": "forget", "delete_data": "forget", "reset_save": "forget", "reset_saves": "forget",
+    "clear_save": "forget", "clear_saves": "forget", "clear_data": "forget", "remove_save": "forget", "erase": "forget",
+    "unsave": "forget", "wipe": "forget",
+}
+HINTS["game"].update(SAVE_HINTS)
+HINTS["world"].update(SAVE_HINTS)
+# Names Windows keeps for itself: a file can't be called one of these, whatever comes after the dot.
+_DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
+def save_folder():
+    """Where games keep their saves: TuffSaves in the user's data folder (%APPDATA% on Windows, Application Support
+    on a Mac, ~/.local/share elsewhere), or the folder TUFF_SAVE_DIR names."""
+    own = os.environ.get(SAVE_ENV, "").strip()
+    if own:
+        return os.path.abspath(os.path.expanduser(own))
+    home = os.path.expanduser("~")
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
+    elif sys.platform == "darwin":
+        base = os.path.join(home, "Library", "Application Support")
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME", "")
+        base = xdg if os.path.isabs(xdg) else os.path.join(home, ".local", "share")
+    return os.path.join(base, "TuffSaves")
+
+
+def save_file_name(title):
+    """A game's save file: its title, made safe for a file name on every system ("Coin Dash.json")."""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", str(title))
+    name = " ".join(name.split())[:100].strip(". ")  # Windows drops dots and spaces at the end; a Mac hides a dot first
+    if not name:
+        name = "Untitled game"
+    if name.split(".")[0].upper() in _DEVICE_NAMES:
+        name += "_"
+    return name + ".json"
+
+
+def tuff_value(rt, v, name):
+    """A saved JSON value as Tuff has it: an object comes back as a table (a tap data object), arrays as lists."""
+    if isinstance(v, list):
+        return [tuff_value(rt, x, name) for x in v]
+    if isinstance(v, dict):
+        try:
+            import tuff_tap
+        except ImportError:  # an app built from a program that never mentions tap leaves tap out
+            raise rt.error(f"The save \"{name}\" has a table in it, and tables need tap: add  mention tap  at the top.")
+        return tuff_tap.Lib(rt).from_json(v)
+    return v
+
+
+class SavedData:
+    """A game's saves (game:save, game:load, game:saved and game:forget): names and values in one JSON file, read the
+    first time the game asks and written each time it saves something new, by writing a whole new file and putting it
+    in the old one's place (so a crash mid-write never leaves half a file). The file is named after the title the
+    game was made with (game:title doesn't change it), so a game run from TuffCode and the same game built with Build
+    exe share their saves, and games with other titles never see them. A damaged file is set aside as .bad and the
+    game starts with nothing saved. Tuff Engine's preview (tuff.py --scene) never reads or writes it: there :save
+    does nothing and :load gives the default."""
+
+    def __init__(self, game, title):
+        self.game, self.rt, self.title = game, game.rt, str(title)
+        self.values = None  # name -> its JSON value, once the file was read
+        self.folder = self.path = None
+        self.told = set()  # notes already shown (a folder that can't be written is said once, not on every save)
+
+    @property
+    def off(self):
+        return SCENE is not None or os.environ.get("TUFF_SCENE") == "1"
+
+    def what(self, method):
+        return f"{self.game.KIND}:{method}"
+
+    def note(self, text):
+        if text not in self.told:
+            self.told.add(text)
+            sys.stderr.write(text + "\n")
+            sys.stderr.flush()
+
+    # ---- what a program gives
+    def name_of(self, name, method, example):
+        n = self.rt.plain(name)
+        if not isinstance(n, str):
+            raise self.rt.error(f"{self.what(method)} needs the save's name as text first, like {example}, not {self.rt.what(n)}.")
+        if not n.strip():
+            raise self.rt.error(f"A save needs a name, like \"best\": {example}")
+        return n
+
+    def keepable(self, v, inside=()):
+        """The JSON value for a Tuff value :save can keep: numbers, text, true/false, nil, lists and tables (tap's
+        data objects), inside each other too. Anything else is a Tuff error on the :save line."""
+        rt = self.rt
+        v = rt.plain(v)
+        if v is None or isinstance(v, (bool, str)):
+            return v
+        if isinstance(v, (int, float)):
+            if v != v or v in (math.inf, -math.inf):
+                raise rt.error(f"{self.what('save')} can only keep ordinary numbers, not {rt.text(v)}.")
+            return v
+        table = None
+        if getattr(v, "tap", None) is not None:  # a tap data object: a table of named values
+            import tuff_tap
+            d = tuff_tap.data_of(v)
+            table = d.values if d is not None else None
+        if isinstance(v, (list, dict)) or table is not None:
+            if any(x is v for x in inside):
+                raise rt.error(f"{self.what('save')} can't keep a list or table that holds itself.")
+            inside = (*inside, v)
+            if isinstance(v, list):
+                return [self.keepable(x, inside) for x in v]
+            return {str(k): self.keepable(x, inside) for k, x in (v if table is None else table).items()}
+        raise rt.error(f"{self.what('save')} can keep {SAVE_KEEPS}, not {rt.what(v)}.")
+
+    # ---- the file
+    def read(self):
+        if self.values is None:
+            self.folder = save_folder()
+            self.path = os.path.join(self.folder, save_file_name(self.title))
+            self.values = {}
+            try:
+                with open(self.path, encoding="utf-8") as f:
+                    data = json.load(f)
+                saves = data.get("saves") if isinstance(data, dict) else None
+                if not isinstance(saves, dict):
+                    raise ValueError("not a save file")
+                self.values = saves
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError):  # not JSON, not text, not a save file, or it can't be opened
+                self.set_aside()
+        return self.values
+
+    def set_aside(self):
+        bad = self.path + ".bad"
+        try:
+            os.replace(self.path, bad)
+            kept = f" The old file is kept as {bad}."
+        except OSError:
+            kept = ""
+        self.note(f"The saved data for \"{self.title}\" was damaged, so the game starts with nothing saved.{kept}")
+
+    def write(self):
+        import tempfile
+        text = json.dumps({"game": self.title, "saves": self.values}, ensure_ascii=False, indent=2) + "\n"
+        tmp = None
+        try:
+            os.makedirs(self.folder, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(prefix=os.path.basename(self.path) + ".", suffix=".tmp", dir=self.folder)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+            for attempt in range(6):  # on Windows, a virus scanner reading the old file holds it for a moment
+                try:
+                    os.replace(tmp, self.path)
+                    break
+                except PermissionError:
+                    if attempt == 5:
+                        raise
+                    time.sleep(0.02 * (attempt + 1))
+            tmp = None
+        except OSError as exc:
+            self.note(f"Couldn't save \"{self.title}\"'s data in {self.folder} ({exc.strerror or exc}). The game goes on, "
+                      "and remembers what it saved until it closes.")
+        finally:
+            if tmp is not None:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
+    def remove_file(self):
+        try:
+            os.remove(self.path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            self.note(f"Couldn't forget \"{self.title}\"'s saves in {self.folder} ({exc.strerror or exc}).")
+
+    # ---- game:save, game:load, game:saved and game:forget
+    def save(self, name, value):
+        name = self.name_of(name, "save", f'{self.what("save")}("best", score)')
+        kept = self.keepable(value)
+        if self.off:
+            return None
+        values = self.read()
+        if name in values and json.dumps(values[name]) == json.dumps(kept):
+            return None  # the same as what's saved (a game saving its score every frame doesn't write every frame)
+        values[name] = kept
+        self.write()
+        return None
+
+    def load(self, name, default=None):
+        name = self.name_of(name, "load", f'best = {self.what("load")}("best", 0)')
+        if self.off:
+            return default
+        values = self.read()
+        return tuff_value(self.rt, values[name], name) if name in values else default
+
+    def saved(self, name):
+        name = self.name_of(name, "saved", f'{self.what("saved")}("best")')
+        return False if self.off else name in self.read()
+
+    def forget(self, name=MISSING):
+        if name is not MISSING:
+            name = self.name_of(name, "forget", f'{self.what("forget")}("best") (or nothing, to forget every save)')
+        if self.off:
+            return None
+        values = self.read()
+        if name is MISSING:
+            values.clear()
+            self.remove_file()
+        elif name in values:
+            del values[name]
+            if values:
+                self.write()
+            else:
+                self.remove_file()
+        return None
+
+
+class GameSaves:
+    """What every game window and world gets for its saves (Game takes these methods, just below)."""
+    NAMES = [("save", "save_value"), ("load", "load_value"), ("saved", "has_saved"), ("forget", "forget_saved")]
+
+    def saves(self):
+        if getattr(self, "save_file", None) is None:  # made by Game.__init__; this is for a game made some other way
+            self.save_file = SavedData(self, self.view.title)
+        return self.save_file
+
+    def save_value(self, name, value):
+        return self.saves().save(name, value)
+
+    def load_value(self, name, default=None):
+        return self.saves().load(name, default)
+
+    def has_saved(self, name):
+        return self.saves().saved(name)
+
+    def forget_saved(self, name=MISSING):
+        return self.saves().forget(name)
+
+
+for _attr in ("saves", *(attr for _, attr in GameSaves.NAMES)):
+    setattr(Game, _attr, getattr(GameSaves, _attr))
+for _cls in (Game2D, World3D):
+    _cls.NAMES = _cls.NAMES + GameSaves.NAMES
+
+
 # ---------------------------------------------------------------- the autopilot (tests)
 
 class Autopilot:
@@ -4864,6 +5125,11 @@ VALUES = {
     **{(k, "music"): {0: "music"} for k in ("game", "world")},
     **{(k, "panel"): {0: "anchor"} for k in ("game", "world")},
 }
+
+# Saved game data (GameSaves, above): game:saved gives true or false. game:load is left out: it gives back whatever
+# was saved.
+for _kind in ("game", "world"):
+    GIVES[_kind]["saved"] = "$bool"
 
 
 def check_value(kind, method, index, value, base_dir=None):

@@ -202,6 +202,14 @@ window.TUFF_METHOD_DOCS = {
   animate: ['hero:animate("walk")', 'tgame (3D): what a character model does: "walk", "idle" (a gentle breathe), "wave" or "none". By default it walks when it moves and breathes when it stands still.'],
 };
 
+// tgame's saved game data: game:save, :load, :saved and :forget, the same on a 2D game and a 3D world.
+Object.assign(window.TUFF_METHOD_DOCS, {
+  save: ['game:save("best", score)', 'tgame: saves a value under a name, right away, so it\'s still there the next time the game runs: a high score, the level, settings. It keeps numbers, text, true/false, nil, lists and tables (tap data objects). Saves belong to the game\'s title, so give each game its own.'],
+  load: ['best = game:load("best", 0)', 'tgame: gives back what was saved under that name, even by an earlier run of the game, or the second input when nothing was saved yet (nil if you leave it out). Lists and tables come back as lists and tables.'],
+  saved: ['game:saved("best")', 'tgame: true if something is saved under that name.'],
+  forget: ['game:forget("best")', 'tgame: forgets one save. game:forget() forgets every save this game has.'],
+});
+
 window.TUFF_LIBS = {
   tgui: {
     window: ['tgui.window("Title", width, height)', 'Opens a new app window. Width and height are optional.'],

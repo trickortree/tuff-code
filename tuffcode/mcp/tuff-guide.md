@@ -498,6 +498,55 @@ while game:open():
     game:frame()
 ```
 
+#### Saving
+`game:save(name, value)` keeps a value on the computer, so the game remembers it the next time it runs, even after it was closed: a high score between games, the level someone reached (their progress), their settings. It works the same in 2D and 3D.
+```tuff
+mention tgame
+
+game = tgame.window("Star Catcher", 600, 400)
+best = game:load("best", 0)                   # what an earlier game saved, or 0 the first time
+score = 0
+label = game:text("Score: 0", 300, 24)
+best_label = game:text("Best: " + best, 300, 54, 18, "gold")
+basket = game:box(300, 370, 80, 20, "wood")
+basket:on_edge "stop"
+star = game:circle(300, 0, 12, "yellow")
+
+func step(dt):
+    if game:held("left"):
+        basket:move(-400 * dt, 0)
+    if game:held("right"):
+        basket:move(400 * dt, 0)
+    star:move(0, 220 * dt)
+    if star:touches(basket):
+        score += 1
+        label:set "Score: " + score
+        star:move_to(random(20, 580), 0)
+    elif star:y() > 400:                      # missed it: game over
+        if score > best:                      # a new high score: keep it for next time
+            best = score
+            game:save("best", best)
+            best_label:set "Best: " + best
+        star:move_to(random(20, 580), 0)
+        game:game_over("Score: " + score, again)
+
+func again():                                 # space after game over
+    score = 0
+    label:set "Score: 0"
+
+func reset_best(key):                         # R forgets the high score
+    game:forget("best")
+    best = 0
+    best_label:set "Best: 0"
+
+game:every_frame step
+game:on_key("r", reset_best)
+```
+- **Saving:** `game:save("best", score)` saves right away (there's nothing else to do before the game closes). It keeps numbers, text, true/false, nil, lists and tables, inside each other too: `game:save("unlocked", ["forest", "cave"])`. A table is a tap data object: `mention tap`, then `stats = tap.data()`, `stats:set("level", 3)` and `game:save("stats", stats)`. Saving a function, a sprite or an object is an error: save the numbers you need instead, like `game:save("x", player:x())`.
+- **Loading:** `game:load("best", 0)` gives back what was saved under that name, or the second input when nothing was saved yet (nil if you leave it out). Lists and tables come back as lists and tables: `stats = game:load("stats")`, then `stats:get("level")`. `game:saved("best")` is true when something is saved under that name.
+- **Forgetting:** `game:forget("best")` forgets one save, and `game:forget()` forgets every save the game has (a "reset progress" button).
+- **Where saves go:** one file per game, named after the title in `tgame.window("Star Catcher")` (changing it later with `game:title` doesn't move the saves), in a TuffSaves folder in the user's own data folder. The same game run from TuffCode or built with Build exe shares its saves, and games with other titles never see them, so give each game its own title. Tuff Engine's preview never saves: there `game:load` always gives the default.
+
 #### Land and lighting (3D)
 `game:terrain(size)` makes land you shape with hills, mountains, dips, lakes and valleys, or paint with brushes.
 ```tuff

@@ -1,0 +1,11 @@
+# A second game for the saved game data tests, a 3D world: another title, so it never sees "Save Test"'s saves
+# (save_data.tuf), and they never see its.
+mention tgame
+
+world = tgame.world("Other Save Test", 400, 300)
+world:sky "night"
+say "other best " + text(world:load("best")) + " " + world:saved("runs")
+world:save("best", 7)
+visits = world:load("visits", 0) + 1
+world:save("visits", visits)
+say "other visits " + visits

@@ -1777,6 +1777,19 @@ def with_physics(tg, lib):
             "animations": tuple(getattr(lib, "ANIMATIONS", ANIMATIONS))}
 
 
+# tgame's saved game data as the checker knows it (Checker.check_saves): game:save, :load, :saved and :forget on a
+# game or a world. For each, what it takes, for messages, an example ({o} is the game's name) and the input counts that
+# fit. The name always comes first, as text; what :save keeps can be anything JSON can hold.
+SAVE_INPUTS = {
+    "save": ("a name, then what to save", '{o}:save("best", score)', (2,)),
+    "load": ("the save's name, then what to give back when nothing was saved (if you like)", 'best = {o}:load("best", 0)', (1, 2)),
+    "saved": ("the save's name", '{o}:saved("best")', (1,)),
+    "forget": ("the save's name, or nothing to forget every save", '{o}:forget("best")', (0, 1)),
+}
+SAVE_KEEPS = "numbers, text, true/false, lists and tables"
+SAVE_KINDS = ("$number", "$text", "$bool", "$nil", "$list", "$line", "data object")  # what :save can keep
+
+
 def nodes(x):
     """Every node inside a node, or inside a list of nodes."""
     if isinstance(x, N):
@@ -2613,6 +2626,8 @@ class Checker:
         if obj in self.TYPE:
             self.problem(e, f"{self.TYPE[obj].capitalize()} doesn't have any :methods.")
             return
+        if obj in ("game", "world") and self.check_saves(e, obj):  # game:save and the rest (saved game data)
+            return
         if obj in self.TGAME_KINDS:
             self.check_tgame(e, obj, bare_fix)
             return
@@ -2655,6 +2670,43 @@ class Checker:
         choices = [to_text(x.value) for x in made.args[0].items]
         if to_text(arg.value) not in choices:
             self.problem(arg, f"'{to_text(arg.value)}' isn't one of this dropdown's choices: {', '.join(choices)}.")
+
+    def check_saves(self, e, obj):
+        """game:save, game:load, game:saved and game:forget (tgame's saved game data, SAVE_INPUTS): how many inputs
+        they got, a name that isn't text (like the score written first: game:save(score, "best")), and what
+        game:save can't keep: a function, a sprite, a widget... Also game:delete(enemy), written to take a thing out
+        of the game. True when it was one of these: nothing else needs checking."""
+        tg = tgame_tables()
+        methods = tg["kinds"].get(obj, {}) if tg else {}
+        name, n = e.name, len(e.args)
+        owner = e.obj.name if e.obj.kind == "var" else obj
+        if name == "delete" and name not in methods and n == 1 and self.kind(e.args[0]) in ("sprite", "object", "car", "ragdoll"):
+            thing = e.args[0].name if e.args[0].kind == "var" else None
+            how = f"To take {thing} out of the game, use {thing}:remove()." if thing else \
+                "To take a thing out of the game, use its :remove(), like enemy:remove()."
+            self.problem(e, f"{a_kind(obj).capitalize()} doesn't have :delete. {how} ({owner}:forget(\"best\") forgets a save.)")
+            return True
+        rule = SAVE_INPUTS.get(name)
+        if rule is None or name not in methods:
+            return False
+        takes, example, counts = rule
+        use = example.format(o=owner)
+        if n not in counts:
+            self.problem(e, f"{owner}:{name} got the wrong number of inputs ({n}). It takes {takes}, like: {use}")
+            return True
+        if e.args:
+            a, k = e.args[0], self.kind(e.args[0])
+            if a.kind == "const" and isinstance(a.value, str) and not a.value.strip():
+                self.problem(a, f"A save needs a name, like \"best\": {use}")
+            elif k is not None and k not in ("$text", "$line"):
+                what = "a library" if k.startswith("$module:") else self.what(k)
+                self.problem(a, f"{owner}:{name} needs the save's name as text first, like {use}, not {what}.")
+        if name == "save":
+            k = self.kind(e.args[1])
+            if k is not None and k not in SAVE_KINDS:
+                what = "a library" if k.startswith("$module:") else self.what(k)
+                self.problem(e.args[1], f"{owner}:save can keep {SAVE_KEEPS}, not {what}.")
+        return True
 
     def check_tgame(self, e, obj, bare_fix):
         """A method of something tgame made: its name, its input count, the function an event runs, and inputs

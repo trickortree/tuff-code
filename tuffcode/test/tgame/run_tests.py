@@ -1901,6 +1901,189 @@ def t_checker(c):
         c.check(p.returncode == 1 and want in p.stderr, f"--check catches: {want}", p.stderr[:400])
 
 
+# ---------------------------------------------------------------- saved game data (game:save, game:load)
+
+# Every game these tests run keeps its saves in out/saves, never in the real TuffSaves folder (the guide's high score
+# game saves too). t_saves gives each of its runs a folder of its own.
+os.environ.setdefault("TUFF_SAVE_DIR", os.path.join(OUT, "saves"))
+
+
+def save_dir(name):
+    """An empty folder for a test's saves (TUFF_SAVE_DIR), in out/saves_test."""
+    import shutil
+    path = os.path.join(OUT, "saves_test", name)
+    shutil.rmtree(path, ignore_errors=True)
+    os.makedirs(path)
+    return path
+
+
+def read_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def same_json(a, b):
+    """The same JSON, types and all (in Python, True == 1 and 1 == 1.0)."""
+    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+# What games/save_data.tuf's show_all says before anything is saved, and after save_all (the list gets "more" added
+# after it's loaded, which doesn't change what's saved).
+SAVE_DEFAULTS = ["best 0", "name nobody", "done false", "nothing false 5", "list []", "stats none", "missing none nil false"]
+SAVE_SHOWN = ["best 42", "name Ada Lovelace", "done true", "nothing true nil", 'list [1, 2.5, "three", [4, 5], false, "more"] 6 5',
+              'stats 3 Ada ["sword", "key"] 7.5', "missing none nil false"]
+SAVE_FILE = {"best": 42, "name": "Ada Lovelace", "done": True, "nothing": None, "list": [1, 2.5, "three", [4, 5], False],
+             "stats": {"level": 3, "name": "Ada", "items": ["sword", "key"], "pet": {"hp": 7.5}}}
+SAVE_ERRORS = [
+    ('game:save("fn", show_all)', "game:save can keep numbers, text, true/false, lists and tables, not a function."),
+    ('game:save("sprite", [1, label])', "game:save can keep numbers, text, true/false, lists and tables, not a sprite."),
+    ('game:save(5, "best")', 'game:save needs the save\'s name as text first, like game:save("best", score), not a number.'),
+    ('game:save("  ", 1)', 'A save needs a name, like "best"'),
+    ('say game:load(true)', 'game:load needs the save\'s name as text first, like best = game:load("best", 0), not true/false.'),
+    ('game:store("best", 1)', "A game doesn't have :store. Use :save instead."),
+    ('game:read("best")', "A game doesn't have :read. Use :load instead."),
+]
+SAVE_CHECK_GOOD = [
+    # Every way the four are written, in 2D (with a table from tap) and in 3D.
+    'mention tap\ngame = tgame.window("Saves", 400, 300)\nbest = game:load("best", 0)\nif game:saved("best"):\n    say best + 1\n'
+    'game:save("best", best)\ngame:save("name", "Ada")\ngame:save("list", [1, [2, "three"]])\ngame:save("flag", true)\n'
+    'game:save("none", nil)\nline = say "hi"\ngame:save("line", line)\nstats = tap.data()\nstats:set("level", 3)\n'
+    'game:save("stats", stats)\ns = game:load("stats")\nsay s:get("level")\nhas = game:saved("x")\nif has and best > 2:\n'
+    '    say "yes"\ngame:forget("best")\ngame:forget()\ngame:forget\nfunc step(dt):\n    game:save("time", game:time())\n'
+    'game:every_frame step\n',
+    'world = tgame.world("Saves 3D")\nvisits = world:load("visits", 0) + 1\nworld:save("visits", visits)\n'
+    'if world:saved("visits"):\n    world:forget("visits")\nworld:save("spot", world:player():spot())\n',
+]
+SAVE_CHECK_BAD = [
+    ('game = tgame.window("x")\ngame:save("best")\n',
+     'game:save got the wrong number of inputs (1). It takes a name, then what to save, like: game:save("best", score)'),
+    ('game = tgame.window("x")\nscore = 5\ngame:save(score, "best")\n',
+     'game:save needs the save\'s name as text first, like game:save("best", score), not a number.'),
+    ('game = tgame.window("x")\ngame:save("step", step)\nfunc step(dt):\n    nil\n',
+     "game:save can keep numbers, text, true/false, lists and tables, not a function."),
+    ('game = tgame.window("x")\nb = game:box(1, 2)\ngame:save("b", b)\n', "game:save can keep numbers, text, true/false, lists and tables, not a sprite."),
+    ('w = tgame.world("x")\nw:save("p", w:player())\n', "w:save can keep numbers, text, true/false, lists and tables, not a player."),
+    ('game = tgame.window("x")\ngame:save("lib", tgame)\n', "game:save can keep numbers, text, true/false, lists and tables, not a library."),
+    ('game = tgame.window("x")\ngame:save("", 1)\n', 'A save needs a name, like "best": game:save("best", score)'),
+    ('game = tgame.window("x")\nx = game:load()\n', "game:load got the wrong number of inputs (0). It takes the save's name, then what to give back"),
+    ('game = tgame.window("x")\nx = game:load(3)\n', 'game:load needs the save\'s name as text first, like best = game:load("best", 0), not a number.'),
+    ('game = tgame.window("x")\nx = game:load("a", 1, 2)\n', "game:load got the wrong number of inputs (3)."),
+    ('game = tgame.window("x")\nsay game:saved()\n', 'game:saved got the wrong number of inputs (0). It takes the save\'s name, like: game:saved("best")'),
+    ('game = tgame.window("x")\nif game:saved(true):\n    say 1\n', "game:saved needs the save's name as text first"),
+    ('game = tgame.window("x")\ngame:forget("a", "b")\n', "game:forget got the wrong number of inputs (2). It takes the save's name, or nothing to forget every save"),
+    ('game = tgame.window("x")\ngame:forget([1])\n', "game:forget needs the save's name as text first"),
+    ('game = tgame.window("x")\ngame:store("best", 1)\n', "A game doesn't have :store. Use :save instead."),
+    ('game = tgame.window("x")\ngame:save_data("best", 1)\n', "A game doesn't have :save_data. Use :save instead."),
+    ('w = tgame.world("x")\nsay w:read("best")\n', "A world doesn't have :read. Use :load instead."),
+    ('game = tgame.window("x")\nx = game:get_data("best")\n', "A game doesn't have :get_data. Use :load instead."),
+    ('game = tgame.window("x")\ngame:delete("best")\n', "A game doesn't have :delete. Use :forget instead."),
+    ('game = tgame.window("x")\ngame:reset_save()\n', "A game doesn't have :reset_save. Use :forget instead."),
+    ('game = tgame.window("x")\nenemy = game:box(1, 2)\ngame:delete(enemy)\n',
+     "A game doesn't have :delete. To take enemy out of the game, use enemy:remove()."),
+    ('game = tgame.window("x")\nx = game:saved("a")\nx:add(1)\n', "True/false doesn't have any :methods."),
+]
+
+
+def t_saves(c):
+    """Saved game data: game:save keeps a number, text, true/false, nil, a list and a table (with a list and a table in
+    it); after the game restarts game:load gives them back (lists as lists, tables as data objects), with defaults for
+    what was never saved; :saved and :forget; friendly errors; a damaged save file is set aside and the game starts
+    fresh; a game with another title (a 3D world) never mixes with it; --scene never saves; and the checker."""
+    folder = save_dir("main")
+    env = {"TUFF_SAVE_DIR": folder}
+    file, other = os.path.join(folder, "Save Test.json"), os.path.join(folder, "Other Save Test.json")
+    tries = [{"at": 0.8 + i * 0.05, "tuff": src} for i, (src, _want) in enumerate(SAVE_ERRORS)]
+    r = play("save_1", game("save_data.tuf"), [{"at": 0.3, "call": "show_all"}, {"at": 0.5, "call": "save_all"},
+                                               {"at": 0.7, "call": "show_all"}, *tries, {"at": 1.4, "close": True}], env=env)
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    said = [line for line in r.lines[1:] if not line.startswith("[autopilot]")]
+    c.check(said[:1] == ["run 1"], "the first run finds nothing saved: run 1", said[:1])
+    c.check(said[1:8] == SAVE_DEFAULTS, "before anything is saved, game:load gives the default (nil without one) and game:saved is false", said[1:8])
+    c.check(said[8:16] == ["saved"] + SAVE_SHOWN, "game:save keeps a number, text, true, nil, a list and a table, and game:load gives them back",
+            said[8:16])
+    errors = [line for line in r.lines if line.startswith("[autopilot]")]
+    for src, want in SAVE_ERRORS:
+        c.check(any(line.startswith(f"[autopilot] {src}: ") and want in line for line in errors), f"{src}: {want}", errors)
+    data = read_json(file)
+    c.check(same_json(data, {"game": "Save Test", "saves": {"runs": 1, **SAVE_FILE}}),
+            "the saves are one JSON file named after the game's title (not what game:title changed the window to), with nothing the errors tried", data)
+    c.check(sorted(os.listdir(folder)) == ["Save Test.json"], "nothing else is in the folder (no temporary files left behind)", os.listdir(folder))
+
+    o = play("save_other_1", game("save_other.tuf"), [{"at": 0.5, "close": True}], env=env)
+    clean_exit(c, o)
+    c.check(o.lines[1:] == ["other best nil false", "other visits 1"], "a game with another title (a 3D world) doesn't see Save Test's saves", o.lines)
+
+    r = play("save_2", game("save_data.tuf"), [{"at": 0.3, "call": "show_all"}, {"at": 0.5, "call": "forget_some"},
+                                               {"at": 0.7, "close": True}], env=env)
+    clean_exit(c, r)
+    c.check(r.lines[1:2] == ["run 2"], "run again, the game finds what it saved last time (runs is 1 + 1)", r.lines[1:2])
+    c.check(r.lines[2:9] == SAVE_SHOWN, "everything comes back the same after the restart (and the other game's best, 7, didn't get in)", r.lines[2:9])
+    c.check(r.lines[9:] == ["forgot best false 0 true"], "game:forget(\"best\") forgets just that one (and a name never saved is fine)", r.lines[9:])
+    data = read_json(file) or {}
+    c.check(same_json(data.get("saves"), {"runs": 2, **{k: v for k, v in SAVE_FILE.items() if k != "best"}}), "the file forgot it too", data)
+
+    before, when = open(file, "rb").read(), os.path.getmtime(file)
+    code, _out, err, d, _secs = scene(game("save_data.tuf"), env=env)
+    batch = json.dumps(d.get("batch") or [])
+    c.check(code == 0 and d.get("stopped") == "end" and "Tuff error" not in err and "Traceback" not in err,
+            "--scene previews a game that saves and loads", (code, d.get("stopped"), err[-400:]))
+    c.check('"Run 1"' in batch and '"Run 3"' not in batch, "in --scene, game:load gives the default even with saves there (the preview says Run 1)",
+            [x for x in ("Run 1", "Run 2", "Run 3") if f'"{x}"' in batch])
+    c.check(open(file, "rb").read() == before and os.path.getmtime(file) == when, "and --scene leaves the save file alone", None)
+    empty = save_dir("scene")
+    code, _out, err, d, _secs = scene(game("save_data.tuf"), env={"TUFF_SAVE_DIR": empty})
+    c.check(code == 0 and not os.listdir(empty), "--scene with nothing saved writes nothing", os.listdir(empty))
+
+    o = play("save_other_2", game("save_other.tuf"), [{"at": 0.5, "close": True}], env=env)
+    clean_exit(c, o)
+    c.check(o.lines[1:] == ["other best 7 false", "other visits 2"], "the 3D world keeps its own saves across runs too", o.lines)
+    c.check(same_json((read_json(other) or {}).get("saves"), {"best": 7, "visits": 2}), "in a file of its own, Other Save Test.json", read_json(other))
+
+    r = play("save_3", game("save_data.tuf"), [{"at": 0.3, "call": "forget_all"}, {"at": 0.5, "close": True}], env=env)
+    clean_exit(c, r)
+    c.check(r.lines[1:] == ["run 3", "forgot all false false nil"], "game:forget() forgets every save the game has", r.lines)
+    c.check(not os.path.exists(file) and os.path.exists(other), "its file is gone, and the other game's saves are still there", os.listdir(folder))
+
+    # A damaged save file: set aside as .bad (with a note on stderr), and the game starts with nothing saved.
+    folder = save_dir("damaged")
+    file = os.path.join(folder, "Save Test.json")
+    for i, broken in enumerate(('{"game": "Save Test", "saves": {"runs": 4', "[1, 2, 3]", "\xff\xfe not text")):
+        with open(file, "wb") as f:
+            f.write(broken.encode("latin-1"))
+        r = play(f"save_damaged_{i}", game("save_data.tuf"), [{"at": 0.3, "call": "show_all"}, {"at": 0.5, "close": True}],
+                 env={"TUFF_SAVE_DIR": folder})
+        what = ("cut off", "JSON but not a save file", "not text")[i]
+        c.check(r.code == 0 and "Traceback" not in r.err and r.lines[1:3] == ["run 1", "best 0"],
+                f"a damaged save file ({what}) doesn't stop the game: it starts with nothing saved", (r.code, r.lines[1:3], r.err[-400:]))
+        c.check(f'The saved data for "Save Test" was damaged, so the game starts with nothing saved. The old file is kept as {file}.bad.' in r.err,
+                "a note on stderr says so, and where the old file is", r.err[-400:])
+        c.check(open(file + ".bad", "rb").read() == broken.encode("latin-1") and same_json((read_json(file) or {}).get("saves"), {"runs": 1}),
+                "the old file is kept as Save Test.json.bad, and a new one is saved", sorted(os.listdir(folder)))
+
+    # The checker: every way the four are written passes, and their mistakes are caught.
+    check_dir = os.path.join(HERE, "out", "checker")
+    os.makedirs(check_dir, exist_ok=True)
+    for name in ("save_data.tuf", "save_other.tuf"):
+        p = subprocess.run(tuff_cmd() + ["--check", game(name)], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(p.returncode == 0 and p.stdout.strip() == "OK", f"--check accepts {name}", (p.stdout + p.stderr)[:400])
+    for i, src in enumerate(SAVE_CHECK_GOOD):
+        path = os.path.join(check_dir, f"save_good{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("mention tgame\n" + src)
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(p.returncode == 0, f"--check accepts saves snippet {i + 1}", (p.stdout + p.stderr)[:400])
+    for i, (src, want) in enumerate(SAVE_CHECK_BAD):
+        path = os.path.join(check_dir, f"save_bad{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("mention tgame\n" + src)
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(p.returncode == 1 and want in p.stderr, f"--check catches: {want}", p.stderr[:400])
+
+
 # ---------------------------------------------------------------- performance
 
 def perf(c, name, program, steps, label):
@@ -1944,6 +2127,7 @@ TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": 
          "terrain_look": t_terrain_look, "no_webgl": t_no_webgl, "ui_2d": t_ui_2d, "ui_3d": t_ui_3d,
          "physics": t_physics, "physics_player": t_physics_player, "physics_car": t_physics_car, "physics_2d": t_physics_2d,
          "physics_off": t_physics_off,
+         "saves": t_saves,
          "scene": t_scene, "notice": t_notice, "mcp": t_mcp, "checker": t_checker, "editor": t_editor, "guide": t_guide, "perf": t_perf}
 
 

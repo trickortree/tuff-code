@@ -376,6 +376,9 @@ const SECTIONS = {
   game: { first: ['tgame'], skip: [...WINDOW_SECTIONS, 'tap'] },
   web: { first: ['tap'], skip: [...WINDOW_SECTIONS, ...GAME_SECTIONS] },
 };
+// tgame's "Saving" (game:save and game:load) is a game section too: "save my high score" in a console program
+// shouldn't get it.
+for (const target of ['console', 'window', 'web']) SECTIONS[target].skip.push('Saving');
 // The sections for a request (and how many): a game's menus, buttons or screens add the guide's section on them,
 // with room left for one more, like the land for a 3D world.
 function sectionsFor(target, question) {
