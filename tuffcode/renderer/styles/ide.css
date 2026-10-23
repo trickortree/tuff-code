@@ -965,3 +965,27 @@ body.enter #statusbar { animation: upin .55s .3s cubic-bezier(.2,.9,.25,1) both;
   #en-zoom, #en-templates { display: none; }
   .en .sd-bar .sd-seg button { padding: 0 7px; }
 }
+
+/* ---------- What's New ---------- */
+#whatsnew { position: fixed; inset: 0; z-index: 3500; display: grid; place-items: center; padding: 24px; background: rgba(0,0,0,.5); backdrop-filter: blur(3px); opacity: 0; transition: opacity .18s; }
+#whatsnew.in { opacity: 1; }
+#whatsnew .wn-card { width: min(640px, 100%); max-height: min(760px, calc(100vh - 48px)); display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; background: var(--bg-panel); border: 1px solid var(--bg-active); box-shadow: 0 30px 80px rgba(0,0,0,.55); transform: translateY(8px) scale(.985); transition: transform .22s cubic-bezier(.2,.8,.2,1); }
+#whatsnew.in .wn-card { transform: none; }
+#whatsnew .wn-hero { flex: none; padding: 14px 14px 0; }
+#whatsnew .wn-strip { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; border-radius: 12px; }
+#whatsnew .wn-strip::-webkit-scrollbar { display: none; }
+#whatsnew .wn-strip img { flex: none; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; scroll-snap-align: start; border-radius: 12px; display: block; background: var(--bg-editor); }
+#whatsnew .wn-dots { display: flex; justify-content: center; gap: 6px; padding-top: 10px; }
+#whatsnew .wn-dots button { width: 7px; height: 7px; padding: 0; border-radius: 50%; background: rgba(255,255,255,.22); transition: background .15s, width .15s; }
+#whatsnew .wn-dots button.on { width: 18px; border-radius: 4px; background: var(--accent); }
+#whatsnew .wn-head { flex: none; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 18px 24px 4px; }
+#whatsnew .wn-head h2 { margin: 0; font-size: 21px; font-weight: 650; color: var(--text); }
+#whatsnew .wn-ver { font-size: 12px; color: var(--text-dim); padding: 2px 8px; border-radius: 999px; background: var(--bg-hover); }
+#whatsnew .wn-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 24px 8px; color: var(--text-dim); font-size: 13px; line-height: 1.55; user-select: text; }
+#whatsnew .wn-body h3 { margin: 16px 0 6px; font-size: 13.5px; font-weight: 650; color: var(--text); }
+#whatsnew .wn-body ul { margin: 0; padding-left: 18px; }
+#whatsnew .wn-body li { margin: 4px 0; }
+#whatsnew .wn-body b { color: var(--text); font-weight: 600; }
+#whatsnew .wn-body code { font-family: var(--font-code); font-size: 12px; padding: 1px 5px; border-radius: 5px; background: var(--bg-editor); color: var(--text); }
+#whatsnew .wn-body a { color: var(--accent); }
+#whatsnew .wn-foot { flex: none; display: flex; justify-content: flex-end; padding: 12px 24px 18px; border-top: 1px solid var(--border-soft); }
