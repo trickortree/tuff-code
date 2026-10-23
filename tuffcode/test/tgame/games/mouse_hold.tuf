@@ -11,5 +11,8 @@ player = world:player("first person")
 func report():
     say "locked " + world:mouse_locked() + ", angle " + round(player:angle())
 
+func lock_now():
+    world:lock_mouse()
+
 while world:open():
     world:frame()

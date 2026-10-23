@@ -2792,10 +2792,11 @@ class World3D(Game):
     mouse_js = False  # MOUSE_JS is on the page
 
     def lock_mouse(self):
-        """Lock the mouse for looking around: now if the browser allows it (in a click or a key press, or just after
-        one), or else on the next click on the game. Under a screen, once the last screen hides. After the player let
-        go of it with Escape, only their next click on the game locks it (as browsers want), so a program that asks
-        every frame doesn't take the mouse straight back, or ask the page 60 times a second."""
+        """Lock the mouse for looking around: now if the page allows it (tuff_view's hold: while the game's window has
+        the focus; the browser's own lock: in a click or a key press, or just after one), or else on the next click on
+        the game. Under a screen, once the last screen hides. After the player let go of it with Escape, only their
+        next click on the game locks it (as browsers want), so a program that asks every frame doesn't take the mouse
+        straight back, or ask the page 60 times a second."""
         ui = self.ui
         if ui is not None and ui.showing:
             ui.relock = True
@@ -6790,6 +6791,8 @@ class Autopilot:
         {"at": 0.5, "key": "right"}, {"at": 1, "hold": "w", "for": 0.8}, {"at": 1.2, "keydown": "a"}, {"keyup": ...},
         {"at": 2, "click": [x, y]} (window pixels), {"click_world": [x, y]} (a 2D game's own units),
         {"click_center": true}, {"look": [dx, dy]} (mouse movement), {"lock": true} (act as if the mouse were locked),
+        {"nudge_mouse": [dx, dy]}, {"hold_report": true}, {"watch_hold": true}, {"front": true} (the mouse held for
+        looking around: see hold_step),
         {"click_ui": "Play"} (the first button, item, tab or text box showing on the game's menus with these words, or
         a text box's placeholder: exactly, or else containing them), {"type": "wasd", "for": 0.5} (keys typed into the
         text box that has the keys, let go after "for" seconds),
@@ -6813,7 +6816,8 @@ class Autopilot:
     def __init__(self, game, plan, here):
         self.game = game
         self.on_top = plan.get("on_top", True)
-        if not plan.get("hold_mouse"):  # the tests leave the real mouse alone, unless they test holding it
+        self.hold_mouse = bool(plan.get("hold_mouse"))
+        if not self.hold_mouse:  # the tests leave the real mouse alone, unless they test holding it
             os.environ["TUFF_VIEW_HOLD"] = "0"
         self.out = plan.get("out") or here
         os.makedirs(self.out, exist_ok=True)
@@ -6856,10 +6860,27 @@ class Autopilot:
 
     def hold_step(self, v, step):
         """{"front": true} brings the window in front of the others (as a click on it would); {"nudge_mouse": [dx, dy]}
-        moves the real cursor as a hand would; {"hold_report": true} prints
+        moves the real cursor as a hand would, when the plan holds the real mouse ("hold_mouse"), or else the page gets
+        the move (as with "look"); {"hold_report": true} prints
         "[autopilot] hold {...}": whether the page and the computer hold the mouse, the window is in front, the cursor
-        is kept inside the window, and it's back in the middle (Windows)."""
+        is kept inside the window, it's back in the middle, and where it is (Windows); {"watch_hold": true} prints
+        "[autopilot] hold watch {"page": ...}" each time the page holds the mouse or lets go, from a thread of its own,
+        so it's heard even while the program is busy."""
+        if "nudge_mouse" in step and not self.hold_mouse:  # only a plan that holds the real mouse moves the real cursor
+            v.js(self.look_js(v, *step["nudge_mouse"]))
+            return
         hold = getattr(v, "_hold", None)
+        if step.get("watch_hold") and hold is not None:
+            import threading
+
+            def watch(was=hold.on):
+                while not self.game.closed:
+                    if hold.on != was:
+                        was = hold.on
+                        print("[autopilot] hold watch " + json.dumps({"page": was}), flush=True)
+                    time.sleep(0.01)
+            threading.Thread(target=watch, name="tgame-autopilot-watch", daemon=True).start()
+            return
         if sys.platform != "win32" or hold is None:
             if step.get("hold_report"):
                 print("[autopilot] hold " + json.dumps({"none": True}), flush=True)
@@ -6891,7 +6912,13 @@ class Autopilot:
         x, y = hold.where()
         middle = area is not None and abs(x - (area.left + area.right) // 2) <= 1 and abs(y - (area.top + area.bottom) // 2) <= 1
         print("[autopilot] hold " + json.dumps({"page": hold.on, "active": hold.active, "front": hold.ours(),
-                                                "inside": inside, "middle": middle}), flush=True)
+                                                "inside": inside, "middle": middle, "cursor": [x, y]}), flush=True)
+
+    def look_js(self, v, dx, dy):
+        """The mouse moved by dx, dy, in the page (it counts for looking around, without moving the real cursor)."""
+        w, h = v.size
+        return (f"window.dispatchEvent(new PointerEvent('pointermove', {{clientX: {w / 2}, clientY: {h / 2}, movementX: {dx}, "
+                f"movementY: {dy}, bubbles: true}}));")
 
     def click_js(self, x, y):
         # A real click somewhere else takes the keys from a text box: so does this one.
@@ -6957,9 +6984,7 @@ class Autopilot:
             v.js(f"const el = document.elementFromPoint({w / 2}, {h / 2}) || document.body;"
                  f"el.dispatchEvent(new PointerEvent('{kind}', {{clientX: {w / 2}, clientY: {h / 2}, bubbles: true, button: 0}}));")
         if "look" in step:
-            dx, dy = step["look"]
-            w, h = v.size
-            v.js(f"window.dispatchEvent(new PointerEvent('pointermove', {{clientX: {w / 2}, clientY: {h / 2}, movementX: {dx}, movementY: {dy}, bubbles: true}}));")
+            v.js(self.look_js(v, *step["look"]))
         if "click_ui" in step:
             v.js(self.click_ui_js(step["click_ui"]))
         if "type" in step:
@@ -6984,7 +7009,7 @@ class Autopilot:
                 print(f"[autopilot] {step['tuff']}: {err.msg}", flush=True)
         if "js" in step:  # JavaScript in the page; tv.emit('tg-autopilot', {message}) prints what it finds
             v.js(step["js"])
-        if "nudge_mouse" in step or step.get("hold_report") or step.get("front"):  # the real mouse (plan "hold_mouse")
+        if "nudge_mouse" in step or step.get("hold_report") or step.get("front") or step.get("watch_hold"):
             self.hold_step(v, step)
         if "say" in step:
             print(step["say"], flush=True)

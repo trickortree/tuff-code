@@ -238,7 +238,7 @@ function call(id, method, args) {
   if (n.kind === 'scene') {
     if (method === 'pick') return pick3d(n, args.length ? args[0] : null, args.length ? args[1] : null);
     if (method === 'project') return project(n, args[0], args[1], args[2]);
-    if (method === 'lock') { n.el.requestPointerLock(); return null; }
+    if (method === 'lock') { const p = n.el.requestPointerLock(); if (p && p.catch) p.catch(() => {}); return null; }
   }
   if (n.kind === 'obj' && method === 'look') { n.obj.lookAt(args[0], args[1], args[2]); n.host.dirty = true; return null; }
   if (n.el && method === 'move') { attach(n, args[0] ? node(args[0]) : null, args[1]); return null; }
@@ -1984,9 +1984,10 @@ function typing(el) {
   return !!el && editable(el) && !(el.tagName === 'INPUT' && /^(checkbox|radio|range|button|submit|reset|color|file|image)$/i.test(el.type));
 }
 
-// What's under the pointer: a 2D shape or 3D object first, then the element and its parents.
+// What's under the pointer: a 2D shape or 3D object first, then the element and its parents. With the mouse held
+// for looking around, the element holding it, as with the browser's lock.
 function target(e) {
-  const t = e.target;
+  const t = (passing && heldBy) || e.target;
   const n = t && t._tv !== undefined ? objs.get(t._tv) : null;
   const info = { x: e.clientX, y: e.clientY, path: domPath(t) };
   if (n && (n.kind === 'canvas' || n.kind === 'scene')) {
@@ -2024,7 +2025,7 @@ addEventListener('pointermove', (e) => {
   moved.dy += e.movementY || 0;
 });
 addEventListener('wheel', (e) => {
-  if (!wheel) wheel = { dx: 0, dy: 0, x: e.clientX, y: e.clientY, path: domPath(e.target) };
+  if (!wheel) wheel = { dx: 0, dy: 0, x: e.clientX, y: e.clientY, path: domPath((passing && heldBy) || e.target) };
   wheel.dx += e.deltaX;
   wheel.dy += e.deltaY;
 }, { passive: true });
@@ -2049,6 +2050,11 @@ document.addEventListener('pointerlockchange', () => emit('lock', { locked: !!do
 addEventListener('resize', () => { resized = true; });
 addEventListener('blur', () => emit('blur', {}));
 addEventListener('focus', () => emit('focus', {}));
+// A press of the mouse still going on, from its pointerdown until just after its click (see passThrough). First of
+// the pointerdown listeners, so it's known before one asks to hold the mouse.
+let pressing = false;
+addEventListener('pointerdown', () => { pressing = true; }, true);
+addEventListener('pointerup', () => setTimeout(() => { pressing = false; passThrough(); }, 0), true);
 // A scene with `clicklock` locks the pointer when it's clicked (for mouse look); the browser only allows that
 // inside the click itself, so it can't wait for Python. Escape unlocks it. That click's mousedown has `locks: true`.
 addEventListener('pointerdown', (e) => {
@@ -2065,26 +2071,46 @@ addEventListener('keydown', wakeSound, true);
 // The mouse held for looking around without the browser's pointer lock, which shows "To show your cursor, press
 // Esc" over the game: Python holds it (tuff_view's _MouseHold keeps it in the window and measures its moves), and
 // the page stands in for the lock, so requestPointerLock, document.pointerLockElement, exitPointerLock and
-// 'pointerlockchange' work as before. Escape and the window losing the focus let go, as with the real lock. Python
-// turns this on (nativeMouse(true)) where it can hold the mouse.
+// 'pointerlockchange' work as before. As with the real lock, only a window with the focus can hold it, Escape and
+// the window losing the focus let go, and while it's held the mouse's events go to the element holding it (nothing
+// else on the page is under the pointer, so a card in the middle of the window doesn't take the game's clicks).
+// Python turns this on (nativeMouse(true)) where it can hold the mouse.
 let heldBy = null;
+let passing = false;  // the mouse's events go to heldBy
 function holdMouse(el) {
   if (heldBy === el) return;
+  if (heldBy) heldBy.removeAttribute('data-tv-holder');
   heldBy = el;
+  if (el) el.setAttribute('data-tv-holder', '');
   document.documentElement.classList.toggle('tv-held', !!el);
+  passThrough();
   emit('capture', { on: !!el });
   document.dispatchEvent(new Event('pointerlockchange'));
+}
+// The mouse's events go to the element holding it, but not before the click that asked for the hold is over (a click
+// on a start screen holds the mouse and hides the screen), so that click still goes where it was made.
+function passThrough() {
+  passing = !!heldBy && !pressing;
+  document.documentElement.classList.toggle('tv-through', passing);
 }
 function nativeMouse(on) {
   if (!on || nativeMouse.on) return null;
   nativeMouse.on = true;
   Object.defineProperty(Document.prototype, 'pointerLockElement', { configurable: true, get() { return heldBy; } });
-  Element.prototype.requestPointerLock = function () { holdMouse(this.isConnected ? this : null); return Promise.resolve(); };
+  Element.prototype.requestPointerLock = function () {
+    if (!document.hasFocus()) {  // another window is in front: no (the next click on the game asks again)
+      document.dispatchEvent(new Event('pointerlockerror'));
+      return Promise.reject(new DOMException("the window doesn't have the focus", 'WrongDocumentError'));
+    }
+    holdMouse(this.isConnected ? this : null);
+    return Promise.resolve();
+  };
   Document.prototype.exitPointerLock = function () { holdMouse(null); };
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && heldBy) holdMouse(null); }, true);
-  addEventListener('blur', () => holdMouse(null));
+  addEventListener('blur', () => { pressing = false; holdMouse(null); });
   const s = document.createElement('style');
-  s.textContent = 'html.tv-held, html.tv-held * { cursor: none !important; }';
+  s.textContent = 'html.tv-held, html.tv-held * { cursor: none !important; }'
+    + ' html.tv-through * { pointer-events: none !important; } html.tv-through [data-tv-holder] { pointer-events: auto !important; }';
   document.head.appendChild(s);
   return null;
 }
