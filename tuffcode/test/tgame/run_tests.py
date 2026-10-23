@@ -2939,6 +2939,7 @@ BAD = [
     ('w = tgame.world("x")\nw:weather("snow", 5)\n',
      'w:weather needs a strength from 0 to 2 after the kind (1 is normal), like w:weather("snow", 1.5).'),
     ('w = tgame.world("x")\nw:shake(3)\n', 'w:shake needs a number from 0 to 2 (1 is a good shake), like w:shake(0.5).'),
+    ('w = tgame.world("x")\nw:shake(0.5, 0)\n', 'w:shake needs how long it shakes, in seconds (more than 0), like w:shake(1, 1.5).'),
     ('w = tgame.world("x")\nw:slow_mo(0)\n',
      'w:slow_mo needs a speed from 0.05 to 1 (0.3 is 30% of the speed, 1 is normal again), like w:slow_mo(0.3, 2).'),
     ('w = tgame.world("x")\nw:slow_mo(2, 3)\n',

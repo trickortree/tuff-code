@@ -1924,6 +1924,7 @@ KIT_NUMBERS = {
     ("slow_mo", 0): (0.05, True, 1, "a speed from 0.05 to 1 (0.3 is 30% of the speed, 1 is normal again)", "{o}:slow_mo(0.3, 2)"),
     ("slow_mo", 1): (0, True, None, "how many seconds it lasts, 0 or more", "{o}:slow_mo(0.3, 2)"),
     ("shake", 0): (0, True, 2, "a number from 0 to 2 (1 is a good shake)", "{o}:shake(0.5)"),
+    ("shake", 1): (0, False, None, "how long it shakes, in seconds (more than 0)", "{o}:shake(1, 1.5)"),
     ("weather", 1): (0, True, 2, "a strength from 0 to 2 after the kind (1 is normal)", '{o}:weather("snow", 1.5)'),
     ("day_cycle", 0): (2, True, None, "how many seconds a whole day takes, 2 or more (0 stops it)", "{o}:day_cycle(120)", 0),
     ("time_of_day", 0): (0, True, 24, "an hour from 0 to 24 (18 is 6 pm)", "{o}:time_of_day(18)"),

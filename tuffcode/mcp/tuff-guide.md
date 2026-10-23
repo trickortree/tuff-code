@@ -736,8 +736,7 @@ guard:clicked hit
 guard:on_death(beaten)
 
 pad = world:jump_pad(12, 0, -4, 14)       # launches you up, 14 m/s
-boost = world:boost_pad(-4, 0, 6, 20)     # shoots you forward the way it faces
-boost:turn(180)
+boost = world:boost_pad(-4, 0, 6, 20)     # shoots you forward the way it faces: on towards the door
 lift = world:box(-16, 0.5, -4, [4, 0.4, 4], "stone")
 lift:path([[-16, 0.5, -4], [-16, 5, -4], [-26, 5, -4]], 2)   # there and back at 2 m/s, and you ride it
 crate = world:box(2, 0, 2, 1, "wood"):physics()             # something to grab and throw

@@ -5480,6 +5480,9 @@ class Level:
             return t.native
         if not t.on_land:
             raise rt.error("Only things in the world can move along a path, not something the player holds.")
+        if t.phys_kind == "dynamic" and n in ("car", "ragdoll"):  # always physics: it can't be turned off
+            raise rt.error(f"A {n} always has physics (it falls and gets pushed), so it can't move along a path. Move it "
+                           f"with {n}:push" + (", or drive it with car:drive()." if n == "car" else "."))
         if t.phys_kind == "dynamic":
             raise rt.error(f"{n}:path moves things that stay up by themselves, but this {n} has physics (it falls and "
                            f"gets pushed). Turn that off first with {n}:physics(\"off\"), or move it with {n}:push.")
