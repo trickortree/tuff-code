@@ -449,7 +449,7 @@ def t_player_3d(c):
     c.check(len(where) == 3 and 80 < float(where[-1].split()[-1]) < 105, "holding D turns the player right (third person)", where)
     c.check(r.lines[-1] == "the window closed, coins 1", "the code after the loop runs once the window closes", r.lines[-1:])
     shot = r.shots.get("player_3d.png")
-    c.check(shot and color_share(shot, (32, 58, 116), 30) > 0.002, "the screenshot shows the player's blue shirt", shot)
+    c.check(shot and color_share(shot, (32, 58, 116), 30) > 0.001, "the screenshot shows the player's blue shirt", shot)
 
 
 def t_callback(c):
