@@ -189,7 +189,7 @@ window.TUFF_METHOD_DOCS = {
   water: ['land:water(-1)', 'tgame (3D): a sea everywhere the land is lower than that height.'],
   height_at: ['land:height_at(x, z)', 'tgame (3D): how high the land is there, as a number.'],
   // tgame's physics: things that fall, bounce, tumble and get pushed.
-  physics: ['crate:physics()', 'tgame: makes it a physics thing: it falls, bounces, tumbles, knocks into things and gets pushed. physics("static") stays put but is solid (a floor, a wall), "kinematic" is moved only by your code, "off" turns it off. It gives back the thing: ball = world:sphere(0, 5, 0, 1, "red"):physics()'],
+  physics: ['crate:physics()', 'tgame: makes it a physics thing: it falls, bounces, tumbles, knocks into things and gets pushed. physics("static") stays put but is solid (a floor, a wall), "kinematic" is moved only by your code, "off" turns it off ("on", "fixed" and "none" work too). It gives back the thing: ball = world:sphere(0, 5, 0, 1, "red"):physics()'],
   mass: ['crate:mass(2)', 'tgame: how heavy a physics thing is, in kg (by default it comes from its size). Heavy things are harder to push.'],
   bounce: ['ball:bounce(0.6)', 'tgame: how bouncy a physics thing is, from 0 (no bounce) to 1 (it bounces right back up).'],
   friction: ['crate:friction(0.4)', 'tgame: how grippy a physics thing is: 0 slides like ice, 1 and more grips.'],
@@ -207,12 +207,12 @@ window.TUFF_METHOD_DOCS = {
   engine: ['car:engine(1.5)', 'tgame (3D): how strong a car\'s engine is: 1 is normal, 2 is twice as strong.'],
   animate: ['hero:animate("walk")', 'tgame (3D): what a character model does: "walk", "idle" (a gentle breathe), "wave" or "none". By default it walks when it moves and breathes when it stands still.'],
   // tgame's game kit: effects, the HUD, interaction and level pieces.
-  slow_mo: ['world:slow_mo(0.3, 2)', 'tgame: slow motion. Everything (the game clock, things that move, physics, animation) runs at 30% for 2 seconds, then eases back. world:slow_mo(1) ends it. game:slow_mo works in 2D too.'],
-  pop_text: ['world:pop_text("+10", x, y, z)', 'tgame: text that floats up from a spot and fades, like "+10" over a coin. Then a color and a size: world:pop_text("+10", 0, 2, 0, "gold", 2). In 2D: game:pop_text("+10", x, y).'],
+  slow_mo: ['world:slow_mo(0.3, 2)', 'tgame: slow motion. Everything (the game clock, things that move, physics, animation) runs at 30% for 2 seconds, then eases back (the speed is from 0.05 to 1). world:slow_mo(1) ends it. game:slow_mo works in 2D too.'],
+  pop_text: ['world:pop_text("+10", x, y, z)', 'tgame: text that floats up from a spot and fades, like "+10" over a coin. Then a color and a size in pixels (how tall it is on screen, 34 if you leave it out): world:pop_text("+10", 0, 2, 0, "gold", 40). In 2D: game:pop_text("+10", x, y).'],
   weather: ['world:weather("rain")', 'tgame (3D): "rain" (falling streaks, a darker sky, thicker fog, wet ground), "snow" (drifting flakes, a paler sky) or "none". Then how strong it is, from 0 to 2: world:weather("snow", 1.5).'],
-  day_cycle: ['world:day_cycle(120)', 'tgame (3D): morning, noon, sunset, night (with stars) and dawn, round and round, over 120 seconds; the sky, the sun, the light and the fog follow. world:day_cycle(0) stops it where it is.'],
+  day_cycle: ['world:day_cycle(120)', 'tgame (3D): morning, noon, sunset, night (with stars) and dawn, round and round, over 120 seconds (2 or more); the sky, the sun, the light and the fog follow. world:day_cycle(0) stops it where it is.'],
   time_of_day: ['world:time_of_day(18)', 'tgame (3D): jumps to that hour, from 0 to 24 (18 is 6 pm, a sunset).'],
-  health_bar: ['enemy:health_bar(100)', 'tgame: a health bar over it (in 3D it faces the camera), full at 100. enemy:hurt(10) takes some off, enemy:heal(5) gives some back, enemy:health() is how much it has.'],
+  health_bar: ['enemy:health_bar(100)', 'tgame: a health bar over it (in 3D it faces the camera), full at 100 (a door has no health). enemy:hurt(10) takes some off, enemy:heal(5) gives some back, enemy:health() is how much it has.'],
   hurt: ['enemy:hurt(10)', 'tgame: takes 10 off its health: its bar shrinks and flashes. At 0, its :on_death function runs.'],
   heal: ['enemy:heal(5)', 'tgame: gives it 5 health back (never more than its health bar\'s most).'],
   health: ['enemy:health()', 'tgame: how much health it has, as a number.'],
@@ -220,7 +220,7 @@ window.TUFF_METHOD_DOCS = {
   countdown: ['clock = game:countdown(60, times_up)', 'tgame: a timer in the top right that ticks down from 60 seconds, turns red under 10 and runs times_up() at 0. clock:add(5) adds seconds, clock:stop() stops it, clock:left() is how many seconds are left.'],
   left: ['clock:left()', 'tgame: how many seconds a countdown has left, as a number.'],
   arrow_to: ['arrow = world:arrow_to(chest)', 'tgame (3D): an arrow at the edge of the screen that points at a thing, with how far it is ("24 m"). arrow:hide(), arrow:show(), and world:arrow_to(other) points it at something else.'],
-  minimap: ['map = world:minimap()', 'tgame (3D): a round map in the top right: the land, its water, and the player as an arrow. Its size in pixels (180) and a corner are optional: world:minimap(200, "top left"). map:mark(coin, "gold") adds a dot.'],
+  minimap: ['map = world:minimap()', 'tgame (3D): a round map in the top right: the land, its water, and the player as an arrow. Its size in pixels (180, from 60 to 600) and a corner are optional: world:minimap(200, "top left"). map:mark(coin, "gold") adds a dot.'],
   mark: ['map:mark(coin, "gold")', 'tgame (3D): a dot on the minimap that follows a thing, in a color.'],
   unmark: ['map:unmark(coin)', 'tgame (3D): takes a thing\'s dot off the minimap.'],
   zoom: ['map:zoom(2)', 'tgame (3D): how close the minimap shows: 2 is twice as close, 0.5 shows more.'],
@@ -234,7 +234,7 @@ window.TUFF_METHOD_DOCS = {
   unlock: ['door:unlock()', 'tgame (3D): unlocks a door.'],
   jump_pad: ['pad = world:jump_pad(x, y, z, 15)', 'tgame (3D): a glowing pad that launches the player (and physics things) up, 15 metres a second, with a whoosh.'],
   boost_pad: ['boost = world:boost_pad(x, y, z, 20)', 'tgame (3D): a pad that shoots the player forward the way it faces, with streaks. boost:turn(90) aims it.'],
-  path: ['lift:path([[0, 2, 0], [10, 2, 0]], 3)', 'tgame (3D): moves it along the spots at 3 metres a second, and back (a moving platform). "loop" as a third input goes round instead. The player and physics things ride on it. lift:path() stops it.'],
+  path: ['lift:path([[0, 2, 0], [10, 2, 0]], 3)', 'tgame (3D): moves it along the spots at 3 metres a second, and back (a moving platform). "loop" as a third input goes round instead. The player and physics things ride on it. lift:path() stops it. Not for a car or a ragdoll: they always use physics.'],
 };
 
 // tgame's saved game data: game:save, :load, :saved and :forget, the same on a 2D game and a 3D world.

@@ -438,8 +438,7 @@ coach:on_talk(coach_talk)
 
 pad = game:jump_pad(0, 0, -6, 12)          # launches you up onto the ledge
 ledge = game:box(0, 0, -14, [8, 3, 6], "stone")
-boost = game:boost_pad(0, 3, -12, 22)      # shoots you along the ledge
-boost:turn(180)
+boost = game:boost_pad(0, 3, -13.5, 22)    # shoots you along the ledge, towards the lift
 lift = game:box(0, 3, -22, [4, 0.4, 4], "wood")
 lift:path([[0, 3, -22], [12, 6, -22], [12, 6, -34]], 3, "loop")   # round and round, and you ride it
 key = game:spawn("key", 12, 6, -34)        # walk into it to pick it up
@@ -485,7 +484,7 @@ func step(dt):
         arrow:hide()
         game:slow_mo(0.3, 2)               # everything at 30% for 2 seconds
         game:shake(0.5)
-        game:pop_text("You made it!", goal:spot(), "gold", 2)
+        game:pop_text("You made it!", goal:spot(), "gold", 60)   # 60 pixels tall
 
 game:every_frame step
 ` },

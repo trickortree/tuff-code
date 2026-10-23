@@ -1395,7 +1395,8 @@ def light_share(path, box, step=3):
 
 def t_level_pads(c):
     """A jump pad launches the player up (power 15: about 5 m, with physics on) and a physics crate dropped on another
-    one, a paused game launches nobody (resuming does), and a boost pad turned to face +x shoots the player that way."""
+    one, a paused game launches nobody (resuming does), and a boost pad turned to face +x shoots the player that way.
+    The Snowy obstacle course example's boost pad shoots the player down the course."""
     r = play("level_pads", game("level_pads.tuf"), [
         {"at": 0.5, "shot": "level_pads.png"},
         {"at": 0.6, "hold": "w", "for": 0.9},
@@ -1427,6 +1428,25 @@ def t_level_pads(c):
     boosted = r.shots.get("level_pads_boost.png")
     c.check(boosted and light_share(boosted, (0, 0.62, 1, 1), step=1) > 0.0005,  # plain grass there has none
             "boosted, the screen streaks: light speed lines over the grass at its edges", boosted)
+
+    # The Snowy obstacle course example (TUFF_GAME_EXAMPLES) runs towards -z: start, jump pad, ledge, lift, key, door,
+    # chest. Its boost pad, on the ledge, shoots the player along it towards the lift, not back off its front edge.
+    course = next((g for g in game_examples() or [] if g["id"] == "snow_course"), None)
+    if course is None:
+        c.check(game_examples() is None, "the examples have the Snowy obstacle course", None)
+        return
+    path = os.path.join(OUT, "snow_course.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(course["code"])
+    r = play("snow_course", path, [
+        {"at": 1.0, "tuff": 'say "pad " + boost:spot()'}, {"at": 1.05, "tuff": "player:move_to(boost:x(), boost:y() + 0.05, boost:z())"},
+        {"at": 1.65, "tuff": 'say "boosted " + player:spot()'}, {"at": 1.8, "close": True}])
+    clean_exit(c, r)
+    pad, boosted = numbers_after(r, "pad"), numbers_after(r, "boosted")
+    ledge = (-17, -11)  # game:box(0, 0, -14, [8, 3, 6]): from z -17 to -11
+    c.check(len(pad) == 3 and ledge[0] + 1.6 <= pad[2] <= ledge[1] - 1.6, f"its boost pad is all on the ledge (z {pad[2:]})", pad)
+    c.check(len(pad) == 3 and len(boosted) == 3 and boosted[2] < pad[2] - 4 and abs(boosted[0] - pad[0]) < 1,
+            f"... and shoots the player along it towards the lift (-z: from z {pad[2:]} to {boosted[2:]})", (pad, boosted))
 
 
 def t_level_lift(c):
@@ -2469,9 +2489,36 @@ def t_editor(c):
         c.check(run.code == 0 and "Tuff error" not in run.err, f"and runs ({run.seconds:.1f} s)", run.err[-400:])
 
 
-def t_guide(c):
-    """Every example in the guide's tgame section passes --check and runs (a window opens and is closed)."""
+def pop_sizes(text):
+    """The sizes pop_text is given in some code or docs: the number after its color, like the 40 in
+    world:pop_text("+10", coin:spot(), "gold", 40)."""
     import re
+    sizes = []
+    for m in re.finditer(r":pop_text\(", text):
+        depth, i = 1, m.end()
+        while i < len(text) and depth:
+            depth += {"(": 1, ")": -1}.get(text[i], 0)
+            i += 1
+        size = re.search(r'"[^"]*"\s*,\s*(-?[\d.]+)\s*$', text[m.end():i - 1])
+        if size:
+            sizes.append(float(size.group(1)))
+    return sizes
+
+
+def t_guide(c):
+    """Every example in the guide's tgame section passes --check and runs (a window opens and is closed), and every
+    place that teaches pop_text gives it a size in pixels."""
+    import re
+    # pop_text's size is how tall the text is on screen, in pixels (34 is normal in 3D, 32 in 2D): 2 is a dash.
+    js = os.path.join(REPO, "tuffcode", "renderer", "js")
+    taught = {"the guide": os.path.join(REPO, "tuffcode", "mcp", "tuff-guide.md"), "the hover docs": os.path.join(js, "tuff-lang.js"),
+              "the examples": os.path.join(js, "tuff-templates.js"), "What's New": os.path.join(js, "whats-new.js")}
+    taught.update({f"games/{n}": os.path.join(GAMES, n) for n in os.listdir(GAMES) if n.endswith(".tuf")})
+    sizes = {where: pop_sizes(open(path, encoding="utf-8").read()) for where, path in taught.items()}
+    sizes["the checker's good snippets"] = pop_sizes("\n".join(GOOD_SNIPPETS))
+    small = {where: s for where, s in sizes.items() if any(v < 8 for v in s)}
+    c.check(sum(len(s) for s in sizes.values()) >= 6 and not small,
+            f"pop_text's size is in pixels wherever it's taught ({sum(len(s) for s in sizes.values())} sizes, none under 8)", small)
     guide = open(os.path.join(REPO, "tuffcode", "mcp", "tuff-guide.md"), encoding="utf-8").read()
     start = guide.find("\n### tgame")
     end = guide.find("\n## ", start + 1)
@@ -2653,9 +2700,10 @@ BAD = [
     ('w = tgame.world("x")\nw:car(0, 0, 0, "redd")\n', "'redd' isn't a color tgame knows."),
     # Physics: the kinds of physics (with "did you mean"), each method's inputs, numbers that can't be right, names
     # people guess, what on_hit gives its function, and a car or a ragdoll in a 2D game.
-    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1, "wood")\ncrate:physics("fixed")\n',
+    ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1, "wood")\ncrate:physics("frozen")\n',
      'A thing\'s physics can be "dynamic" (it falls and can be pushed), "static" (it stays where it is), "kinematic" (your code moves it) '
-     'or "off", not "fixed". Did you mean "static"?'),
+     'or "off", not "frozen". Did you mean "static"?'),
+    ('game = tgame.window("x")\nb = game:box(1, 2)\nb:physics("immovable")\n', 'not "immovable". Did you mean "static"?'),
     ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1, "wood")\ncrate:physics "dynamc"\n', 'not "dynamc". Did you mean "dynamic"?'),
     ('game = tgame.window("x")\nball = game:circle(1, 2, 3)\nball:physics("bouncy")\n', 'A thing\'s physics can be "dynamic"'),
     ('w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1, "wood")\ncrate:physics("dynamic", 2)\n',
@@ -2717,7 +2765,12 @@ BAD = [
      'w:weather needs a strength from 0 to 2 after the kind (1 is normal), like w:weather("snow", 1.5).'),
     ('w = tgame.world("x")\nw:shake(3)\n', 'w:shake needs a number from 0 to 2 (1 is a good shake), like w:shake(0.5).'),
     ('w = tgame.world("x")\nw:slow_mo(0)\n',
-     'w:slow_mo needs a number above 0 (0.3 is 30% of the speed, 1 is normal again), like w:slow_mo(0.3, 2).'),
+     'w:slow_mo needs a speed from 0.05 to 1 (0.3 is 30% of the speed, 1 is normal again), like w:slow_mo(0.3, 2).'),
+    ('w = tgame.world("x")\nw:slow_mo(2, 3)\n',
+     'w:slow_mo needs a speed from 0.05 to 1 (0.3 is 30% of the speed, 1 is normal again), like w:slow_mo(0.3, 2).'),
+    ('w = tgame.world("x")\nw:slow_mo(0.01)\n', 'w:slow_mo needs a speed from 0.05 to 1'),
+    ('game = tgame.window("x")\ngame:slow_mo(1.5)\n', 'game:slow_mo needs a speed from 0.05 to 1'),
+    ('w = tgame.world("x")\nw:slow_mo(0.3, -1)\n', 'w:slow_mo needs how many seconds it lasts, 0 or more, like w:slow_mo(0.3, 2).'),
     ('w = tgame.world("x")\nw:slowmo(0.3)\n', "A world doesn't have :slowmo. Use :slow_mo instead."),
     ('game = tgame.window("x")\ngame:slow_motion(0.3)\n', "A game doesn't have :slow_motion. Use :slow_mo instead."),
     ('w = tgame.world("x")\nw:screen_shake(1)\n', "A world doesn't have :screen_shake. Use :shake instead."),
@@ -2731,7 +2784,18 @@ BAD = [
     ('w = tgame.world("x")\nw:floating_text("+10", 0, 2, 0)\n', "A world doesn't have :floating_text. Use :pop_text instead."),
     ('w = tgame.world("x")\nw:time_of_day(25)\n', 'w:time_of_day needs an hour from 0 to 24 (18 is 6 pm), like w:time_of_day(18).'),
     ('w = tgame.world("x")\nw:day_cycle(-5)\n',
-     'w:day_cycle needs how many seconds a day takes, 0 or more (0 stops it), like w:day_cycle(120).'),
+     'w:day_cycle needs how many seconds a whole day takes, 2 or more (0 stops it), like w:day_cycle(120).'),
+    ('w = tgame.world("x")\nw:day_cycle(1)\n',
+     'w:day_cycle needs how many seconds a whole day takes, 2 or more (0 stops it), like w:day_cycle(120).'),
+    ('w = tgame.world("x")\nw:day_cycle(0.5)\n', 'w:day_cycle needs how many seconds a whole day takes, 2 or more'),
+    ('w = tgame.world("x")\nw:pop_text("+10", 0, 2, 0, "gold", 0)\n',
+     'w:pop_text needs a size above 0: how tall the text is on screen, in pixels (34 is normal), like w:pop_text("+10", 0, 2, 0, "gold", 40).'),
+    ('w = tgame.world("x")\nw:pop_text("+10", [0, 2, 0], "gold", -3)\n', 'w:pop_text needs a size above 0'),
+    ('w = tgame.world("x")\nc = w:spawn("coin")\nw:pop_text("+10", c, "gold", 0)\n', 'w:pop_text needs a size above 0'),
+    ('w = tgame.world("x")\nc = w:spawn("coin")\nw:pop_text("+10", c, "glod")\n', "'glod' isn't a color tgame knows."),
+    ('game = tgame.window("x")\nb = game:box(1, 2)\ngame:pop_text("hit", b, "red", 0)\n', 'game:pop_text needs a size above 0'),
+    ('game = tgame.window("x")\ngame:pop_text("+10", 400, 300, "gold", 0)\n',
+     'game:pop_text needs a size above 0: how tall the text is on screen, in pixels (32 is normal), like game:pop_text("+10", 400, 300, "gold", 40).'),
     ('w = tgame.world("x")\nw:day_night_cycle(120)\n', "A world doesn't have :day_night_cycle. Use :day_cycle instead."),
     ('game = tgame.window("x")\ngame:weather("rain")\n',
      'The weather needs a 3D world. Make the game with tgame.world, like: world = tgame.world("My Game"), then world:weather("rain")'),
@@ -2800,6 +2864,20 @@ BAD = [
     ('w = tgame.world("x")\nd = w:door(0, 0, -5)\nd:open(1)\n',
      'd:open got the wrong number of inputs (1). It takes nothing, like: d:open()'),
     ('w = tgame.world("x")\nd = w:door(0, 0, -5)\nd:fly()\n', "A door doesn't have :fly."),
+    # A door has no health, and a car or a ragdoll always uses physics, so it can't move along a path.
+    ('w = tgame.world("x")\nd = w:door(0, 0, -5)\nd:health_bar(50)\n',
+     "A door doesn't have health, so it can't have :health_bar. It opens and closes (d:open(), d:close()), and d:needs(key) "
+     "locks it until the player has the key."),
+    ('w = tgame.world("x")\nd = w:door(0, 0, -5)\nd:hurt(1)\n', "A door doesn't have health, so it can't have :hurt."),
+    ('w = tgame.world("x")\nd = w:door(0, 0, -5)\nsay d:health()\n', "A door doesn't have health, so it can't have :health."),
+    ('w = tgame.world("x")\nd = w:door(0, 0, -5)\nd:on_death(gone)\nfunc gone():\n    nil\n',
+     "A door doesn't have health, so it can't have :on_death."),
+    ('w = tgame.world("x")\nd = w:door(0, 0, -5)\nd:damage(3)\n', "A door doesn't have health, so it can't have :damage."),
+    ('w = tgame.world("x")\ncar = w:car(0, 1, 0)\ncar:path([[0, 1, 0], [10, 1, 0]], 3)\n',
+     "A car always uses physics (it drives on its wheels), so it can't move along a path. Push it with car:push(0, 4, -6), "
+     "or let the player drive it with car:drive()."),
+    ('w = tgame.world("x")\ndummy = w:ragdoll(0, 0, 0)\ndummy:path([[0, 1, 0]])\n',
+     "A ragdoll always uses physics (that's what makes it flop), so it can't move along a path. Push it with dummy:push(0, 4, -6)."),
     ('w = tgame.world("x")\np = w:jump_pad(0, 0)\n',
      'w:jump_pad got the wrong number of inputs (2). It takes x, y and z, then how hard it launches things up (m/s), like: pad = w:jump_pad(0, 0, 5, 15)'),
     ('w = tgame.world("x")\np = w:jump_pad(0, 0, 5, 0)\n',
@@ -2878,6 +2956,12 @@ GOOD_SNIPPETS = [
     'dummy = world:ragdoll(5, 0, 0, "blue")\ndummy:push(0, 4, -6)\ndummy:on_hit(bumped)\nhero = world:spawn("hut", 1, 0, 1)\n'
     'hero:animate("walk")\nhero:animate "None"\nplayer = world:player("third person")\nplayer:on_hit(ouch)\n'
     'func bumped(other, strength):\n    say strength\nfunc ouch(other):\n    say "ouch"\nwhile world:open():\n    world:frame()\n',
+    # The other words tgame knows for the kinds of physics (any case): on, falls and fall (dynamic), fixed, still and
+    # solid (static), none and no (off).
+    'w = tgame.world("x")\ncrate = w:box(0, 6, 0, 1, "wood")\ncrate:physics("on")\ncrate:physics("Falls")\ncrate:physics "fall"\n'
+    'crate:physics("fixed")\ncrate:physics("still")\ncrate:physics("SOLID")\ncrate:physics("none")\ncrate:physics("no")\n'
+    'car = w:car(0, 1, 10)\ncar:physics("on")\ndummy = w:ragdoll(5, 0, 0)\ndummy:physics("falls")\n',
+    'game = tgame.window("x")\nfloor = game:box(400, 580, 800, 40, "gray"):physics("Fixed")\nball = game:circle(1, 2, 3):physics("on")\n',
     # Physics in 2D: gravity, walls, a static floor, a ball that bounces and is pushed, its velocity, on_hit, explode.
     'game = tgame.window("Bouncy", 800, 600)\ngame:gravity(900)\ngame:walls(true)\n'
     'floor = game:box(400, 580, 800, 40, "gray"):physics("static")\nball = game:circle(400, 100, 20, "red"):physics()\n'
@@ -2890,6 +2974,12 @@ GOOD_SNIPPETS = [
     'hour = w:time_of_day()\nsay hour + 1\n'
     'game = tgame.window("x")\nball = game:circle(100, 100, 10)\ngame:slow_mo(0.5)\ngame:shake(2, 1)\n'
     'game:pop_text("+1", 100, 50)\ngame:pop_text("+1", 100, 50, "gold", 40)\ngame:pop_text("hit", ball)\n',
+    # The game kit's numbers at the ends of what they can be: slow motion from 0.05 to 1 (for 0 seconds or more), a
+    # minimap from 60 to 600 pixels, a day of 2 seconds or more (0 stops it); and a car or a ragdoll told to stop a
+    # path (there's none to stop: that's fine).
+    'w = tgame.world("x")\nw:slow_mo(0.05)\nw:slow_mo(1, 0)\nw:slow_mo(0.5, 10)\nm = w:minimap(60)\nm = w:minimap(600, "top left")\n'
+    'w:day_cycle(2)\nw:day_cycle(0)\nw:day_cycle(600)\ncar = w:car(0, 1, 10)\ncar:path()\ndummy = w:ragdoll(5, 0, 0)\ndummy:path()\n',
+    'game = tgame.window("x")\ngame:slow_mo(0.05, 1)\ngame:slow_mo(1)\n',
     # Level pieces: pads with and without a power (a spot for x, y and z), turned, recoloured and on a path, and paths
     # in every way they're written (a speed, a mode in any case, spots built in a loop, path() to stop, chained).
     'world = tgame.world("Parkour", 960, 600)\nland = world:terrain(200)\npad = world:jump_pad(0, 0, 5, 15)\n'
@@ -2901,7 +2991,7 @@ GOOD_SNIPPETS = [
     # The game kit in 3D: every maker and method in each way it's written (a spot for x, y and z, colors, the
     # weathers and corners, "loop"), a key, a door that needs it, on_death, on_talk and the countdown's function.
     'world = tgame.world("Kit", 960, 600)\nland = world:terrain(160)\nworld:slow_mo(0.3, 2)\nworld:slow_mo(1)\n'
-    'world:shake(0.5)\nworld:shake(1, 1.5)\nworld:pop_text("+10", 0, 2, 0)\nworld:pop_text("+10", 0, 2, 0, "gold", 2)\n'
+    'world:shake(0.5)\nworld:shake(1, 1.5)\nworld:pop_text("+10", 0, 2, 0)\nworld:pop_text("+10", 0, 2, 0, "gold", 40)\n'
     'world:weather("rain")\nworld:weather("Snow", 1.5)\nworld:weather "none"\nworld:day_cycle(120)\nworld:day_cycle(0)\n'
     'world:time_of_day(18)\nenemy = world:spawn("person", 4, 0, 2)\nenemy:health_bar(100)\nenemy:hurt(10)\nenemy:heal(5)\n'
     'say enemy:health() + 1\nenemy:on_death(gone)\nclock = world:countdown(60, times_up)\nclock:add(5)\nclock:stop()\n'
@@ -2938,6 +3028,18 @@ GOOD_SNIPPETS = [
 ]
 
 
+def game_examples():
+    """The games the MCP server's tuff_examples gives agents and TuffCode offers as examples (TUFF_GAME_EXAMPLES in
+    renderer/js/tuff-templates.js), or None without Node."""
+    templates = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-templates.js")
+    load = "const window = {}; require('vm').runInNewContext(require('fs').readFileSync(process.argv[1], 'utf8'), { window }); " \
+           "console.log(JSON.stringify(window.TUFF_GAME_EXAMPLES || []))"
+    try:
+        return json.loads(subprocess.run(["node", "-e", load, templates], capture_output=True, text=True, encoding="utf-8", timeout=60).stdout)
+    except FileNotFoundError:
+        return None
+
+
 def t_checker(c):
     for name in GOOD:
         p = subprocess.run(tuff_cmd() + ["--check", os.path.join(GAMES, name)], capture_output=True, text=True, encoding="utf-8", timeout=60)
@@ -2953,13 +3055,8 @@ def t_checker(c):
         p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
         c.check(p.returncode == 0, f"--check accepts snippet {i + 1}: {src.splitlines()[1][:60]}", (p.stdout + p.stderr)[:400])
     # The games the MCP server's tuff_examples gives agents (renderer/js/tuff-templates.js, TUFF_GAME_EXAMPLES).
-    templates = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-templates.js")
-    load = "const window = {}; require('vm').runInNewContext(require('fs').readFileSync(process.argv[1], 'utf8'), { window }); " \
-           "console.log(JSON.stringify(window.TUFF_GAME_EXAMPLES || []))"
-    try:
-        games = json.loads(subprocess.run(["node", "-e", load, templates], capture_output=True, text=True, encoding="utf-8", timeout=60).stdout)
-    except FileNotFoundError:
-        games = None
+    games = game_examples()
+    if games is None:
         c.check(True, "Node isn't installed: skipped the MCP's game examples")
     if games is not None:
         c.check(any("terrain(" in g["code"] for g in games), "the MCP's game examples have a world with land (terrain)", [g["id"] for g in games])
@@ -2977,6 +3074,16 @@ def t_checker(c):
             f.write("mention tgame\n" + src)
         p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
         c.check(p.returncode == 1 and want in p.stderr, f"--check catches: {want}", p.stderr[:400])
+    # A 3D-only kit name in a 2D game: "needs a 3D world" is the error the editor shows (its first), and the only one.
+    for i, line in enumerate(['game:weather("rain")', "game:minimap()", "game:arrow_to(star)", "game:jump_pad(1, 2, 3)",
+                              "game:time_of_day(18)", "game:boost_pad(1, 2, 3)", "game:day_cycle(60)"]):
+        path = os.path.join(folder, f"flat{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f'mention tgame\ngame = tgame.window("x")\nstar = game:circle(1, 2, 3)\n{line}\n')
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        first = next((x for x in p.stderr.splitlines() if x.startswith("Tuff error")), "")
+        c.check(p.returncode == 1 and "needs a 3D world" in first and "doesn't have" not in p.stderr,
+                f"{line} in a 2D game: the error is that it needs a 3D world, and nothing else", p.stderr[:400])
     # The game kit once tgame has it itself: its own names win (here a countdown it calls a "timer", with a :pause of
     # its own), the kit's checks still run on them, and "key" is a kit model either way.
     import tuff
@@ -3381,6 +3488,9 @@ def t_hud_checker(c):
         ('w = tgame.world("x")\ne = w:spawn("person")\ne:on_death(gone)\nfunc gone(a, b):\n    nil\n', "gone() needs 2 inputs, but e:on_death gives it 1 input"),
         ('w = tgame.world("x")\na = w:arrow_to(1, 2, 3)\na:hide(1)\n', "a:hide got the wrong number of inputs (1)."),
         ('w = tgame.world("x")\nm = w:map()\n', "A world doesn't have :map. Use :minimap instead."),
+        ('w = tgame.world("x")\nm = w:minimap(50)\n',
+         "w:minimap needs its size in pixels first, from 60 to 600 (180 is normal), like map = w:minimap(180)."),
+        ('w = tgame.world("x")\nm = w:minimap(1000, "top left")\n', "w:minimap needs its size in pixels first, from 60 to 600"),
     ]
     for i, (src, want) in enumerate(bad):
         path = os.path.join(folder, f"bad{i}.tuf")
