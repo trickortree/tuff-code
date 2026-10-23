@@ -365,4 +365,61 @@ func step(dt):                             # dt is 0 while a screen pauses the g
 
 game:every_frame step
 ` },
+    { id: 'car_smash', name: 'Car smash (physics, 3D)', desc: 'A tgame 3D world with real physics: a car you drive with the arrow keys into towers of crates that fall and tumble (thing:physics(), :mass, :friction, :bounce), a bouncy ball, a ragdoll that flops over, crate:on_hit counting the crates knocked over, an explosion on B (world:explode) and car:flip on F.', code: `mention tgame
+
+game = tgame.world("Car Smash", 960, 600)
+game:sky "day"
+game:lighting "modern"
+land = game:terrain(160)                   # with physics on, the land is solid
+land:hill(45, 10, 40, 6)                   # a hill to drive up
+game:gravity(-9.8)                         # how strong gravity is (this is the default)
+
+# Towers of crates: physics things fall, tumble and get knocked over.
+towers = [[0, -20], [-12, -30], [12, -34]]
+for spot in towers:
+    for i in range(0, 5):
+        crate = game:box(spot[0], i * 1.05, spot[1], 1, "wood")
+        crate:physics()                    # it falls and can be pushed
+        crate:mass(1.5)                    # kg
+        crate:friction(0.6)
+        crate:on_hit(crate_hit)
+
+ball = game:sphere(-6, 0, -10, 1.2, "red"):physics()   # physics() gives back the thing
+ball:bounce(0.7)                           # 0 doesn't bounce, 1 bounces right back up
+dummy = game:ragdoll(6, 0, -16, "blue")    # a person made of parts that flops when it's hit
+
+car = game:car(0, 1, 6, "orange")
+car:drive()                                # the arrow keys or WASD drive it, and the camera follows
+car:engine(1.5)                            # a bit more power than normal
+car:on_hit(car_hit)
+
+hud = game:hud()
+score_label = hud:text("Knocked: 0", 100, 30)
+speed_label = hud:text("Speed: 0 km/h", 100, 64)
+hud:text("Arrows drive, F flips the car, B goes boom", 480, 580, 18)
+score = 0
+
+func crate_hit(other, strength):           # what hit it, and how hard
+    if strength > 3:
+        score += 1
+        score_label:set "Knocked: " + score
+
+func car_hit(other, strength):
+    if strength > 20:
+        game:sound "hit"
+
+func flip(key):
+    car:flip()                             # back on its wheels
+
+func boom(key):
+    game:explode(car:x(), 0, car:z() - 6, 25, 10)   # pushes everything near it away
+    game:sound "boom"
+
+func step(dt):
+    speed_label:set "Speed: " + round(car:speed()) + " km/h"
+
+game:on_key("f", flip)
+game:on_key("b", boom)
+game:every_frame step
+` },
 ];

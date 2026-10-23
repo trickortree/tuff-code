@@ -73,6 +73,10 @@
     lake: svg('<path d="M1.5 5.5h2.6c1.1 5.5 6.7 5.5 7.8 0h2.6"/><path d="M5.2 8h5.6"/>'),
     valley: svg('<path d="M1.5 3.5c3.4 0 4.1 9 6.5 9s3.1-9 6.5-9"/>'),
     water: svg('<path d="M1.5 6.3c1.4-1.3 2.9-1.3 4.3 0s2.9 1.3 4.4 0 2.9-1.3 4.3 0M1.5 10.3c1.4-1.3 2.9-1.3 4.3 0s2.9 1.3 4.4 0 2.9-1.3 4.3 0"/>'),
+    // Physics: a car, a ragdoll, and the badge on things that use physics (a ball falling).
+    car: svg('<path d="M1.5 11V8.8c0-.4.3-.8.7-.8h1.3l1.6-2.6c.2-.3.5-.4.8-.4h4.4c.3 0 .6.1.8.4L13 8h.8c.4 0 .7.4.7.8V11"/><circle cx="4.8" cy="11.3" r="1.6"/><circle cx="11.2" cy="11.3" r="1.6"/><path d="M6.4 11.3h3.2M5.6 8h4.8"/>'),
+    ragdoll: svg('<circle cx="8" cy="3.3" r="1.8"/><path d="M8 5.1v5M4 7.6l4-1.2 4 1.8M8 10.1l-2.6 3.9M8 10.1l3 3.4"/>'),
+    physics: svg('<circle cx="9.8" cy="9.8" r="3.7"/><path d="M2.5 2.5l3.2 3.2M2 6.8h2.6M6.8 2v2.6"/>'),
   };
   ICON.terrain = ICON.land;
   ICON.sphere = ICON.ball;
@@ -88,21 +92,29 @@
   const TERRAIN_RE = /^([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*):terrain\b\s*(.*)$/;
   const LAND_RE = /^([A-Za-z_]\w*):(style|hill|mountain|dip|lake|valley|raise|lower|smooth|flatten|water)\b\s*(.*)$/;
   const REG_RE = /^([A-Za-z_]\w*):(every_frame|on_key|every|after|clicked)\b\s*(.*)$/;
-  const MAKE_RE = /^(?:([A-Za-z_]\w*)\s*=\s*)?([A-Za-z_]\w*):(box|circle|line|text|image|sphere|cylinder|cone|plane|spawn|light|player|hud|hold)\b\s*(.*)$/;
-  const PROP_RE = /^([A-Za-z_]\w*):(speed|spin|on_edge|layer|turn_to|hide|label|solid|glow|align|scale|clicked|walk_speed|jump_height|move_to)\b\s*(.*)$/;
+  const MAKE_RE = /^(?:([A-Za-z_]\w*)\s*=\s*)?([A-Za-z_]\w*):(box|circle|line|text|image|sphere|cylinder|cone|plane|spawn|light|player|hud|hold|car|ragdoll)\b\s*(.*)$/;
+  const PROP_RE = /^([A-Za-z_]\w*):(speed|spin|on_edge|layer|turn_to|hide|label|solid|glow|align|scale|clicked|walk_speed|jump_height|move_to|physics|mass|bounce|friction|drive|engine)\b\s*(.*)$/;
   const FUNC_RE = /^func\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*:\s*$/;
   const SCORE_RE = /^score\s*=\s*(-?\d+)\s*$/;
   const MARK_RE = /^#\s*Tuff Engine:/;
   const NAME_RE = /^[A-Za-z_]\w*$/;
   const K2D = ['box', 'circle', 'line', 'text', 'image', 'hud'];
-  const K3D = ['box', 'sphere', 'cylinder', 'cone', 'plane', 'spawn', 'light', 'player', 'hud'];
+  const K3D = ['box', 'sphere', 'cylinder', 'cone', 'plane', 'spawn', 'light', 'player', 'hud', 'car', 'ragdoll'];
   const KHUD = ['text', 'box', 'circle', 'line', 'image'];
+  // The lines that belong to a thing (after its own line), by what it is. Physics lines (crate:physics(),
+  // crate:mass(2), crate:bounce(0.6), crate:friction(0.4)) belong to a 3D object; a car has drive and engine.
+  const PHYSICS_PROPS = ['physics', 'mass', 'bounce', 'friction'];
   const FAMILY = {
     sprite: ['speed', 'spin', 'on_edge', 'layer', 'turn_to', 'hide', 'align', 'clicked'],
-    object: ['speed', 'spin', 'turn_to', 'hide', 'label', 'solid', 'glow', 'scale', 'clicked'],
+    object: ['speed', 'spin', 'turn_to', 'hide', 'label', 'solid', 'glow', 'scale', 'clicked', ...PHYSICS_PROPS],
     player: ['move_to', 'turn_to', 'walk_speed', 'jump_height'],
+    car: ['drive', 'engine', 'clicked'],
+    ragdoll: ['clicked'],
   };
-  const family = (n) => (n.kind === 'player' ? 'player' : n.layer === 'world' ? 'object' : 'sprite');
+  const family = (n) => (n.kind === 'player' || n.kind === 'car' || n.kind === 'ragdoll' ? n.kind : n.layer === 'world' ? 'object' : 'sprite');
+  // The things the Inspector's Physics section is for, and the kinds of physics it writes (Off is no line).
+  const PHYSICS_THINGS = ['box', 'sphere', 'cylinder', 'spawn'];
+  const PHYSICS_KINDS = ['off', 'dynamic', 'static', 'kinematic'];
   const BUILTINS = ['print', 'number', 'num', 'text', 'str', 'int', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average', 'err', 'all'];
   const LIBS = ['tgame', 'tgui', 'mtgui', 'atgui', 'tap', 'anims'];
   const KEYWORDS = () => window.TUFF_KEYWORDS || [];
@@ -209,6 +221,8 @@
       if (node.kind === 'spawn') return { pre: 1, dim: 3, rest: [] };
       if (node.kind === 'player') return { pre: 1, dim: 0, rest: [] };
       if (node.kind === 'light') return { pre: 0, dim: 3, rest: [['color', 'white']] };
+      if (node.kind === 'car') return { pre: 0, dim: 3, rest: [['color', 'red']] };
+      if (node.kind === 'ragdoll') return { pre: 0, dim: 3, rest: [['color', 'blue']] };
       return { pre: 0, dim: 3, rest: [['size', node.kind === 'plane' ? 4 : 1], ['color', 'white']] };
     }
     switch (node.kind) {
@@ -741,7 +755,7 @@
     if (step?.model && !step.model.isDisposed()) step.model.pushStackElement();
   }
 
-  const BASE = { box: 'box', circle: 'circle', line: 'line', text: 'words', image: 'picture', sphere: 'ball', cylinder: 'cylinder', cone: 'cone', plane: 'plane', spawn: 'thing', light: 'lamp', player: 'player' };
+  const BASE = { box: 'box', circle: 'circle', line: 'line', text: 'words', image: 'picture', sphere: 'ball', cylinder: 'cylinder', cone: 'cone', plane: 'plane', spawn: 'thing', light: 'lamp', player: 'player', car: 'car', ragdoll: 'dummy' };
   const baseFor = (n) => (n.kind === 'spawn' && typeof n.args[0] === 'string' ? n.args[0].replace(/\.glb$/i, '').split(/[\\/]/).pop() : BASE[n.kind] || 'thing');
 
   // An edit in progress: one makeEditor, names that stay free inside it, and what goes at the end of the file.
@@ -820,16 +834,18 @@
   const PROP_OFF = {
     speed: (a) => a.every((v) => v === 0), spin: (a) => a[0] === 0, on_edge: (a) => a[0] === 'none', layer: (a) => a[0] === 0, turn_to: (a) => a[0] === 0,
     label: (a) => a[0] === '', glow: (a) => a[0] === '' || a[0] === 'none', solid: (a) => a[0] === true, align: (a) => a[0] === 'center', scale: (a) => a[0] === 1,
-    walk_speed: (a) => a[0] === 5, jump_height: (a) => a[0] === 1.2,
+    walk_speed: (a) => a[0] === 5, jump_height: (a) => a[0] === 1.2, physics: (a) => a[0] === 'off', drive: (a) => a[0] === false, engine: (a) => a[0] === 1,
   };
-  const propLine = (V, method, args) => (!args.length ? `${V}:${method}()` : args.length === 1 ? `${V}:${method} ${fmt(args[0])}` : `${V}:${method}(${args.map(fmt).join(', ')})`);
+  // Physics and car lines always have brackets, like crate:physics() and crate:bounce(0.6).
+  const PAREN = new Set([...PHYSICS_PROPS, 'drive', 'engine']);
+  const propLine = (V, method, args) => (!args.length ? `${V}:${method}()` : args.length === 1 && !PAREN.has(method) ? `${V}:${method} ${fmt(args[0])}` : `${V}:${method}(${args.map(fmt).join(', ')})`);
 
   // A prop line (coin:spin 90): replaced where it is, or put after the thing's own lines; a default value removes it.
   function propEdit(pl, node, method, args) {
     const p = node.props[method];
     if (args === null || PROP_OFF[method]?.(args)) { if (p) pl.ed.remove(p.line); return; }
     const V = ensureVar(pl, node);
-    if (p) pl.ed.replace(p.line, callText(p.call, args));
+    if (p) pl.ed.replace(p.line, callText(p.call, args, { paren: PAREN.has(method) }));
     else pl.ed.insertAfter(ownLast(node), propLine(V, method, args));
   }
 
@@ -1029,6 +1045,16 @@
           }
           case 'score': pl.needScore(); pl.done(); return pl.label ? `v:${pl.label}` : null;
           case 'light': put(nm('lamp'), ''); lines = [`${V} = ${G}:light(${num(X)}, 3, ${num(Z)}, "gold")`]; break;
+          // A car the arrow keys drive (the camera follows it), unless the player or another car has the keys already.
+          case 'car': {
+            const n = nm('car');
+            const driven = P.nodes.find((m) => m.kind === 'car' && m.props.drive && m.props.drive.args[0] !== false);
+            put(n, `${n} = ${G}:car(${num(X)}, 1, ${num(Z)}, "red")`);
+            if (!P.player && !driven) lines.push(`${n}:drive()`);
+            else say = `${P.player ? 'The player walks with the arrow keys' : `${cap(driven.var || 'another car')} drives with the arrow keys`}, so ${n} waits. Turn on Drive it in its Inspector to drive it instead.`;
+            break;
+          }
+          case 'ragdoll': put(nm('dummy'), ''); lines = [`${V} = ${G}:ragdoll(${num(X)}, 0, ${num(Z)}, "blue")`]; break;
           case 'island': case 'ground':
             if (P.settings.island || P.settings.ground || P.land) return null;
             settingEdit(pl, id, id === 'island' ? [80] : ['grass', 400]);
@@ -1146,7 +1172,9 @@
       let args = node.args;
       if (node.kind === 'line' && q.form === 'line') args = withArgs(node, { x1: q.x1 + 30, y1: q.y1 + 30, x2: q.x2 + 30, y2: q.y2 + 30 });
       else if (['xy', 'spot'].includes(q.form)) args = withArgs(node, node.layer === 'world' ? { x: q.x + 2 } : { x: q.x + 30, y: q.y + 30 });
-      const props = Object.values(node.props).sort((a, b) => a.line - b.line).map((p) => K.renameIdents(P.lines[p.line - 1], map));
+      // (A copy of a car doesn't drive too: one car has the arrow keys.)
+      const props = Object.entries(node.props).filter(([m]) => !(node.kind === 'car' && m === 'drive')).map(([, p]) => p)
+        .sort((a, b) => a.line - b.line).map((p) => K.renameIdents(P.lines[p.line - 1], map));
       pl.ed.insertAfter(ownLast(node), [lineFor(node, args, N), ...props].join('\n'));
       pl.done();
       return `v:${N}`;
@@ -1635,8 +1663,27 @@ func coin_collect(dt):
 
   const KIND_LABEL = (n) => {
     if (n.kind === 'spawn') { const m = typeof n.args[0] === 'string' ? n.args[0] : ''; return /\.glb$/i.test(m) ? 'Model' : cap(m || 'Model'); }
-    return { box: 'Box', circle: 'Circle', line: 'Line', text: 'Text', image: 'Picture', sphere: 'Ball', cylinder: 'Cylinder', cone: 'Cone', plane: 'Plane', light: 'Light', player: 'Player' }[n.kind] || cap(n.kind);
+    return { box: 'Box', circle: 'Circle', line: 'Line', text: 'Text', image: 'Picture', sphere: 'Ball', cylinder: 'Cylinder', cone: 'Cone', plane: 'Plane', light: 'Light', player: 'Player', car: 'Car', ragdoll: 'Ragdoll' }[n.kind] || cap(n.kind);
   };
+  // What kind of physics a thing's code gives it: 'off' (no line), 'dynamic', 'static', 'kinematic', or 'code' (worked
+  // out by code). A car and a ragdoll always use physics.
+  const physicsOf = (n) => {
+    if (n.kind === 'car' || n.kind === 'ragdoll') return 'dynamic';
+    const p = n.props.physics;
+    if (!p) return 'off';
+    const a = p.args[0];
+    if (a === undefined) return 'dynamic';
+    const k = typeof a === 'string' ? a.trim().toLowerCase() : null;
+    return PHYSICS_KINDS.includes(k) ? k : 'code';
+  };
+  // Whether a thing uses physics, from its code (and, once tgame says so in the scene, from what it made: things made
+  // by code too).
+  const dumpPhysics = (t) => {
+    const p = t.physics;
+    const k = p && typeof p === 'object' ? p.kind ?? p.type : p;
+    return !!p && k !== 'off';
+  };
+  const usesPhysics = (key, n) => (n && physicsOf(n) !== 'off') || (S.join?.byKey.get(key)?.things || []).some(dumpPhysics);
   const iconFor = (n) => (n.kind === 'spawn' ? ICON[typeof n.args[0] === 'string' ? n.args[0] : ''] || ICON.model : n.layer === 'hud' && n.kind === 'text' ? ICON.hudtext : ICON[n.kind] || ICON.box);
 
   // ---------------------------------------------------------------- the frame (host.js)
@@ -2284,6 +2331,10 @@ func coin_collect(dt):
         { id: 'chop', label: 'Choppable tree', icon: ICON.tree, tip: 'Falls over when clicked, and grows back' },
         { id: 'score', label: 'Score', icon: ICON.score, tip: P.score ? 'This world has a score already' : 'A score on the screen', off: !!P.score },
       ]],
+      ['Physics', [
+        { id: 'car', label: 'Car', icon: ICON.car, tip: 'A car the arrow keys drive, with wheels and springs (press Play)' },
+        { id: 'ragdoll', label: 'Ragdoll', icon: ICON.ragdoll, tip: 'A floppy person that falls over when it\'s hit (press Play)' },
+      ]],
       ['Nature', kit(KIT_NATURE)],
       ['Buildings', kit(KIT_BUILDINGS)],
       ['Shapes', [
@@ -2369,8 +2420,17 @@ func coin_collect(dt):
       for (const e of P.land.edits) row(e.key, ICON[e.op], LAND_OPS[e.op].label, landSummary(e), '', 'en-edit').title = `Line ${e.line}: ${K.stripComment(e.text).code.trim().slice(0, 120)}`;
     }
     const whatOf = (n) => (n.kind === 'text' || n.kind === 'image' ? (typeof n.args[0] === 'string' ? n.args[0] : '') : n.kind === 'spawn' ? '' : typeof fieldOf(n, 'color') === 'string' ? fieldOf(n, 'color') : '');
+    // A badge on the things that use physics: they fall and bump into things when the game runs (the preview doesn't).
+    const badge = (b) => {
+      b.querySelector('.lb').insertAdjacentHTML('afterend', `<span class="en-phys" title="Uses physics: it falls, bounces and gets pushed when you press Play (the preview doesn't move it)">${ICON.physics}physics</span>`);
+      return b;
+    };
     const main = P.nodes.filter((n) => n.layer !== 'hud' && n.kind !== 'player');
-    for (const n of main) row(n.key, iconFor(n), KIND_LABEL(n), whatOf(n), n.var, drawn(n.key) ? '' : 'en-dim').title = drawn(n.key) ? '' : 'Not drawn yet';
+    for (const n of main) {
+      const b = row(n.key, iconFor(n), KIND_LABEL(n), whatOf(n), n.var, drawn(n.key) ? '' : 'en-dim');
+      b.title = drawn(n.key) ? '' : 'Not drawn yet';
+      if (usesPhysics(n.key, n)) badge(b);
+    }
     if (P.player) {
       const n = P.player;
       row(n.key, ICON.player, 'Player', `${typeof n.args[0] === 'string' ? n.args[0] : 'first person'}${n.hold ? ` · holds ${n.hold.item}` : ''}`, n.var, drawn(n.key) ? '' : 'en-dim');
@@ -2385,7 +2445,9 @@ func coin_collect(dt):
       box.insertAdjacentHTML('beforeend', '<div class="sd-cat">Made by your code</div>');
       for (const gr of groups) {
         const count = J.byKey.get(gr.key)?.is.length || 0;
-        row(gr.key, UI.code, `${count} × ${gr.kind}`, `${gr.why} (line ${gr.line})`, '', 'en-group').title = `Made by your code on line ${gr.line}: ${gr.why}`;
+        const b = row(gr.key, UI.code, `${count} × ${gr.kind}`, `${gr.why} (line ${gr.line})`, '', 'en-group');
+        b.title = `Made by your code on line ${gr.line}: ${gr.why}`;
+        if (usesPhysics(gr.key, null)) badge(b);
       }
     }
     box.insertAdjacentHTML('beforeend', '<div class="sd-hint">Things your game makes while it runs show up when you press Play.</div>');
@@ -2824,10 +2886,14 @@ func coin_collect(dt):
       const put2 = (k, v) => { const c = cur(); setA({ x: c.x ?? t?.x ?? 0, y: c.y ?? t?.y ?? 0, [k]: v2(v) }); };
       form.append(sec('Where', [numbers([['X', q.x ?? t?.x, (v) => put2('x', v), { disabled }], ['Y', q.y ?? t?.y, (v) => put2('y', v), { disabled }]])]));
     }
-    // What it does comes first (Chases → speed), then how it looks and how it moves by itself.
-    if (!hud && node.kind !== 'player' && node.kind !== 'light') form.append(behSection(P, node));
+    // What it does comes first (Chases → speed), then how it looks, its physics, and how it moves by itself (not for a
+    // thing physics moves, unless its code moves it already: that fights the physics, so it can be taken out here).
+    const physical = node.kind === 'car' || node.kind === 'ragdoll';
+    const moves = !physical && (physicsOf(node) !== 'dynamic' || node.props.speed || node.props.spin);
+    if (!hud && !physical && node.kind !== 'player' && node.kind !== 'light') form.append(behSection(P, node));
     if (node.kind !== 'player') form.append(lookSection(P, node, setA, setP));
-    if (!hud && node.kind !== 'player' && node.kind !== 'light') form.append(movesSection(node, setP));
+    if (is3 && (PHYSICS_THINGS.includes(node.kind) || physical)) form.append(physicsSection(node, setP));
+    if (!hud && moves && node.kind !== 'player' && node.kind !== 'light') form.append(movesSection(node, setP));
     if (node.kind !== 'player' && node.kind !== 'light') {
       const clicked = node.props.clicked?.args[0]?.raw || '';
       form.append(sec('Events', [fieldEl('When clicked', fnPick(clicked, 1, (v) => act((Q) => { const n = find(Q, key); return n ? Edits.setEvent(Q, { type: 'click', node: n }, v) : null; })))]));
@@ -2896,7 +2962,7 @@ func coin_collect(dt):
       const c = f('color');
       kids.push(fieldEl(colorLabel('Color', c), colorPick(c, (v) => setA({ color: v }))));
     }
-    if (k === 'light') return sec('Look', kids);
+    if (k === 'light' || k === 'car' || k === 'ragdoll') return sec('Look', kids);
     if (!is3) {
       kids.push(numbers([
         ['Layer', isNum(node.props.layer?.args[0]) ? node.props.layer.args[0] : 0, (v) => setP('layer', [v2(v)]), { title: 'Higher layers are drawn on top' }],
@@ -2912,6 +2978,50 @@ func coin_collect(dt):
     }
     kids.push(fieldEl('Hidden at start', boolEl(!!node.props.hide, (on) => setP('hide', on ? [] : null))));
     return sec('Size and look', kids);
+  }
+
+  // Physics (1.2.0): a box, ball, cylinder or kit model is Off (no line), Falls (thing:physics()) or Fixed
+  // (thing:physics("static")), with Mass, Bounce and Friction lines; empty is tgame's own. Off takes those lines out
+  // too. A car has Drive it and its engine, and a car and a ragdoll always use physics. Each change is one Ctrl+Z.
+  function physicsSection(node, setP) {
+    const kids = [];
+    const v3 = (v) => +num(v);
+    const preview = tip("The preview doesn't move it: press Play to see it fall and bump into things.");
+    if (node.kind === 'car') {
+      const drive = node.props.drive;
+      const on = !!drive && drive.args[0] !== false;
+      const engine = node.props.engine?.args[0];
+      kids.push(tip('A car always uses physics: it drives on the land and crashes into things.'));
+      kids.push(fieldEl('Drive it', boolEl(on, (v) => setP('drive', v ? [] : null, true)), 'The arrow keys or WASD drive it, and the camera follows'));
+      kids.push(numbers([['Engine', isNum(engine) ? engine : 1, (v) => v > 0 && setP('engine', [v3(v)]), { step: 0.5, min: 0.1, title: 'How strong its engine is: 1 is normal' }]]));
+      kids.push(preview);
+      return sec('Car', kids);
+    }
+    if (node.kind === 'ragdoll') {
+      kids.push(tip('A person made of jointed parts that flops over when it\'s hit or pushed. Push it in your code, like dummy:push(0, 4, -6).'));
+      kids.push(preview);
+      return sec('Physics', kids);
+    }
+    const kind = physicsOf(node);
+    const options = ['off', 'dynamic', 'static', ...(kind === 'kinematic' ? ['kinematic'] : [])];
+    const names = { off: 'Off', dynamic: 'Falls', static: 'Fixed', kinematic: 'Moved by code' };
+    const seg = K.control('segment', options.includes(kind) ? kind : null, { options, names }, (v) => {
+      if (v === 'off') setP('physics', null, true, PHYSICS_PROPS.slice(1).map((m) => [m, null]));
+      else setP('physics', v === 'dynamic' ? [] : [v], true);
+    });
+    seg.id = 'en-physics';
+    $$('.pf-chip', seg).forEach((b, i) => { b.dataset.v = options[i]; });
+    kids.push(fieldEl('Physics', seg, kind === 'code' ? 'Its physics comes from code' : kind === 'static' ? 'Fixed: it stays put, and things bump into it and land on it' : 'Falls: it falls, bounces, tumbles and gets pushed'));
+    if (kind === 'off') return sec('Physics', kids);
+    const n0 = (m) => (isNum(node.props[m]?.args[0]) ? node.props[m].args[0] : '');
+    const set = (m, ok) => (v) => { if (v === '') setP(m, null); else if (ok(v)) setP(m, [v3(v)]); };
+    kids.push(numbers([
+      ['Mass', n0('mass'), set('mass', (v) => v > 0), { blank: true, step: 0.5, min: 0.01, placeholder: 'auto', title: 'How heavy it is, in kg. Empty: from its size' }],
+      ['Bounce', n0('bounce'), set('bounce', (v) => v >= 0 && v <= 1), { blank: true, step: 0.1, min: 0, placeholder: 'auto', title: 'How bouncy it is, from 0 (no bounce) to 1' }],
+      ['Friction', n0('friction'), set('friction', (v) => v >= 0), { blank: true, step: 0.1, min: 0, placeholder: 'auto', title: 'How grippy it is: 0 slides like ice' }],
+    ]));
+    kids.push(preview);
+    return sec('Physics', kids);
   }
 
   function movesSection(node, setP) {

@@ -1589,6 +1589,98 @@ GAME_UI_TAKES = {"panel": "where the panel goes", "screen": "a title, then wheth
                  "start_screen": "a title, then a hint"}
 
 
+# tgame's physics as the checker knows it, filled in where tgame's own tables leave it out (with_physics): what each
+# method takes, for messages, an example ({o} is the thing's name), the input counts that fit, and how many inputs a
+# spot ([x, y, z] in 3D, [x, y] in 2D) can stand in for. A car and a ragdoll have an object's methods too.
+_THING_PHYSICS = {
+    "physics": ("nothing, or the kind of physics", '{o}:physics() or {o}:physics("static")', (0, 1), 0),
+    "mass": ("how heavy it is, in kg", "{o}:mass(2)", (1,), 0),
+    "bounce": ("how bouncy it is, from 0 to 1", "{o}:bounce(0.6)", (1,), 0),
+    "friction": ("how grippy it is, from 0 up", "{o}:friction(0.4)", (1,), 0),
+    "on_hit": ("the name of a function to run when something hits it", "{o}:on_hit(bumped)", (1,), 0),
+    "sleep": ("nothing", "{o}:sleep()", (0,), 0),
+    "wake": ("nothing", "{o}:wake()", (0,), 0),
+}
+_PHYSICS_3D = {
+    **_THING_PHYSICS,
+    "push": ("x, y and z: how hard to push it each way", "{o}:push(0, 5, -3)", (3,), 3),
+    "spin": ("how fast it keeps turning, or x, y and z to give it a spin", "{o}:spin(0, 2, 0)", (1, 3), 3),
+    "velocity": ("nothing (to read it), or x, y and z", "{o}:velocity(0, 0, -4)", (0, 3), 3),
+}
+PHYSICS_INPUTS = {
+    "world": {
+        "gravity": ("how strong gravity is (-9.8 is like on Earth)", "{o}:gravity(-9.8)", (1,), 0),
+        "explode": ("x, y and z, then how strong and how far", "{o}:explode(0, 0, 0, 12, 8)", (3, 4, 5), 3),
+        "car": ("x, y, z and a color", '{o}:car(0, 1, 10, "red")', (0, 1, 2, 3, 4), 3),
+        "ragdoll": ("x, y, z and a color", '{o}:ragdoll(5, 0, 0, "blue")', (0, 1, 2, 3, 4), 3),
+    },
+    "game": {
+        "gravity": ("how strong gravity is, in pixels a second each second (down the screen)", "{o}:gravity(900)", (1,), 0),
+        "walls": ("true or false: whether the edges of the screen are walls", "{o}:walls(true)", (0, 1), 0),
+        "explode": ("x and y, then how strong and how far", "{o}:explode(400, 300, 600, 200)", (2, 3, 4), 2),
+    },
+    "object": {**_PHYSICS_3D, "animate": ('an animation: "walk", "idle", "wave" or "none"', '{o}:animate("walk")', (1,), 0)},
+    "sprite": {
+        **_THING_PHYSICS,
+        "push": ("x and y: how hard to push it each way", "{o}:push(200, -300)", (2,), 2),
+        "velocity": ("nothing (to read it), or x and y", "{o}:velocity(0, -200)", (0, 2), 2),
+    },
+    "player": {"on_hit": _THING_PHYSICS["on_hit"]},
+    "car": {
+        **_PHYSICS_3D,
+        "drive": ("nothing, or false to stop driving it", "{o}:drive()", (0, 1), 0),
+        "engine": ("how strong its engine is (1 is normal)", "{o}:engine(1.5)", (1,), 0),
+        "speed": ("nothing: it gives back how fast it goes, in km/h", "say {o}:speed()", (0,), 0),
+        "flip": ("nothing", "{o}:flip()", (0,), 0),
+    },
+    "ragdoll": _PHYSICS_3D,
+}
+PHYSICS_KINDS = ("dynamic", "static", "kinematic", "off")
+PHYSICS_SAYS = {"dynamic": "it falls and can be pushed", "static": "it stays where it is", "kinematic": "your code moves it"}
+ANIMATIONS = ("walk", "idle", "wave", "none")
+PHYSICS_HIT = (0, 2, "2 inputs (the thing that hit it, and how hard)")
+_PUSHES = {"impulse": "push", "apply_impulse": "push", "add_impulse": "push", "kick": "push", "force": "push",
+           "add_force": "push", "apply_force": "push", "shove": "push", "throw": "push", "launch": "push",
+           "set_velocity": "velocity", "vel": "velocity", "linear_velocity": "velocity", "weight": "mass",
+           "set_mass": "mass", "bounciness": "bounce", "restitution": "bounce", "elasticity": "bounce",
+           "bouncy": "bounce", "set_bounce": "bounce", "grip": "friction", "set_friction": "friction",
+           "rigidbody": "physics", "rigid_body": "physics", "body": "physics", "enable_physics": "physics",
+           "use_physics": "physics", "add_physics": "physics", "set_physics": "physics", "collider": "physics",
+           "physical": "physics", "dynamic": "physics", "collision": "on_hit", "on_collision": "on_hit",
+           "on_collide": "on_hit", "oncollision": "on_hit", "on_touch": "on_hit", "on_contact": "on_hit",
+           "on_bump": "on_hit", "on_hit_by": "on_hit", "when_hit": "on_hit", "hit": "on_hit", "collided": "on_hit",
+           "freeze": "sleep", "rest": "sleep", "wakeup": "wake", "wake_up": "wake", "unfreeze": "wake",
+           "torque": "spin", "apply_torque": "spin", "add_torque": "spin", "angular_impulse": "spin"}
+PHYSICS_HINTS = {
+    "world": {"set_gravity": "gravity", "explosion": "explode", "blast": "explode", "boom": "explode", "bomb": "explode",
+              "kaboom": "explode", "vehicle": "car", "kart": "car", "truck": "car", "buggy": "car", "add_car": "car",
+              "make_car": "car", "rag_doll": "ragdoll", "dummy": "ragdoll", "puppet": "ragdoll", "add_ragdoll": "ragdoll"},
+    "game": {"set_gravity": "gravity", "edges": "walls", "borders": "walls", "bounds": "walls", "boundaries": "walls",
+             "screen_walls": "walls", "edge_walls": "walls", "explosion": "explode", "blast": "explode", "boom": "explode",
+             "bomb": "explode"},
+    "object": {**_PUSHES, "anim": "animate", "animation": "animate", "play_animation": "animate",
+               "set_animation": "animate", "play_anim": "animate"},
+    "sprite": _PUSHES,
+    "car": {**_PUSHES, "accelerate": "engine", "throttle": "engine", "power": "engine", "gas": "engine", "motor": "engine",
+            "horsepower": "engine", "control": "drive", "controls": "drive", "get_in": "drive", "enter": "drive",
+            "steer": "drive", "drivable": "drive", "reset": "flip", "unflip": "flip", "upright": "flip", "flip_over": "flip",
+            "kmh": "speed", "mph": "speed", "get_speed": "speed"},
+    "ragdoll": _PUSHES,
+    "player": {"on_collision": "on_hit", "on_collide": "on_hit", "collision": "on_hit", "on_bump": "on_hit"},
+}
+VALUE_HINTS["physics"] = {
+    "fixed": "static", "still": "static", "solid": "static", "frozen": "static", "wall": "static", "ground": "static",
+    "immovable": "static", "stuck": "static", "stay": "static", "none": "off", "no": "off", "false": "off",
+    "disabled": "off", "nothing": "off", "stop": "off", "on": "dynamic", "yes": "dynamic", "true": "dynamic",
+    "falls": "dynamic", "fall": "dynamic", "falling": "dynamic", "rigid": "dynamic", "moving": "dynamic",
+    "normal": "dynamic", "default": "dynamic", "physics": "dynamic", "kinematics": "kinematic", "animated": "kinematic",
+    "scripted": "kinematic", "code": "kinematic", "moved": "kinematic", "manual": "kinematic"}
+VALUE_HINTS["animation"] = {
+    "walking": "walk", "run": "walk", "running": "walk", "jog": "walk", "move": "walk", "stand": "idle",
+    "standing": "idle", "rest": "idle", "breathe": "idle", "breathing": "idle", "still": "idle", "wait": "idle",
+    "waving": "wave", "hello": "wave", "hi": "wave", "off": "none", "stop": "none", "nothing": "none", "no": "none"}
+
+
 def tgame_tables():
     """tgame's functions ("lib"), the methods of everything it makes ("kinds"), what they give back, its events,
     hints for guessed names and a check for text inputs, read from the library without opening a window.
@@ -1597,7 +1689,7 @@ def tgame_tables():
     if _TGAME is None:
         try:
             import tuff_tgame
-            _TGAME = with_game_ui(with_terrain(tuff_tgame.tables(), tuff_tgame), tuff_tgame)
+            _TGAME = with_game_ui(with_physics(with_terrain(tuff_tgame.tables(), tuff_tgame), tuff_tgame), tuff_tgame)
         except Exception:
             _TGAME = {}
     return _TGAME or None
@@ -1651,6 +1743,38 @@ def with_terrain(tg, lib):
     hints = {**tg["hints"], **{k: {**v, **tg["hints"].get(k, {})} for k, v in TERRAIN_HINTS.items()}}
     return {**tg, "kinds": kinds, "gives": gives, "hints": hints, "styles": tuple(getattr(lib, "TERRAIN_STYLES", TERRAIN_STYLES)),
             "lightings": tuple(getattr(lib, "LIGHTINGS", LIGHTINGS))}
+
+
+def physics_input(*inputs):  # stands in for a physics method tgame's tables leave out: Checker.check_physics_inputs counts
+    return None
+
+
+def with_physics(tg, lib):
+    """tgame's tables with the physics filled in where they leave it out: the physics methods of games, worlds, sprites,
+    objects and the player (thing:physics(), :push, :on_hit, world:car...), a car and a ragdoll (an object's methods
+    and their own), what they give back (physics() gives back the thing, car:speed() a number), what on_hit gives its
+    function, the guessed names, and the kinds of physics and the animations (tgame's PHYSICS_KINDS and ANIMATIONS
+    when it has them). Whatever tgame's own tables say wins."""
+    own_kinds, own_gives = tg["kinds"], tg["gives"]
+    kinds, gives, handlers, hints = dict(own_kinds), dict(own_gives), dict(tg["handlers"]), dict(tg["hints"])
+    for kind in ("car", "ragdoll"):  # an object, with its own methods on top
+        mine = {**{m: (kind if v == "object" else v) for m, v in own_gives.get("object", {}).items()},
+                **{m: kind for m in PHYSICS_INPUTS[kind] if m != "velocity"}}
+        if kind == "car":
+            mine["speed"] = "$number"
+        kinds[kind] = own_kinds.get(kind) or {**own_kinds["object"], **dict.fromkeys(PHYSICS_INPUTS[kind], physics_input)}
+        gives[kind] = {**mine, **own_gives.get(kind, {})}
+    for kind, table in PHYSICS_INPUTS.items():
+        kinds[kind] = {**dict.fromkeys(table, physics_input), **kinds.get(kind, {})}
+        if kind in ("object", "sprite", "player"):  # the setters give back the thing (velocity() gives a list)
+            gives[kind] = {**{m: kind for m in table if m != "velocity"}, **gives.get(kind, {})}
+        if kind in ("object", "sprite", "player", "car", "ragdoll"):
+            handlers[kind] = {"on_hit": PHYSICS_HIT, **handlers.get(kind, {})}
+        hints[kind] = {**PHYSICS_HINTS.get(kind, {}), **hints.get(kind, {})}
+    gives["world"] = {"car": "car", "ragdoll": "ragdoll", **gives["world"]}
+    return {**tg, "kinds": kinds, "gives": gives, "handlers": handlers, "hints": hints, "physics_inputs": PHYSICS_INPUTS,
+            "physics_kinds": tuple(getattr(lib, "PHYSICS_KINDS", PHYSICS_KINDS)),
+            "animations": tuple(getattr(lib, "ANIMATIONS", ANIMATIONS))}
 
 
 def nodes(x):
@@ -1726,10 +1850,16 @@ class Checker:
     EVENT_GIVES = {"click": (0, "a button click"), "button": (0, "a button click"), "opened": (0, ":opened"),
                    "every": (0, ":every"), "after": (0, ":after"), "change": (1, ":change"), "enter": (1, ":enter")}
     HANDLER_POS = {"click": 0, "opened": 0, "change": 0, "enter": 0, "button": 1, "every": 1, "after": 1,
-                   "every_frame": 0, "on_key": 1, "clicked": 0, "game_over": 1}
-    TGAME_KINDS = ("game", "world", "sprite", "object", "player", "hud", "group", "terrain")  # what tgame makes
+                   "every_frame": 0, "on_key": 1, "clicked": 0, "game_over": 1, "on_hit": 0}
+    TGAME_KINDS = ("game", "world", "sprite", "object", "player", "hud", "group", "terrain", "car", "ragdoll")  # what tgame makes
     # tgame inputs written as text that the checker checks itself: (kind, method, input position) -> what it is.
-    LAND_VALUES = {("world", "terrain", 1): "style", ("terrain", "style", 0): "style", ("world", "lighting", 0): "lighting"}
+    LAND_VALUES = {("world", "terrain", 1): "style", ("terrain", "style", 0): "style", ("world", "lighting", 0): "lighting",
+                   **{(k, "physics", 0): "physics" for k in ("object", "sprite", "car", "ragdoll")}, ("object", "animate", 0): "animation"}
+    # Physics inputs that are numbers, and the numbers that can't be right: method -> (the lowest, whether the lowest
+    # itself is fine, the highest, what it needs, an example).
+    PHYSICS_NUMBERS = {"mass": (0, False, None, "a number above 0", "{o}:mass(2)"),
+                       "bounce": (0, True, 1, "a number from 0 (no bounce) to 1 (it bounces right back up)", "{o}:bounce(0.6)"),
+                       "friction": (0, True, None, "a number from 0 (slippery, like ice) up", "{o}:friction(0.4)")}
     # What tap's functions make, and what the methods of those give back (left out: it depends, like :json).
     TAP_MAKES = {"get": "response", "post": "response", "put": "response", "delete": "response", "data": "data object"}
     TAP_GIVES = {"response": {"status": "$number", "ok": "$bool", "text": "$text"},
@@ -2536,6 +2666,15 @@ class Checker:
         name, n = e.name, len(e.args)
         what = a_kind(obj).capitalize()
         game_ui = obj in ("game", "world") and name in GAME_UI
+        if name not in methods and obj == "game" and name in ("car", "ragdoll"):
+            self.problem(e, f"The {name} needs a 3D world. Make the game with tgame.world, like: world = tgame.world(\"Physics Fun\"), "
+                            f"then {name} = world:{name}(...)")
+            return
+        if name not in methods and obj in ("game", "world") and name == "physics":
+            owner = e.obj.name if e.obj.kind == "var" else obj
+            self.problem(e, f"{what} doesn't have :physics. Each thing turns its own on, like crate:physics(), and "
+                            f"{owner}:gravity({'-9.8' if obj == 'world' else '900'}) changes how strong gravity is.")
+            return
         if name not in methods:
             alt = tg["hints"].get(obj, {}).get(name.lower())
             at = atgui_tables()
@@ -2549,8 +2688,12 @@ class Checker:
             else:
                 self.problem(e, method_help(what, name, list(methods)))
             return
+        physics = tg.get("physics_inputs", {}).get(obj, {}).get(name)
         if obj == "terrain" and name in TERRAIN_INPUTS:
             if not self.check_land_inputs(e):
+                return
+        elif physics:
+            if not self.check_physics_inputs(e, obj, methods[name], physics, bare_fix):
                 return
         elif not accepts(methods[name], n):
             owner = e.obj.name if e.obj.kind == "var" else obj
@@ -2596,6 +2739,39 @@ class Checker:
                 msg = self.land_value(land, a.value, tg) if land else tg["check"](obj, name, i, a.value, base)
                 if msg:
                     self.problem(a, msg)
+        if physics and name in self.PHYSICS_NUMBERS and len(e.args) == 1:
+            self.check_physics_number(e, self.PHYSICS_NUMBERS[name])
+
+    def check_physics_inputs(self, e, obj, fn, physics, bare_fix):
+        """How many inputs a physics method got. A spot ([x, y, z], or [x, y] in 2D) can go in place of its x, y and z,
+        and once tgame has the method itself, the ways it takes count too. True when the count can be right."""
+        name, n = e.name, len(e.args)
+        takes, example, counts, spot = physics
+        first_list = bool(e.args) and self.kind(e.args[0]) in ("$list", None)
+        fits = n in counts or (spot > 1 and first_list and n + spot - 1 in counts) or (fn is not physics_input and accepts(fn, n))
+        if fits:
+            return True
+        owner = e.obj.name if e.obj.kind == "var" else obj
+        if e.bare and 0 in counts:
+            self.problem(e, bare_fix)
+        else:
+            self.problem(e, f"{owner}:{name} got the wrong number of inputs ({n}). It takes {takes}, like: {example.format(o=owner)}")
+        return False
+
+    def check_physics_number(self, e, rule):
+        """thing:mass, :bounce and :friction written with a number that can't be right, or with text or true/false."""
+        low, low_ok, high, needs, example = rule
+        a = e.args[0]
+        if a.kind == "neg" and a.value.kind == "const" and isinstance(a.value.value, (int, float)) and not isinstance(a.value.value, bool):
+            v = -a.value.value
+        elif a.kind == "const" and a.value is not None:
+            v = a.value
+        else:
+            return
+        number = isinstance(v, (int, float)) and not isinstance(v, bool)
+        if not number or v < low or (v == low and not low_ok) or (high is not None and v > high):
+            owner = e.obj.name if e.obj.kind == "var" else "thing"
+            self.problem(a, f"{owner}:{e.name} needs {needs}, like {example.format(o=owner)}.")
 
     def check_land_inputs(self, e):
         """How many inputs one of the land's methods got. A spot ([x, z]) can go in place of each x and z, and a
@@ -2621,14 +2797,21 @@ class Checker:
         return False
 
     def land_value(self, what, value, tg):
-        """A land style or a lighting written as text: one tgame knows, or a "did you mean"."""
-        names = tg["styles"] if what == "style" else tg["lightings"]
+        """A land style, a lighting, a kind of physics or an animation written as text: one tgame knows, or a "did you
+        mean"."""
+        names = {"style": tg["styles"], "lighting": tg["lightings"], "physics": tg.get("physics_kinds", PHYSICS_KINDS),
+                 "animation": tg.get("animations", ANIMATIONS)}[what]
         low = value.strip().lower()
         if low in names:
             return None
         guess = VALUE_HINTS[what].get(low)
         hint = guess if guess in names else next(iter(difflib.get_close_matches(low, names, n=1, cutoff=0.6)), None)
-        thing, shown = ("The land's style", list(names)) if what == "style" else ("The lighting", [f'"{x}"' for x in names])
+        if what == "style":
+            thing, shown = "The land's style", list(names)
+        elif what == "physics":
+            thing, shown = "A thing's physics", [f'"{x}"' + (f" ({PHYSICS_SAYS[x]})" if x in PHYSICS_SAYS else "") for x in names]
+        else:
+            thing, shown = "The lighting" if what == "lighting" else "A character's animation", [f'"{x}"' for x in names]
         msg = f"{thing} can be {', '.join(shown[:-1])} or {shown[-1]}, not \"{value}\"."
         return msg + (f" Did you mean \"{hint}\"?" if hint else "")
 
