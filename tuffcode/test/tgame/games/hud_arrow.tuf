@@ -1,0 +1,12 @@
+mention tgame
+
+# world:arrow_to: over the chest while it's in view, at the side of the screen when the camera looks away from it,
+# along the bottom when it's behind, hidden and shown again, and pointing at a spot instead.
+world = tgame.world("Arrow", 900, 560)
+world:ground()
+world:camera_at(0, 2, 10)
+world:look_at(0, 1, 0)
+chest = world:spawn("chest", 0, 0, -14)
+for x in [-6, 6]:
+    world:spawn("pine", x, 0, -10)
+arrow = world:arrow_to(chest)

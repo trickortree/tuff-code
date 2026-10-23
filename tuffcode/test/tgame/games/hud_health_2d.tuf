@@ -1,0 +1,32 @@
+mention tgame
+
+# Health bars in 2D, over sprites (a moving one too), and a countdown in the top right that stops while the game is
+# paused, runs times_up() at 0, and starts again when it gets more time.
+game = tgame.window("Health 2D", 640, 400)
+game:background "navy"
+hero = game:box(160, 250, 60, 60, "teal")
+hero:health_bar(10)
+slime = game:circle(420, 260, 30, "lime")
+slime:set("name", "slime")
+slime:health_bar(3)
+bat = game:box(80, 120, 40, 24, "purple")
+bat:health_bar(5)
+bat:speed(60, 0)
+game:hud():text("Score: 0", 80, 24, 20, "white")
+dead = 0
+ends = 0
+
+func gone(s):
+    dead += 1
+    say "gone " + s:get("name")
+    s:hide()
+
+func times_up():
+    ends += 1
+    say "times up " + ends
+
+slime:on_death gone
+clock = game:countdown(3, times_up)
+
+func report():
+    say "hero " + hero:health() + " slime " + slime:health() + " left " + clock:left() + " dead " + dead + " ends " + ends

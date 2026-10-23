@@ -4,6 +4,7 @@
 
 import * as anim from './anim.js';  // models that move by themselves: swaying trees, spinning coins, walking people, water
 import * as fx from './fx.js';      // tgame's effects: a shake, pop text, rain and snow, stars; its clock runs at the game's speed
+import './hud.js';  // tgame's HUD: health bars, the countdown, the arrow and the minimap (the <tg-hud> element)
 
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
