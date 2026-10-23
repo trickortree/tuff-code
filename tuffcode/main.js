@@ -177,7 +177,8 @@ function createWindow() {
   win.on('unmaximize', () => send('window:maximized', false));
   win.on('blur', () => {
     send('window:blur');
-    if (process.platform === 'win32') stopWatching();
+    // (A quiet test's window never gets the focus back, so it keeps watching, as one in front does.)
+    if (process.platform === 'win32' && process.env.TUFF_TEST_QUIET !== '1') stopWatching();
   });
   win.on('focus', () => {
     if (process.platform !== 'win32' || !watchedDir) return;
@@ -273,7 +274,8 @@ function startWatching() {
   stopWatching();
   const dir = watchedDir;
   if (!dir || !fs.existsSync(dir)) return false;
-  if (process.platform === 'win32' && win && !win.isDestroyed() && !win.isFocused()) return true;
+  // (A quiet test's window never has the focus: it watches as one in front does.)
+  if (process.platform === 'win32' && win && !win.isDestroyed() && !win.isFocused() && process.env.TUFF_TEST_QUIET !== '1') return true;
   try {
     watcher = fs.watch(dir, { recursive: true }, (_type, name) => {
       const n = name == null ? '' : String(name);
