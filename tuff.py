@@ -1986,7 +1986,10 @@ def with_gamekit(tg, lib):
     return {**tg, "kinds": kinds, "gives": gives, "handlers": handlers, "hints": hints, "check": check, "kit_inputs": inputs,
             "kit_kinds": tuple(made.values()),
             "weathers": tuple(getattr(lib, "WEATHERS", WEATHERS)), "corners": tuple(getattr(lib, "CORNERS", CORNERS)),
-            "path_modes": tuple(getattr(lib, "PATH_MODES", PATH_MODES))}
+            "path_modes": tuple(getattr(lib, "PATH_MODES", PATH_MODES)),
+            # the values tgame checks itself, with the other ways it understands them ("rainy", "around"...)
+            "own_values": tuple(w for w, f in (("weather", "WEATHER_WORDS"), ("corner", "corner_name"), ("path", "path_mode"))
+                                if hasattr(lib, f))}
 
 
 def nodes(x):
@@ -3010,7 +3013,9 @@ class Checker:
         takes, example, counts, spot = physics
         spot, at = spot if isinstance(spot, tuple) else (spot, 0)  # the game kit's spots can come after other inputs
         at_list = len(e.args) > at and self.kind(e.args[at]) in ("$list", None)
-        fits = n in counts or (spot > 1 and at_list and n + spot - 1 in counts) or (fn not in (physics_input, kit_input) and accepts(fn, n))
+        partial = spot > 1 and at < n < at + spot and self.kind(e.args[at]) == "$number"  # x without its y and z
+        fits = (n in counts or (spot > 1 and at_list and n + spot - 1 in counts)
+                or (fn not in (physics_input, kit_input) and accepts(fn, n) and not partial))
         if fits:
             return True
         owner = e.obj.name if e.obj.kind == "var" else obj
@@ -3056,6 +3061,8 @@ class Checker:
                 self.problem(a, f'{owner}:minimap takes its size first, then the corner, like: map = {owner}:minimap(180, "{a.value.strip().lower()}")')
             elif text and what == "key":
                 self.problem(a, f'{owner}:needs takes the key itself, not its name, like: key = world:spawn("key", 3, 0, 3), then {owner}:needs(key)')
+            elif text and what in tg.get("own_values", ()):
+                continue  # tgame's own check found nothing wrong
             elif text and what:
                 msg = self.kit_value(what, a.value, tg, owner)
                 if msg:
