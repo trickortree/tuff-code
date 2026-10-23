@@ -1937,6 +1937,187 @@ def t_perf(c):
         json.dump(results, f, indent=2)
 
 
+# ---------------------------------------------------------------- the HUD: health bars, countdowns, arrows, minimaps
+
+GREEN_BAR, RED_BAR, GOLD = hexrgb("#3ccf6e"), hexrgb("#ef4b4b"), hexrgb("#f2c230")
+
+
+def t_hud_health_3d(c):
+    """games/hud_health_3d.tuf: bars over a falling physics crate and a labelled guard, and the player's along the
+    bottom; :hurt and :heal (health stays from 0 to the most), :on_death once each time the health runs out."""
+    r = play("hud_health_3d", game("hud_health_3d.tuf"), [
+        {"at": 0.3, "tuff": "crate:hurt(30)"},
+        {"at": 0.4, "tuff": "guard:hurt(20)"},
+        {"at": 0.45, "tuff": "me:hurt(25)"},
+        {"at": 1.5, "shot": "hud_health_3d.png"},
+        {"at": 1.55, "call": "report"},
+        {"at": 1.6, "tuff": "guard:hurt(40)"},
+        {"at": 1.65, "tuff": "guard:hurt(5)"},
+        {"at": 1.7, "tuff": "guard:heal(10)"},
+        {"at": 1.75, "tuff": "guard:hurt(10)"},
+        {"at": 1.8, "tuff": "crate:heal(500)"},
+        {"at": 1.85, "tuff": "me:hurt(80)"},
+        {"at": 2.5, "shot": "hud_health_3d_after.png"},
+        {"at": 2.55, "call": "report"},
+        {"at": 2.6, "close": True},
+    ])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    c.check("crate 70 guard 30 me 75 deaths 0" in r.lines, ":hurt takes health off (crate 70, guard 30, player 75)", r.lines)
+    c.check(r.lines.count("gone guard") == 2 and "crate 100 guard 0 me 0 deaths 2" in r.lines,
+            "at 0 :on_death runs (once: hurting it more doesn't run it again), :heal tops up to the most, and a heal "
+            "and another hurt run it again", r.lines)
+    shot, after = r.shots.get("hud_health_3d.png"), r.shots.get("hud_health_3d_after.png")
+    c.check(shot and color_share(shot, GREEN_BAR, 30, (0.25, 0.15, 0.75, 0.6), 2) > 0.0008,
+            "green bars float over the crate and the guard", shot)
+    c.check(shot and color_share(shot, GREEN_BAR, 30, (0, 0.85, 0.35, 1), 2) > 0.01,
+            "the player's bar is along the bottom left", shot)
+    c.check(after and color_share(after, GREEN_BAR, 30, (0, 0.85, 0.35, 1), 2) < 0.002,
+            "and it's empty once the player's health is gone", after)
+
+
+def t_hud_health_2d(c):
+    """games/hud_health_2d.tuf: bars over sprites (a moving one too), and the countdown: it stops while the game is
+    paused, turns red under 10 seconds, runs its function at 0, and starts again with clock:add."""
+    r = play("hud_health_2d", game("hud_health_2d.tuf"), [
+        {"at": 0.3, "tuff": "hero:hurt(4)"},
+        {"at": 0.35, "tuff": "slime:hurt(1)"},
+        {"at": 0.8, "shot": "hud_health_2d.png"},
+        {"at": 0.85, "call": "report"},
+        {"at": 0.9, "tuff": "game:pause()"},
+        {"at": 2.0, "call": "report"},
+        {"at": 2.1, "tuff": "game:resume()"},
+        {"at": 2.2, "tuff": "slime:hurt(5)"},
+        {"at": 2.5, "shot": "hud_health_2d_after.png"},
+        {"at": 4.8, "call": "report"},
+        {"at": 4.85, "tuff": "clock:add(1)"},
+        {"at": 6.4, "call": "report"},
+        {"at": 6.5, "close": True},
+    ])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    reports = [line for line in r.lines if line.startswith("hero ")]
+    c.check(reports[:2] == ["hero 6 slime 2 left 3 dead 0 ends 0"] * 2,
+            "health goes down, and the countdown holds still while the game is paused", reports)
+    c.check("gone slime" in r.lines and reports[2:3] == ["hero 6 slime 0 left 0 dead 1 ends 1"],
+            "the slime's :on_death ran, and at 0 the countdown ran its function", reports)
+    c.check(reports[3:4] == ["hero 6 slime 0 left 0 dead 1 ends 2"] and "times up 2" in r.lines,
+            "clock:add gave it more time, and it ran out again", reports)
+    shot, after = r.shots.get("hud_health_2d.png"), r.shots.get("hud_health_2d_after.png")
+    c.check(shot and color_share(shot, GREEN_BAR, 30, (0.15, 0.45, 0.85, 0.65), 2) > 0.002,
+            "green bars over the hero and the slime", shot)
+    c.check(shot and color_share(shot, GREEN_BAR, 30, (0.1, 0.18, 0.35, 0.32), 2) > 0.002,
+            "and over the bat, which moves", shot)
+    c.check(shot and color_share(shot, RED_BAR, 40, (0.7, 0, 1, 0.17), 2) > 0.003,
+            "the countdown is in the top right, red under 10 seconds", shot)
+    c.check(after and color_share(after, GREEN_BAR, 30, (0.55, 0.45, 0.85, 0.65), 2) < 0.0005,
+            "the slime's bar went with it when :on_death hid it", after)
+
+
+def t_hud_arrow(c):
+    """games/hud_arrow.tuf: the arrow over the chest in view, at the left edge when the camera looks right, along the
+    bottom when the chest is behind, hidden, and pointing at a spot."""
+    r = play("hud_arrow", game("hud_arrow.tuf"), [
+        {"at": 0.8, "shot": "hud_arrow_over.png"},
+        {"at": 0.85, "tuff": "world:look_at(30, 1, 6)"},
+        {"at": 1.1, "shot": "hud_arrow_side.png"},
+        {"at": 1.15, "tuff": "world:look_at(0, 1, 40)"},
+        {"at": 1.4, "shot": "hud_arrow_behind.png"},
+        {"at": 1.45, "tuff": "arrow:hide()"},
+        {"at": 1.7, "shot": "hud_arrow_hidden.png"},
+        {"at": 1.75, "tuff": "world:look_at(0, 1, 0)"},
+        {"at": 1.8, "tuff": "world:arrow_to(-12, 0, -4)"},
+        {"at": 1.85, "tuff": "arrow:show()"},
+        {"at": 2.1, "shot": "hud_arrow_spot.png"},
+        {"at": 2.2, "close": True},
+    ])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    s = r.shots
+    c.check(s.get("hud_arrow_over.png") and color_share(s["hud_arrow_over.png"], GOLD, 30, (0.4, 0.15, 0.6, 0.5), 2) > 0.002,
+            "in view, the arrow is over the chest", s.get("hud_arrow_over.png"))
+    c.check(s.get("hud_arrow_side.png") and color_share(s["hud_arrow_side.png"], GOLD, 30, (0, 0, 0.1, 1), 2) > 0.002,
+            "looking away to the right, it waits at the left edge", s.get("hud_arrow_side.png"))
+    c.check(s.get("hud_arrow_behind.png") and color_share(s["hud_arrow_behind.png"], GOLD, 30, (0.4, 0.8, 0.6, 1), 2) > 0.002,
+            "with the chest behind, it's along the bottom", s.get("hud_arrow_behind.png"))
+    c.check(s.get("hud_arrow_hidden.png") and color_share(s["hud_arrow_hidden.png"], GOLD, 30, (0.4, 0.8, 0.6, 1), 2) < 0.0003,
+            "arrow:hide hides it", s.get("hud_arrow_hidden.png"))
+    c.check(s.get("hud_arrow_spot.png") and color_share(s["hud_arrow_spot.png"], GOLD, 30, (0, 0.1, 0.45, 0.6), 2) > 0.001,
+            "world:arrow_to(x, y, z) points at a spot, and arrow:show shows it again", s.get("hud_arrow_spot.png"))
+
+
+def t_hud_minimap(c):
+    """games/hud_minimap.tuf: the round map in the top right under the countdown, with the lake, the marks (gold,
+    and a red one), the player; zoomed in; then moved to the bottom left while the player walks."""
+    r = play("hud_minimap", game("hud_minimap.tuf"), [
+        {"at": 1.0, "shot": "hud_minimap.png"},
+        {"at": 1.05, "tuff": "map:zoom(2)"},
+        {"at": 1.3, "shot": "hud_minimap_zoom.png"},
+        {"at": 1.35, "tuff": "world:minimap(220, \"bottom left\")"},
+        {"at": 1.4, "hold": "w", "for": 0.6},
+        {"at": 2.3, "shot": "hud_minimap_moved.png"},
+        {"at": 2.4, "close": True},
+    ])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    s = r.shots
+    box = (0.77, 0.11, 0.99, 0.46)  # 180 pixels across, under the countdown, in a 900 x 560 window
+    shot = s.get("hud_minimap.png")
+    water = shot and (color_share(shot, hexrgb("#2f7fc8"), 30, box, 2) + color_share(shot, hexrgb("#4f9fe3"), 30, box, 2))
+    c.check(water and water > 0.02, f"the map shows the lake ({water and round(water, 3)})", shot)
+    c.check(shot and color_share(shot, GOLD, 30, box, 1) > 0.001, "gold dots for the coins", shot)
+    c.check(shot and color_share(shot, hexrgb("#e5484d"), 30, box, 1) > 0.0005, "a red dot for the rock", shot)
+    c.check(shot and color_share(shot, (245, 245, 245), 45, box, 1) > 0.02, "a white rim and the player's arrow", shot)
+    c.check(shot and color_share(shot, (255, 255, 255), 20, (0.8, 0, 1, 0.1), 1) > 0.005, "the countdown above it", shot)
+    zoom = s.get("hud_minimap_zoom.png")
+    zw = zoom and (color_share(zoom, hexrgb("#2f7fc8"), 30, box, 2) + color_share(zoom, hexrgb("#4f9fe3"), 30, box, 2))
+    c.check(zw and zw > water, f"map:zoom(2) shows the lake bigger ({zw and round(zw, 3)})", zoom)
+    moved = s.get("hud_minimap_moved.png")
+    lake = lambda shot, box: color_share(shot, hexrgb("#2f7fc8"), 30, box, 2) + color_share(shot, hexrgb("#4f9fe3"), 30, box, 2)
+    c.check(moved and color_share(moved, (245, 245, 245), 45, (0, 0.5, 0.3, 1), 1) > 0.02 and lake(moved, (0, 0.5, 0.3, 1)) > 0.02
+            and lake(moved, (0.78, 0.12, 0.99, 0.32)) < 0.002,
+            "world:minimap(220, \"bottom left\") moves it to the bottom left", moved)
+
+
+def t_hud_checker(c):
+    """--check knows the HUD's names, what they give back and what their functions get; their mistakes have
+    kid-friendly messages, when checking and when running."""
+    for name in ("hud_health_3d.tuf", "hud_health_2d.tuf", "hud_arrow.tuf", "hud_minimap.tuf"):
+        p = subprocess.run(tuff_cmd() + ["--check", game(name)], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(p.returncode == 0 and p.stdout.strip() == "OK", f"--check accepts {name}", (p.stdout + p.stderr)[:400])
+    folder = os.path.join(OUT, "hud")
+    os.makedirs(folder, exist_ok=True)
+    bad = [
+        ('w = tgame.world("x")\nm = w:minimap(180, "middle")\n', "A minimap can go in the top right, top left, bottom left or bottom right corner"),
+        ('w = tgame.world("x")\nm = w:minimap()\ncoin = w:spawn("coin")\nm:mark(coin, "goldd")\n', "'goldd' isn't a color tgame knows."),
+        ('game = tgame.window("x")\nb = game:box(1, 2)\nb:damage(3)\n', "A sprite doesn't have :damage. Use :hurt instead."),
+        ('w = tgame.world("x")\nt = w:timer(30)\n', "A world doesn't have :timer. Use :countdown instead."),
+        ('game = tgame.window("x")\nclock = game:countdown(10)\nsay clock:time_left()\n', "A countdown doesn't have :time_left. Use :left instead."),
+        ('game = tgame.window("x")\nclock = game:countdown(10, done)\nfunc done(a, b):\n    nil\n', "done() needs 2 inputs, but game:countdown gives it no inputs"),
+        ('w = tgame.world("x")\ne = w:spawn("person")\ne:on_death(gone)\nfunc gone(a, b):\n    nil\n', "gone() needs 2 inputs, but e:on_death gives it 1 input"),
+        ('w = tgame.world("x")\na = w:arrow_to(1, 2, 3)\na:hide(1)\n', "arrow:hide got the wrong number of inputs (1)."),
+        ('w = tgame.world("x")\nm = w:map()\n', "A world doesn't have :map. Use :minimap instead."),
+    ]
+    for i, (src, want) in enumerate(bad):
+        path = os.path.join(folder, f"bad{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("mention tgame\n" + src)
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(p.returncode == 1 and want in p.stderr, f"--check catches: {want}", p.stderr[:400])
+    running = [
+        ('w = tgame.world("x")\ncrate = w:spawn("crate")\ncrate:hurt(5)\n', "crate:hurt needs health first. Give it a health bar, like crate:health_bar(100)."),
+        ('game = tgame.window("x")\ngame:minimap()\n', "The minimap needs a 3D world. Make the game with tgame.world(...) for one."),
+        ('game = tgame.window("x")\nb = game:box(1, 2)\nb:health_bar(10)\nb:hurt(-2)\n', "box:hurt needs a number of 0 or more. To heal it, use :heal."),
+        ('w = tgame.world("x")\nm = w:minimap(180, "middle")\n', "A minimap can go in the top right, top left, bottom left or bottom right corner, not \"middle\"."),
+    ]
+    for i, (src, want) in enumerate(running):
+        path = os.path.join(folder, f"run{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("mention tgame\n" + src)
+        run = play(f"hud_run{i}", path, [{"at": 0.5, "close": True}])
+        c.check(run.code == 1 and want in run.err, f"running it says: {want}", run.err[-400:])
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
          "models": t_models,
@@ -1945,6 +2126,8 @@ TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": 
          "physics": t_physics, "physics_player": t_physics_player, "physics_car": t_physics_car, "physics_2d": t_physics_2d,
          "physics_off": t_physics_off,
          "scene": t_scene, "notice": t_notice, "mcp": t_mcp, "checker": t_checker, "editor": t_editor, "guide": t_guide, "perf": t_perf}
+TESTS.update({"hud_health_3d": t_hud_health_3d, "hud_health_2d": t_hud_health_2d, "hud_arrow": t_hud_arrow,
+              "hud_minimap": t_hud_minimap, "hud_checker": t_hud_checker})
 
 
 def main():

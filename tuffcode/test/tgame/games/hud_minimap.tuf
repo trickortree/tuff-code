@@ -1,0 +1,20 @@
+mention tgame
+
+# world:minimap: the land with its lake, the player (third person) as an arrow in the middle, coins marked in gold
+# (one unmarked again, one far away waiting at the map's edge), a rock marked red, and the countdown above it in the
+# top right. Then zoomed in, and moved to the bottom left.
+world = tgame.world("Minimap", 900, 560)
+land = world:terrain(200)
+land:lake(20, -14, 26, 3)
+land:hill(-25, 15, 30, 6)
+p = world:player("third person")
+map = world:minimap()
+coins = []
+for spot in [[8, 0, -6], [-12, 0, 6], [5, 0, 18], [90, 0, 90]]:
+    c = world:spawn("coin", spot)
+    map:mark(c)
+    coins:add(c)
+map:unmark(coins[2])
+rock = world:spawn("rock", -10, 0, -12)
+map:mark(rock, "red")
+clock = world:countdown(90)

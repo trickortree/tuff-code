@@ -1898,6 +1898,7 @@ class World3D(Game):
         t = Thing(self, "ground", 0, 0, 0, (sz, 0.01, sz), [("plane", {"w": sz, "h": sz, "rx": -90, "color": c, "shadow": True}, True)])
         t.solid_ = False
         t.floor = True
+        t.floor_color = c  # for a minimap (the HUD)
         return t.native
 
     def island(self, size=80):
@@ -4905,6 +4906,8 @@ def check_value(kind, method, index, value, base_dir=None):
         return None if low in LIGHTINGS else lighting_problem(low)
     if what == "anchor":
         return None if anchor_name(value) else anchor_problem(value.strip())
+    if what == "corner":  # world:minimap's (the HUD, at the end)
+        return None if corner_name(value) else corner_problem(value.strip())
     if what == "edge":
         return None if low in EDGE_MODES else ":on_edge can be \"bounce\", \"wrap\", \"stop\" (stay on screen) or \"none\"."
     if what == "align":
@@ -4958,7 +4961,385 @@ def tables():
                       ("ragdoll", Ragdoll)):
         obj = probe(cls)
         kinds[kind] = {name: getattr(obj, attr) for name, attr in cls.NAMES}
+    kinds.update({kind: {name: getattr(probe(cls), attr) for name, attr in cls.NAMES} for kind, cls in HUD_KINDS})
     ui_kinds = {"panel": probe(Panel).methods(), "screen": probe(StartScreen).methods()}
     return {"lib": make_library(FakeRt()), "kinds": kinds, "gives": GIVES, "handlers": HANDLERS, "hints": HINTS,
             "check": check_value, "ui_kinds": ui_kinds, "anchors": ANCHORS, "physics_kinds": PHYSICS_KINDS,
             "physics_words": PHYSICS_WORDS, "needs_3d": NEEDS_3D}
+
+
+# ---------------------------------------------------------------- the HUD: health bars, countdowns, arrows, minimaps
+# Health for sprites, objects and the player (thing:health_bar, :hurt, :heal, :health, :on_death), game:countdown,
+# world:arrow_to and world:minimap. The page draws them (tuff_view_web/hud.js): one <tg-hud> element over the game,
+# whose methods tgame calls like any element's. Bars, the arrow and the map follow things where the page has them,
+# so they keep up with physics too, with nothing sent each frame.
+
+CORNERS = ("top right", "top left", "bottom left", "bottom right")
+HUD_GOLD = "#f2c230"  # the arrow's colour, and a mark's unless the program gives one
+
+
+def corner_name(text):
+    """Which corner a minimap goes in ("top right"...) for what a program wrote ("Top-Right", "right top"...), or None."""
+    name = anchor_name(text)
+    return name if name in CORNERS else None
+
+
+def corner_problem(name):
+    return (f"A minimap can go in the top right, top left, bottom left or bottom right corner, not \"{name}\"."
+            + did_you_mean(str(name).strip().lower(), CORNERS))
+
+
+class HudPage:
+    """The page's side of the HUD: a <tg-hud> element (hud.js) over the game, under its HUD layer and its menus."""
+
+    def __init__(self, game):
+        self.game = game
+        under = [int(game.hud_layer.node)] if game.hud_layer is not None else []
+        if game.ui is not None and SCENE is None:
+            under.append(int(game.ui.id))
+        self.node = game.view.el("tg-hud", 0, **({"before": min(under)} if under else {}))
+        view = int(game.scene) if game.three_d else int(game.node)
+        game.view.call(self.node, "setup", {"three_d": game.three_d, "view": view, "size": [game.W, game.H]})
+
+    def call(self, method, *args):
+        self.game.view.call(self.node, method, *args)
+
+    def player(self):
+        """Tells the page who the player is (its figure, in third person), so the map and the arrow measure from it."""
+        p = getattr(self.game, "the_player", None)
+        if p is not None:
+            self.call("player", int(p.body.node) if p.body is not None else 0)
+
+
+def hud_page(game):
+    if getattr(game, "hud_js", None) is None:
+        game.hud_js = HudPage(game)
+    return game.hud_js
+
+
+class Health:
+    """Health, for sprites (2D), objects (3D: cars and ragdolls too) and the player. thing:health_bar(100) gives it
+    100 health and a bar over it (an object's faces the camera; the player's goes along the bottom of the screen);
+    :hurt takes some off (the bar shrinks and flashes), :heal gives some back, :health is how much it has, and its
+    :on_death functions run once when it reaches 0 (again only if it's healed and runs out again)."""
+    NAMES = [("health_bar", "health_bar"), ("hurt", "hurt"), ("heal", "heal"), ("health", "health"),
+             ("on_death", "on_death")]
+    HELPERS = ("hp_game", "hp_name", "hp_need", "hp_amount", "hp_send")
+
+    def hp_game(self):
+        return self.world if isinstance(self, Player) else self.game
+
+    def hp_name(self):
+        return "player" if isinstance(self, Player) else self.phys_name()
+
+    def hp_need(self, what):
+        if getattr(self, "hp_most", None) is None:
+            n = self.hp_name()
+            raise self.rt.error(f"{n}:{what} needs health first. Give it a health bar, like {n}:health_bar(100).")
+
+    def hp_amount(self, amount, what, other):
+        n = self.rt.number(amount, f":{what}")
+        if n < 0:
+            raise self.rt.error(f"{self.hp_name()}:{what} needs a number of 0 or more. To {other} it, use :{other}.")
+        return n
+
+    def hp_send(self, flash=None):
+        kind = "player" if isinstance(self, Player) else "3d" if isinstance(self, Thing) else "2d"
+        label = getattr(self, "label_node", None)  # an object's bar goes over its label
+        hud_page(self.hp_game()).call("bar", "player" if kind == "player" else int(self.node),
+                                      {"kind": kind, "value": tidy(self.hp), "most": tidy(self.hp_most), "flash": flash,
+                                       "label": int(label) if label is not None else 0})
+
+    def health_bar(self, most=100):
+        m = self.rt.number(most, ":health_bar")
+        if m <= 0:
+            n = self.hp_name()
+            raise self.rt.error(f"{n}:health_bar needs the most health it can have, above 0, like {n}:health_bar(100).")
+        self.hp_most = self.hp = float(m)  # full (again)
+        self.hp_out = False
+        self.hp_send()
+        return self.native
+
+    def hurt(self, amount):
+        self.hp_need("hurt")
+        n = self.hp_amount(amount, "hurt", "heal")
+        if self.hp_out or not n:
+            return self.native
+        self.hp = max(0.0, self.hp - n)
+        self.hp_send("hurt")
+        if self.hp <= 0:
+            self.hp_out = True
+            for fn in list(getattr(self, "death_fns", ())):
+                self.hp_game().fire(fn, self.native)
+        return self.native
+
+    def heal(self, amount):
+        self.hp_need("heal")
+        n = self.hp_amount(amount, "heal", "hurt")
+        if not n or self.hp >= self.hp_most:
+            return self.native
+        self.hp = min(self.hp_most, self.hp + n)
+        self.hp_out = False
+        self.hp_send("heal")
+        return self.native
+
+    def health(self):
+        self.hp_need("health")
+        return tidy(self.hp)
+
+    def on_death(self, fn):
+        fn = self.hp_game().lib.check_fn(fn, ":on_death")
+        if getattr(self, "death_fns", None) is None:
+            self.death_fns = []
+        self.death_fns.append(fn)
+        return self.native
+
+
+class Countdown:
+    """game:countdown(60, times_up): a timer in the top right that counts down on the game's clock (so it stops while
+    the game is paused), turns red under 10 seconds and runs times_up() at 0. A game has one: making it again starts
+    it again. It's one of the game's movers while it runs."""
+    NAMES = [("add", "add"), ("stop", "stop"), ("left", "left")]
+
+    def __init__(self, game):
+        self.game, self.rt = game, game.rt
+        self.alive = True
+        self.secs = 0.0
+        self.fn = None
+        self.running = False
+        self.shown = None
+        self.native = game.rt.native("countdown", methods(self, "countdown", self.NAMES, game.rt),
+                                     lambda nested=False: f"<countdown, {self.left()} s left>")
+        self.native.tg = self
+
+    def start(self, seconds, fn):
+        self.secs, self.fn, self.running = float(seconds), fn, seconds > 0
+        self.shown = None
+        self.send()
+        self.busy()
+
+    def busy(self):
+        if self.running:
+            self.game.movers.add(self)
+        else:
+            self.game.movers.discard(self)
+
+    def send(self):
+        """The whole seconds left, to the page, when they change."""
+        shown = self.left()
+        if shown != self.shown:
+            self.shown = shown
+            hud_page(self.game).call("countdown", {"left": shown})
+
+    def tick(self, dt):
+        self.secs -= dt
+        if self.secs > 0:
+            self.send()
+            return
+        self.secs = 0.0
+        self.running = False
+        self.busy()
+        self.send()
+        if self.fn is not None:
+            self.game.fire(self.fn)
+
+    def add(self, seconds):
+        finished = self.secs <= 0 and not self.running
+        self.secs = max(0.0, self.secs + self.rt.number(seconds, ":add"))
+        if finished and self.secs > 0 and self.shown is not None:
+            self.running = True  # it had run out: more time starts it again
+        self.send()
+        self.busy()
+        return self.native
+
+    def stop(self):
+        self.running = False
+        self.busy()
+        return self.native
+
+    def left(self):
+        return math.ceil(max(0.0, self.secs) - 1e-9)
+
+
+class Arrow:
+    """world:arrow_to(chest): an arrow that points the way to something, with how far away it is: over it while it's
+    in view, at the edge of the screen when it isn't, and along the bottom when it's behind you. A world has one:
+    world:arrow_to(other) points it at something else. It can point at a spot too, like world:arrow_to(10, 0, -20)."""
+    NAMES = [("hide", "hide"), ("show", "show")]
+
+    def __init__(self, world):
+        self.world, self.rt = world, world.rt
+        self.shown = True
+        self.target = None
+        self.native = world.rt.native("arrow", methods(self, "arrow", self.NAMES, world.rt), lambda nested=False: "<arrow>")
+        self.native.tg = self
+
+    def point(self, args):
+        w = self.world
+        t = thing_of(args[0])
+        if isinstance(t, Player):
+            raise self.rt.error("world:arrow_to shows the player the way to something else, like world:arrow_to(chest).")
+        if isinstance(t, Thing):
+            if not t.alive:
+                raise self.rt.error("world:arrow_to can't point at something that was removed.")
+            if not t.on_land:
+                raise self.rt.error("world:arrow_to points at things in the world, not at something the player holds.")
+            self.target = {"id": int(t.node)}
+        else:
+            v = self.rt.plain(args[0])
+            if not isinstance(v, list) and not isinstance(v, (int, float)):
+                raise self.rt.error(f"world:arrow_to needs a thing to point at, like world:arrow_to(chest), or a spot "
+                                    f"like [10, 0, -20], not {self.rt.what(v)}.")
+            x, y, z, _ = w.where(args, (), "arrow_to")
+            self.target = {"at": [tidy(x), tidy(w.above(x, y, z)), tidy(z)]}
+        hud_page(w).player()
+        self.send()
+
+    def send(self):
+        hud_page(self.world).call("arrow", {**self.target, "shown": self.shown, "color": HUD_GOLD})
+
+    def hide(self):
+        self.shown = False
+        self.send()
+        return self.native
+
+    def show(self):
+        self.shown = True
+        self.send()
+        return self.native
+
+
+class Minimap:
+    """world:minimap(): a round map in a corner, north up: the land around the player (its colours and its water),
+    the player as an arrow, and a dot for each thing map:mark gave it (one too far away waits at the map's edge).
+    map:zoom(2) shows things twice as big. A world has one: world:minimap(240, "top left") changes it."""
+    NAMES = [("mark", "mark"), ("unmark", "unmark"), ("zoom", "zoom")]
+
+    def __init__(self, world):
+        self.world, self.rt = world, world.rt
+        self.size, self.corner, self.k = 180, "top right", 1.0
+        self.marks = {}  # node id -> colour
+        self.native = world.rt.native("minimap", methods(self, "minimap", self.NAMES, world.rt), lambda nested=False: "<minimap>")
+        self.native.tg = self
+
+    def floors(self):
+        """The world's ground and islands, for the map (the page finds a terrain by itself)."""
+        out = []
+        for t in self.world.things:
+            if isinstance(t, Thing) and t.alive and getattr(t, "floor", False):
+                if t.kind == "island":
+                    out.append({"island": tidy(t.dims[0] / 2)})
+                else:
+                    out.append({"ground": tidy(t.dims[0]), "color": getattr(t, "floor_color", None) or COLORS["grass"]})
+        return out
+
+    def send(self):
+        page = hud_page(self.world)
+        page.player()
+        page.call("minimap", {"size": self.size, "corner": self.corner, "zoom": self.k, "floors": self.floors()})
+
+    def thing(self, v, what):
+        t = thing_of(v)
+        if not isinstance(t, Thing) or not t.on_land:
+            raise self.rt.error(f"map:{what} needs a thing in the world, like map:{what}(coin), not {self.rt.what(v)}.")
+        return t
+
+    def mark(self, thing, color=HUD_GOLD):
+        t = self.thing(thing, "mark")
+        c = self.world.color(color)
+        self.marks[int(t.node)] = c
+        hud_page(self.world).call("mark", int(t.node), c)
+        return self.native
+
+    def unmark(self, thing):
+        t = self.thing(thing, "unmark")
+        if self.marks.pop(int(t.node), None) is not None:
+            hud_page(self.world).call("unmark", int(t.node))
+        return self.native
+
+    def zoom(self, k):
+        n = self.rt.number(k, ":zoom")
+        if n <= 0:
+            raise self.rt.error("map:zoom needs a number above 0: 2 shows things twice as big, 0.5 shows twice as far.")
+        self.k = clamp(n, 0.05, 50)
+        self.send()
+        return self.native
+
+
+def countdown(self, seconds, fn=None):  # game:countdown and world:countdown
+    secs = self.num(seconds, ":countdown")
+    if secs < 0:
+        raise self.rt.error(":countdown needs how many seconds it counts down from, like game:countdown(60, times_up).")
+    if fn is not None:
+        fn = self.lib.check_fn(fn, ":countdown")
+    if getattr(self, "the_countdown", None) is None:
+        self.the_countdown = Countdown(self)
+    self.the_countdown.start(secs, fn)
+    return self.the_countdown.native
+
+
+def arrow_to(self, x, y=MISSING, z=MISSING):  # world:arrow_to
+    if getattr(self, "the_arrow", None) is None:
+        self.the_arrow = Arrow(self)
+    self.the_arrow.point([x, y, z])
+    return self.the_arrow.native
+
+
+def minimap(self, size=180, corner="top right"):  # world:minimap
+    s = self.num(size, ":minimap")
+    if not 60 <= s <= 600:
+        raise self.rt.error(":minimap needs a size from 60 to 600 (how many pixels across), like world:minimap(180).")
+    where = corner_name(self.rt.text(corner))
+    if where is None:
+        raise self.rt.error(corner_problem(self.rt.text(corner)))
+    if getattr(self, "the_map", None) is None:
+        self.the_map = Minimap(self)
+    m = self.the_map
+    m.size, m.corner = tidy(s), where
+    m.send()
+    return m.native
+
+
+# The HUD's names on the kinds that have them: health on sprites, objects (cars and ragdolls too) and the player.
+Game.countdown, World3D.arrow_to, World3D.minimap = countdown, arrow_to, minimap
+Game2D.NAMES = Game2D.NAMES + [("countdown", "countdown")]
+World3D.NAMES = World3D.NAMES + [("countdown", "countdown"), ("arrow_to", "arrow_to"), ("minimap", "minimap")]
+for _cls in (Sprite, Thing, Car, Player):  # a ragdoll has an object's names
+    _cls.NAMES = _cls.NAMES + Health.NAMES
+for _cls in (Sprite, Thing, Player):
+    for _attr in [a for _, a in Health.NAMES] + list(Health.HELPERS):
+        setattr(_cls, _attr, getattr(Health, _attr))
+HUD_KINDS = (("countdown", Countdown), ("arrow", Arrow), ("minimap", Minimap))
+
+NEEDS_3D.update({"arrow_to": "The arrow needs a 3D world. Make the game with tgame.world(...) to point the way to things.",
+                 "minimap": "The minimap needs a 3D world. Make the game with tgame.world(...) for one."})
+_HEALTH_HINTS = {"damage": "hurt", "take_damage": "hurt", "harm": "hurt", "hp": "health", "get_health": "health",
+                 "life": "health", "healthbar": "health_bar", "hp_bar": "health_bar", "life_bar": "health_bar",
+                 "lifebar": "health_bar", "max_health": "health_bar", "set_health": "health_bar", "cure": "heal",
+                 "restore": "heal", "on_die": "on_death", "on_dead": "on_death", "died": "on_death",
+                 "when_dead": "on_death", "on_killed": "on_death"}
+for _kind in ("sprite", "object", "car", "ragdoll", "player"):
+    HINTS[_kind].update({k: v for k, v in _HEALTH_HINTS.items() if k not in HINTS[_kind]})
+_TIMER_HINTS = {"timer": "countdown", "count_down": "countdown", "countdown_timer": "countdown"}
+HINTS["game"].update(_TIMER_HINTS)
+HINTS["world"].update({**_TIMER_HINTS, "compass": "arrow_to", "waypoint": "arrow_to", "pointer": "arrow_to",
+                       "point_to": "arrow_to", "arrow": "arrow_to", "map": "minimap", "mini_map": "minimap",
+                       "radar": "minimap"})
+HINTS["countdown"] = {"pause": "stop", "end": "stop", "time_left": "left", "remaining": "left", "seconds": "left",
+                      "time": "left", "add_time": "add", "extend": "add", "plus": "add"}
+HINTS["arrow"] = {"remove": "hide", "visible": "show"}
+HINTS["minimap"] = {"dot": "mark", "add": "mark", "track": "mark", "pin": "mark", "remove": "unmark",
+                    "untrack": "unmark", "zoom_in": "zoom", "scale": "zoom"}
+
+GIVES["game"]["countdown"] = "countdown"
+GIVES["world"].update({"countdown": "countdown", "arrow_to": "arrow", "minimap": "minimap"})
+for _kind in ("sprite", "object", "car", "ragdoll", "player"):
+    GIVES[_kind].update({"health_bar": _kind, "hurt": _kind, "heal": _kind, "health": "$number", "on_death": _kind})
+GIVES.update({"countdown": {"left": "$number", "add": "countdown", "stop": "countdown"},
+              "arrow": {"hide": "arrow", "show": "arrow"},
+              "minimap": {"mark": "minimap", "unmark": "minimap", "zoom": "minimap"}})
+for _kind in ("game", "world"):
+    HANDLERS[_kind]["countdown"] = (1, 0, "no inputs")
+for _kind in ("sprite", "object", "car", "ragdoll", "player"):
+    HANDLERS.setdefault(_kind, {})["on_death"] = (0, 1, f"1 input (the {_kind} whose health ran out)")
+VALUES.update({("world", "minimap"): {1: "corner"}, ("minimap", "mark"): {1: "color"}})
