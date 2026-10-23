@@ -3379,7 +3379,7 @@ def t_hud_checker(c):
         ('game = tgame.window("x")\nclock = game:countdown(10)\nsay clock:time_left()\n', "A countdown doesn't have :time_left. Use :left instead."),
         ('game = tgame.window("x")\nclock = game:countdown(10, done)\nfunc done(a, b):\n    nil\n', "done() needs 2 inputs, but game:countdown gives it no inputs"),
         ('w = tgame.world("x")\ne = w:spawn("person")\ne:on_death(gone)\nfunc gone(a, b):\n    nil\n', "gone() needs 2 inputs, but e:on_death gives it 1 input"),
-        ('w = tgame.world("x")\na = w:arrow_to(1, 2, 3)\na:hide(1)\n', "arrow:hide got the wrong number of inputs (1)."),
+        ('w = tgame.world("x")\na = w:arrow_to(1, 2, 3)\na:hide(1)\n', "a:hide got the wrong number of inputs (1)."),
         ('w = tgame.world("x")\nm = w:map()\n', "A world doesn't have :map. Use :minimap instead."),
     ]
     for i, (src, want) in enumerate(bad):
