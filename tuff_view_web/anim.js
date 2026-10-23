@@ -1,9 +1,11 @@
 // Animation that runs in the page, every frame, with no work for Python: tgame's trees, bushes and flowers sway in
 // the wind, coins spin and bob, people walk while they move (and stand breathing when they don't, or wave), and
 // water ripples. A model's parts say how it moves with an `anim` prop (the kit in tuff_tgame.py): its style ("tree",
-// "pine", "bush", "flower", "coin", "person"), or for a person's parts [style, part, pivot], the part being "leg_l",
-// "arm_r", "head", "torso"... and the pivot the point it turns about (a hip, a shoulder, the neck). The model's group
-// can choose with `anim` too (thing:animate): "auto" (its own way), "walk", "idle", "wave" or "none" (still).
+// "pine", "bush", "flower", "coin", "person"), or for a person's parts [style, part, pivot, up], the part being
+// "leg_l" (a thigh), "shin_l", "arm_r" (an upper arm), "forearm_r" (with its hand), "head", "torso", "body"... the
+// pivot the point it turns about (a hip, a knee, a shoulder, an elbow, the neck), and for a shin or a forearm `up` the
+// pivot of the limb it hangs from (it turns with the thigh or the upper arm too). The model's group can choose with
+// `anim` too (thing:animate): "auto" (its own way), "walk", "idle", "wave" or "none" (still).
 // Everything holds still while the game is paused (tgame puts data-paused on the scene's canvas).
 //
 // engine.js calls add() when an object gets an `anim`, and frame() before it draws each frame (with the real time
@@ -23,9 +25,9 @@ export function add(n, v) {
   if (n === group) {
     a.mode = typeof v === 'string' ? v : 'auto';
   } else {
-    const [style, role, pivot] = Array.isArray(v) ? v : [v];
+    const [style, role, pivot, up] = Array.isArray(v) ? v : [v];
     if (style) a.style = style;
-    n.obj.userData.anim = { role: role || null, pivot: pivot || null };
+    n.obj.userData.anim = { role: role || null, pivot: pivot || null, up: up || null };
   }
   a.kids = -1;  // look at its parts again
   live.add(group);
@@ -64,8 +66,12 @@ function step(now, game, scenes) {
     const t = window.tuffView && window.tuffView.three();
     if (!t || t.failed || !t.Quaternion) return;
     THREE = t;
-    W = { q: new THREE.Quaternion(), turn: new THREE.Quaternion(), e: new THREE.Euler(), axis: new THREE.Vector3(),
-      up: new THREE.Vector3(), y: new THREE.Vector3(0, 1, 0), x: new THREE.Vector3(1, 0, 0), z: new THREE.Vector3(0, 0, 1) };
+    const Q = () => new THREE.Quaternion();
+    W = { q: Q(), turn: Q(), e: new THREE.Euler(), axis: new THREE.Vector3(),
+      up: new THREE.Vector3(), y: new THREE.Vector3(0, 1, 0), x: new THREE.Vector3(1, 0, 0), z: new THREE.Vector3(0, 0, 1),
+      // a person's joints, this frame: the hips, knees, shoulders, elbows and neck, and scratch ones for mixing poses
+      hipL: Q(), hipR: Q(), kneeL: Q(), kneeR: Q(), shL: Q(), shR: Q(), elL: Q(), elR: Q(), neck: Q(), a: Q(), b: Q(), c: Q(),
+      grip: Q().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2) };
   }
   for (const s of scenes) {
     // A scene's models move with each frame it's drawn anyway (Python changed something), and on their own at most
@@ -110,12 +116,20 @@ function parts(g, a) {
   let top = 0.01;
   for (const o of g.obj.children) {
     const b = o.userData.animBase || (o.userData.animBase = { p: o.position.clone(), q: o.quaternion.clone(), s: o.scale.clone() });
-    if (!o.isMesh) { a.held.push({ o, b }); continue; }  // a group of its own: something a person holds (its own thing)
+    if (!o.isMesh) {  // a group of its own: something a person holds (its own thing), and the pose it was last given
+      a.held.push({ o, b, at: o.position.clone(), q: o.quaternion.clone() });
+      continue;
+    }
     const info = o.userData.anim || {};
-    a.parts.push({ o, b, role: info.role, pivot: info.pivot ? new THREE.Vector3().fromArray(info.pivot) : null, w: 1 });
+    const vec = (v) => (v ? new THREE.Vector3().fromArray(v) : null);
+    a.parts.push({ o, b, role: info.role, pivot: vec(info.pivot), up: vec(info.up), w: 1 });
     top = Math.max(top, b.p.y);
   }
   for (const p of a.parts) p.w = Math.max(0, p.b.p.y / top) ** 1.5;  // swaying: the higher up, the further it goes
+  // A person's hips, shoulders and right elbow (a held thing goes with its right hand), and how high its hips are.
+  const at = (role) => (a.parts.find((p) => p.role === role) || {}).pivot || null;
+  a.joints = { hip: at('leg_l'), shR: at('arm_r'), elR: at('forearm_r') };
+  a.hip = a.joints.hip ? a.joints.hip.y : 0.75;
 }
 
 function still(a) {
@@ -124,7 +138,14 @@ function still(a) {
     p.o.quaternion.copy(p.b.q);
     p.o.scale.copy(p.b.s);
   }
-  for (const h of a.held) h.o.position.y = h.b.p.y;
+  for (const h of a.held) {
+    if (a.style === 'person') {
+      track(h);
+      hold(h, a, W.a.identity(), W.b.identity(), 0);  // in its hanging hand
+    } else {
+      h.o.position.y = h.b.p.y;
+    }
+  }
   a.rest = true;
 }
 
@@ -138,6 +159,15 @@ function pose(p, q, at, lift) {
   if (at) o.position.add(at);
   o.position.y += lift;
   o.quaternion.multiplyQuaternions(q, p.b.q);
+}
+
+// A part of a limb's lower half (a shin, a forearm): turned by q2 about its joint `at2` (the knee, the elbow), then
+// with the whole limb by q1 about `at1` (the hip, the shoulder), then lifted.
+function pose2(p, q1, at1, q2, at2, lift) {
+  const o = p.o;
+  o.position.copy(p.b.p).sub(at2).applyQuaternion(q2).add(at2).sub(at1).applyQuaternion(q1).add(at1);
+  o.position.y += lift;
+  o.quaternion.multiplyQuaternions(q1, q2).multiply(p.b.q);
 }
 
 // ---------------------------------------------------------------- the styles
@@ -181,9 +211,14 @@ function coin(g, a, t, dt) {
   for (const part of a.parts) pose(part, W.q, null, lift);
 }
 
+// A turn about x then z (a limb swung forward by fwd, then out to the side by out), into q.
+function limb(q, fwd, out) {
+  return q.setFromAxisAngle(W.z, out).multiply(W.c.setFromAxisAngle(W.x, fwd));
+}
+
 function person(g, a, t, dt) {
   const p = g.obj.position;
-  if (a.px === undefined) Object.assign(a, { px: p.x, pz: p.z, speed: 0, walk: 0, wave: 0, phase: 0 });
+  if (a.px === undefined) Object.assign(a, { px: p.x, pz: p.z, speed: 0, walk: 0, wave: 0, phase: 0, hold: a.held.length ? 1 : 0 });
   // How fast it's going (smoothed: Python moves it at its own frame rate). A big jump is a move_to, not a step.
   let d = Math.hypot(p.x - a.px, p.z - a.pz);
   a.px = p.x;
@@ -193,40 +228,97 @@ function person(g, a, t, dt) {
   const walking = a.mode === 'walk' || (a.mode === 'auto' && a.speed > 0.35);
   a.walk += ((walking ? 1 : 0) - a.walk) * Math.min(1, dt * 7);
   a.wave += ((a.mode === 'wave' ? 1 : 0) - a.wave) * Math.min(1, dt * 5);
+  a.hold += ((a.held.length ? 1 : 0) - a.hold) * Math.min(1, dt * 8);
   const speed = a.mode === 'walk' && a.speed < 0.6 ? 1.4 : Math.min(a.speed, 9);
   a.phase = (a.phase + dt * Math.PI * 2 * speed / (1.2 + speed * 0.25)) % (Math.PI * 2);  // two steps a stride
-  const leg = Math.sin(a.phase) * (0.3 + Math.min(speed, 6) * 0.05) * a.walk;
-  const breathe = Math.sin(t * 2.2) * (1 - a.walk);
-  const lift = -0.73 * (1 - Math.cos(leg)) + breathe * 0.006;  // legs apart, it's lower: the foot down stays down
-  const look = Math.sin(t * 0.45) * 0.22 * (1 - a.walk) * (1 - a.wave);
+  const w = a.walk;
+  const amp = (0.3 + Math.min(speed, 6) * 0.05) * w;
+  const leg = Math.sin(a.phase) * amp;  // the left thigh forward, the right one back (and the other way)
+  const swingL = Math.cos(a.phase);     // > 0: the left leg is swinging forward (off the ground), < 0: the right one
+  const breathe = Math.sin(t * 2.2) * (1 - w);
+  const lift = -a.hip * (1 - Math.cos(leg));  // legs apart, it's lower: the straight leg on the ground stays down
+  const up = breathe * 0.006;  // breathing in lifts its chest, shoulders and head a little
+  const look = Math.sin(t * 0.45) * 0.22 * (1 - w) * (1 - a.wave);
+
+  // Legs swing from the hips; a knee bends as its leg swings forward (the foot clears the ground) and is straight
+  // when the foot lands and takes the weight.
+  W.hipL.setFromAxisAngle(W.x, leg);
+  W.hipR.setFromAxisAngle(W.x, -leg);
+  W.kneeL.setFromAxisAngle(W.x, -(0.05 * w + 1.6 * amp * Math.max(0, swingL)));
+  W.kneeR.setFromAxisAngle(W.x, -(0.05 * w + 1.6 * amp * Math.max(0, -swingL)));
+  // Arms swing the other way, a little out from the body, the elbows bent more as they come forward; standing,
+  // they hang relaxed and move with its breath.
+  const armL = -leg * 0.85 + breathe * 0.03;
+  const armR = leg * 0.85 + breathe * 0.03;
+  limb(W.shL, armL, -(0.03 + 0.03 * w + breathe * 0.012));
+  limb(W.shR, armR, 0.03 + 0.03 * w + breathe * 0.012);
+  W.elL.setFromAxisAngle(W.x, 0.1 + 0.12 * w + 0.7 * Math.max(0, armL) + breathe * 0.03);
+  W.elR.setFromAxisAngle(W.x, 0.1 + 0.12 * w + 0.7 * Math.max(0, armR) + breathe * 0.03);
+  // Holding something in the right hand: the forearm forward, the thing upright in the fist. A swing (thing:swing
+  // pitches it forward) brings the arm down and forward with it.
+  if (a.hold > 0.001) {
+    const h = a.held[0];
+    if (h) track(h);
+    const chop = h ? Math.min(1.6, Math.max(0, -2 * Math.atan2(h.b.q.x, h.b.q.w))) : 0;
+    limb(W.a, 0.25 + 0.05 * leg + chop * 0.5, 0.1);
+    W.shR.slerp(W.a, a.hold);
+    W.elR.slerp(W.b.setFromAxisAngle(W.x, 1.0 - chop * 0.5), a.hold);
+  }
+  // Waving: the right arm up and out to the side, the forearm up, the hand turned to show its palm, waving to and
+  // fro at the elbow.
+  if (a.wave > 0.001) {
+    const to = Math.sin(t * 9);
+    W.a.setFromAxisAngle(W.x, -0.3).multiply(W.c.setFromAxisAngle(W.z, 2.0 + 0.05 * to));
+    W.shR.slerp(W.a, a.wave);
+    W.b.setFromAxisAngle(W.z, 0.85 + 0.42 * to).multiply(W.c.setFromAxisAngle(W.y, -Math.PI / 2));
+    W.elR.slerp(W.b, a.wave);
+  }
+  // The head looks about (standing), and tips a little away from the hand while it waves.
+  W.neck.setFromAxisAngle(W.y, look).multiply(W.c.setFromAxisAngle(W.z, 0.1 * a.wave));
+
   for (const part of a.parts) {
     switch (part.role) {
-      case 'leg_l': case 'leg_r':
-        pose(part, W.q.setFromAxisAngle(W.x, part.role === 'leg_l' ? leg : -leg), part.pivot, lift);
-        break;
-      case 'arm_l':
-        pose(part, W.q.setFromAxisAngle(W.x, -leg * 0.85 + breathe * 0.04), part.pivot, lift);
-        break;
-      case 'arm_r': {
-        // Holding something: the hand stays where the thing is. Waving: up and out to the side, to and fro.
-        const holds = a.held.length > 0;
-        const swing = (holds ? 0.17 : leg * 0.85 - breathe * 0.04) * (1 - a.wave);
-        W.turn.setFromAxisAngle(W.z, a.wave * (2.75 + 0.3 * Math.sin(t * 9)) + (holds ? 0.13 * (1 - a.wave) : 0));
-        pose(part, W.turn.multiply(W.q.setFromAxisAngle(W.x, swing)), part.pivot, lift);
-        break;
-      }
-      case 'head':
-        pose(part, W.q.setFromAxisAngle(W.y, look), part.pivot, lift);
-        break;
-      case 'torso':
-        pose(part, W.q.identity(), null, lift);
-        part.o.scale.y = part.b.s.y * (1 + breathe * 0.014);
-        break;
-      default:
-        pose(part, W.q.identity(), null, lift);
+      case 'leg_l': pose(part, W.hipL, part.pivot, lift); break;
+      case 'leg_r': pose(part, W.hipR, part.pivot, lift); break;
+      case 'shin_l': pose2(part, W.hipL, part.up, W.kneeL, part.pivot, lift); break;
+      case 'shin_r': pose2(part, W.hipR, part.up, W.kneeR, part.pivot, lift); break;
+      case 'arm_l': pose(part, W.shL, part.pivot, lift + up); break;
+      case 'arm_r': pose(part, W.shR, part.pivot, lift + up); break;
+      case 'forearm_l': pose2(part, W.shL, part.up, W.elL, part.pivot, lift + up); break;
+      case 'forearm_r': pose2(part, W.shR, part.up, W.elR, part.pivot, lift + up); break;
+      case 'head': pose(part, W.neck, part.pivot, lift + up); break;
+      case 'torso': pose(part, W.q.identity(), null, lift + up); break;
+      default: pose(part, W.q.identity(), null, lift);
     }
   }
-  for (const h of a.held) h.o.position.y = h.b.p.y + lift;  // what it holds goes up and down with its hand
+  for (const h of a.held) {  // what it holds goes with its right hand
+    track(h);
+    hold(h, a, W.shR, W.elR, lift + up);
+  }
+}
+
+// What a person holds: Python puts it in the right hand as it hangs, upright (a swing pitches it forward). It goes
+// with that hand, turned with it, gripped so that it points the way the hand's fingers would curl round it: up when
+// the forearm is forward.
+function track(h) {  // the program moved or turned it since: that's its pose now
+  if (!h.o.position.equals(h.at)) h.b.p.copy(h.o.position);
+  if (!h.o.quaternion.equals(h.q)) h.b.q.copy(h.o.quaternion);
+}
+
+function hold(h, a, sh, el, lift) {
+  const o = h.o;
+  const S = a.joints && a.joints.shR;
+  const E = a.joints && a.joints.elR;
+  if (S && E) {
+    o.position.copy(h.b.p).sub(E).applyQuaternion(el).add(E).sub(S).applyQuaternion(sh).add(S);
+    o.quaternion.multiplyQuaternions(sh, el).multiply(W.grip).multiply(h.b.q);
+  } else {  // a person made before arms bent: it just goes up and down
+    o.position.copy(h.b.p);
+    o.quaternion.copy(h.b.q);
+  }
+  o.position.y += lift;
+  h.at.copy(o.position);
+  h.q.copy(o.quaternion);
 }
 
 const STYLES = { tree: sway, pine: sway, bush: sway, flower: sway, coin, person };

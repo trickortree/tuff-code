@@ -136,6 +136,7 @@ function create(id, kind, type, parentId, props) {
   if (n.kind === 'obj') track(n, true);
   objs.set(id, n);
   if (props) setProps(n, props);
+  n.made = true;
 }
 
 // A scene keeps its land, water and sunlight close at hand: the land's colours depend on the water near it, and
@@ -192,7 +193,7 @@ function remove(id) {
       labels.delete(n);
       track(n, false);
       if (n.type === 'label' && n.obj.material.map) n.obj.material.map.dispose();
-      if (n.obj.material) n.obj.material.dispose();
+      if (n.obj.material && !n.shared) n.obj.material.dispose();
       if (n.land || n.water) n.obj.geometry.dispose();  // their own, not shared like a box's
       if (n.skirt) { n.skirt.geometry.dispose(); n.skirt.material.dispose(); }
       if (n.apron) n.apron.geometry.dispose();  // its material is the land's
@@ -1471,12 +1472,29 @@ function texture(src, repeat) {
   return t;
 }
 
+// Parts made with `share` (a person's: there can be dozens of people, each of thirty-odd parts) share one material
+// with every other part that looks the same, so three.js draws them one after another without switching materials.
+// One the program changes later (a new colour, a glow) gets its own.
+const sharedMaterials = new Map();
+
 function material(n) {
   const p = n.p;
   const Kind = { basic: THREE.MeshBasicMaterial, lambert: THREE.MeshLambertMaterial, phong: THREE.MeshPhongMaterial,
     toon: THREE.MeshToonMaterial, standard: THREE.MeshStandardMaterial }[p.mat];
   if (!Kind) throw new Error(`there's no material called '${p.mat}'`);
   let m = n.obj.material;
+  if (n.shared) {  // changed since it was made: its own from now on
+    n.shared = false;
+    m = n.obj.material = m.clone();
+  } else if (p.share && !n.made && !p.texture && !p.ontop) {
+    const key = [p.mat, p.color, p.opacity, p.emissive, p.rough, p.metal, p.wireframe, p.flat, p.side].join(' ');
+    const ready = sharedMaterials.has(key);
+    if (!ready) sharedMaterials.set(key, new Kind());
+    if (m) m.dispose();  // the one it was made with, before it had its looks
+    m = n.obj.material = sharedMaterials.get(key);
+    n.shared = true;
+    if (ready) return;
+  }
   if (!(m instanceof Kind)) {
     if (m) m.dispose();
     m = n.obj.material = new Kind();
@@ -1505,6 +1523,8 @@ function setObj(n, props) {
     const v = props[k];
     switch (k) {
       case 'ontop':
+        if (n.shared) { n.shared = false; o.material = o.material.clone(); }  // its own
+        p.ontop = !!v;
         if (o.material) { o.material.depthTest = !v; o.material.needsUpdate = true; }
         o.renderOrder = v ? 1000 : 0;
         break;

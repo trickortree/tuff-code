@@ -3509,37 +3509,109 @@ def _kit(name):
     raise KeyError(name)
 
 
-def person_parts(shirt=None, skin=None, hair=None, pants=None):
-    """A person (the kit's, and the player in third person), facing -z like everything that walks forward: legs,
-    arms, hips, a body and a head. Each part tells anim.js which part it is and where it turns (hips, shoulders and
-    the neck), so it can walk, breathe and wave."""
-    shirt = shirt or random.choice(["#e5484d", "#3574f0", "#2fa36b", "#f2a33a", "#8e5bd8", "#14b8a6"])
-    skin = skin or random.choice(["#f1c9a5", "#e0ac7e", "#c68a5c", "#8d5a3b", "#ffd9b8"])
-    hair = hair or random.choice(["#2b2018", "#5a3a22", "#a8692e", "#e3c06b", "#1c1c1c", "#b5482b"])
-    pants = pants or random.choice(["#2f3e5c", "#3b3b44", "#5b4636", "#24456b"])
+# A person's joints, standing (feet at 0, facing -z, its right +x): where its limbs turn. The kit's person, the
+# player in third person and the ragdoll are all made by person_parts, so they look alike.
+NECK, SHOULDER, ELBOW, HIP, KNEE = 1.4, (0.262, 1.27), 1.02, (0.094, 0.76), 0.43
+HEAD = (1.555, 0.178)  # its head's middle, and how round it is
+WAIST = 0.855  # where its shirt meets its trousers, under a belt
+CHEST = (0.212, 0.188)  # how wide its body is at the shoulders and at the waist (half)
+SHIRTS = ("#e5484d", "#3574f0", "#2fa36b", "#f2a33a", "#8e5bd8", "#14b8a6")
+SKINS = ("#f1c9a5", "#e0ac7e", "#c68a5c", "#8d5a3b", "#ffd9b8")
+HAIRS = ("#2b2018", "#5a3a22", "#a8692e", "#e3c06b", "#1c1c1c", "#b5482b")
+PANTS = ("#2f3e5c", "#3b3b44", "#5b4636", "#24456b")
+SHOES = ("#3a2a22", "#26262c", "#f4f1ea", "#c8473a", "#2f6fd0")
+HAIR_STYLES = ("short", "swoop", "bob", "ponytail", "buns", "curly", "spiky")
 
-    def part(type_, role, pivot, main=False, **p):
-        return (type_, {**p, "anim": ["person", role, pivot]}, main)
+
+def person_parts(shirt=None, skin=None, hair=None, pants=None, style=None, sleeves=None, shoes=None):
+    """A chunky toy person (the kit's, the player in third person, and the ragdoll's look), facing -z like
+    everything that walks forward: shoes, legs that bend at the knee, hips with a belt, a broad body with round
+    shoulders the arms hang from, arms that bend at the elbow, mitten hands, a short neck and a big friendly head
+    (eyes, eyebrows, a nose and a smile) with one of a few hair styles. Long sleeves or rolled up to the elbow.
+
+    Each part tells anim.js which part it is and where it turns ([style, role, pivot, the pivot of the limb it hangs
+    from]): a thigh turns at the hip and its shin at the knee (and with the thigh), an upper arm at the shoulder and
+    its forearm and hand at the elbow, the head at the neck. The shirt's parts are the main ones (person:color)."""
+    pick = random.choice
+    shirt, skin, hair, pants = shirt or pick(SHIRTS), skin or pick(SKINS), hair or pick(HAIRS), pants or pick(PANTS)
+    style, sleeves, shoes = style or pick(HAIR_STYLES), sleeves or pick(("long", "long", "rolled")), shoes or pick(SHOES)
+    sx, sy = SHOULDER
+    hx, hy = HIP
     parts = []
+
+    def part(type_, role, main=False, **p):
+        # Parts that look the same share a material in the page ("share"): a crowd draws about as fast as before.
+        side = -1 if role.endswith("_l") else 1
+        pivots = {"leg": [[hx * side, hy, 0]], "shin": [[hx * side, KNEE, 0], [hx * side, hy, 0]],
+                  "arm": [[sx * side, sy, 0]], "forearm": [[sx * side, ELBOW, 0], [sx * side, sy, 0]],
+                  "head": [[0, NECK, 0]]}.get(role.split("_")[0], [None])
+        parts.append((type_, {**p, "share": True, "anim": ["person", role] + pivots}, main))
+
+    cloth, soft = {"rough": 0.88}, {"rough": 0.6}
     for side, x in (("l", -1), ("r", 1)):  # its right is +x (it faces -z)
-        hip, shoulder = [0.1 * x, 0.8, 0], [0.29 * x, 1.38, 0]
-        parts += [
-            part("capsule", "leg_" + side, hip, r=0.085, h=0.56, x=0.1 * x, y=0.44, seg=12, color=pants, rough=0.9),
-            part("sphere", "leg_" + side, hip, r=0.085, x=0.1 * x, y=0.055, z=-0.04, sy=0.6, sz=1.45, seg=10, color="#2a2522", rough=0.7),
-            part("capsule", "arm_" + side, shoulder, True, r=0.065, h=0.46, x=0.29 * x, y=1.1, seg=10, color=shirt, rough=0.85),
-            part("sphere", "arm_" + side, shoulder, r=0.068, x=0.29 * x, y=0.79, seg=10, color=skin, rough=0.7),
-        ]
-    neck = [0, 1.46, 0]
-    parts += [
-        part("cylinder", "body", None, rt=0.19, rb=0.18, h=0.16, y=0.82, seg=14, color=pants, rough=0.9),
-        part("capsule", "torso", None, True, r=0.2, h=0.36, y=1.12, sz=0.72, seg=14, color=shirt, rough=0.85),
-        part("sphere", "head", neck, r=0.18, y=1.57, seg=18, color=skin, rough=0.65),
-        part("sphere", "head", neck, r=0.185, y=1.65, z=0.04, sy=0.78, seg=18, color=hair, rough=0.8),
-        part("sphere", "head", neck, r=0.17, y=1.56, z=0.065, sy=0.9, seg=16, color=hair, rough=0.8),
-        part("sphere", "head", neck, r=0.026, x=-0.065, y=1.59, z=-0.163, seg=8, color="#1d1d24", rough=0.3),
-        part("sphere", "head", neck, r=0.026, x=0.065, y=1.59, z=-0.163, seg=8, color="#1d1d24", rough=0.3),
-    ]
+        # A leg: the thigh's round ends are the hip and the knee, so it bends without a gap. The shin goes down into
+        # a big round shoe.
+        part("capsule", "leg_" + side, r=0.086, h=hy - KNEE, x=hx * x, y=(hy + KNEE) / 2, seg=10, color=pants, **cloth)
+        part("capsule", "shin_" + side, r=0.084, h=KNEE - 0.11, x=hx * x, y=(KNEE + 0.11) / 2, seg=10, color=pants, **cloth)
+        part("sphere", "shin_" + side, r=0.1, x=hx * x, y=0.062, z=-0.045, sx=1.02, sy=0.62, sz=1.42, seg=12, color=shoes, rough=0.55)
+    for side, x in (("l", -1), ("r", 1)):
+        # An arm grows out of the round end of the shoulders: its top is the shoulder, so it turns there without a
+        # gap, and it hangs flush against the body. The elbow is the upper arm's other end.
+        part("capsule", "arm_" + side, True, r=0.077, h=sy - ELBOW, x=sx * x, y=(sy + ELBOW) / 2, seg=10, color=shirt, **cloth)
+        part("capsule", "forearm_" + side, sleeves == "long", r=0.073, h=0.2, x=sx * x, y=ELBOW - 0.1, seg=10,
+             color=shirt if sleeves == "long" else skin, **(cloth if sleeves == "long" else soft))
+        part("sphere", "forearm_" + side, r=0.088, x=sx * x, y=0.765, sx=0.84, sy=1.08, sz=1.02, seg=12, color=skin, **soft)
+        part("sphere", "forearm_" + side, r=0.036, x=(sx - 0.03) * x, y=0.8, z=-0.066, sy=1.2, seg=8, color=skin, **soft)
+    # The hips (their round ends are the hip joints), a belt where the shirt meets the trousers, and its buckle.
+    part("capsule", "body", r=0.088, h=hx * 2, y=hy, rz=90, sz=1.25, seg=12, color=pants, **cloth)
+    part("cylinder", "body", r=CHEST[1] + 0.008, h=0.055, y=WAIST, sz=0.68, seg=16, color="#3d2b20", rough=0.7)
+    part("box", "body", w=0.075, h=0.052, d=0.02, y=WAIST, z=-(CHEST[1] + 0.008) * 0.68 - 0.002, color="#e8b84a", metal=0.4, rough=0.35)
+    # A broad body, a little wider at the top, rounded over at the top, with a round shoulder each side that the arm
+    # grows out of (the round ends of a bar across the shoulders), and a short neck.
+    part("cylinder", "torso", True, rt=CHEST[0], rb=CHEST[1], h=sy - WAIST, y=(sy + WAIST) / 2, sz=0.64, seg=16, color=shirt, **cloth)
+    part("sphere", "torso", True, r=CHEST[0], y=sy, sy=0.46, sz=0.64, seg=16, color=shirt, **cloth)
+    part("capsule", "torso", True, r=0.087, h=sx * 2, y=sy, rz=90, seg=12, color=shirt, **cloth)
+    part("cylinder", "torso", rt=0.058, rb=0.066, h=0.12, y=NECK - 0.01, seg=12, color=_shade(skin, -0.08), **soft)
+    # The head: big and round, with eyes (a white and a pupil, big enough to see from afar), eyebrows, a little nose
+    # and a smile (a ring sunk into the face, its lower half showing). The face is laid out on a head 0.17 round, and
+    # grows with the head (k).
+    y, r = HEAD
+    k = r / 0.17
+    part("sphere", "head", r=r, y=y, sx=1.06, seg=20, color=skin, **soft)
+    for x in (-0.064 * k, 0.064 * k):
+        part("sphere", "head", r=0.043 * k, x=x, y=y + 0.002 * k, z=-0.151 * k, sx=0.9, sy=1.18, sz=0.5, seg=12, color="#ffffff", rough=0.4)
+        part("sphere", "head", r=0.025 * k, x=x * 0.94, y=y - 0.003 * k, z=-0.167 * k, sy=1.2, sz=0.55, seg=10, color="#1b1b24", rough=0.25)
+        part("capsule", "head", r=0.012 * k, h=0.05 * k, x=x * 1.03, y=y + 0.075 * k, z=-0.139 * k, rz=90 - (8 if x > 0 else -8), sz=0.7,
+             seg=6, color=_shade(hair, -0.35), rough=0.8)
+    part("sphere", "head", r=0.027 * k, y=y - 0.035 * k, z=-0.168 * k, sy=0.85, seg=10, color=_shade(skin, -0.07), **soft)
+    part("torus", "head", r=0.045 * k, tube=0.011 * k, y=y - 0.055 * k, z=-0.144 * k, seg=20, color="#7a2e2a", rough=0.6)
+    for type_, p in hair_parts(style, y, k):
+        part(type_, "head", **p, color=hair, rough=0.75)
     return parts
+
+
+def hair_parts(style, y, k=1.0):
+    """A hair style's parts on a head whose middle is at y (k: how big the head is, 1 for 0.17 round): a cap over
+    the top and back, and what makes the style."""
+    def at(type_, **p):
+        return (type_, {key: v * k if key in ("r", "h", "x", "z") else y + v * k if key == "y" else v for key, v in p.items()})
+    cap = at("sphere", r=0.181, y=0.03, z=0.022, sx=1.07, sy=0.88, seg=20)
+    if style == "curly":  # a big round mop
+        return [at("sphere", r=0.2, y=0.05, z=0.03, sx=1.06, sy=0.84, seg=14),
+                at("sphere", r=0.15, y=-0.01, z=0.09, sx=1.28, sy=0.92, seg=12)]
+    if style == "bob":  # down to the chin all round the back, with a fringe
+        return [cap, at("sphere", r=0.185, y=-0.015, z=0.065, sx=1.04, sy=0.95, seg=18),
+                at("sphere", r=0.15, y=0.085, z=-0.015, sx=1.12, sy=0.42, sz=0.95, seg=14)]
+    if style == "ponytail":
+        return [cap, at("capsule", r=0.055, h=0.16, y=-0.03, z=0.2, rx=-18, seg=10), at("sphere", r=0.05, y=0.06, z=0.175, seg=10)]
+    if style == "buns":
+        return [cap, at("sphere", r=0.068, x=-0.13, y=0.125, z=0.02, seg=12), at("sphere", r=0.068, x=0.13, y=0.125, z=0.02, seg=12)]
+    if style == "spiky":
+        return [cap] + [at("cone", r=0.06, h=0.12, x=x, y=0.15, z=z, rx=rx, rz=rz, seg=6, flat=True)
+                        for x, z, rx, rz in ((-0.07, -0.02, -15, 25), (0.0, -0.05, -25, 0), (0.07, -0.02, -15, -25))]
+    if style == "swoop":  # swept up and over at the front
+        return [cap, at("sphere", r=0.1, x=0.03, y=0.125, z=-0.054, sx=1.5, sy=0.62, sz=0.9, rz=-14, seg=14)]
+    return [cap, at("sphere", r=0.12, x=-0.02, y=0.105, z=-0.057, sx=1.35, sy=0.45, sz=0.72, rz=8, seg=14)]
 
 
 def held_parts(name):
@@ -4210,7 +4282,8 @@ class Player:
                                       lambda nested=False: f"<player at {tidy(self.x)}, {tidy(self.y)}, {tidy(self.z)}>")
         self.native.tg = self
         if mode == "third person":
-            parts = [(t, {**p, "shadow": True}, main) for t, p, main in person_parts("#3574f0", "#f1c9a5", "#5a3a22", "#2f3e5c")]
+            parts = [(t, {**p, "shadow": True}, main)
+                     for t, p, main in person_parts("#3574f0", "#f1c9a5", "#5a3a22", "#2f3e5c", "short", "long", "#3a2a22")]
             self.body = Thing(world, "player", 0, 0, 0, (0.6, self.TALL, 0.6), parts, pick=False)
             self.body.solid_ = False
             world.things.pop(self.body, None)
@@ -4304,7 +4377,8 @@ class Player:
             self.held.heading = -15
             self.held.tilt, self.held.tilt_axis = 18, (0.0, 1.0)
         else:
-            self.held = Thing(w, name, 0.38, 0.75, -0.1, (0.3, 0.8, 0.1), held_parts(name), parent=self.body.node, pick=False)
+            # In the right hand as it hangs: the page (anim.js) moves it with the hand, gripped upright in the fist.
+            self.held = Thing(w, name, SHOULDER[0], 0.765, 0, (0.3, 0.8, 0.1), held_parts(name), parent=self.body.node, pick=False)
         self.held.solid_ = False
         self.held.push_rotation()
         if SCENE is not None: SCENE.held_made = list(SCENE.interp.lines)
@@ -4822,59 +4896,64 @@ class Car(Thing):
 
 
 # A ragdoll's parts: name, shape, size (a ball's radius; a box's half sizes; a capsule's half length and radius), its
-# middle when it stands (feet at 0), mass (kg), and what it's dressed in. And its joints: the two parts, where they
-# meet, "ball" (turns any way) or "hinge" (bends one way, about x: forward is more), and how far a hinge bends.
+# middle when it stands (feet at 0), mass (kg), and which part of a person (person_parts) it's dressed as. They're a
+# little slimmer than the person they look like, so parts that aren't joined don't touch as it stands. And its
+# joints: the two parts, where they meet (the person's own joints), "ball" (turns any way) or "hinge" (bends one way,
+# about x: forward is more), and how far a hinge bends.
+_SX, _SY = SHOULDER
+_HX, _HY = HIP
+_BEND = WAIST + 0.025  # where its body bends at the waist: the chest's box starts a little above it, so bending
+#                        doesn't push the chest into the tops of its legs
 RAGDOLL = (
-    ("head", "ball", 0.13, (0, 1.56, 0), 1.0, "skin"),
-    ("chest", "box", (0.18, 0.17, 0.11), (0, 1.24, 0), 3.0, "shirt"),
-    ("hips", "box", (0.16, 0.12, 0.1), (0, 0.94, 0), 2.0, "pants"),
-    ("left arm", "capsule", (0.11, 0.055), (-0.25, 1.24, 0), 0.6, "shirt"),
-    ("right arm", "capsule", (0.11, 0.055), (0.25, 1.24, 0), 0.6, "shirt"),
-    ("left hand", "capsule", (0.1, 0.05), (-0.25, 0.94, 0), 0.4, "skin"),
-    ("right hand", "capsule", (0.1, 0.05), (0.25, 0.94, 0), 0.4, "skin"),
-    ("left leg", "capsule", (0.15, 0.07), (-0.09, 0.6, 0), 1.2, "pants"),
-    ("right leg", "capsule", (0.15, 0.07), (0.09, 0.6, 0), 1.2, "pants"),
-    ("left foot", "capsule", (0.15, 0.06), (-0.09, 0.21, 0), 0.8, "pants"),
-    ("right foot", "capsule", (0.15, 0.06), (0.09, 0.21, 0), 0.8, "pants"),
+    ("head", "ball", 0.165, (0, HEAD[0], 0), 1.0, "head"),
+    ("chest", "box", (0.17, (_SY - _BEND - 0.05) / 2, 0.125), (0, (_SY + _BEND + 0.05) / 2, 0), 3.0, "torso"),
+    ("hips", "box", (0.16, 0.1, 0.115), (0, _BEND - 0.06, 0), 2.0, "body"),
+    ("left arm", "capsule", ((_SY - ELBOW) / 2, 0.07), (-_SX, (_SY + ELBOW) / 2, 0), 0.6, "arm_l"),
+    ("right arm", "capsule", ((_SY - ELBOW) / 2, 0.07), (_SX, (_SY + ELBOW) / 2, 0), 0.6, "arm_r"),
+    ("left hand", "capsule", (0.13, 0.065), (-_SX, ELBOW - 0.1, 0), 0.4, "forearm_l"),
+    ("right hand", "capsule", (0.13, 0.065), (_SX, ELBOW - 0.1, 0), 0.4, "forearm_r"),
+    ("left leg", "capsule", ((_HY - KNEE) / 2, 0.08), (-_HX, (_HY + KNEE) / 2, 0), 1.2, "leg_l"),
+    ("right leg", "capsule", ((_HY - KNEE) / 2, 0.08), (_HX, (_HY + KNEE) / 2, 0), 1.2, "leg_r"),
+    ("left foot", "capsule", ((KNEE - 0.084) / 2, 0.08), (-_HX, (KNEE + 0.084) / 2, 0), 0.8, "shin_l"),
+    ("right foot", "capsule", ((KNEE - 0.084) / 2, 0.08), (_HX, (KNEE + 0.084) / 2, 0), 0.8, "shin_r"),
 )
 RAGDOLL_JOINTS = (
-    ("chest", "head", (0, 1.42, 0), "ball", None),
-    ("chest", "hips", (0, 1.06, 0), "hinge", (-0.8, 0.3)),
-    ("chest", "left arm", (-0.25, 1.39, 0), "ball", None),
-    ("chest", "right arm", (0.25, 1.39, 0), "ball", None),
-    ("left arm", "left hand", (-0.25, 1.09, 0), "hinge", (0, 2.0)),
-    ("right arm", "right hand", (0.25, 1.09, 0), "hinge", (0, 2.0)),
-    ("hips", "left leg", (-0.09, 0.82, 0), "hinge", (-0.5, 1.2)),
-    ("hips", "right leg", (0.09, 0.82, 0), "hinge", (-0.5, 1.2)),
-    ("left leg", "left foot", (-0.09, 0.38, 0), "hinge", (-2.0, 0)),
-    ("right leg", "right foot", (0.09, 0.38, 0), "hinge", (-2.0, 0)),
+    ("chest", "head", (0, NECK, 0), "ball", None),
+    ("chest", "hips", (0, _BEND, 0), "hinge", (-0.8, 0.3)),
+    ("chest", "left arm", (-_SX, _SY, 0), "ball", None),
+    ("chest", "right arm", (_SX, _SY, 0), "ball", None),
+    ("left arm", "left hand", (-_SX, ELBOW, 0), "hinge", (0, 2.0)),
+    ("right arm", "right hand", (_SX, ELBOW, 0), "hinge", (0, 2.0)),
+    ("hips", "left leg", (-_HX, _HY, 0), "hinge", (-0.5, 1.2)),
+    ("hips", "right leg", (_HX, _HY, 0), "hinge", (-0.5, 1.2)),
+    ("left leg", "left foot", (-_HX, KNEE, 0), "hinge", (-2.0, 0)),
+    ("right leg", "right foot", (_HX, KNEE, 0), "hinge", (-2.0, 0)),
 )
 RAGDOLL_MASS = sum(p[4] for p in RAGDOLL)
 
 
 class Ragdoll(Thing):
     """world:ragdoll: a person made of parts held together by joints (a ball for the head, boxes for the chest and
-    hips, capsules for the arms and legs). Made standing on the ground, it stands still until something hits it or
-    it's pushed, then flops over; made in the air, it falls. Its x and z are its chest's, its y its lowest part's; a
-    push goes to its chest."""
+    hips, capsules for the arms and legs), dressed like the kit's person (in the shirt colour it's given, with hair
+    and a face). Made standing on the ground, it stands still until something hits it or it's pushed, then flops
+    over; made in the air, it falls. Its x and z are its chest's, its y its lowest part's; a push goes to its chest."""
     KIND = "ragdoll"
     EXAMPLE = "dummy"
 
     def __init__(self, world, x, y, z, color):
-        dress = {"skin": "#f1c9a5", "shirt": world.color(color), "pants": "#3b4252"}
-        parts = []
-        for name, shape, size, (px, py, pz), _mass, wear in RAGDOLL:
-            look = {"x": px, "y": py, "z": pz, "color": dress[wear], "rough": 0.7, "shadow": True}
-            if shape == "ball":
-                parts.append(("sphere", {"r": size, "seg": 16, **look}, wear == "shirt"))
-            elif shape == "box":
-                parts.append(("box", {"w": size[0] * 2, "h": size[1] * 2, "d": size[2] * 2, **look}, wear == "shirt"))
-            else:
-                parts.append(("capsule", {"r": size[1], "h": size[0] * 2, "seg": 10, **look}, wear == "shirt"))
-        super().__init__(world, "ragdoll", x, y, z, (0.6, 1.7, 0.3), parts)
-        head = self.parts[0][0]
-        for ex in (-0.045, 0.045):  # eyes, on the head (they turn with it)
-            world.by_node[int(world.view.obj(head, "sphere", r=0.022, x=ex, y=0.025, z=-0.115, seg=8, color="#1d2026"))] = self
+        # Each physics part is a group where its body is (physics moves it), holding the person's parts for that
+        # part of the body, where they are on the person.
+        look = {}
+        for type_, p, main in person_parts(world.color(color)):
+            look.setdefault(p["anim"][1], []).append((type_, {k: v for k, v in p.items() if k != "anim"}, main))
+        super().__init__(world, "ragdoll", x, y, z, (0.6, 1.7, 0.3),
+                         [("group", {"x": at[0], "y": at[1], "z": at[2]}, False) for _, _, _, at, _, _ in RAGDOLL])
+        for (node, _), (_, _, _, at, _, role) in zip(list(self.parts), RAGDOLL):
+            for type_, p, main in look[role]:
+                p = {**p, "x": p.get("x", 0) - at[0], "y": p.get("y", 0) - at[1], "z": p.get("z", 0) - at[2], "shadow": True}
+                child = world.view.obj(node, type_, **p)
+                world.by_node[int(child)] = self
+                self.parts.append((child, main))
         self.phys_kind = "dynamic"
         self.standing = self.y - self.ground() < 0.05  # on the ground: it stands until something knocks it over
         world.physics_on().sync(self)
