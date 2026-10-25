@@ -365,7 +365,7 @@ func step(dt):                             # dt is 0 while a screen pauses the g
 
 game:every_frame step
 ` },
-    { id: 'car_smash', name: 'Car smash (physics, 3D)', desc: 'A tgame 3D world with real physics: a car you drive with the arrow keys into towers of crates that fall and tumble (thing:physics(), :mass, :friction, :bounce), a bouncy ball, a ragdoll that flops over, crate:on_hit counting the crates knocked over, an explosion on B (world:explode) and car:flip on F.', code: `mention tgame
+    { id: 'car_smash', name: 'Car smash (physics, 3D)', desc: 'A tgame 3D world with real physics: a car you drive with the arrow keys into towers of crates that fall and tumble (thing:physics(), :weight, :friction, :bounce), a bouncy ball, a ragdoll that flops over, crate:on_hit counting the crates knocked over, an explosion on B (world:explode) and car:flip on R.', code: `mention tgame
 
 game = tgame.world("Car Smash", 960, 600)
 game:sky "day"
@@ -380,7 +380,7 @@ for spot in towers:
     for i in range(0, 5):
         crate = game:box(spot[0], i * 1.05, spot[1], 1, "wood")
         crate:physics()                    # it falls and can be pushed
-        crate:mass(1.5)                    # kg
+        crate:weight(15)                   # kg: light crates (a 1200 kg car sends them flying)
         crate:friction(0.6)
         crate:on_hit(crate_hit)
 
@@ -389,14 +389,14 @@ ball:bounce(0.7)                           # 0 doesn't bounce, 1 bounces right b
 dummy = game:ragdoll(6, 0, -16, "blue")    # a person made of parts that flops when it's hit
 
 car = game:car(0, 1, 6, "orange")
-car:drive()                                # the arrow keys or WASD drive it, and the camera follows
+car:drive()                                # no player here: the arrow keys or WASD drive it, and the camera follows
 car:engine(1.5)                            # a bit more power than normal
 car:on_hit(car_hit)
 
 hud = game:hud()
 score_label = hud:text("Knocked: 0", 100, 30)
 speed_label = hud:text("Speed: 0 km/h", 100, 64)
-hud:text("Arrows drive, F flips the car, B goes boom", 480, 580, 18)
+hud:text("Arrows drive, R flips the car, B goes boom", 480, 580, 18)
 score = 0
 
 func crate_hit(other, strength):           # what hit it, and how hard
@@ -418,7 +418,7 @@ func boom(key):
 func step(dt):
     speed_label:set "Speed: " + round(car:speed()) + " km/h"
 
-game:on_key("f", flip)
+game:on_key("r", flip)
 game:on_key("b", boom)
 game:every_frame step
 ` },
@@ -487,5 +487,51 @@ func step(dt):
         game:pop_text("You made it!", goal:spot(), "gold", 60)   # 60 pixels tall
 
 game:every_frame step
+` },
+    { id: 'tag', name: 'Tag (multiplayer, 3D)', desc: 'A tgame 3D game for several players on the same network: a main menu with Host a game (world:host) and Join a game (world:join), the other players as people in your world (world:others), who is "it" as a shared value everyone sees (world:share, world:shared), a message to the player you tag (world:send, world:on_message), and on_leave when a player goes.', code: `mention tgame
+
+world = tgame.world("Tag")
+world:sky "day"
+world:ground "grass"
+me = world:player("third person")
+me:move_to(random(-8, 8), 0, random(-8, 8))   # everyone starts somewhere else
+label = world:hud():text("", 480, 570, 22, "white")
+last_tag = 0
+
+menu = world:main_menu("Tag")
+menu:button("Host a game", host_game)
+menu:button("Join a game", join_game, "secondary")
+
+func host_game():
+    world:host("Tag")                         # a room the others on this network can find
+    world:share("it", world:my_name())        # the host starts as "it" (everyone sees shared values)
+    menu:hide()
+
+func join_game():
+    world:join()                              # finds a room on this network and goes in
+    menu:hide()
+
+func got(message, value, sender):             # a message from another player
+    if message == "tag" and value == world:my_name():
+        last_tag = world:time()               # just tagged: no tagging back for 2 seconds
+        world:shake(0.6)
+
+func left(name):                              # a player left: if they were "it", the host is now
+    if world:hosting() and world:shared("it", "") == name:
+        world:share("it", world:my_name())
+
+func step(dt):
+    it = world:shared("it", "")
+    label:set "It: " + it
+    if it == world:my_name() and world:time() - last_tag > 2:
+        for p in world:others():              # the other players' people
+            if me:distance(p) < 1.5:
+                last_tag = world:time()
+                world:send("tag", p:get("name"))
+                world:share("it", p:get("name"))
+
+world:on_message(got)
+world:on_leave(left)
+world:every_frame step
 ` },
 ];

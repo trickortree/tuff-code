@@ -3,6 +3,56 @@
 // its pictures go in renderer/whats-new/<version>/ and show at the top, with rounded corners.
 (() => {
   const NOTES = {
+    '1.3.0': {
+      images: ['1.png'],
+      notes: `### Play together
+- **Games can be multiplayer now!** Everyone on the same Wi-Fi can play in one game together: one computer hosts a room, and the others join it.
+- **Host a room:** \`world:host("Tag")\` makes a room called Tag. The top of the window says it's hosting, and the computer's address.
+- **Join a room:** \`world:join()\` finds a room on your network and goes in by itself. \`world:join("Tag")\` looks for that room, and \`world:join("192.168.1.20")\` goes straight to a friend's computer.
+- **Leave:** \`world:leave()\` leaves the room. When the host leaves, the room closes for everyone.
+
+### See each other
+- **Other players show up in your world** as people with their names over their heads. They walk where they walk, jump when they jump, and each has their own shirt color.
+- **Find them in your code:** \`world:others()\` is a list of the other players. Use \`me:distance(p)\` or \`me:touches(p)\` for a game of tag, and \`p:get("name")\` for their name.
+- **Names:** \`world:my_name("Sam")\` picks the name everyone sees. Without one, you're "Player 1", "Player 2" and so on.
+- **Who's playing:** \`world:players()\` lists everyone's names. \`world:on_join(hello)\` runs when someone comes in, and \`world:on_leave(bye)\` when they go.
+
+### Send messages
+- **Tell everyone something:** \`world:send("score", 10)\` sends a message, with a number, some text, a list or a table.
+- **Hear it:** \`world:on_message(got)\` runs \`got(message, value, sender)\` each time a message arrives, so you know what it says and who sent it.
+- **2D games too:** send where your sprite is, \`game:send("at", [me:x(), me:y()])\`, and move a sprite for your friend when it arrives.
+
+### Share values
+- **One value everyone sees:** \`world:share("coins", 5)\` sets it, and \`world:shared("coins", 0)\` reads it on every computer. The host keeps it, so players who join late see it too.
+- **Only one host:** \`world:hosting()\` is true on the computer that hosts, for things only one game should do, like starting the timer or placing the coins.
+
+### Try it on your own
+- **A second player on one computer:** in a game that hosts or joins, a two-people button shows next to Run. It runs a second player, another copy of your game, so you can host in one window and join in the other. The Run panel marks each line P1 or P2.
+
+### Get in the car
+- **Press F to get in:** walk up to a car and "F: Get in" shows. F gets in and you drive with WASD or the arrow keys, and F again gets out beside the door. Nothing drives off by itself when the game starts.
+- **Start in it:** \`car:drive()\` starts the game with the player in the car. \`car:on_enter(got_in)\` and \`car:on_exit(got_out)\` run when you get in and out.
+
+### Things have weight
+- **Everything weighs what it is:** a crate 25 kg, a person 70, a rock 300, a car 1200. Walk into a crate and it slides away; walk into a big rock and it doesn't budge.
+- **Change it:** \`crate:weight(80)\`, and \`crate:weight()\` tells you. A heavy thing moves less when it's pushed and hits harder.
+- **Physics on anything:** cones, planes, people, signs, every model, and in 2D boxes, circles, lines, text and pictures. Tuff Engine has a Physics section for all of them.
+
+### Signs and people
+- **Real words on signs:** \`sign:label("Shop")\` writes on the sign's board, on both sides, instead of floating over it.
+- **Dress people up:** \`npc:shirt("red")\`, \`npc:hair("curly", "blonde")\`, \`npc:pants\`, \`npc:skin\`, \`npc:shoes\` and \`npc:sleeves("short")\`. Ragdolls and the player in third person too.
+
+### Tuff Engine
+- **A bigger Add panel** where every name fits (drag its edge to make it wider), and **real pictures** of everything you can add, drawn by the game engine.
+- **Clothes and hair** for people and ragdolls, **Weight** for physics things, and **Sign text** for signs, right in the Inspector.
+
+### Good to know
+- The first time a computer hosts, Windows may ask if TuffCode can use the network. Click **Allow**.
+- **Weights changed:** a 1 m box weighed 1 kg in 1.2.0 and weighs 50 kg now. Boxes and balls move just as before, but if your game sets \`:mass\`, use about 50 times the number.
+- A game that uses F for itself (\`world:on_key("f", ...)\`) keeps it, and gets in cars with \`car:drive()\`.
+- Games you build with Build exe can host and join too, so you can share your game and play it together.
+- Claude, Codex, Antigravity and Pumice 1 know all of it, and the checker catches mistakes like a message that isn't text.`,
+    },
     '1.2.0': {
       images: ['1.png'],
       notes: `### Real physics in games

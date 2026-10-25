@@ -1,0 +1,26 @@
+mention tgame
+
+# Multiplayer in 2D, a joining game: goes straight to an address, shares two values before it's in (the room's
+# level wins, its lives fill in what the room lacks), sends where its circle is, and hears the host leave.
+game = tgame.window("Net 2D", 480, 320)
+game:join("127.0.0.1")
+game:share("level", 1)
+game:share("lives", 5)
+me = game:circle(240, 160, 16, "blue")
+
+func got(message, value, sender):
+    say "got " + message + " " + text(value) + " from " + sender
+
+func left(name):
+    say "left " + name
+
+game:on_message(got)
+game:on_leave(left)
+
+func move():
+    me:move_to(120, 80)
+    game:send("at", [me:x(), me:y()])
+
+func show():
+    say "level " + text(game:shared("level")) + " lives " + text(game:shared("lives"))
+    say "connected " + text(game:connected())

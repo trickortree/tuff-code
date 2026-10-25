@@ -1,0 +1,28 @@
+mention tgame
+
+# Multiplayer, a joining game: finds the room on this computer, sends a hit (the host adds it to the shared score),
+# hears the host's welcome, and sees the host's player as a person that walks.
+world = tgame.world("Net Test", 640, 400)
+world:sky "day"
+world:ground "grass"
+me = world:player("third person")
+me:move_to(3, 0, 2)
+world:my_name("Sam")
+world:join()
+
+func joined(name):
+    say "joined " + name
+
+func got(message, value, sender):
+    say "got " + message + " " + text(value) + " from " + sender
+
+world:on_join(joined)
+world:on_message(got)
+
+func hit():
+    world:send("hit", 2)
+
+func show():
+    say "score " + text(world:shared("score", 0))
+    say "players " + text(world:players())
+    say "connected " + text(world:connected())

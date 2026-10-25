@@ -49,6 +49,8 @@
 //            'stats'         { objs, mode, sceneBg, cameraNodesVisible, things, sel, camMode, cam, outlines, marker,
 //                              load, b, scene, sel2d }
 //            'pos', i        thing i's live position: 2D { x, y }, 3D { x, y, z } (follows a drag in progress)
+//            'box', i        3D: thing i's box in the world as drawn now { min: [x, y, z], max: [x, y, z] }, or null
+//                            (nothing drawn yet: a model file still loading)
 //            'fetch', url    { status, type, size } of a tuffview://app/ address (tests of what the scheme serves)
 //            'height', x, z  the land's height there, in this page's copy (follows the brush)
 //            'spot', x, z    where that point of the land is on screen, in this page's CSS pixels: [x, y]
@@ -1099,6 +1101,16 @@
       const z = +m.z || 0;
       if (m.what === 'height') reply(landAt(x, z));
       else send([['k', L.sceneId, 'project', [x, landAt(x, z), z], m.tag]]);
+      return;
+    }
+    if (m.what === 'box') {  // 3D: thing i's box in the world as it's drawn now (a model file's once it has loaded)
+      const g3 = three();
+      const gid = groupOf(m.i);
+      const g = gid && objs().get(gid);
+      if (!g3 || !g || !g.obj) { reply(null, `no thing ${m.i}`); return; }
+      g.obj.updateWorldMatrix(true, true);
+      const b = new g3.T.Box3().setFromObject(g.obj);
+      reply(b.isEmpty() ? null : { min: b.min.toArray(), max: b.max.toArray() });
       return;
     }
     if (m.what === 'screen' || m.what === 'pos') {

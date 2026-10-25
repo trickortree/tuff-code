@@ -11,6 +11,8 @@
     accent: null,
     running: false,
     runId: 0,
+    running2: false, // "Run a second player": a second copy of the program
+    run2Id: 0,
     lastRunFile: null,
     fontSize: 14,
   };
@@ -622,6 +624,8 @@
         syncDirty(tab);
         autosave();
         window.monaco.editor.setModelMarkers(model, 'tuff', []);
+        clearTimeout(secondTimer);
+        secondTimer = setTimeout(updateSecond, 300); // the file may start or stop using game:host / game:join
       });
       state.tabs.push(t);
     }
@@ -895,6 +899,7 @@
     $('#sb-eol').textContent = s && s.model.getEOL() === '\n' ? 'LF' : 'CRLF';
     const runFile = runTarget();
     $('#runconfig-name').textContent = runFile ? basename(runFile) : 'Current File';
+    updateSecond();
     document.title = s ? `${basename(state.root)} – ${basename(s.path)} – TuffCode` : `${basename(state.root || '')} – TuffCode`;
   }
 
@@ -1078,10 +1083,32 @@
     s.textContent = on ? `Running ${basename(state.lastRunFile)}` : '';
   }
 
-  let oscBuf = '';
+  // "Run a second player": the button beside Run plays and stops the second copy, the same way.
+  function setRunning2(on) {
+    state.running2 = on;
+    $('#btn-run2').classList.toggle('running', on);
+    $('#btn-run2').title = on ? 'Stop the second player' : SECOND_TITLE;
+    updateSecond();
+  }
+
+  // Shown for a file that hosts or joins a multiplayer room, and while a second player runs (so it can be stopped).
+  const SECOND_TITLE = 'Run a second player: another copy of this game, to host in one and join in the other';
+  const MULTIPLAYER = /:(host|join)\s*[("]/;
+  let secondTimer = null;
+  function updateSecond() {
+    const file = runTarget();
+    const t = file && state.tabs.find((x) => x.path === file);
+    $('#btn-run2').classList.toggle('hidden', !state.running2 && !(t && MULTIPLAYER.test(t.model.getValue())));
+  }
+
   let runInput = null;
-  const runLines = new Map();
   const decode64 = (s) => new TextDecoder().decode(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)));
+  // The two copies of the program in the Run panel: the run (1) and the second player (2). Each has its own say
+  // lines and half-read escape codes. Once a second player runs, the panel gets .two and every line a P1 or P2 chip
+  // (data-who, drawn by CSS, so runOutputText() never sees it); the second player's spans are .p2.
+  const copies = { 1: { who: 1, osc: '', lines: new Map() }, 2: { who: 2, osc: '', lines: new Map() } };
+  const resetCopy = (c) => { c.osc = ''; c.lines.clear(); };
+  const saidBy = (node, c) => !!node.classList?.contains('p2') === (c.who === 2);
 
   function appendNode(node) {
     const out = $('#run-output');
@@ -1091,18 +1118,36 @@
     return node;
   }
 
-  function appendOut(text, cls) {
+  function appendOut(text, cls, c = copies[1]) {
     const span = document.createElement('span');
     if (cls) span.className = cls;
+    if (c.who === 2) span.classList.add('p2');
     span.textContent = text;
+    if (text) {
+      // A line the other copy left half-written ends here, so the two never share a line.
+      const prev = runInput ? runInput.previousSibling : $('#run-output').lastChild;
+      let fresh = !prev || prev.nodeName === 'BR' || prev.textContent.endsWith('\n');
+      if (!fresh && !saidBy(prev, c)) {
+        appendNode(document.createElement('br'));
+        fresh = true;
+      }
+      if (fresh && text[0] !== '\n') span.dataset.who = c.who;
+    }
     return appendNode(span);
   }
 
-  function handleOsc(kind, args) {
+  // Plain output, a span per line, so each line gets its chip.
+  function appendLines(text, cls, c) {
+    for (const piece of text.split(/(?<=\n)/)) appendOut(piece, cls, c);
+  }
+
+  function handleOsc(kind, args, c) {
     if (kind === 'say') {
-      // say;<id>;<b64>[;<style>]: "notice" is the yellow line a tgame program starts with.
-      const span = appendOut(decode64(args[1] || ''), args[2] === 'notice' ? 'tline notice' : 'tline');
-      runLines.set(args[0], span);
+      // say;<id>;<b64>[;<style>]: "notice" is the yellow line a tgame program starts with. The second player
+      // leaves it out: the first copy has said it.
+      if (c.who === 2 && args[2] === 'notice') return 'skip';
+      const span = appendOut(decode64(args[1] || ''), args[2] === 'notice' ? 'tline notice' : 'tline', c);
+      c.lines.set(args[0], span);
       // tgame's notice gets a button that opens the game in Tuff Engine.
       if (args[2] === 'notice' && /^Tuff Engine/.test(span.textContent)) {
         const file = state.lastRunFile;
@@ -1114,7 +1159,7 @@
         span.append(b);
       }
     } else if (kind === 'rewrite') {
-      const span = runLines.get(args[0]);
+      const span = c.lines.get(args[0]);
       if (!span) return;
       span.textContent = decode64(args[1] || '');
       const now = performance.now();
@@ -1128,13 +1173,14 @@
     } else if (kind === 'error') {
       markError(state.lastRunFile, +args[0], +args[1], decode64(args[2] || ''));
     } else if (kind === 'clear') {
-      clearOutput(args[0] === 'all' ? Infinity : +args[0]);
+      clearOutput(args[0] === 'all' ? Infinity : +args[0], c);
     }
   }
 
-  function clearOutput(count) {
+  // A copy's clear takes away its own lines, not the other copy's.
+  function clearOutput(count, c = copies[1]) {
     const out = $('#run-output');
-    const nodes = [...out.childNodes].filter((n) => n !== runInput);
+    const nodes = [...out.childNodes].filter((n) => n !== runInput && n.nodeName !== 'BR' && saidBy(n, c));
     const text = nodes.map((n) => n.textContent).join('');
     let keep = 0;
     if (count !== Infinity) {
@@ -1157,29 +1203,30 @@
     }
   }
 
-  function handleStdout(chunk) {
-    const data = oscBuf + chunk;
-    oscBuf = '';
+  function handleStdout(chunk, c = copies[1]) {
+    const data = c.osc + chunk;
+    c.osc = '';
     const re = /\x1b\]tuff;(\w+);([^\x07]*)\x07/g;
     let last = 0;
     let m;
     while ((m = re.exec(data))) {
-      if (m.index > last) appendOut(data.slice(last, m.index));
-      handleOsc(m[1], m[2].split(';'));
+      if (m.index > last) appendLines(data.slice(last, m.index), '', c);
+      const skipped = handleOsc(m[1], m[2].split(';'), c) === 'skip';
       last = re.lastIndex;
+      if (skipped && data[last] === '\n') last += 1; // the end of the line it left out
     }
     let rest = data.slice(last);
     const partial = rest.indexOf('\x1b');
     if (partial !== -1) {
-      oscBuf = rest.slice(partial);
+      c.osc = rest.slice(partial);
       rest = rest.slice(0, partial);
     }
-    if (rest) appendOut(rest);
-    if (runInput && rest && !rest.endsWith('\n')) runInput.focus();
+    if (rest) appendLines(rest, '', c);
+    if (c.who === 1 && runInput && rest && !rest.endsWith('\n')) runInput.focus();
   }
 
-  function handleStderr(text) {
-    const span = appendOut(text, 'err');
+  function handleStderr(text, c = copies[1]) {
+    const span = appendOut(text, 'err', c);
     const m = text.match(/Tuff error on line (\d+)/);
     if (m && state.lastRunFile) {
       const file = state.lastRunFile;
@@ -1241,21 +1288,28 @@
     $('#run-output').appendChild(runInput);
   }
 
+  // What the program said (the first copy: Learn checks it).
   function runOutputText() {
     return [...$('#run-output').children]
-      .filter((el) => el.tagName === 'SPAN' && !el.classList.contains('cmd') && !el.classList.contains('done'))
+      .filter((el) => el.tagName === 'SPAN' && !['cmd', 'done', 'p2'].some((k) => el.classList.contains(k)))
       .map((el) => el.textContent)
       .join('');
   }
 
+  // A new run starts over with one copy: main.js ends the second player too.
   function startRun(file) {
     state.lastRunFile = file;
     state.runId += 1;
+    if (state.running2) {
+      state.run2Id += 1; // what it says on its way out isn't shown
+      setRunning2(false);
+    }
     showBottom(true);
-    oscBuf = '';
-    runLines.clear();
+    resetCopy(copies[1]);
+    resetCopy(copies[2]);
     runInput = null;
     $('#run-output').innerHTML = '';
+    $('#run-output').classList.remove('two');
     setBottomTab('run');
     createRunInput();
     clearMarkers(file);
@@ -1274,6 +1328,28 @@
     }
     await saveAll();
     startRun(file);
+  }
+
+  // "Run a second player": another copy of the same game beside the first, to try a multiplayer game alone (host in
+  // one window, join in the other). It runs the file on screen; if that isn't running yet, Run starts it first.
+  // While the second player runs, the button stops it (and only it).
+  async function runSecond() {
+    if (state.running2) return api.run2.stop();
+    const file = runTarget();
+    if (!file) return toast('Open a .tuf file to run it.');
+    if (!state.running || state.lastRunFile !== file) {
+      await runCurrent();
+      if (!state.running) return;
+    } else {
+      await saveAll();
+    }
+    state.run2Id += 1;
+    resetCopy(copies[2]);
+    showBottom(true);
+    setBottomTab('run');
+    $('#run-output').classList.add('two');
+    setRunning2(true);
+    api.run2.start(file, state.run2Id);
   }
 
   // ---------- auto code sort ----------
@@ -1325,9 +1401,22 @@
     const output = runOutputText();
     runInput?.remove();
     runInput = null;
-    appendOut(`\nProcess finished with exit code ${code}\n`, 'done' + (code ? ' bad' : ''));
+    appendOut('\n', 'done');
+    appendOut(`Process finished with exit code ${code}\n`, 'done' + (code ? ' bad' : ''));
     setRunning(false);
     window.dispatchEvent(new CustomEvent('tuff:run-finished', { detail: { file: state.lastRunFile, code, output } }));
+  });
+  api.run2.onData(({ id, stream, text }) => {
+    if (id !== state.run2Id) return;
+    if (stream === 'stdout') handleStdout(text, copies[2]);
+    else if (stream === 'stderr') handleStderr(text, copies[2]);
+    else appendOut(text, 'cmd', copies[2]);
+  });
+  api.run2.onExit(({ id, code }) => {
+    if (id !== state.run2Id) return;
+    appendOut('\n', 'done', copies[2]);
+    appendOut(`The second player finished with exit code ${code}\n`, 'done' + (code ? ' bad' : ''), copies[2]);
+    setRunning2(false);
   });
   $('#run-output').addEventListener('mouseup', () => {
     if (runInput && !getSelection().toString()) runInput.focus();
@@ -2006,6 +2095,7 @@
   api.win.onBlur(() => saveAll());
 
   $('#btn-run').onclick = () => (state.running ? api.run.stop() : runCurrent());
+  $('#btn-run2').onclick = runSecond;
   $('#run-rerun').onclick = rerun;
   $('#run-stop2').onclick = () => api.run.stop();
   $('#run-clear').onclick = () => {
@@ -2054,6 +2144,8 @@
         ? { label: 'Stop', sc: 'Ctrl+F2', run: () => api.run.stop() }
         : { label: cur ? `Run '${basename(cur)}'` : 'Run Current File', sc: 'Shift+F10', run: runCurrent },
       { label: 'Rerun', sc: 'Ctrl+F5', run: rerun },
+      ...(!$('#btn-run2').classList.contains('hidden')
+        ? [{ label: state.running2 ? 'Stop the Second Player' : 'Run a Second Player', run: runSecond }] : []),
       'sep',
       { label: `Build ${BUILD_WORD}…`, sc: 'Ctrl+F9', run: () => openBuildDialog() },
       'sep',
@@ -2153,7 +2245,7 @@
     // Tuff Engine
     openEngine,
     engineVisible: () => engine.visible,
-    scene: (file, source) => api.engine.scene(file, source),
+    scene: (file, source, tag) => api.engine.scene(file, source, tag),
     stopRun: () => api.run.stop(),
     isRunning: () => !!state.running,
     runCommand: (id) => commands[id]?.run(),

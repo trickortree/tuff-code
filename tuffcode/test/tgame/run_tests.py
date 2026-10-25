@@ -13,6 +13,7 @@ import io
 import json
 import math
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -1184,6 +1185,136 @@ def t_physics_car(c):
             (p0, p1, car))
     c.check(abs((p1[3] - p0[3] + 180) % 360 - 180) < 1,
             f"moving the mouse while driving doesn't turn the player: it gets out facing the way it did ({p0[3]} -> {p1[3]})", (p0, p1))
+
+
+def car_reports(r):
+    """The car_enter game's reports: [{"car": [x, y, z], "player": [x, y, z], "in": bool, "driven": bool, "ins": n,
+    "outs": n}, ...]."""
+    out = []
+    for line in r.lines:
+        m = re.match(r"car \[(.*?)\] player \[(.*?)\] in (\w+) driven (\w+) ins (\d+) outs (\d+)", line)
+        if m:
+            out.append({"car": [float(v) for v in m[1].split(",")], "player": [float(v) for v in m[2].split(",")],
+                        "in": m[3] == "true", "driven": m[4] == "true", "ins": int(m[5]), "outs": int(m[6])})
+    return out
+
+
+def t_car_enter(c):
+    """Getting into a car with F (1.3.0): nothing happens far from it; next to it the hint says "F: Get in" and F gets
+    in (the player's figure goes, car:on_enter runs, player:in_car() and car:driven() say so); W drives it with the
+    player in it (player:spot() goes with the car); and F gets out beside its door (car:on_exit runs, the figure's
+    back, and the car stays parked)."""
+    r = play("car_enter", game("car_enter.tuf"), [
+        {"at": 0.6, "dump": "ce_far.json"}, {"at": 0.65, "key": "f"}, {"at": 0.9, "call": "report"},
+        {"at": 1.0, "tuff": "player:move_to(-2.3, 0, 0)"}, {"at": 1.3, "dump": "ce_near.json"},
+        {"at": 1.35, "key": "f"}, {"at": 1.6, "call": "report"}, {"at": 1.65, "dump": "ce_in.json"},
+        {"at": 1.7, "hold": "w", "for": 2.0}, {"at": 3.75, "hold": "space", "for": 0.6},
+        {"at": 3.9, "call": "report"}, {"at": 3.95, "shot": "car_enter_driving.png"},
+        {"at": 4.5, "key": "f"}, {"at": 4.8, "call": "report"}, {"at": 4.85, "dump": "ce_out.json"},
+        {"at": 4.9, "shot": "car_enter_out.png"}, {"at": 6.0, "call": "report"}, {"at": 6.1, "close": True}])
+    clean_exit(c, r)
+    reps = car_reports(r)
+    far, near, inside, out = (r.dumps.get(n, {}) for n in ("ce_far.json", "ce_near.json", "ce_in.json", "ce_out.json"))
+    hint = lambda d: (d.get("interact") or {}).get("hint")
+    c.check(len(reps) == 5 and not reps[0]["in"] and reps[0]["ins"] == 0 and hint(far) is None,
+            "far from the car there's no hint, and F does nothing", (reps[:1], hint(far)))
+    c.check(hint(near) == "F: Get in", 'next to its door the hint says "F: Get in"', hint(near))
+    c.check(len(reps) > 1 and reps[1]["in"] and reps[1]["driven"] and reps[1]["ins"] == 1 and inside.get("player_shown") is False
+            and hint(inside) == "F: Get out",
+            "F gets in: player:in_car() and car:driven() are true, car:on_enter ran, the figure is hidden, and the hint says F: Get out",
+            (reps[1:2], inside.get("player_shown"), hint(inside)))
+    c.check(len(reps) > 2 and reps[2]["car"][2] < -6 and math.dist(reps[2]["car"][::2], reps[2]["player"][::2]) < 0.2,
+            "W drives it (the car's way forward), and player:spot() goes with the car", reps[2:3])
+    c.check(len(reps) > 3 and not reps[3]["in"] and not reps[3]["driven"] and reps[3]["outs"] == 1 and out.get("player_shown") is True,
+            "F again gets out: car:on_exit ran, player:in_car() is false, and the figure is back", (reps[3:4], out.get("player_shown")))
+    gap = math.dist(reps[3]["car"][::2], reps[3]["player"][::2]) if len(reps) > 3 else None
+    c.check(gap is not None and 1.5 < gap < 3.2, f"the player gets out beside the car ({gap and round(gap, 2)} m from its middle)", reps[3:4])
+    c.check(len(reps) > 4 and math.dist(reps[3]["car"], reps[4]["car"]) < 0.3, "the car stays parked where it was left", reps[3:])
+    shot = r.shots.get("car_enter_driving.png")
+    c.check(shot and color_share(shot, (53, 116, 240), 60, (0.3, 0.35, 0.7, 0.8)) > 0.02, "the camera follows the blue car while it drives", shot)
+
+    # A game that uses F itself keeps it: its own F gets in and out with car:drive (tgame's F doesn't undo it in the
+    # same frame), and car:on_enter runs for car:drive() too.
+    r = play("car_own_f", game("car_own_f.tuf"), [
+        {"at": 0.6, "key": "f"}, {"at": 0.9, "call": "report"}, {"at": 0.95, "dump": "cf_in.json"},
+        {"at": 1.2, "key": "f"}, {"at": 1.5, "call": "report"}, {"at": 1.55, "dump": "cf_out.json"}, {"at": 1.8, "close": True}])
+    clean_exit(c, r)
+    own = [line for line in r.lines if line.startswith("own in")]
+    c.check(own == ["own in true ins 1", "own in false ins 1"], "the game's own F gets in and out (and on_enter ran for car:drive())", own)
+    c.check((r.dumps.get("cf_in.json", {}).get("interact") or {}).get("driving") is True, "it's driving after the game's own F", r.dumps.get("cf_in.json", {}).get("interact"))
+
+
+def t_weight(c):
+    """Things weigh what they are (1.3.0): thing:weight() gives it (and sets it), the same push sends a light box off and
+    hardly moves a heavy one, and the player shoves a crate out of its way but can't move a big stone box."""
+    r = play("weight", game("weight.tuf"), [
+        {"at": 0.8, "call": "report"}, {"at": 0.85, "call": "kick"}, {"at": 2.3, "call": "report"},
+        {"at": 2.4, "hold": "w", "for": 1.4}, {"at": 4.0, "call": "report"},
+        {"at": 4.1, "call": "to_stone"}, {"at": 4.4, "hold": "w", "for": 1.4}, {"at": 6.0, "call": "report"},
+        {"at": 6.2, "close": True}])
+    clean_exit(c, r)
+    weights = said(r, "weights")
+    c.check(weights == ["weights", "6.25", "200", "25", "400", "1200", "70", "70"],
+            "a 0.5 m box weighs 6.25 kg (50 kg a cubic metre), one set to 200 is 200, a crate 25, a 2 m box 400, a car 1200, a ragdoll and the player 70",
+            weights)
+    spots = []
+    for line in r.lines:
+        m = re.match(r"light \[(.*?)\] heavy \[(.*?)\] crate \[(.*?)\] stone \[(.*?)\] player \[(.*?)\]", line)
+        if m:
+            spots.append([[float(v) for v in m[i].split(",")] for i in range(1, 6)])
+    c.check(len(spots) == 4, "four reports", r.lines[-6:])
+    if len(spots) == 4:
+        moved = lambda i, a, b: math.dist(spots[a][i], spots[b][i])
+        c.check(moved(0, 0, 1) > 3 and moved(1, 0, 1) < 0.4,
+                f"the same push sends the light box {moved(0, 0, 1):.2f} m and the 200 kg one {moved(1, 0, 1):.2f} m", spots[:2])
+        c.check(moved(2, 1, 2) > 1.5, f"walking into the crate shoves it {moved(2, 1, 2):.2f} m", (spots[1][2], spots[2][2]))
+        c.check(moved(3, 2, 3) < 0.6 and spots[3][4][2] > -1.8,
+                f"the 400 kg stone box hardly moves ({moved(3, 2, 3):.2f} m): it stops the player", (spots[2][3], spots[3][3], spots[3][4]))
+
+
+def t_sign_text(c):
+    """A sign's words are written on its board (1.3.0), on both sides, as big as fit (a long one wraps onto more
+    lines): a 'writing' in the page, no label over it (other things' labels still float), and new words redraw it."""
+    page = ("const live = [...tv.objs.values()].filter((n) => n.obj && !n.dead);"
+            "tv.emit('tg-autopilot', {message: 'writing ' + JSON.stringify(live.filter((n) => n.type === 'writing').map((n) => n.p.text))"
+            " + ' labels ' + live.filter((n) => n.type === 'label').length})")
+    r = play("sign_text", game("sign_text.tuf"), [
+        {"at": 0.7, "js": page}, {"at": 0.8, "shot": "sign_text.png"}, {"at": 0.9, "call": "change"}, {"at": 1.1, "js": page},
+        {"at": 1.2, "call": "behind"}, {"at": 1.45, "shot": "sign_text_back.png"}, {"at": 1.7, "close": True}])
+    clean_exit(c, r)
+    pages = [line[len("[autopilot] "):] for line in r.lines if line.startswith("[autopilot] writing ")]
+    c.check(len(pages) == 2 and pages[0] == 'writing ["SHOP","Welcome to Tuff Town, population 3","Open"] labels 1',
+            "each sign's words are written on its board, and only the crate's label floats", pages[:1])
+    c.check(len(pages) == 2 and pages[1].startswith('writing ["SHOP","Welcome to Tuff Town, population 3","Closed"]'),
+            "sign:label with new words writes them on the board", pages[1:])
+    for name, side in (("sign_text.png", "front"), ("sign_text_back.png", "back")):
+        shot = r.shots.get(name)
+        dark = shot and color_share(shot, (58, 36, 20), 34, (0.2, 0.25, 0.8, 0.55))
+        c.check(shot and dark > 0.01, f"the letters show on the boards from the {side} ({dark and round(dark, 3)} of it)", shot)
+
+
+def t_people_style(c):
+    """People dressed in code (1.3.0): a person, a ragdoll and the player in third person get a shirt, trousers, skin,
+    hair (a style and a colour), shoes and sleeves, and change them while the game runs; only people have clothes."""
+    r = play("people_style", game("people_style.tuf"), [
+        {"at": 0.7, "shot": "people_style.png"}, {"at": 0.8, "dump": "ps_before.json"}, {"at": 0.85, "call": "restyle"},
+        {"at": 1.2, "shot": "people_style_after.png"}, {"at": 1.25, "dump": "ps_after.json"},
+        {"at": 1.3, "tuff": 'world:box(0, 0, 9, 1, "red"):shirt("blue")'}, {"at": 1.7, "close": True}])
+    first, after = r.shots.get("people_style.png"), r.shots.get("people_style_after.png")
+    # Their shirts, behind the player, in the light they're in: red, blue, then purple and yellow.
+    left, right = (0.43, 0.42, 0.48, 0.5), (0.52, 0.42, 0.565, 0.5)
+    red, blue, purple, yellow = (150, 50, 50), (35, 75, 150), (90, 60, 155), (140, 100, 12)
+    c.check(first and color_share(first, red, 45, left, 1) > 0.012 and color_share(first, blue, 45, right, 1) > 0.012,
+            "the person wears its red shirt and the ragdoll its blue one", first)
+    c.check(after and color_share(after, purple, 45, left, 1) > 0.05 and color_share(after, red, 45, left, 1) < 0.03
+            and color_share(after, yellow, 45, right, 1) > 0.012,
+            "restyled while it runs: the person's shirt is purple now, and the ragdoll's yellow", after)
+    before_n, after_n = [len((r.dumps.get(n, {}).get("page") or {}).get("objs") or []) or r.dumps.get(n, {}).get("view_nodes")
+                         for n in ("ps_before.json", "ps_after.json")]
+    c.check(before_n and after_n and abs(before_n - after_n) < 12, f"the old clothes go when new ones come ({before_n} -> {after_n} objects)",
+            (before_n, after_n))
+    c.check(any("Only people have clothes and hair" in line for line in r.lines + r.err.splitlines()),
+            "a box's shirt says only people have clothes", r.lines[-3:])
 
 
 def t_physics_2d(c):
@@ -2779,7 +2910,8 @@ GOOD = ["snake.tuf", "breakout.tuf", "snake3d.tuf", "axe_sim.tuf", "features_2d.
         "fx_slow_mo.tuf", "fx_shake_pop.tuf", "fx_weather.tuf", "fx_day.tuf", "fx_2d.tuf",
         "ix_grab.tuf", "ix_talk.tuf", "ix_door.tuf", "ix_note.tuf",
         "level_pads.tuf", "level_lift.tuf", "level_lift_physics.tuf",
-        "menu_2d.tuf", "menu_3d.tuf", "menu_start.tuf"]
+        "menu_2d.tuf", "menu_3d.tuf", "menu_start.tuf",
+        "net_host.tuf", "net_join.tuf", "net_host_2d.tuf", "net_join_2d.tuf", "net_room.tuf"]
 BAD = [
     ('world = tgame.world("x")\nd = world:door(0, 0, 0)\nd:shut()\n', "A door doesn't have :shut. Use :close instead."),
     ('world = tgame.world("x")\nworld:door(0, 0, 0, "purpel")\n', "'purpel' isn't a color tgame knows."),
@@ -3123,6 +3255,22 @@ BAD = [
     ('w = tgame.world("x")\nlift = w:box(0, 2, 0, 4)\nlift:path([[0, 2, 0]], 3, "loop", 4)\n',
      'lift:path got the wrong number of inputs (4).'),
     ('w = tgame.world("x")\nk = w:spawn("kee")\n', 'tgame doesn\'t have a "kee" to spawn.'),
+    # Multiplayer: names, messages and addresses as text, what :send and :share carry, the events' functions.
+    ('w = tgame.world("x")\nw:host(5)\n', 'w:host needs the room\'s name as text, like w:host("Tag"), not a number.'),
+    ('w = tgame.world("x")\nw:join("Tag", 2)\n', "w:join got the wrong number of inputs (2). It takes nothing (the first room it finds)"),
+    ('game = tgame.window("x")\nscore = 3\ngame:send(score)\n', 'game:send needs the message as text, like game:send("score", 10), not a number.'),
+    ('game = tgame.window("x")\ngame:send("me", game)\n', "game:send can send numbers, text, true/false, lists and tables, not a game."),
+    ('w = tgame.world("x")\nw:share("coins")\n', "w:share got the wrong number of inputs (1). It takes a name, then its value"),
+    ('w = tgame.world("x")\nb = w:box(0, 0, 0)\nw:share("box", b)\n', "w:share can share numbers, text, true/false, lists and tables, not an object."),
+    ('w = tgame.world("x")\nsay w:shared()\n', "w:shared got the wrong number of inputs (0)."),
+    ('w = tgame.world("x")\nw:my_name("")\n', 'w:my_name needs the name, like w:my_name("Sam")'),
+    ('w = tgame.world("x")\nfunc got(a, b, c, d):\n    say a\nw:on_message(got)\n', "got() needs 4 inputs, but w:on_message gives it 3 inputs"),
+    ('w = tgame.world("x")\nfunc hi(name):\n    say name\nw:on_join(hi())\n', "Pass the function's name without brackets: hi, not hi()."),
+    ('game = tgame.window("x")\nfor p in game:others():\n    say p\n', "The other players are people in a 3D world."),
+    ('w = tgame.world("x")\nw:connect()\n', "A world doesn't have :connect. Use :join instead."),
+    ('w = tgame.world("x")\nif w:is_host():\n    say 1\n', "A world doesn't have :is_host. Use :hosting instead."),
+    ('game = tgame.window("x")\ngame:broadcast("hi")\n', "A game doesn't have :broadcast. Use :send instead."),
+    ('game = tgame.window("x")\ngame:on_receive(got)\n', "A game doesn't have :on_receive. Use :on_message instead."),
 ]
 
 
@@ -3254,6 +3402,17 @@ GOOD_SNIPPETS = [
     'world:on_key("any", key)\nwhile world:open():\n    world:frame()\n',
     'game = tgame.window("Star Hopper", 800, 500)\ngame:splash("Made by me", 3)\nmenu = game:main_menu()\nmenu:button("Play", go)\n'
     'func go():\n    menu:hide()\ngame:every_frame step\nfunc step(dt):\n    if game:paused():\n        say "menu"\n',
+    # Multiplayer: host or join (by name, by address, or any room), every event with fewer inputs than it gives, values
+    # of any kind sent and shared, the other players' people as objects, the names a list.
+    'w = tgame.world("Tag")\nme = w:player("third person")\nw:my_name("Sam")\nif w:hosting():\n    w:join()\nelse:\n    w:host()\n'
+    'w:join("Tag")\nw:join("192.168.1.20")\nw:host("Sam\'s room")\n'
+    'func got(message, value):\n    say message\nfunc hi(name):\n    w:send("hello", [1, "two", true])\nfunc bye():\n    say "bye"\n'
+    'w:on_message(got)\nw:on_join(hi)\nw:on_leave(bye)\nw:share("coins", w:shared("coins", 0) + 1)\nw:send("ping")\n'
+    'for p in w:others():\n    if me:touches(p):\n        say p:get("name") + " is it"\n    p:animate("wave")\n'
+    'say len(w:players()) + " playing"\nif w:connected():\n    w:leave()\nname = w:my_name()\n',
+    'game = tgame.window("Dots")\ngame:join()\nme = game:circle(100, 100, 10, "blue")\nfriend = game:circle(-50, -50, 10, "red")\n'
+    'func got(message, value, sender):\n    if message == "at":\n        friend:move_to(value[0], value[1])\n'
+    'game:on_message(got)\nfunc step(dt):\n    game:send("at", [me:x(), me:y()])\ngame:every_frame(step)\n',
 ]
 
 
@@ -3801,6 +3960,181 @@ def t_hud_checker(c):
         c.check(run.code == 1 and want in run.err, f"running it says: {want}", run.err[-400:])
 
 
+# ---------------------------------------------------------------- multiplayer (game:host, game:join...)
+
+# The tests' rooms stay on this computer (127.0.0.1: no firewall questions), on ports of their own, away from a real
+# game someone might be hosting meanwhile.
+os.environ.setdefault("TUFF_NET_LOCAL", "1")
+os.environ.setdefault("TUFF_NET_PORT", "47900")
+
+
+def start_play(name, program, steps, seed=1, env=None):
+    """play()'s start, without waiting for the game: games that play together start one after another, then
+    finish_play waits for each."""
+    os.makedirs(OUT, exist_ok=True)
+    plan = {"on_top": True, "out": OUT, "seed": seed, "steps": steps,
+            "timeout": max([s.get("at", 0) for s in steps] + [0]) + 15}
+    plan_file = os.path.join(OUT, f"{name}.plan.json")
+    with open(plan_file, "w", encoding="utf-8") as f:
+        json.dump(plan, f, indent=1)
+    for s in steps:
+        for key in ("dump", "shot"):
+            if key in s and os.path.exists(os.path.join(OUT, s[key])):
+                os.remove(os.path.join(OUT, s[key]))
+    full_env = {**os.environ, "TUFF_TGAME_AUTOPILOT": plan_file, "PYTHONIOENCODING": "utf-8", **(env or {})}
+    full_env.pop("TUFF_IDE", None)
+    p = subprocess.Popen(tuff_cmd() + [program], cwd=os.path.dirname(program), env=full_env, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
+    return p, steps, time.perf_counter()
+
+
+def finish_play(started, timeout=60):
+    p, steps, t0 = started
+    try:
+        out, err = p.communicate(timeout=max(1, timeout - (time.perf_counter() - t0)))
+        code = p.returncode
+    except subprocess.TimeoutExpired:
+        p.kill()
+        out, _ = p.communicate()
+        code, err = "timeout", "timed out"
+    dumps, shots = {}, {}
+    for s in steps:
+        if "dump" in s:
+            try:
+                with open(os.path.join(OUT, s["dump"]), encoding="utf-8") as f:
+                    dumps[s["dump"]] = json.load(f)
+            except (OSError, ValueError):
+                dumps[s["dump"]] = {}
+        if "shot" in s and os.path.exists(os.path.join(OUT, s["shot"])):
+            shots[s["shot"]] = os.path.join(OUT, s["shot"])
+    return Played(code, out, err, dumps, shots, time.perf_counter() - t0)
+
+
+def play_together(*games, gap=0.4):
+    """Games that play together: (name, program, steps, env) each, started `gap` seconds apart (the host first)."""
+    started = []
+    for name, program, steps, env in games:
+        started.append(start_play(name, program, steps, env=env))
+        time.sleep(gap)
+    return [finish_play(s) for s in started]
+
+
+def net_of(d):
+    return d.get("net") or {}
+
+
+def t_net(c):
+    """Two 3D games on this computer: one hosts a room, the other finds it (world:join()) and goes in. Each sees the
+    other's player as a person with their name over it, walking where they walk; messages go both ways; a shared
+    value the host changes reaches the other game; and when the joining game closes, the host hears it leave."""
+    port = {"TUFF_NET_PORT": "47910"}
+    host, joiner = play_together(
+        ("net_host", game("net_host.tuf"), [
+            {"at": 0.5, "dump": "net_host_start.json"}, {"at": 4.5, "call": "show"}, {"at": 4.6, "dump": "net_host_in.json"},
+            {"at": 5.0, "hold": "w", "for": 1.0}, {"at": 11.5, "dump": "net_host_after.json"}, {"at": 11.6, "call": "show"},
+            {"at": 12.0, "close": True}], port),
+        ("net_join", game("net_join.tuf"), [
+            {"at": 2.5, "dump": "net_join_in.json"}, {"at": 2.6, "call": "hit"}, {"at": 3.4, "call": "show"},
+            {"at": 3.5, "dump": "net_join_shared.json"}, {"at": 3.55, "shot": "net_join.png"},
+            {"at": 8.0, "dump": "net_join_walked.json"}, {"at": 8.05, "shot": "net_join_walked.png"},
+            {"at": 8.5, "close": True}], port))
+    clean_exit(c, host)
+    clean_exit(c, joiner)
+    start = net_of(host.dumps.get("net_host_start.json", {}))
+    c.check("hosting true" in host.lines and start.get("state") == "in" and start.get("room") == "Test Room",
+            "world:host(\"Test Room\") hosts at once: world:hosting() is true on the next line", (host.lines[:4], start))
+    said = net_of(host.dumps.get("net_host_in.json", {})).get("said", [])
+    c.check('Hosting "Test Room" on this computer' in said and "Sam joined" in said,
+            "the HUD says it's hosting the room (on this computer, in a test), then that Sam joined", said)
+    inside = net_of(joiner.dumps.get("net_join_in.json", {}))
+    c.check(inside.get("state") == "in" and inside.get("room") == "Test Room" and inside.get("players") == ["Player 1", "Sam"],
+            "world:join() finds the room on its own and goes in, as Sam (world:my_name), after Player 1 (the host)", inside)
+    c.check("joined Player 1" in joiner.lines and "joined Sam" in host.lines,
+            "on_join runs on both: the host hears Sam come in, and Sam hears of the host already there", (host.lines, joiner.lines))
+    c.check("got welcome Sam from Player 1" in joiner.lines,
+            "a message the host sends (world:send(\"welcome\", name)) reaches Sam's on_message", joiner.lines)
+    c.check("got hit 2 from Sam" in host.lines,
+            "a message Sam sends (world:send(\"hit\", 2)) reaches the host's on_message, with who sent it", host.lines)
+    c.check("score 7" in joiner.lines and net_of(joiner.dumps.get("net_join_shared.json", {})).get("shared", {}).get("score") == 7,
+            "world:share on the host (5, then 5 + Sam's 2) reaches Sam's world:shared(\"score\")", (joiner.lines, inside.get("shared")))
+    others = inside.get("others") or []
+    c.check(len(others) == 1 and others[0][0] == "Player 1" and abs(others[0][1]) < 0.3 and abs(others[0][3]) < 0.3 and others[0][5],
+            "Sam's world shows the host's player as a person called Player 1, where the host stands (0, 0, 0)", others)
+    labels = joiner.dumps.get("net_join_in.json", {}).get("labels", [])
+    c.check("Player 1" not in labels, "... a person of tgame's own, like the player's figure (not among the program's things)", labels)
+    walked = net_of(joiner.dumps.get("net_join_walked.json", {})).get("others") or []
+    c.check(len(walked) == 1 and walked[0][3] < -3.5 and abs(walked[0][1]) < 0.5,
+            "when the host walks forward (W for a second), Sam sees its person walk there too (z from 0 to about -5)", walked)
+    hothers = net_of(host.dumps.get("net_host_in.json", {})).get("others") or []
+    c.check(len(hothers) == 1 and hothers[0][0] == "Sam" and abs(hothers[0][1] - 3) < 0.3 and abs(hothers[0][3] - 2) < 0.3,
+            "the host's world shows Sam where Sam stands (3, 0, 2)", hothers)
+    c.check("others 1" in host.lines and 'players ["Player 1", "Sam"]' in host.lines, "world:others() and world:players() on the host", host.lines)
+    after = net_of(host.dumps.get("net_host_after.json", {}))
+    c.check("left Sam" in host.lines and after.get("players") == ["Player 1"] and not after.get("others"),
+            "when Sam's game closes, the host hears it leave (on_leave), and its person goes", (host.lines[-4:], after))
+    shot, walked_shot = joiner.shots.get("net_join.png"), joiner.shots.get("net_join_walked.png")
+    c.check(shot and walked_shot and changed_pixels(shot, walked_shot) > 0.002,
+            "Sam's screenshots differ once the host's person has walked away", (shot, walked_shot))
+
+
+def t_net_2d(c):
+    """Two 2D games: the joining one goes straight to an address (game:join("127.0.0.1")), messages carry lists, a
+    value the joining game shares before it's in fills in only what the room doesn't have, and when the host closes
+    the other game hears that the host left."""
+    port = {"TUFF_NET_PORT": "47930"}
+    host, joiner = play_together(
+        ("net_host_2d", game("net_host_2d.tuf"), [{"at": 6.5, "call": "show"}, {"at": 7.0, "close": True}], port),
+        ("net_join_2d", game("net_join_2d.tuf"), [
+            {"at": 2.5, "call": "move"}, {"at": 3.0, "dump": "net_join_2d_in.json"}, {"at": 3.1, "call": "show"},
+            {"at": 10.0, "dump": "net_join_2d_after.json"}, {"at": 10.1, "call": "show"}, {"at": 10.5, "close": True}], port))
+    clean_exit(c, host)
+    clean_exit(c, joiner)
+    inside = net_of(joiner.dumps.get("net_join_2d_in.json", {}))
+    c.check(inside.get("state") == "in" and inside.get("room") == "Net 2D" and inside.get("players") == ["Ana", "Player 2"],
+            "game:join(\"127.0.0.1\") goes straight to that computer's room (named after the game: game:host() with no name); "
+            "the host is Ana, the joining game Player 2", inside)
+    c.check("got at [120, 80] from Player 2" in host.lines, "a list sent with a message arrives as a list", host.lines)
+    c.check("got hello [1, 2, 3] from Ana" in joiner.lines, "the host's message reaches the joining game", joiner.lines)
+    c.check("level 3 lives 5" in joiner.lines and "level 3 lives 5" in host.lines,
+            "the room's level (3) wins over one shared before joining (1), and lives the room didn't have (5) fill in, for both",
+            (host.lines, joiner.lines))
+    after = net_of(joiner.dumps.get("net_join_2d_after.json", {}))
+    c.check("left Ana" in joiner.lines and after.get("state") == "off" and "The host left the game" in after.get("said", []),
+            "when the host closes, the other game hears it leave (on_leave) and says \"The host left the game\"", (joiner.lines[-4:], after))
+    c.check("connected false" in joiner.lines and after.get("players") == ["Player 2"],
+            "then game:connected() is false, and game:players() is only itself", (joiner.lines, after.get("players")))
+
+
+def t_net_rooms(c):
+    """Rooms by name, with four games: two rooms on this computer, two games that join "Blue Room" by its name go in
+    that one (not the other), two players with the same name get different names, and Tuff Engine's preview (--scene)
+    never opens a room."""
+    port = {"TUFF_NET_PORT": "47950"}
+
+    def host(name, room):
+        return (name, game("net_room.tuf"), [{"at": 0.1, "tuff": f'game:host("{room}")'}, {"at": 4.5, "dump": f"{name}.json"},
+                                              {"at": 9.0, "close": True}], port)
+
+    def joiner(name):
+        return (name, game("net_room.tuf"), [{"at": 0.1, "tuff": 'game:my_name("Kim")'}, {"at": 0.15, "tuff": 'game:join("blue  ROOM")'},
+                                              {"at": 3.0, "dump": f"{name}.json"}, {"at": 7.0, "close": True}], port)
+
+    red, blue, a, b = play_together(host("net_red", "Red Room"), host("net_blue", "Blue Room"), joiner("net_a"), joiner("net_b"))
+    for r in (red, blue, a, b):
+        clean_exit(c, r)
+    na, nb = net_of(a.dumps.get("net_a.json", {})), net_of(b.dumps.get("net_b.json", {}))
+    c.check(na.get("room") == "Blue Room" and nb.get("room") == "Blue Room",
+            "game:join(\"blue  ROOM\") finds the room called Blue Room (big or small letters, spaces)", (na, nb))
+    c.check(net_of(red.dumps.get("net_red.json", {})).get("players") == ["Player 1"], "... and nobody goes in the other room",
+            net_of(red.dumps.get("net_red.json", {})))
+    c.check(sorted([na.get("name"), nb.get("name")]) == ["Kim", "Kim 2"] and
+            net_of(blue.dumps.get("net_blue.json", {})).get("players") == ["Player 1", "Kim", "Kim 2"],
+            "two players both called Kim are Kim and Kim 2, everywhere", (na.get("name"), nb.get("name"), net_of(blue.dumps.get("net_blue.json", {}))))
+    code, out, err, dump, secs = scene(game("net_host.tuf"), env={"TUFF_NET_PORT": "47970"})
+    c.check(code == 0 and dump.get("error") is None and dump.get("stopped") == "end" and "Hosting" not in json.dumps(dump.get("batch")),
+            "in Tuff Engine's preview (--scene), world:host does nothing (and says nothing on the HUD)", (code, err[-300:], dump.get("error")))
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
          "models": t_models, "people": t_people,
@@ -3817,6 +4151,8 @@ TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": 
          "scene": t_scene, "notice": t_notice, "mcp": t_mcp, "checker": t_checker, "editor": t_editor, "guide": t_guide, "perf": t_perf}
 TESTS.update({"hud_health_3d": t_hud_health_3d, "hud_health_2d": t_hud_health_2d, "hud_arrow": t_hud_arrow,
               "hud_minimap": t_hud_minimap, "hud_checker": t_hud_checker})
+TESTS.update({"net": t_net, "net_2d": t_net_2d, "net_rooms": t_net_rooms})
+TESTS.update({"car_enter": t_car_enter, "weight": t_weight, "sign_text": t_sign_text, "people_style": t_people_style})
 
 
 def main():

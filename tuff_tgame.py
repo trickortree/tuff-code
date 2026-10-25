@@ -14,15 +14,21 @@ Positions, collisions, animations, timers and the player all live here, so the p
 world the page shows. Each object keeps its own copy of what it sent, and only changes are sent, once
 per frame.
 """
+import atexit
 import base64
 import collections
+import errno
 import json
 import math
 import os
+import queue
 import random
 import re
+import selectors
+import socket
 import struct
 import sys
+import threading
 import time
 
 import tuff_atgui as atgui  # a game's menus are atgui's own widgets (GameUI, near the end)
@@ -475,6 +481,7 @@ class Game:
         self.sound_count = 0
         self.phys = None  # the game's physics (Physics), once something uses it
         self.fx = None  # its effects (Effects): slow motion, a shake, pop text, weather, the time of day
+        self.net = None  # its multiplayer (Net), once it hosts, joins or shares something
         self.base = getattr(getattr(self.rt, "interp", None), "base_dir", None) or os.getcwd()
         if SCENE is not None:
             self.autopilot = None
@@ -613,6 +620,8 @@ class Game:
         if self.closed or not self.view.is_open:
             self.closed = True
             return 0
+        if self.net is not None:  # what the other players said and did: messages, who came and went, where they are
+            self.net.frame(real)
         dt = 0.0 if self.is_paused else real
         if self.fx is not None:
             dt = self.fx.frame(dt, real)  # slow motion slows everything that goes by dt
@@ -876,6 +885,8 @@ class Game:
         self.view.set_title(self.rt.text(text))
 
     def close(self):
+        if self.net is not None:
+            self.net.stop()  # a host says goodbye to the other players first
         self.view.close()
         self.closed = True
 
@@ -1328,6 +1339,21 @@ class Effects:
 
 # ---------------------------------------------------------------- physics on sprites and objects
 
+# How heavy things are (kg) in a 3D world's physics, when the program doesn't say (thing:weight). The kit's models
+# weigh what they'd weigh as they're made (more or less with :scale, by how much more or less of it there is); the
+# shapes (box, ball, cylinder, cone, plane) and models from files weigh 50 kg a cubic metre, so a 1 m box is 50 kg.
+# The player is 70 kg (it shoves light things out of its way and can't budge heavy ones), a ragdoll 70 kg and a car
+# 1200 kg. thing:push's numbers are the speed it gives a 50 kg thing like a 1 m box (physics.js's PUSH_KG), so a
+# heavier one goes slower and a lighter one faster (and boxes and balls move just as they did before things had
+# weights), and on_hit's strength is in the same units. The player can grab (player:can_grab) things up to GRAB_KG.
+KIT_WEIGHT = {"tree": 400, "pine": 300, "rock": 300, "bush": 8, "flower": 0.3, "house": 6000, "hut": 1500, "sign": 15,
+              "crate": 25, "fence": 20, "coin": 0.05, "chest": 40, "person": 70, "key": 0.1}
+SHAPE_DENSITY = 50
+PUSH_KG = 50
+PLAYER_KG = 70
+GRAB_KG = 100
+
+
 def physics_problem(word):
     return (f"Physics can be \"dynamic\" (it falls and gets pushed), \"static\" (it never moves), \"kinematic\" (your code "
             f"moves it) or \"off\", not \"{word}\".{did_you_mean(word, PHYSICS_KINDS)}")
@@ -1420,13 +1446,36 @@ class Physical:
     def after_physics(self):
         pass
 
-    def mass(self, kg):
-        m = self.num(kg, ":mass")
+    def weight(self, kg=MISSING):
+        return self.set_weight(kg, "weight", f"{self.EXAMPLE}:weight({'50' if self.D == 3 else '2'})")
+
+    def mass(self, kg=MISSING):  # the same as weight, by its physics name
+        return self.set_weight(kg, "mass", f"{self.EXAMPLE}:mass(2)")
+
+    def set_weight(self, kg, name, example):
+        """thing:weight(kg) sets how heavy it is; thing:weight() gives it back (its own, or the one it has by
+        default: see KIT_WEIGHT)."""
+        if kg is MISSING:
+            return tidy(round(self.weight_now(), 3))
+        m = self.num(kg, f":{name}")
         if m <= 0:
-            raise self.rt.error(f"{self.phys_name()}:mass needs a number above 0, like {self.EXAMPLE}:mass(2).")
+            raise self.rt.error(f"{self.phys_name()}:{name} needs a number above 0, like {example}.")
         self.mass_ = m
         self.phys_changed()
         return self.native
+
+    def weight_now(self):
+        return self.mass_ if self.mass_ is not None else self.default_weight()
+
+    def default_weight(self):
+        """How heavy it is when the program doesn't say, in kg: in 2D, 1 kg for every 50 x 50 pixels (Rapier's own,
+        from its shape: a line is a capsule 4 pixels thick)."""
+        if self.shape == "line":
+            (ax, ay), (bx, by) = self.points
+            return max(0.01, (4 * math.hypot(bx - ax, by - ay) * self.k + 4 * math.pi) / 2500)
+        hw, hh = self.half()
+        area = math.pi * hw * hh if self.shape == "circle" else 4 * hw * hh
+        return max(0.01, area / 2500)
 
     def bounce(self, amount=MISSING):
         v = self.rt.plain(amount)
@@ -1496,6 +1545,7 @@ class Physical:
         if self.phys_kind is None:
             return None
         return {"kind": self.phys_kind, "mass": tidy(self.mass_) if self.mass_ is not None else None,
+                "auto_weight": tidy(round(self.default_weight(), 3)),
                 "bounce": tidy(self.bounce_) if self.bounce_ is not None else None,
                 "friction": tidy(self.friction_) if self.friction_ is not None else None}
 
@@ -1718,7 +1768,7 @@ class Sprite(Physical):
         ("color", "set_color"), ("layer", "set_layer"), ("flip", "flip"), ("align", "align"), ("hide", "hide"),
         ("show", "show"), ("remove", "remove"), ("set", "set"), ("get", "get"), ("value", "value"),
         ("clicked", "clicked"), ("shake", "shake"),
-        ("physics", "physics"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
+        ("physics", "physics"), ("weight", "weight"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
         ("velocity", "velocity"), ("on_hit", "on_hit"), ("sleep", "sleep"), ("wake", "wake"),
     ]
     D = 2
@@ -2520,8 +2570,10 @@ class World3D(Game):
         if low not in KIT:
             raise self.rt.error(f"tgame doesn't have a \"{n}\" to spawn. It has: {', '.join(KIT)}. "
                                 "Or spawn a .glb model from your project folder.")
-        size, body, parts, solid = kit(low)
+        look = person_look() if low == "person" else None
+        size, body, parts, solid = kit(low, look)
         t = Thing(self, low, x, y, z, size, parts, body=body)
+        t.look = look
         t.solid_ = solid
         t.heading = random.uniform(0, 360) if low in ("tree", "pine", "rock", "bush", "flower") else 0.0
         t.push_rotation()
@@ -2915,7 +2967,10 @@ class World3D(Game):
         p = self.the_player
         if p is not None:
             p.update(dt, real)
-            if self.phys is not None:
+            car = self.driving
+            if car is not None:  # in the car: the player is where the car is (player:x, a game on the network)
+                p.x, p.y, p.z, p.heading = car.x, car.y, car.z, car.heading % 360
+            elif self.phys is not None:
                 self.phys.player_sync(p)
             return
         mode = self.cam_mode
@@ -3303,11 +3358,14 @@ def animation_problem(name):
             + did_you_mean(name, ANIMATIONS))
 
 
-def kit(name):
+def kit(name, look=None):
     """A built-in model: (size, solid body, parts, solid). Parts are (type, engine props, main part?); every part
     casts and gets shadows, and colours vary a little from one model to the next. A part's "anim" says how the page
     moves the model (tuff_view_web/anim.js): a "tree", "pine", "bush" or "flower" sways in the wind, a "coin" spins
-    and bobs, and each part of a "person" says which limb it is and where it turns ([style, role, pivot])."""
+    and bobs, and each part of a "person" says which limb it is and where it turns ([style, role, pivot]). A person
+    is dressed in `look` (person_look)."""
+    if name == "person":
+        return (0.7, 1.75, 0.5), None, dressed(look or person_look()), True
     size, body, parts, solid = _kit(name)
     return size, body, [(type_, {"shadow": True, **p}, main) for type_, p, main in parts], solid
 
@@ -3437,7 +3495,7 @@ def _kit(name):
         board = shade("#c08a4d", 0.05)
         edge = _shade(board, -0.3)
         return ((1.2, 1.6, 0.2), (0.3, 1.6, 0.2), [
-            ("cylinder", {"rt": 0.055, "rb": 0.065, "h": 1.5, "y": 0.75, "z": -0.07, "seg": 8, "color": "#6b4428", "rough": 0.95}, False),
+            ("cylinder", {"rt": 0.055, "rb": 0.065, "h": 1.0, "y": 0.5, "z": -0.07, "seg": 8, "color": "#6b4428", "rough": 0.95}, False),
             ("box", {"w": 1.12, "h": 0.52, "d": 0.06, "y": 1.25, "color": board, "rough": 0.85}, True),
             ("box", {"w": 1.1, "h": 0.014, "d": 0.066, "y": 1.25, "color": edge, "rough": 0.9}, False),
             ("box", {"w": 1.2, "h": 0.07, "d": 0.09, "y": 1.525, "color": edge, "rough": 0.85}, False),
@@ -3494,8 +3552,6 @@ def _kit(name):
             ("box", {"w": 0.12, "h": 0.15, "d": 0.05, "y": 0.42, "z": 0.29, "color": "#f2c230", "emissive": "#3a2a00", "metal": 0.7,
                      "rough": 0.3}, False),
         ], True)
-    if name == "person":
-        return ((0.7, 1.75, 0.5), None, person_parts(), True)
     if name == "key":
         # An old gold key floating upright (it spins and bobs like a coin): a ring to hold, a shaft and its teeth.
         gold = {"color": "#f2c230", "emissive": "#5a4200", "metal": 0.55, "rough": 0.3}
@@ -3523,6 +3579,35 @@ SHOES = ("#3a2a22", "#26262c", "#f4f1ea", "#c8473a", "#2f6fd0")
 HAIR_STYLES = ("short", "swoop", "bob", "ponytail", "buns", "curly", "spiky")
 
 
+LOOK_KEYS = ("shirt", "skin", "hair", "pants", "style", "sleeves", "shoes")
+LOOK_METHODS = ("shirt", "pants", "skin", "hair", "shoes", "sleeves")
+SLEEVES = ("long", "rolled")
+# Words people use for a look, as tgame's own: hair styles, sleeves, and skin and hair colours (other colours are
+# the game's colour names or "#rrggbb").
+HAIR_WORDS = {"pony": "ponytail", "pony tail": "ponytail", "tail": "ponytail", "bun": "buns", "afro": "curly",
+              "curls": "curly", "mop": "curly", "spikes": "spiky", "mohawk": "spiky", "quiff": "swoop", "fringe": "bob",
+              "long": "bob"}
+SLEEVE_WORDS = {"short": "rolled", "rolled up": "rolled", "rolled-up": "rolled", "up": "rolled", "full": "long"}
+SKIN_COLORS = {"pale": "#ffd9b8", "light": "#f1c9a5", "fair": "#f1c9a5", "tan": "#e0ac7e", "medium": "#c68a5c",
+               "olive": "#c68a5c", "brown": "#8d5a3b", "dark": "#8d5a3b"}
+HAIR_COLORS = {"black": "#1c1c1c", "dark brown": "#2b2018", "brown": "#5a3a22", "blonde": "#e3c06b",
+               "blond": "#e3c06b", "ginger": "#b5482b", "auburn": "#a8692e", "red": "#b5482b", "grey": "#9a9a9e",
+               "gray": "#9a9a9e", "white": "#eeeeee"}
+
+
+def person_look(shirt=None, skin=None, hair=None, pants=None, style=None, sleeves=None, shoes=None):
+    """A person's look for person_parts: what's given, and the rest picked at random."""
+    pick = random.choice
+    return {"shirt": shirt or pick(SHIRTS), "skin": skin or pick(SKINS), "hair": hair or pick(HAIRS),
+            "pants": pants or pick(PANTS), "style": style or pick(HAIR_STYLES),
+            "sleeves": sleeves or pick(("long", "long", "rolled")), "shoes": shoes or pick(SHOES)}
+
+
+def dressed(look):
+    """A person's parts in a look (person_look), each casting a shadow, as a model's parts are."""
+    return [(type_, {"shadow": True, **p}, main) for type_, p, main in person_parts(**look)]
+
+
 def person_parts(shirt=None, skin=None, hair=None, pants=None, style=None, sleeves=None, shoes=None):
     """A chunky toy person (the kit's, the player in third person, and the ragdoll's look), facing -z like
     everything that walks forward: shoes, legs that bend at the knee, hips with a belt, a broad body with round
@@ -3532,9 +3617,8 @@ def person_parts(shirt=None, skin=None, hair=None, pants=None, style=None, sleev
     Each part tells anim.js which part it is and where it turns ([style, role, pivot, the pivot of the limb it hangs
     from]): a thigh turns at the hip and its shin at the knee (and with the thigh), an upper arm at the shoulder and
     its forearm and hand at the elbow, the head at the neck. The shirt's parts are the main ones (person:color)."""
-    pick = random.choice
-    shirt, skin, hair, pants = shirt or pick(SHIRTS), skin or pick(SKINS), hair or pick(HAIRS), pants or pick(PANTS)
-    style, sleeves, shoes = style or pick(HAIR_STYLES), sleeves or pick(("long", "long", "rolled")), shoes or pick(SHOES)
+    look = person_look(shirt, skin, hair, pants, style, sleeves, shoes)
+    shirt, skin, hair, pants, style, sleeves, shoes = (look[k] for k in LOOK_KEYS)
     sx, sy = SHOULDER
     hx, hy = HIP
     parts = []
@@ -3656,10 +3740,12 @@ class Thing(Physical):
         ("color", "set_color"), ("glow", "glow"), ("hide", "hide"), ("show", "show"), ("remove", "remove"),
         ("solid", "solid"), ("touches", "touches"), ("distance", "distance"), ("label", "label"),
         ("clicked", "clicked"), ("set", "set"), ("get", "get"),
-        ("physics", "physics"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
+        ("physics", "physics"), ("weight", "weight"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
         ("velocity", "velocity"), ("on_hit", "on_hit"), ("sleep", "sleep"), ("wake", "wake"),
         ("say", "say"), ("on_talk", "on_talk"),
         ("path", "path"),
+        ("shirt", "shirt"), ("pants", "pants"), ("skin", "skin"), ("hair", "hair"), ("shoes", "shoes"),
+        ("sleeves", "sleeves"),
     ]
 
     def __init__(self, world, kind, x, y, z, size, parts, body=None, parent=None, pick=True, camera=False):
@@ -3684,6 +3770,10 @@ class Thing(Physical):
         self.click_fns = []
         self.label_node = None
         self.label_text = ""
+        self.writing = None  # a sign's words, on its board (label)
+        self.look = None  # a person's clothes and hair (person_look): the kit's person, the player's figure
+        self.pickable = pick
+        self.glow_color = None
         self.on_land = parent is None and not camera  # held things have their own x, y, z (in the hand)
         self.phys_init()
         self.quat = None  # how physics has turned it ([x, y, z, w]), once it has
@@ -3792,7 +3882,8 @@ class Thing(Physical):
         if not self.alive or w.phys is None or not self.on_land:
             return None
         kind = self.phys_kind
-        base = {"mass": self.mass_, "bounce": self.bounce_, "friction": self.friction_, "hits": bool(self.hit_fns)}
+        base = {"mass": tidy(round(self.weight_now(), 3)), "bounce": self.bounce_, "friction": self.friction_,
+                "hits": bool(self.hit_fns)}
         if kind is None:
             if getattr(self, "floor", False):
                 half = self.dims[0] / 2
@@ -3806,6 +3897,20 @@ class Thing(Physical):
             kind = "kinematic"
         shape, size, cy = self.phys_shape(kind)
         return {**base, "kind": kind, "shape": shape, "size": size, "cy": cy}
+
+    def default_weight(self):
+        """How heavy it is when the program doesn't say (see KIT_WEIGHT), in kg."""
+        kx, ky, kz = self.k
+        if self.kind in KIT_WEIGHT:
+            return KIT_WEIGHT[self.kind] * kx * ky * kz
+        w, h, d = self.dims
+        if self.kind == "sphere":
+            volume = math.pi / 6 * (w * max(kx, ky, kz)) ** 3
+        elif self.kind in ("cylinder", "cone"):
+            volume = math.pi / 4 * (w * max(kx, kz)) ** 2 * h * ky / (3 if self.kind == "cone" else 1)
+        else:
+            volume = w * kx * max(h * ky, 0.02) * d * kz
+        return max(0.01, volume * SHAPE_DENSITY)
 
     def phys_shape(self, kind):
         """(shape, size, how high its middle is above its position): a ball for a sphere, a cylinder or a cone for
@@ -4108,6 +4213,8 @@ class Thing(Physical):
 
     def set_color(self, color):
         c = self.world.color(color)
+        if self.look is not None:  # a person's main parts are its shirt
+            self.look["shirt"] = c
         for node, main in self.parts:
             if main:
                 self.send(node, color=c)
@@ -4116,10 +4223,74 @@ class Thing(Physical):
     def glow(self, color="white"):
         name = self.rt.text(color).strip().lower()
         c = "#000000" if name in ("none", "off", "") else self.world.color(color)
+        self.glow_color = None if c == "#000000" else c
         for node, main in self.parts:
             if main:
                 self.send(node, emissive=c)
         return self.native
+
+    # ---- a person's look: the kit's person, the player's figure (player:shirt...) and a ragdoll (Ragdoll.restyle)
+    def shirt(self, color):
+        return self.dress("shirt", shirt=self.world.color(color))
+
+    def pants(self, color):
+        return self.dress("pants", pants=self.world.color(color))
+
+    def skin(self, color):
+        name = self.rt.text(color).strip().lower()
+        return self.dress("skin", skin=SKIN_COLORS.get(name) or self.world.color(color))
+
+    def shoes(self, color):
+        return self.dress("shoes", shoes=self.world.color(color))
+
+    def hair(self, a, b=MISSING):
+        """person:hair("curly"), person:hair("brown") or both, either way round: a style and a colour."""
+        change = {}
+        for v in (a, b):
+            if v is MISSING:
+                continue
+            word = self.rt.text(v).strip().lower()
+            style = HAIR_WORDS.get(word, word)
+            if style in HAIR_STYLES and "style" not in change:
+                change["style"] = style
+            elif "hair" not in change:
+                change["hair"] = HAIR_COLORS.get(word) or self.world.color(v)
+            else:
+                raise self.rt.error(f"{self.kind}:hair takes a style ({', '.join(HAIR_STYLES)}) and a colour, like "
+                                    f"{self.kind}:hair(\"curly\", \"brown\").")
+        return self.dress("hair", **change)
+
+    def sleeves(self, how):
+        word = self.rt.text(how).strip().lower()
+        word = SLEEVE_WORDS.get(word, word)
+        if word not in SLEEVES:
+            raise self.rt.error(f"Sleeves can be \"long\" or \"short\" (rolled up to the elbow), not \"{word}\".")
+        return self.dress("sleeves", sleeves=word)
+
+    def dress(self, what, **change):
+        if self.look is None:
+            raise self.rt.error(f"Only people have clothes and hair: :{what} works on a person (world:spawn(\"person\", "
+                                f"x, y, z)), a ragdoll or the player in third person, not a {self.kind}.")
+        if any(self.look.get(k) != v for k, v in change.items()):
+            self.look.update(change)
+            self.restyle()
+        return self.native
+
+    def restyle(self):
+        """Dressed again in its look: its old parts go and new ones come (anim.js looks at a model's parts again)."""
+        w = self.world
+        if not self.alive:  # (removed: the page has let its parts go)
+            return
+        for node, _ in self.parts:
+            w.view.remove(node)
+            w.by_node.pop(int(node), None)
+        self.parts = []
+        for type_, p, main in dressed(self.look):
+            if main and self.glow_color:
+                p = {**p, "emissive": self.glow_color}
+            node = w.view.obj(self.node, type_, **p, **({} if self.pickable else {"pick": False}))
+            w.by_node[int(node)] = self
+            self.parts.append((node, main))
 
     def hide(self):
         self.hidden = True
@@ -4145,7 +4316,7 @@ class Thing(Physical):
             w.view.remove(self.label_node)
         w.movers.discard(self)
         w.things.pop(self, None)
-        for node in [self.node] + [n for n, _ in self.parts]:
+        for node in [self.node] + [n for n, _ in self.parts] + ([self.writing] if self.writing is not None else []):
             w.by_node.pop(int(node), None)
         if w.phys is not None:
             w.phys.dirty.discard(self)  # its body went with its object
@@ -4200,6 +4371,16 @@ class Thing(Physical):
         t = self.rt.text(text)
         self.label_text = t
         w = self.world
+        if self.kind == "sign":  # a sign's words are written on its board (both sides), not over it
+            if not self.alive:
+                return self.native
+            if self.writing is None:
+                self.writing = w.view.obj(self.node, "writing", text=t, w=1.02, h=0.44, d=0.066, y=1.25,
+                                          color="#3a2414")
+                w.by_node[int(self.writing)] = self
+            else:
+                self.send(self.writing, text=t)
+            return self.native
         if self.label_node is None:
             if not t or not self.alive:
                 return self.native
@@ -4251,7 +4432,9 @@ class Player:
         ("turn_to", "turn_to"), ("angle", "angle"), ("walk_speed", "walk_speed"), ("jump_height", "jump_height"),
         ("jump", "jump"), ("hold", "hold"), ("looking_at", "looking_at"), ("touches", "touches"),
         ("distance", "distance"), ("hide", "hide"), ("show", "show"), ("on_hit", "on_hit"),
-        ("can_grab", "can_grab"), ("holding", "holding"),
+        ("can_grab", "can_grab"), ("holding", "holding"), ("weight", "weight"), ("in_car", "in_car"),
+        ("shirt", "shirt"), ("pants", "pants"), ("skin", "skin"), ("hair", "hair"), ("shoes", "shoes"),
+        ("sleeves", "sleeves"),
     ]
     RADIUS = 0.32
     TALL = 1.75
@@ -4281,12 +4464,15 @@ class Player:
         self.native = world.rt.native("player", methods(self, "player", self.NAMES, world.rt),
                                       lambda nested=False: f"<player at {tidy(self.x)}, {tidy(self.y)}, {tidy(self.z)}>")
         self.native.tg = self
+        self.kg = PLAYER_KG
         if mode == "third person":
-            parts = [(t, {**p, "shadow": True}, main)
-                     for t, p, main in person_parts("#3574f0", "#f1c9a5", "#5a3a22", "#2f3e5c", "short", "long", "#3a2a22")]
-            self.body = Thing(world, "player", 0, 0, 0, (0.6, self.TALL, 0.6), parts, pick=False)
+            look = person_look("#3574f0", "#f1c9a5", "#5a3a22", "#2f3e5c", "short", "long", "#3a2a22")
+            self.body = Thing(world, "player", 0, 0, 0, (0.6, self.TALL, 0.6), dressed(look), pick=False)
+            self.body.look = look
             self.body.solid_ = False
             world.things.pop(self.body, None)
+            if world.driving is not None:  # it starts in a car (car:drive() came first)
+                self.body.hide()
         hud = world.hud()
         if mode == "first person":
             world.crosshair = hud.make("circle", world.W / 2, world.H / 2, {"r": 3.5, "color": "#ffffff", "stroke": "#000000",
@@ -4298,6 +4484,9 @@ class Player:
             world.hint.hide()
         if SCENE is not None and world.crosshair is not None:
             world.crosshair.hide()
+        elif world.driving is not None and world.crosshair is not None:  # it starts in a car: back when it gets out
+            world.crosshair.hide()
+            world.car_hid = [world.crosshair]
         if world.land is not None:  # it starts standing on the land
             self.y = world.land.at(0, 0)
             if self.body is not None:
@@ -4396,6 +4585,46 @@ class Player:
         it = self.world.interact
         return it.held.native if it is not None and it.held is not None else None
 
+    def in_car(self):
+        return self.world.driving is not None
+
+    def weight(self, kg=MISSING):
+        """How heavy the player is (70 kg): the heavier, the harder it shoves physics things it walks into."""
+        if kg is MISSING:
+            return tidy(self.kg)
+        m = self.rt.number(kg, ":weight")
+        if m <= 0:
+            raise self.rt.error("player:weight needs a number above 0, like player:weight(70).")
+        self.kg = m
+        self.world.physics_on().send("player_weight", m)
+        return self.native
+
+    # ---- how the player looks in third person: its figure's (Thing.shirt...)
+    def dress_body(self, what, *args):
+        if self.body is None:
+            raise self.rt.error(f"player:{what} changes how the player looks, and in first person nobody sees it. "
+                                "Make the player with world:player(\"third person\") to see it.")
+        getattr(self.body, what)(*args)
+        return self.native
+
+    def shirt(self, color):
+        return self.dress_body("shirt", color)
+
+    def pants(self, color):
+        return self.dress_body("pants", color)
+
+    def skin(self, color):
+        return self.dress_body("skin", color)
+
+    def hair(self, a, b=MISSING):
+        return self.dress_body("hair", a, b)
+
+    def shoes(self, color):
+        return self.dress_body("shoes", color)
+
+    def sleeves(self, how):
+        return self.dress_body("sleeves", how)
+
     def touches(self, other):
         v = self.rt.plain(other)
         g = thing_of(v)
@@ -4428,7 +4657,7 @@ class Player:
 
     def show(self):
         self.hidden = False
-        if self.body is not None:
+        if self.body is not None and self.world.driving is None:  # (in a car, it shows when it gets out)
             self.body.show()
         return self.native
 
@@ -4714,7 +4943,7 @@ class Physics:
         hasn't made yet. Standing on a physics thing, it's on the ground. Not when the program has just moved the
         player (move_to, getting out of a car): that goes to the page next, and the capsule's spot is the old one."""
         done, x, y, z, grounded = rep
-        if p.teleported or done < self.first_seq or self.sent is None:
+        if p.teleported or done < self.first_seq or self.sent is None or self.game.driving is not None:
             return
         while self.moves and self.moves[0][0] <= done:
             self.moves.popleft()
@@ -4788,12 +5017,17 @@ class Car(Thing):
     """world:car: a car to drive. In the page it's Rapier's ray-cast vehicle: a body on four wheels that are rays with
     springs, so it rolls over the land, leans in corners and can roll over (car:flip puts it back on its wheels).
     car:drive gives it the keys (W or up goes, S or down brakes and then backs up, A and D or left and right steer,
-    Space brakes) and the camera, which follows it from behind. car:speed is how fast it goes, in km/h."""
+    Space brakes) and the camera, which follows it from behind. car:speed is how fast it goes, in km/h.
+
+    In a world with a player, the player gets in by walking up to it and pressing F (Interaction says "F: Get in"),
+    and F again gets out, beside the driver's door; car:drive() starts the game with the player in it. car:on_enter
+    and car:on_exit run when the player gets in and out, and car:driven() says whether it's being driven."""
     KIND = "car"
-    NAMES = [(n, "car_speed" if n == "speed" else a) for n, a in Thing.NAMES] + [
-        ("drive", "drive"), ("engine", "engine"), ("flip", "flip")]
+    NAMES = [(n, "car_speed" if n == "speed" else a) for n, a in Thing.NAMES if n not in LOOK_METHODS] + [
+        ("drive", "drive"), ("engine", "engine"), ("flip", "flip"), ("on_enter", "on_enter"), ("on_exit", "on_exit"),
+        ("driven", "is_driven")]
     EXAMPLE = "car"
-    MASS = 150
+    MASS = 1200
     WHEEL_R = 0.36
     REST = 0.35  # the springs' length
     CY = 0.79    # the body's middle above the car's position (the ground under its wheels)
@@ -4825,7 +5059,9 @@ class Car(Thing):
         self.phys_kind = "dynamic"
         self.kmh = 0.0
         self.controls = (0, 0, 0)
+        self.enter_fns, self.exit_fns = [], []
         world.physics_on().sync(self)
+        world.interaction().cars.append(self)  # the player gets in with F
 
     def can_have_physics(self, kind):
         if kind != "dynamic":
@@ -4835,8 +5071,11 @@ class Car(Thing):
         if not self.alive or self.world.phys is None:
             return None
         return {"kind": "dynamic", "shape": "car", "size": self.HALF, "cy": self.CY, "wheel_r": self.WHEEL_R,
-                "rest": self.REST, "mass": self.mass_ or self.MASS, "bounce": self.bounce_, "friction": self.friction_,
+                "rest": self.REST, "mass": self.weight_now(), "bounce": self.bounce_, "friction": self.friction_,
                 "hits": bool(self.hit_fns), "wheels": [[int(n), *xyz] for n, xyz in zip(self.wheel_nodes, self.WHEELS)]}
+
+    def default_weight(self):
+        return self.MASS
 
     def from_physics(self, b):
         """Like an object's, and the car's speed (km/h, forward)."""
@@ -4847,41 +5086,102 @@ class Car(Thing):
         return tidy(self.kmh)
 
     def drive(self, on=True):
+        """The player gets in (or the keys drive it, with no player) or out. car:on_enter and car:on_exit run when the
+        player gets in and out, however it happens (F, this, the car being removed)."""
         w = self.world
         ph = w.physics_on()
+        p = w.the_player
+        fire = None
         if self.rt.truthy(on):
-            if w.driving is not None and w.driving is not self:
+            if w.driving is self:
+                return self.native
+            if w.driving is not None:
                 w.driving.drive(False)
             w.driving = self
+            w.drove_frame = w.frames  # an F the program used for this isn't Interaction's F too
             if w.cam_mode != "player":
                 w.cam_mode = "drive"
             w.camera_dirty = False
             ph.send("chase", int(self.node))
-            p = w.the_player
             if p is not None:  # in the car: its figure and its capsule aren't left standing where it got in
                 if p.body is not None:
                     p.body.hide()
+                # In first person, what it holds and the crosshair go too (they're on the camera, behind the car).
+                w.car_hid = [s for s in (p.held if p.mode == "first person" else None, w.crosshair)
+                             if s is not None and not s.hidden]
+                for s in w.car_hid:
+                    s.hide()
                 ph.send("player_off")
+                fire = self.enter_fns
         elif w.driving is self:
             w.driving = None
-            self.controls = (0, 0, 0)
-            ph.send("drive", int(self.node), 0, 0, 0)
+            w.drove_frame = w.frames
+            self.controls = (0, 0, 1)  # parked: the brake stays on, so it doesn't roll away down a hill
+            ph.send("drive", int(self.node), 0, 0, 1)
             ph.send("chase", None)
             if w.cam_mode == "drive":
                 w.cam_mode = "fixed"
                 w.push_camera()  # the camera stays where it was, behind the car
-            p = w.the_player
             if p is not None:  # out of the car, beside its door
-                h = math.radians(self.heading)
-                p.x, p.z = self.x - math.cos(h) * 2.2, self.z - math.sin(h) * 2.2
-                p.y, p.vy = w.ground_y(p.x, p.z), 0.0
+                p.x, p.y, p.z = self.exit_spot(p)
+                p.vy = 0.0
+                p.heading = self.heading % 360  # facing the way the car faces
                 p.teleported = True  # its capsule comes back there (player_to)
                 if p.body is not None and not p.hidden:
                     p.body.show()
+                for s in getattr(w, "car_hid", None) or ():
+                    if getattr(s, "alive", True) and not p.hidden:
+                        s.show()
+                w.car_hid = []
                 p.place_camera(1)
+                fire = self.exit_fns
         if getattr(w, "hud_js", None) is not None:
             w.hud_js.player()  # the minimap and the arrow measure from the car while it's driven
+        for fn in list(fire or ()):
+            w.fire(fn, self.native)
         return self.native
+
+    def exit_spot(self, p):
+        """Where the player gets out: beside the driver's door (its left), or the other door, behind it or in front of
+        it when something solid is in the way, standing on whatever is there."""
+        solids = p.solids()
+        h = math.radians(self.heading)
+        rx, rz = math.cos(h), math.sin(h)  # the car's right, along the ground
+        fx, fz = math.sin(h), -math.cos(h)  # its front
+        spots = [(-rx * 2.2, -rz * 2.2), (rx * 2.2, rz * 2.2), (-fx * 3.4, -fz * 3.4), (fx * 3.4, fz * 3.4)]
+        for dx, dz in spots:
+            x, z = self.x + dx, self.z + dz
+            y = max(self.world.ground_y(x, z), p.floor_at(x, z, self.y + 0.4, solids))
+            if not p.blocked(x, z, y, solids):
+                return x, y, z
+        x, z = self.x + spots[0][0], self.z + spots[0][1]
+        return x, max(self.world.ground_y(x, z), self.y), z
+
+    def get_in(self):
+        """The player gets in (F next to it), with the sound of its door."""
+        w = self.world
+        if w.driving is self or not self.alive:
+            return
+        w.view.call(0, "tones", INTERACT_SOUNDS["car door"], 0.25)
+        self.drive(True)
+
+    def get_out(self):
+        w = self.world
+        if w.driving is not self:
+            return
+        w.view.call(0, "tones", INTERACT_SOUNDS["car door"], 0.25)
+        self.drive(False)
+
+    def on_enter(self, fn):
+        self.enter_fns.append(self.world.lib.check_fn(fn, ":on_enter"))
+        return self.native
+
+    def on_exit(self, fn):
+        self.exit_fns.append(self.world.lib.check_fn(fn, ":on_exit"))
+        return self.native
+
+    def is_driven(self):
+        return self.world.driving is self
 
     def engine(self, power):
         n = self.num(power, ":engine")
@@ -4929,7 +5229,8 @@ RAGDOLL_JOINTS = (
     ("left leg", "left foot", (-_HX, KNEE, 0), "hinge", (-2.0, 0)),
     ("right leg", "right foot", (_HX, KNEE, 0), "hinge", (-2.0, 0)),
 )
-RAGDOLL_MASS = sum(p[4] for p in RAGDOLL)
+RAGDOLL_MASS = sum(p[4] for p in RAGDOLL)  # its parts' own masses, which are shared out like this
+RAGDOLL_KG = 70  # how heavy it is, unless the program says (dummy:weight)
 
 
 class Ragdoll(Thing):
@@ -4941,19 +5242,10 @@ class Ragdoll(Thing):
     EXAMPLE = "dummy"
 
     def __init__(self, world, x, y, z, color):
-        # Each physics part is a group where its body is (physics moves it), holding the person's parts for that
-        # part of the body, where they are on the person.
-        look = {}
-        for type_, p, main in person_parts(world.color(color)):
-            look.setdefault(p["anim"][1], []).append((type_, {k: v for k, v in p.items() if k != "anim"}, main))
         super().__init__(world, "ragdoll", x, y, z, (0.6, 1.7, 0.3),
                          [("group", {"x": at[0], "y": at[1], "z": at[2]}, False) for _, _, _, at, _, _ in RAGDOLL])
-        for (node, _), (_, _, _, at, _, role) in zip(list(self.parts), RAGDOLL):
-            for type_, p, main in look[role]:
-                p = {**p, "x": p.get("x", 0) - at[0], "y": p.get("y", 0) - at[1], "z": p.get("z", 0) - at[2], "shadow": True}
-                child = world.view.obj(node, type_, **p)
-                world.by_node[int(child)] = self
-                self.parts.append((child, main))
+        self.look = person_look(world.color(color))
+        self.restyle()
         self.phys_kind = "dynamic"
         self.standing = self.y - self.ground() < 0.05  # on the ground: it stands until something knocks it over
         world.physics_on().sync(self)
@@ -4962,11 +5254,37 @@ class Ragdoll(Thing):
         if kind != "dynamic":
             raise self.rt.error("A ragdoll always uses physics (that's what makes it flop).")
 
+    def default_weight(self):
+        return RAGDOLL_KG * self.k[0] * self.k[1] * self.k[2]
+
+    def restyle(self):
+        """Dressed in its look: each physics part is a group where its body is (physics moves it), holding the
+        person's parts for that part of the body, where they are on the person. Dressed again, its old clothes go."""
+        w = self.world
+        if not self.alive:
+            return
+        groups = self.parts[:len(RAGDOLL)]
+        for node, _ in self.parts[len(RAGDOLL):]:
+            w.view.remove(node)
+            w.by_node.pop(int(node), None)
+        self.parts = list(groups)
+        by_role = {}
+        for type_, p, main in person_parts(**self.look):
+            by_role.setdefault(p["anim"][1], []).append((type_, {k: v for k, v in p.items() if k != "anim"}, main))
+        for (node, _), (_, _, _, at, _, role) in zip(groups, RAGDOLL):
+            for type_, p, main in by_role[role]:
+                if main and self.glow_color:
+                    p = {**p, "emissive": self.glow_color}
+                p = {**p, "x": p.get("x", 0) - at[0], "y": p.get("y", 0) - at[1], "z": p.get("z", 0) - at[2], "shadow": True}
+                child = w.view.obj(node, type_, **p)
+                w.by_node[int(child)] = self
+                self.parts.append((child, main))
+
     def phys_spec(self):
         if not self.alive or self.world.phys is None:
             return None
         names = [p[0] for p in RAGDOLL]
-        scale = (self.mass_ / RAGDOLL_MASS) if self.mass_ else 1.0
+        scale = self.weight_now() / RAGDOLL_MASS
         return {"kind": "dynamic", "shape": "ragdoll", "main": names.index("chest"), "bounce": self.bounce_,
                 "friction": self.friction_, "hits": bool(self.hit_fns), "stand": self.standing,
                 "parts": [[int(node), shape, size, list(at), round(mass * scale, 4)]
@@ -4979,6 +5297,7 @@ class Ragdoll(Thing):
 
 TALK_REACH = 3.0  # how near the player has to be to talk to someone (npc:on_talk) or to grab something
 DOOR_REACH = 2.5  # how near a door has to be for E to open or close it
+CAR_REACH = 1.8   # how near a car's side the player has to be for F to get in
 HOLD_AT = 2.2     # how far in front of the player's eyes a held thing floats
 THROW = 13.0      # how fast a thrown thing flies off (metres a second)
 # Little sounds for the page's synth (like SOUNDS): a door swinging open, banging shut, rattling when it's locked, a
@@ -4989,6 +5308,7 @@ INTERACT_SOUNDS = {
     "locked": [[220, 0, 0.06, "square", 0.45], [180, 0.08, 0.07, "square", 0.45]],
     "grab": [[440, 0, 0.07, "sine", 0.7, 760]],
     "throw": [[1100, 0, 0.2, "noise", 0.55, 250]],
+    "car door": [[160, 0, 0.09, "square", 0.5, 90], [700, 0.02, 0.05, "noise", 0.35, 200]],
 }
 
 
@@ -5014,9 +5334,11 @@ class Interaction:
     player:can_grab, and run every frame by World3D.update.
 
     E does the first of these that it can: talk to the nearest one with an on_talk within 3 m, open or close the
-    nearest door within 2.5 m, or grab the physics thing the player is looking at within 3 m (with player:can_grab).
-    A hint at the bottom says what E will do ("E: Talk"). A held thing floats in front of the player (its speed is set
-    toward that spot every frame, so it still bumps into things), a click throws it and E drops it. Walking into a key
+    nearest door within 2.5 m, or grab the physics thing the player is looking at within 3 m (with player:can_grab),
+    unless it weighs more than GRAB_KG. F gets into the nearest car within 1.8 m of its side, and gets out again.
+    A hint at the bottom says what E and F will do ("E: Talk", "F: Get in"). A held thing floats in front of the
+    player (its speed is set toward that spot every frame, so it still bumps into things), a click throws it (a heavy
+    thing not as far) and E drops it. Walking into a key
     (the kit's "key", or anything a door needs) picks it up, and walking into a door opens it, away from the player.
     Speech bubbles are drawn by the page (tuff_view_web/interact.js); this keeps them over whoever's talking."""
 
@@ -5026,6 +5348,8 @@ class Interaction:
         self.held = None
         self.talkers = {}  # thing -> its on_talk functions
         self.doors = []
+        self.cars = []     # cars the player can get into with F
+        self.out_hint_until = None  # in a car: "F: Get out" shows for a few seconds after getting in
         self.keys = {}     # things the player picked up (a dict used as an ordered set)
         self.wanted = {}   # things a door needs: walking into them picks them up, like a key
         self.bubbles = {}  # thing -> [its bubble's node, when it goes (the game's clock) or None, its words, where it is]
@@ -5081,11 +5405,25 @@ class Interaction:
         if self.note_text is not None and w.clock >= self.note_until:
             self.show_note(None)
         p = w.the_player
-        if p is None or w.driving is not None or w.closed:
+        if p is None or w.closed:
             self.show_hint(None)
             return
         if w.is_paused:
             return
+        mine = not w.input_paused
+        # F gets in and out of cars, unless the program uses F itself (world:on_key("f", ...)), or got in or out
+        # with car:drive this frame.
+        f = mine and "f" in w.just and getattr(w, "drove_frame", -1) != w.frames and not any(k == "f" for k, _ in w.key_fns)
+        if w.driving is not None:  # in a car: F gets out
+            if self.out_hint_until is None:
+                self.out_hint_until = w.clock + 4
+            if f and p.alive:
+                w.driving.get_out()
+                self.show_hint(None)
+            else:
+                self.show_hint("F: Get out" if w.clock < self.out_hint_until else None)
+            return  # (the F that got out doesn't get straight back in)
+        self.out_hint_until = None
         self.pick_up(p)
         for d in self.doors:
             if d.alive:
@@ -5093,16 +5431,23 @@ class Interaction:
         if self.held is not None:
             self.carry(p)
         do, what = self.choice(p)
+        car = self.car_near(p) if self.held is None else None
         # An E that hid a screen (a note the program closes with E) only hides it, and the click that locks the mouse
         # again (after Escape) isn't a throw.
-        mine = not w.input_paused
+        if f and car is not None and not ("e" in w.just and do is not None):
+            car.get_in()
+            self.show_hint("F: Get out")
+            return
         if mine and "e" in w.just and do is not None:
             do(what)
             do, what = self.choice(p)
         elif mine and "mouse" in w.just and self.held is not None and not w.lock_click:
             self.throw(p)
             do, what = self.choice(p)
-        self.show_hint(self.hint_for(do, what))
+        hint = self.hint_for(do, what)
+        if car is not None:
+            hint = f"{hint}     F: Get in" if hint else "F: Get in"
+        self.show_hint(hint)
 
     def follow(self, t, b):
         """A bubble stays over the one talking (and hides with it)."""
@@ -5127,8 +5472,20 @@ class Interaction:
         if self.grab_on:
             t = self.aimed_at(p)
             if t is not None:
-                return self.grab, t
+                return (self.too_heavy, t) if t.weight_now() > GRAB_KG else (self.grab, t)
         return None, None
+
+    def car_near(self, p):
+        """The nearest car the player is close enough to get into (within CAR_REACH of its side), or None."""
+        best = None
+        for car in self.cars:
+            if not car.alive or car.hidden or abs(p.y - car.y) > 2.5:
+                continue
+            lx, lz = door_local(car.heading, p.x - car.x, p.z - car.z)
+            gap = math.hypot(max(abs(lx) - car.HALF[0], 0), max(abs(lz) - car.HALF[2], 0))
+            if gap <= CAR_REACH and (best is None or gap < best[0]):
+                best = (gap, car)
+        return best[1] if best else None
 
     def hint_for(self, do, what):
         if do is None:
@@ -5139,6 +5496,8 @@ class Interaction:
             return "E: Talk"
         if do == self.use_door:
             return "E: Close" if what.want else "E: Open"
+        if do == self.too_heavy:
+            return "Too heavy to lift"
         return "E: Grab"
 
     # ---- talking
@@ -5181,6 +5540,9 @@ class Interaction:
         self.held = t
         self.world.view.call(0, "tones", INTERACT_SOUNDS["grab"], 0.2)
 
+    def too_heavy(self, t):
+        self.world.view.call(0, "tones", INTERACT_SOUNDS["locked"], 0.2)
+
     def drop(self, _=None):
         self.held = None
 
@@ -5206,7 +5568,8 @@ class Interaction:
     def throw(self, p):
         t, self.held = self.held, None
         _, f = self.eyes(p)
-        v = [f[0] * THROW, f[1] * THROW + (2.0 if p.mode == "first person" else 3.5), f[2] * THROW]
+        k = clamp(math.sqrt(PUSH_KG / max(t.weight_now(), 0.01)), 0.35, 1.0)  # a heavy thing doesn't go as far
+        v = [f[0] * THROW * k, f[1] * THROW * k + (2.0 if p.mode == "first person" else 3.5), f[2] * THROW * k]
         t.vel = v
         self.world.phys.send("velocity", int(t.node), *v)
         self.world.view.call(0, "tones", INTERACT_SOUNDS["throw"], 0.2)
@@ -5283,6 +5646,7 @@ class Interaction:
         """For the autopilot's reports."""
         return {"grab": self.grab_on, "held": self.held.kind if self.held is not None else None,
                 "bubbles": [b[2] for t, b in self.bubbles.items() if t.alive], "hint": self.hint_text,
+                "driving": self.world.driving is not None,
                 "note": self.note_text, "keys": [t.kind for t in self.keys],
                 "doors": [{"angle": round(d.angle, 1), "open": bool(d.want), "locked": self.is_locked(d)}
                           for d in self.doors if d.alive]}
@@ -5297,7 +5661,7 @@ class Door(Thing):
     door:close(). A locked one (door:lock(), or door:needs(key) until the player has picked up that key) stays shut
     and says "Locked!"."""
     KIND = "door"
-    NAMES = Thing.NAMES + [("open", "open"), ("close", "close"), ("needs", "needs"), ("lock", "lock"),
+    NAMES = [(n, a) for n, a in Thing.NAMES if n not in LOOK_METHODS] + [("open", "open"), ("close", "close"), ("needs", "needs"), ("lock", "lock"),
                            ("unlock", "unlock")]
     EXAMPLE = "door"
     WIDE, TALL, THICK = 1.0, 2.0, 0.08  # the door itself (its frame is a little bigger)
@@ -6713,16 +7077,18 @@ class SavedData:
             raise self.rt.error(f"A save needs a name, like \"best\": {example}")
         return n
 
-    def keepable(self, v, inside=()):
+    def keepable(self, v, inside=(), method="save"):
         """The JSON value for a Tuff value :save can keep: numbers, text, true/false, nil, lists and tables (tap's
-        data objects), inside each other too. Anything else is a Tuff error on the :save line."""
+        data objects), inside each other too. Anything else is a Tuff error on the :save line. game:send and
+        game:share take the same values (method: which one it is, for the message)."""
         rt = self.rt
         v = rt.plain(v)
         if v is None or isinstance(v, (bool, str)):
             return v
+        verb = "keep" if method == "save" else "send" if method == "send" else "share"
         if isinstance(v, (int, float)):
             if v != v or v in (math.inf, -math.inf):
-                raise rt.error(f"{self.what('save')} can only keep ordinary numbers, not {rt.text(v)}.")
+                raise rt.error(f"{self.what(method)} can only {verb} ordinary numbers, not {rt.text(v)}.")
             return v
         table = None
         if getattr(v, "tap", None) is not None:  # a tap data object: a table of named values
@@ -6731,12 +7097,12 @@ class SavedData:
             table = d.values if d is not None else None
         if isinstance(v, (list, dict)) or table is not None:
             if any(x is v for x in inside):
-                raise rt.error(f"{self.what('save')} can't keep a list or table that holds itself.")
+                raise rt.error(f"{self.what(method)} can't {verb} a list or table that holds itself.")
             inside = (*inside, v)
             if isinstance(v, list):
-                return [self.keepable(x, inside) for x in v]
-            return {str(k): self.keepable(x, inside) for k, x in (v if table is None else table).items()}
-        raise rt.error(f"{self.what('save')} can keep {SAVE_KEEPS}, not {rt.what(v)}.")
+                return [self.keepable(x, inside, method) for x in v]
+            return {str(k): self.keepable(x, inside, method) for k, x in (v if table is None else table).items()}
+        raise rt.error(f"{self.what(method)} can {verb} {SAVE_KEEPS}, not {rt.what(v)}.")
 
     # ---- the file
     def read(self):
@@ -7170,6 +7536,8 @@ class Autopilot:
         out["effects"] = g.fx.state() if g.fx is not None else None
         if getattr(g, "interact", None) is not None:
             out["interact"] = g.interact.state()
+        if getattr(g, "net", None) is not None:
+            out["net"] = g.net.state_dump()
         if g.three_d and g.the_player is not None:
             out["on_ground"] = g.the_player.on_ground
             body = g.the_player.body  # third person: the figure the camera follows
@@ -7184,8 +7552,9 @@ class Autopilot:
 # (:speed and :velocity are left out: with no inputs they give how fast it goes.)
 _SETTERS = ("move", "move_to", "glide", "forward", "turn", "turn_to", "spin", "point_at", "on_edge", "size",
             "scale", "color", "layer", "flip", "align", "hide", "show", "set", "clicked", "shake", "look_at", "fall",
-            "grow", "regrow", "swing", "glow", "solid", "label", "physics", "mass", "bounce", "friction", "push",
+            "grow", "regrow", "swing", "glow", "solid", "label", "physics", "bounce", "friction", "push",
             "on_hit", "sleep", "wake")
+_LOOKS = ("shirt", "pants", "skin", "hair", "shoes", "sleeves")  # a person's look (Thing.shirt...): give the thing back
 _OBJECT_GIVES = {"x": "$number", "y": "$number", "z": "$number", "spot": "$list", "angle": "$number",
                  "distance": "$number", "fallen": "$bool"}
 # game:panel gives a "panel" and game:screen and game:start_screen a "screen": atgui containers (tables()["ui_kinds"] has
@@ -7275,6 +7644,14 @@ for _kind in ("game", "world"):
 GIVES["world"].update({"jump_pad": "object", "boost_pad": "object"})
 GIVES["object"]["path"] = "object"
 VALUES[("object", "path")] = {2: "path"}
+# 1.3.0: getting in and out of cars, and how people look.
+GIVES["car"].update({"on_enter": "car", "on_exit": "car", "driven": "$bool"})
+GIVES["player"]["in_car"] = "$bool"
+HANDLERS["car"].update({"on_enter": (0, 1, "1 input (the car)"), "on_exit": (0, 1, "1 input (the car)")})
+for _k in ("object", "ragdoll", "player"):
+    GIVES[_k].update({m: _k for m in _LOOKS})
+    VALUES.update({(_k, "shirt"): {0: "color"}, (_k, "pants"): {0: "color"}, (_k, "shoes"): {0: "color"},
+                   (_k, "skin"): {0: "skin"}, (_k, "hair"): {0: "hair", 1: "hair"}, (_k, "sleeves"): {0: "sleeves"}})
 
 
 def check_value(kind, method, index, value, base_dir=None):
@@ -7330,6 +7707,18 @@ def check_value(kind, method, index, value, base_dir=None):
         return None if low in HOLDABLE else f"The player can hold: {', '.join(HOLDABLE)}. Not \"{value}\"."
     if what == "physics":
         return None if PHYSICS_WORDS.get(low, low) in PHYSICS_KINDS else physics_problem(low)
+    if what in ("skin", "hair"):
+        named = SKIN_COLORS if what == "skin" else HAIR_COLORS
+        if low in named or low in COLORS or (low[:1] == "#" and len(low) in (4, 7) and all(c in "0123456789abcdef" for c in low[1:])):
+            return None
+        if what == "hair" and HAIR_WORDS.get(low, low) in HAIR_STYLES:
+            return None
+        if what == "skin":
+            return f"'{value}' isn't a skin colour tgame knows. Try {', '.join(SKIN_COLORS)}, or a hex code like \"#e0ac7e\"."
+        return (f"'{value}' isn't a hair style or colour tgame knows. Styles: {', '.join(HAIR_STYLES)}. Colours: "
+                f"{', '.join(c for c in HAIR_COLORS if c not in ('blond', 'gray'))}, or a hex code.")
+    if what == "sleeves":
+        return None if SLEEVE_WORDS.get(low, low) in SLEEVES else f"Sleeves can be \"long\" or \"short\", not \"{value}\"."
     if what == "spawn":
         if low.endswith(MODEL_FILES):
             return file_problem(MODEL_FILES, "model")
@@ -7763,3 +8152,1178 @@ for _kind in ("game", "world"):
 for _kind in ("sprite", "object", "car", "ragdoll", "player"):
     HANDLERS.setdefault(_kind, {})["on_death"] = (0, 1, f"1 input (the {_kind} whose health ran out)")
 VALUES.update({("world", "minimap"): {1: "corner"}, ("minimap", "mark"): {1: "color"}})
+
+
+# ---------------------------------------------------------------- multiplayer: games on the same network (1.3.0)
+# game:host(name) makes a room that other games on the same network (the same Wi-Fi, or cables to the same router)
+# can find, and game:join() finds one and goes in: game:join("Tag") looks for the room called Tag, and
+# game:join("192.168.1.20") goes straight to that computer. The host's game keeps the room: every message goes
+# through it, it keeps the shared values (game:share, game:shared) and it tells everyone who comes and goes. In a 3D
+# world each player's player shows up in everyone else's world as a person with their name over their head, walking
+# where they walk (world:others() gives them to the program).
+#
+# The sockets live on a thread of their own (NetLink), which never runs Tuff. What it hears waits in a queue that
+# the game empties at each frame (Net.frame), so on_message, on_join and on_leave run between frames, like on_key.
+# Messages are lines of JSON over TCP. Finding rooms is UDP: a joining game asks "who's hosting?" across the
+# network (and on this computer), and each host answers with its room's name and port.
+
+NET_VERSION = 1
+NET_PORT = 47800  # finding rooms (UDP); a host takes the first free TCP port after it (47801...)
+# The UDP ports hosts answer on, after NET_PORT: the first free one each (a second host on the same computer can't
+# share the first: Windows would give each question to only one of them). Joining games ask on all of them.
+NET_FIND_PORTS = (0, 10, 11, 12, 13)
+NET_PORT_ENV = "TUFF_NET_PORT"  # another first port (the tests use their own, away from real games)
+NET_LOCAL_ENV = "TUFF_NET_LOCAL"  # "1": only games on this computer (quiet tests: no firewall questions)
+NET_SEND_EVERY = 0.05  # where the player is goes out 20 times a second while it moves (and each second when not)
+NET_MAX_PLAYERS = 16
+NET_LINE_MAX = 1 << 20  # a line longer than this (a megabyte) isn't a game's: the connection goes
+NET_NAME_MAX = 24
+# Shirts for the players' people, in the order they join: the host's is the blue the player's own figure has.
+NET_SHIRTS = ("#3574f0", "#e5484d", "#2fa36b", "#f2a33a", "#8e5bd8", "#14b8a6", "#ec4899", "#e2a508")
+NET_ADDRESS = re.compile(r"^\s*(localhost|\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?\s*$", re.I)
+_WOULD_BLOCK = {getattr(errno, n) for n in ("EINPROGRESS", "EWOULDBLOCK", "EALREADY") if hasattr(errno, n)} | {10035}
+# Names people guess for these (Roblox, Godot, socket libraries...), with the tgame name.
+NET_HINTS = {
+    "host_game": "host", "create_room": "host", "make_room": "host", "start_server": "host",
+    "create_server": "host", "open_room": "host", "start_host": "host", "host_room": "host", "create_game": "host",
+    "connect": "join", "join_game": "join", "join_room": "join", "find_game": "join", "find_room": "join",
+    "connect_to": "join", "disconnect": "leave", "leave_game": "leave", "leave_room": "leave",
+    "quit_game": "leave", "exit_room": "leave", "is_connected": "connected", "online": "connected",
+    "is_online": "connected", "in_room": "connected", "is_host": "hosting", "is_server": "hosting",
+    "am_host": "hosting", "is_hosting": "hosting", "player_list": "players", "get_players": "players",
+    "list_players": "players", "everyone": "players", "set_name": "my_name", "name": "my_name", "nickname": "my_name",
+    "username": "my_name", "player_name": "my_name", "set_nickname": "my_name", "broadcast": "send",
+    "emit": "send", "send_message": "send", "message": "send", "tell": "send", "rpc": "send",
+    "on_receive": "on_message", "on_received": "on_message", "on_data": "on_message", "on_msg": "on_message",
+    "received": "on_message", "on_event": "on_message", "listen": "on_message", "on_player_join": "on_join",
+    "on_player_joined": "on_join", "on_joined": "on_join", "on_connect": "on_join", "player_joined": "on_join",
+    "on_player_leave": "on_leave", "on_player_left": "on_leave", "on_left": "on_leave", "on_disconnect": "on_leave",
+    "player_left": "on_leave", "sync": "share", "set_shared": "share", "share_value": "share", "set_var": "share",
+    "get_shared": "shared", "shared_value": "shared", "get_var": "shared", "other_players": "others",
+    "remote_players": "others", "get_others": "others", "opponents": "others",
+}
+
+
+def net_base_port():
+    try:
+        port = int(os.environ.get(NET_PORT_ENV) or NET_PORT)
+    except ValueError:
+        port = NET_PORT
+    return port if 1024 <= port <= 65000 else NET_PORT
+
+
+def net_local():
+    """Whether rooms stay on this computer: TUFF_NET_LOCAL=1, or a quiet test run (TUFF_TEST_QUIET=1) that doesn't
+    say. A room on this computer only listens on 127.0.0.1, which never asks the firewall."""
+    own = os.environ.get(NET_LOCAL_ENV)
+    if own is not None:
+        return own.strip() == "1"
+    return os.environ.get("TUFF_TEST_QUIET") == "1"
+
+
+def local_ips():
+    """This computer's addresses on its networks (not 127.0.0.1), the one it reaches other computers with first."""
+    ips = []
+    try:  # no packet goes out: connecting a UDP socket only picks the way it would go
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("10.255.255.255", 1))
+            ips.append(s.getsockname()[0])
+        finally:
+            s.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ips.append(info[4][0])
+    except OSError:
+        pass
+    seen = []
+    for ip in ips:
+        if ip not in seen and not ip.startswith(("127.", "169.254.", "0.")):
+            seen.append(ip)
+    return seen
+
+
+def net_address(text):
+    """(ip, port or None) for an address written as text ("192.168.1.20", "localhost:47801"), or None for a room's name."""
+    m = NET_ADDRESS.match(text)
+    if not m:
+        return None
+    ip = "127.0.0.1" if m.group(1).lower() == "localhost" else m.group(1)
+    if any(int(n) > 255 for n in ip.split(".")):
+        return None
+    port = int(m.group(2)) if m.group(2) else None
+    return ip, (port if port is None or 0 < port < 65536 else None)
+
+
+def same_room(a, b):
+    return " ".join(str(a).lower().split()) == " ".join(str(b).lower().split())
+
+
+class _Conn:
+    """One TCP connection: what came in that isn't a whole line yet, and what's still to go out."""
+    __slots__ = ("sock", "buf", "out", "id", "events", "to", "ended", "key")
+
+    def __init__(self, sock):
+        self.sock, self.buf, self.out = sock, bytearray(), bytearray()
+        self.id = None
+        self.events = 0
+        self.to = None
+        self.ended = False
+        self.key = None  # where a joining game's connection goes: (ip, port)
+
+
+class NetLink(threading.Thread):
+    """The sockets of a game in a room, on a thread of their own: a host's (it keeps the room) or a joining game's.
+    It never runs Tuff. What it hears goes into `inbox` as events for the game's frame, and what the game says comes
+    in through say() (which wakes it).
+
+    The host is player 1. It relays every message, keeps the shared values (each change goes out to everyone in the
+    order the host saw it, back to the one who made it too) and remembers where each player last was, for players
+    who come later. A joining game asks the network for rooms, picks one (the room it was told to look for, or one
+    for the same game, or the first to answer), and goes in."""
+
+    def __init__(self, role, title, name, room=None, address=None, listener=None, shared=None):
+        super().__init__(name=f"tgame-net-{role}", daemon=True)
+        self.role, self.title, self.my_name = role, title, name
+        self.room, self.address = room, address
+        self.inbox = queue.Queue()
+        self.outbox = collections.deque()
+        self.lock = threading.Lock()
+        self.stopping = False
+        self.local = net_local()
+        self.base = net_base_port()
+        self.sel = selectors.DefaultSelector()
+        self.wake_r, self.wake_w = socket.socketpair()
+        for s in (self.wake_r, self.wake_w):
+            s.setblocking(False)
+        self.sel.register(self.wake_r, selectors.EVENT_READ, self.on_wake)
+        self.udp = None
+        self.conns = []
+        # host
+        self.listener = listener
+        self.players = {1: name}
+        self.next_id = 2
+        self.shared = dict(shared or {})
+        self.last_pos = {}
+        # joining
+        self.conn = None  # the connection to the host, once one is being made
+        self.joined = False
+        self.found, self.first_found, self.next_ask, self.asks = {}, None, 0.0, 0
+        self.bad = {}  # rooms that didn't let us in, for a few seconds
+        self.waiting = collections.deque(maxlen=200)  # messages said before the host let us in
+        self.hello_by = 0.0
+
+    # ---- the game's side (the Tuff thread)
+    def say(self, op):
+        with self.lock:
+            self.outbox.append(op)
+        self.poke()
+
+    def poke(self):
+        try:
+            self.wake_w.send(b"!")
+        except OSError:  # its buffer is full (it's waking anyway), or it's closed
+            pass
+
+    def stop(self):
+        self.stopping = True
+        self.poke()
+
+    # ---- the thread
+    def post(self, e):
+        self.inbox.put(e)
+
+    def run(self):
+        try:
+            if self.role == "host":
+                self.start_host()
+            else:
+                self.start_join()
+            while not self.stopping:
+                timeout = self.tick()
+                for key, mask in self.sel.select(timeout):
+                    key.data(mask)
+                    if self.stopping:
+                        break
+        except Exception as exc:  # anything at all: the game hears it, and the game goes on
+            self.post({"t": "error", "why": str(exc) or type(exc).__name__})
+        finally:
+            self.shut()
+
+    def tick(self):
+        """Work done on time, not when a socket says something: asking for rooms, and giving up on a slow host.
+        Gives how long the thread can wait for its sockets."""
+        if self.role == "host" or self.joined:
+            return 1.0
+        now = time.monotonic()
+        if self.conn is not None:
+            if now > (self.conn.to if self.conn.to is not None else self.hello_by):
+                self.failed("slow")  # it didn't answer, or didn't let us in
+            return 0.1
+        if now >= self.next_ask:
+            self.ask()
+            self.next_ask = now + 0.5
+        if self.first_found is not None and now - self.first_found >= 0.3:
+            self.pick()
+        return max(0.01, min(self.next_ask - now, 0.1))
+
+    def on_wake(self, mask):
+        try:
+            while self.wake_r.recv(4096):
+                pass
+        except OSError:
+            pass
+        while True:
+            with self.lock:
+                if not self.outbox:
+                    break
+                op = self.outbox.popleft()
+            if self.role == "host":
+                self.host_op(op)
+            elif self.joined:
+                self.write(self.conn, op)
+            elif op.get("t") == "msg":
+                self.waiting.append(op)  # it goes once the host lets us in (where the player is goes again by itself)
+            elif op.get("t") == "name":
+                self.my_name = op.get("name")
+
+    def shut(self):
+        """Closing down: a host tells everyone the room is closing (so their games say "The host left"), and every
+        socket closes."""
+        for c in list(self.conns):
+            try:
+                if self.role == "host" and c.id is not None:
+                    c.out += self.line({"t": "end"})
+                c.sock.setblocking(True)
+                c.sock.settimeout(0.2)
+                if c.out:
+                    c.sock.sendall(bytes(c.out))
+            except OSError:
+                pass
+            try:
+                c.sock.close()
+            except OSError:
+                pass
+        self.conns = []
+        for s in (self.listener, self.udp, self.wake_r, self.wake_w):
+            if s is not None:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+        try:
+            self.sel.close()
+        except Exception:
+            pass
+
+    # ---- lines of JSON
+    @staticmethod
+    def line(obj):
+        return (json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+
+    def add(self, sock, to=None):
+        sock.setblocking(False)
+        c = _Conn(sock)
+        c.to = to
+        self.conns.append(c)
+        if to is None:
+            self.watch(c, selectors.EVENT_READ)
+        else:  # a connection being made: it's ready to write once it's made (or failed)
+            self.watch(c, selectors.EVENT_WRITE)
+        return c
+
+    def watch(self, c, events):
+        if events == c.events:
+            return
+        if c.events:
+            self.sel.modify(c.sock, events, lambda mask, c=c: self.on_conn(c, mask))
+        else:
+            self.sel.register(c.sock, events, lambda mask, c=c: self.on_conn(c, mask))
+        c.events = events
+
+    def write(self, c, obj):
+        if c is None or c not in self.conns:
+            return
+        c.out += self.line(obj)
+        if len(c.out) > 8 * NET_LINE_MAX:  # it isn't reading what it's sent: let it go
+            self.drop(c)
+            return
+        self.flush(c)
+
+    def flush(self, c):
+        try:
+            while c.out:
+                n = c.sock.send(c.out)
+                if not n:
+                    break
+                del c.out[:n]
+        except (BlockingIOError, InterruptedError):
+            pass
+        except OSError:
+            self.drop(c)
+            return
+        if c.to is None:
+            self.watch(c, selectors.EVENT_READ | (selectors.EVENT_WRITE if c.out else 0))
+
+    def on_conn(self, c, mask):
+        if c not in self.conns:
+            return
+        if c.to is not None:  # a connection to a host being made: made, or not
+            self.connected(c)
+            return
+        if mask & selectors.EVENT_WRITE:
+            self.flush(c)
+        if mask & selectors.EVENT_READ and c in self.conns:
+            try:
+                data = c.sock.recv(65536)
+            except (BlockingIOError, InterruptedError):
+                return
+            except OSError:
+                data = b""
+            if not data:
+                self.drop(c)
+                return
+            c.buf += data
+            while c in self.conns:
+                i = c.buf.find(b"\n")
+                if i < 0:
+                    break
+                raw = bytes(c.buf[:i])
+                del c.buf[:i + 1]
+                try:
+                    m = json.loads(raw.decode("utf-8"))
+                except ValueError:
+                    continue
+                if isinstance(m, dict):
+                    if self.role == "host":
+                        self.host_line(c, m)
+                    else:
+                        self.join_line(c, m)
+            if len(c.buf) > NET_LINE_MAX:
+                self.drop(c)
+
+    def drop(self, c):
+        if c not in self.conns:
+            return
+        self.conns.remove(c)
+        try:
+            self.sel.unregister(c.sock)
+        except (KeyError, ValueError, OSError):
+            pass
+        try:
+            c.sock.close()
+        except OSError:
+            pass
+        if self.role == "host":
+            if c.id in self.players:
+                name = self.players.pop(c.id)
+                self.last_pos.pop(c.id, None)
+                out = {"t": "left", "id": c.id, "name": name}
+                self.to_all(out)
+                self.post(out)
+        elif c is self.conn:
+            self.conn = None
+            if self.joined:
+                self.joined = False
+                self.post({"t": "lost", "why": "end" if c.ended else "lost"})
+                self.stopping = True
+            else:
+                self.failed("closed", c)
+
+    # ---- the host
+    def start_host(self):
+        self.listener.setblocking(False)
+        self.port = self.listener.getsockname()[1]
+        self.sel.register(self.listener, selectors.EVENT_READ, self.on_accept)
+        for off in NET_FIND_PORTS:
+            u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                u.bind(("127.0.0.1" if self.local else "", self.base + off))
+            except OSError:  # another host on this computer has it
+                u.close()
+                continue
+            u.setblocking(False)
+            self.udp = u
+            self.sel.register(u, selectors.EVENT_READ, self.on_find)
+            break
+        # (with every port taken, games can still join by this computer's address)
+        ips = [] if self.local else local_ips()
+        self.post({"t": "hosting", "port": self.port, "ips": ips, "findable": self.udp is not None})
+
+    def on_accept(self, mask):
+        while True:
+            try:
+                sock, _ = self.listener.accept()
+            except (BlockingIOError, InterruptedError):
+                return
+            except OSError:
+                return
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except OSError:
+                pass
+            self.add(sock)
+
+    def on_find(self, mask):
+        while True:
+            try:
+                data, addr = self.udp.recvfrom(2048)
+            except (BlockingIOError, InterruptedError):
+                return
+            except ConnectionResetError:  # Windows: an answer earlier didn't arrive (the asker has gone)
+                continue
+            except OSError:
+                return
+            try:
+                m = json.loads(data.decode("utf-8"))
+            except ValueError:
+                continue
+            if isinstance(m, dict) and m.get("tuff") == "find":
+                reply = {"tuff": "room", "v": NET_VERSION, "room": self.room, "game": self.title, "port": self.port,
+                         "players": len(self.players), "host": self.players.get(1)}
+                try:
+                    self.udp.sendto(json.dumps(reply, ensure_ascii=False).encode("utf-8"), addr)
+                except OSError:
+                    pass
+
+    def to_all(self, obj, but=None):
+        for c in list(self.conns):
+            if c.id is not None and c is not but:
+                self.write(c, obj)
+
+    def unique(self, name, pid):
+        name = " ".join(str(name).split())[:NET_NAME_MAX] or f"Player {pid}"
+        taken = {n.lower() for i, n in self.players.items() if i != pid}
+        if name.lower() not in taken:
+            return name
+        n = 2
+        while f"{name} {n}".lower() in taken:
+            n += 1
+        return f"{name} {n}"
+
+    def host_line(self, c, m):
+        t = m.get("t")
+        if c.id is None:
+            if t == "hello":
+                self.welcome(c, m)
+            return
+        if t == "msg":
+            out = {"t": "msg", "from": c.id, "m": m.get("m"), "v": m.get("v")}
+            self.to_all(out, but=c)
+            self.post(out)
+        elif t == "pos":
+            out = {"t": "pos", "id": c.id, "p": m.get("p")}
+            self.last_pos[c.id] = out["p"]
+            self.to_all(out, but=c)
+            self.post(out)
+        elif t == "share" and isinstance(m.get("k"), str):
+            self.shared[m["k"]] = m.get("v")
+            out = {"t": "shared", "k": m["k"], "v": m.get("v"), "by": c.id}
+            self.to_all(out)
+            self.post(out)
+        elif t == "name":
+            self.rename(c.id, m.get("name"))
+
+    def welcome(self, c, m):
+        if len(self.players) >= NET_MAX_PLAYERS:
+            c.out += self.line({"t": "full"})
+            self.flush(c)
+            self.drop(c)
+            return
+        c.id = self.next_id
+        self.next_id += 1
+        name = self.unique(m.get("name") or f"Player {c.id}", c.id)
+        self.players[c.id] = name
+        self.write(c, {"t": "welcome", "id": c.id, "name": name, "room": self.room, "game": self.title,
+                       "players": [[i, n] for i, n in self.players.items()], "shared": self.shared,
+                       "pos": {str(i): p for i, p in self.last_pos.items()}})
+        out = {"t": "joined", "id": c.id, "name": name}
+        self.to_all(out, but=c)
+        self.post(out)
+
+    def rename(self, pid, name):
+        if pid not in self.players or not isinstance(name, str):
+            return
+        name = self.unique(name, pid)
+        self.players[pid] = name
+        out = {"t": "renamed", "id": pid, "name": name}
+        self.to_all(out)
+        self.post(out)
+
+    def host_op(self, op):
+        t = op.get("t")
+        if t == "msg":
+            self.to_all({"t": "msg", "from": 1, "m": op.get("m"), "v": op.get("v")})
+        elif t == "pos":
+            self.last_pos[1] = op.get("p")
+            self.to_all({"t": "pos", "id": 1, "p": op.get("p")})
+        elif t == "share":
+            self.shared[op["k"]] = op.get("v")
+            out = {"t": "shared", "k": op["k"], "v": op.get("v"), "by": 1}
+            self.to_all(out)
+            self.post(out)
+        elif t == "name":
+            self.rename(1, op.get("name"))
+
+    # ---- a joining game
+    def start_join(self):
+        u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        u.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        u.bind(("127.0.0.1" if self.local else "", 0))
+        u.setblocking(False)
+        self.udp = u
+        self.sel.register(u, selectors.EVENT_READ, self.on_rooms)
+        if self.address is not None:
+            ip, port = self.address
+            self.targets = [ip]
+            if port is not None:  # the whole address: straight there
+                self.connect((ip, port))
+                return
+        elif self.local:
+            self.targets = ["127.0.0.1"]
+        else:
+            nets = {ip.rsplit(".", 1)[0] + ".255" for ip in local_ips()}  # each network's own broadcast (a /24 guess)
+            self.targets = ["255.255.255.255", *sorted(nets), "127.0.0.1"]
+        self.post({"t": "looking"})
+
+    def ask(self):
+        self.asks += 1
+        ask = json.dumps({"tuff": "find", "v": NET_VERSION}).encode("utf-8")
+        for ip in self.targets:
+            for off in NET_FIND_PORTS:
+                try:
+                    self.udp.sendto(ask, (ip, self.base + off))
+                except OSError:  # that network isn't there (or a broadcast isn't allowed): the others still go
+                    pass
+        if self.address is not None and self.conn is None and (self.address[1] is not None or self.asks % 3 == 0):
+            # No answer from that computer yet: its firewall may only let the game itself in. Try the game's port.
+            self.connect((self.address[0], self.address[1] or self.base + 1))
+
+    def on_rooms(self, mask):
+        while True:
+            try:
+                data, addr = self.udp.recvfrom(4096)
+            except (BlockingIOError, InterruptedError):
+                return
+            except ConnectionResetError:
+                continue
+            except OSError:
+                return
+            try:
+                m = json.loads(data.decode("utf-8"))
+            except ValueError:
+                continue
+            if not isinstance(m, dict) or m.get("tuff") != "room" or not isinstance(m.get("port"), int):
+                continue
+            key = (addr[0], m["port"])
+            if self.bad.get(key, 0) > time.monotonic() or self.conn is not None:
+                continue
+            if self.room is not None and not same_room(m.get("room", ""), self.room):
+                continue
+            self.found[key] = m
+            if self.first_found is None:
+                self.first_found = time.monotonic()
+
+    def pick(self):
+        """The room to go in, of those that answered: one for the same game first (another game's room is still a
+        room), then the one with fewest players."""
+        rooms = sorted(self.found.items(), key=lambda kv: (not same_room(kv[1].get("game", ""), self.title),
+                                                           kv[1].get("players", 0), kv[0][0] != "127.0.0.1"))
+        self.found, self.first_found = {}, None
+        if rooms:
+            self.connect(rooms[0][0])
+
+    def connect(self, key):
+        if self.conn is not None:
+            return
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setblocking(False)  # a computer that doesn't answer mustn't hold up the thread (tick gives up on it)
+        try:
+            err = s.connect_ex(key)
+        except OSError as exc:
+            err = exc.errno or -1
+        if err not in (0, *_WOULD_BLOCK):
+            s.close()
+            self.bad[key] = time.monotonic() + 2
+            return
+        self.conn = self.add(s, to=time.monotonic() + 3)
+        self.conn.key = key
+        self.post({"t": "connecting", "to": key[0]})
+
+    def connected(self, c):
+        try:
+            err = c.sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+        except OSError as exc:
+            err = exc.errno or -1
+        if err:
+            self.failed("refused", c)
+            return
+        try:
+            c.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+        c.to = None
+        self.hello_by = time.monotonic() + 5
+        self.watch(c, selectors.EVENT_READ)
+        self.write(c, {"t": "hello", "v": NET_VERSION, "name": self.my_name, "game": self.title})
+
+    def failed(self, why, c=None):
+        """A room that didn't let us in (it's gone, it's full, it answered too slowly): look again."""
+        c = c or self.conn
+        if c is not None:
+            if c.key is not None:
+                self.bad[c.key] = time.monotonic() + 3
+            self.conn = None
+            if c in self.conns:
+                self.drop(c)
+        self.conn = None
+        self.next_ask = 0.0
+        self.post({"t": "looking", "why": why})
+
+    def join_line(self, c, m):
+        t = m.get("t")
+        if t == "welcome" and not self.joined:
+            self.joined = True
+            self.post(m)
+            for op in self.waiting:
+                self.write(c, op)
+            self.waiting.clear()
+        elif t == "full":
+            self.post({"t": "refused", "why": "full"})
+            self.stopping = True
+        elif t == "end":
+            c.ended = True
+        elif self.joined:
+            self.post(m)
+
+
+class Net:
+    """A game's multiplayer (game:host, game:join and the rest), on the Tuff thread: who's in the room, the shared
+    values, the other players' people in a 3D world, and the functions that run when something happens. NetLink
+    does the talking. A message on the HUD says what's going on (hosting, looking, who came and went)."""
+
+    def __init__(self, game):
+        self.game, self.rt = game, game.rt
+        self.link = None
+        self.role = None  # "host" or "join", while the game is in a room or looking for one
+        self.state = "off"  # "off", "looking" (or "connecting") and "in"
+        self.me = 1
+        self.own_name = None  # what the program called its player (game:my_name)
+        self.room = None
+        self.players = {}  # player number -> name, everyone in the room, this game too
+        self.values = {}  # the shared values as this game sees them: the room's, and its own changes on their way
+        self.pending = collections.Counter()  # this game's changes the host hasn't sent back yet, by name
+        self.early = set()  # names shared before the game was in its room: they fill in what the room doesn't have
+        self.people = {}  # player number -> their person (a 3D world)
+        self.msg_fns, self.join_fns, self.leave_fns = [], [], []
+        self.sent, self.sent_at = None, 0.0
+        self.pill, self.pill_text, self.pill_until = (None, None), None, None
+        self.said = collections.deque(maxlen=12)  # what the HUD said lately (for the autopilot's reports)
+        self.address = None  # the host's address, for the pill
+        atexit.register(self.stop)
+
+    # ---- helpers
+    @property
+    def off(self):
+        return SCENE is not None or os.environ.get("TUFF_SCENE") == "1"
+
+    def what(self, method):
+        return f"{self.game.KIND}:{method}"
+
+    def name(self):
+        return self.players.get(self.me) or self.own_name or "Player 1"
+
+    def text_input(self, v, method, example, what="name"):
+        t = self.rt.plain(v)
+        if not isinstance(t, str):
+            raise self.rt.error(f"{self.what(method)} needs the {what} as text, like {example}, not {self.rt.what(t)}.")
+        return t
+
+    def title(self):
+        saves = getattr(self.game, "save_file", None)
+        return saves.title if saves is not None else self.game.view.title
+
+    def busy(self, method):
+        if self.role == "host":
+            raise self.rt.error(f"This game is hosting \"{self.room}\" already. Use {self.what('leave')}() first to "
+                                f"{'host another room' if method == 'host' else 'join another game'}.")
+        if self.role == "join":
+            raise self.rt.error(f"This game is {'in a room' if self.state == 'in' else 'looking for a room'} already. "
+                                f"Use {self.what('leave')}() first to {'host one' if method == 'host' else 'join another'}.")
+
+    def value_in(self, v, what):
+        """A value from another game as Tuff has it (a table needs tap, like a save's)."""
+        try:
+            return tuff_value(self.rt, v, what)
+        except Exception:
+            self.game.engine_error(self.rt.error(f"\"{what}\" came with a table, and tables need tap: add  mention tap  at "
+                                                 "the top."), "multiplayer")
+            return None
+
+    def fire(self, fns, *args):
+        for fn in list(fns):
+            self.game.fire(fn, *args)
+            if self.game.closed:
+                return
+
+    # ---- game:host, game:join, game:leave
+    def host(self, room=MISSING):
+        g = self.game
+        title = self.title()
+        if room is MISSING or room is None:
+            room = title
+        room = " ".join(self.text_input(room, "host", f'{self.what("host")}("{title}")', "room's name").split())
+        if not room:
+            raise self.rt.error(f"A room needs a name, like {self.what('host')}(\"{title}\").")
+        self.busy("host")
+        if self.off:
+            return None
+        listener = self.listen()
+        self.role, self.state, self.room, self.me = "host", "in", room, 1
+        self.players = {1: self.own_name or "Player 1"}
+        self.pending.clear()
+        self.early.clear()
+        self.link = NetLink("host", title, self.players[1], room=room, listener=listener, shared=self.values)
+        self.link.start()
+        self.dress_player()
+        self.say(f"Hosting \"{room}\"", None)
+        return None
+
+    def listen(self):
+        """The host's TCP socket, made here so game:hosting() is true from the line after game:host. The first free
+        port after the one rooms are found on."""
+        bind = "127.0.0.1" if net_local() else ""
+        base = net_base_port()
+        last = None
+        for port in [*range(base + 1, base + 10), 0]:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: never share a port another game has
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                else:  # elsewhere this only lets a port be used again right after a game closed
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind((bind, port))
+                s.listen(16)
+                return s
+            except OSError as exc:
+                last = exc
+                s.close()
+        raise self.rt.error(f"This computer wouldn't let the game host a room ({getattr(last, 'strerror', None) or last}).")
+
+    def join(self, where=MISSING):
+        title = self.title()
+        room = address = None
+        if where is not MISSING and where is not None:
+            text = self.text_input(where, "join", f'{self.what("join")}("192.168.1.20") or {self.what("join")}("{title}")',
+                                   "room's name or the host's address")
+            address = net_address(text)
+            if address is None:
+                room = " ".join(text.split())
+                if not room:
+                    raise self.rt.error(f"{self.what('join')}() finds any room, and {self.what('join')}(\"{title}\") the room "
+                                        "called that. Give it a name, or nothing.")
+        self.busy("join")
+        if self.off:
+            return None
+        self.role, self.state, self.room, self.address = "join", "looking", room, address
+        self.players = {}
+        self.pending.clear()
+        self.early = set(self.values)
+        self.link = NetLink("join", title, self.own_name, room=room, address=address)
+        self.link.start()
+        self.say(f"Looking for \"{room}\"..." if room else f"Looking for {address[0]}..." if address else
+                 "Looking for a game to join...", None)
+        return None
+
+    def leave(self):
+        if self.link is None and self.role is None:
+            return None
+        self.stop()
+        was = self.role
+        self.gone_all()
+        self.role, self.state, self.link = None, "off", None
+        self.say("You left the game" if was == "join" else "The room is closed", 2.5)
+        return None
+
+    def stop(self):
+        link = self.link
+        if link is not None:
+            link.stop()
+            if link.is_alive() and link is not threading.current_thread():
+                link.join(0.5)  # a host says goodbye to everyone before the window closes
+
+    def gone_all(self):
+        """Everyone else has gone (this game left, or the room closed): their people go, and on_leave runs for each."""
+        others = [(i, n) for i, n in sorted(self.players.items()) if i != self.me]
+        for pid in list(self.people):
+            self.remove_person(pid)
+        self.players = {self.me: self.name()} if self.players else {}
+        for _, n in others:
+            self.fire(self.leave_fns, n)
+
+    # ---- what the program asks
+    def connected(self):
+        return self.state == "in"
+
+    def hosting(self):
+        return self.role == "host" and self.state == "in"
+
+    def player_names(self):
+        if not self.players:
+            return [self.name()]
+        return [n for _, n in sorted(self.players.items())]
+
+    def my_name(self, name=MISSING):
+        if name is MISSING or name is None:
+            return self.name()
+        n = " ".join(self.text_input(name, "my_name", f'{self.what("my_name")}("Sam")').split())
+        if not n:
+            raise self.rt.error(f"Your name can't be empty: {self.what('my_name')}(\"Sam\")")
+        if len(n) > NET_NAME_MAX:
+            raise self.rt.error(f"Names can be up to {NET_NAME_MAX} letters long, so they fit over a player's head. "
+                                f"\"{n[:NET_NAME_MAX]}\" would fit.")
+        self.own_name = n
+        if self.link is not None:
+            self.link.say({"t": "name", "name": n})
+        if self.players:
+            self.players[self.me] = n
+        return n
+
+    def send(self, message, value=None):
+        m = self.text_input(message, "send", f'{self.what("send")}("hello") or {self.what("send")}("score", 10)', "message")
+        v = self.game.saves().keepable(value, method="send")
+        if self.link is None or self.off:
+            return None  # not in a room: there's nobody to send it to
+        self.link.say({"t": "msg", "m": m, "v": v})
+        return None
+
+    def share(self, name, value):
+        k = self.text_input(name, "share", f'{self.what("share")}("coins", 5)')
+        if not k.strip():
+            raise self.rt.error(f"A shared value needs a name, like {self.what('share')}(\"coins\", 5).")
+        v = self.game.saves().keepable(value, method="share")
+        self.values[k] = v
+        if self.link is not None and self.state == "in":
+            self.pending[k] += 1
+            self.link.say({"t": "share", "k": k, "v": v})
+        elif self.role == "join":
+            self.early.add(k)  # the room's own value wins when the game gets in (this one fills in if it has none)
+        return None
+
+    def shared(self, name, default=None):
+        k = self.text_input(name, "shared", f'coins = {self.what("shared")}("coins", 0)')
+        return self.value_in(self.values[k], k) if k in self.values else default
+
+    def on(self, fns, fn, method):
+        fns.append(self.game.lib.check_fn(fn, f":{method}"))
+        return None
+
+    def others(self):
+        return [t.native for pid, t in sorted(self.people.items()) if t.alive and pid in self.players]
+
+    # ---- every frame
+    def frame(self, real):
+        link = self.link
+        if link is not None:
+            for _ in range(2000):
+                try:
+                    e = link.inbox.get_nowait()
+                except queue.Empty:
+                    break
+                self.event(e)
+                if self.game.closed or self.link is not link:
+                    break
+        if self.link is not None and self.state == "in":
+            self.send_spot()
+        if self.people:
+            self.move_people(real)
+        if self.pill_until is not None and time.monotonic() >= self.pill_until:
+            self.say(None)
+
+    def event(self, e):
+        t = e.get("t")
+        if t == "hosting":
+            ips = e.get("ips") or []
+            self.address = ips[0] if ips else None
+            where = f" on {self.address}" if self.address else " on this computer"
+            self.say(f"Hosting \"{self.room}\"{where}", 6)
+        elif t == "looking" and self.state == "connecting":
+            self.state = "looking"
+        elif t == "connecting":
+            self.state = "connecting"
+        elif t == "welcome":
+            self.welcome(e)
+        elif t == "joined":
+            pid, name = e.get("id"), str(e.get("name"))
+            self.players[pid] = name
+            self.say(f"{name} joined", 2.5)
+            self.fire(self.join_fns, name)
+        elif t == "left":
+            pid = e.get("id")
+            name = self.players.pop(pid, None) or str(e.get("name"))
+            self.remove_person(pid)
+            self.say(f"{name} left", 2.5)
+            self.fire(self.leave_fns, name)
+        elif t == "renamed":
+            pid, name = e.get("id"), str(e.get("name"))
+            if pid in self.players:
+                self.players[pid] = name
+            if pid == self.me:
+                self.own_name = name
+            person = self.people.get(pid)
+            if person is not None and person.alive:
+                person.data["name"] = name
+                person.label(name)
+        elif t == "msg":
+            sender = self.players.get(e.get("from"), "Someone")
+            self.fire(self.msg_fns, e.get("m"), self.value_in(e.get("v"), e.get("m")), sender)
+        elif t == "pos":
+            if e.get("id") != self.me:
+                self.place(e.get("id"), e.get("p"))
+        elif t == "shared":
+            k, by = e.get("k"), e.get("by")
+            if by == self.me and self.pending[k] > 0:
+                self.pending[k] -= 1
+            if self.pending[k] <= 0:
+                self.pending.pop(k, None)
+                self.values[k] = e.get("v")
+        elif t == "lost":
+            self.state = "off"
+            self.gone_all()
+            self.role, self.link = None, None
+            self.say("The host left the game" if e.get("why") == "end" else "Lost the connection to the game", 4)
+        elif t == "refused":
+            self.role, self.state, self.link = None, "off", None
+            self.say("That game is full", 4)
+        elif t == "error":
+            self.role, self.state, self.link = None, "off", None
+            self.say("Multiplayer stopped working", 4)
+            self.game.engine_error(self.rt.error(f"Multiplayer stopped working: {e.get('why')}"), "multiplayer")
+
+    def welcome(self, e):
+        self.state, self.me, self.room = "in", e.get("id"), e.get("room")
+        self.players = {int(i): str(n) for i, n in e.get("players", [])}
+        shared = e.get("shared") or {}
+        mine = {k: self.values[k] for k in self.early if k in self.values and k not in shared}
+        self.values = {**shared, **mine}
+        self.early.clear()
+        for k, v in mine.items():  # what this game shared before it got in, that the room didn't have yet
+            self.pending[k] += 1
+            self.link.say({"t": "share", "k": k, "v": v})
+        self.sent = None  # where the player is goes out at once
+        for pid, p in (e.get("pos") or {}).items():
+            if int(pid) != self.me:
+                self.place(int(pid), p)
+        self.dress_player()
+        self.say(f"Joined \"{self.room}\"", 3)
+        for pid, name in sorted(self.players.items()):
+            if pid != self.me:
+                self.fire(self.join_fns, name)
+
+    # ---- people (a 3D world)
+    def send_spot(self):
+        g = self.game
+        p = getattr(g, "the_player", None)
+        if p is None:
+            return
+        now = time.monotonic()
+        if now - self.sent_at < NET_SEND_EVERY:
+            return
+        hidden = p.hidden or getattr(g, "driving", None) is not None  # in a car (cars aren't shared): not walking about
+        spot = [round(p.x, 3), round(p.y, 3), round(p.z, 3), round(p.heading, 1), 0 if hidden else 1]
+        if spot == self.sent and now - self.sent_at < 1.0:
+            return
+        self.sent, self.sent_at = spot, now
+        self.link.say({"t": "pos", "p": spot})
+
+    def dress_player(self):
+        """The player's own figure (third person) wears the shirt the others see it in."""
+        body = getattr(getattr(self.game, "the_player", None), "body", None)
+        if body is not None and body.alive:
+            c = NET_SHIRTS[(self.me - 1) % len(NET_SHIRTS)]
+            if body.look is not None:  # it stays that colour when the program changes its look
+                body.look["shirt"] = c
+            for node, main in body.parts:
+                if main:
+                    body.send(node, color=c)
+
+    def place(self, pid, p):
+        g = self.game
+        if not g.three_d or not isinstance(pid, int) or not isinstance(p, list) or len(p) < 4:
+            return
+        try:
+            spot = [float(v) for v in p[:4]] + [bool(p[4]) if len(p) > 4 else True]
+        except (TypeError, ValueError):
+            return
+        person = self.people.get(pid)
+        if person is None or not person.alive:
+            person = self.people[pid] = self.make_person(pid, spot)
+        person.net_to = spot
+
+    def make_person(self, pid, spot):
+        g = self.game
+        pick = random.Random(pid * 7919 + 17).choice  # the same person on every screen
+        parts = [(t, {**p, "shadow": True}, main) for t, p, main in person_parts(
+            NET_SHIRTS[(pid - 1) % len(NET_SHIRTS)], pick(SKINS), pick(HAIRS), pick(PANTS), pick(HAIR_STYLES),
+            pick(("long", "long", "rolled")), pick(SHOES))]
+        x, y, z, heading, shown = spot
+        t = Thing(g, "person", x, y, z, (0.7, 1.75, 0.5), parts)
+        g.things.pop(t, None)  # tgame's own, like the player's figure: game:clear leaves the other players
+        t.solid_ = False  # walk through each other (touches still sees them)
+        t.heading = heading % 360
+        t.push_rotation()
+        name = self.players.get(pid, f"Player {pid}")
+        t.data["name"] = name
+        t.label(name)
+        t.net_shown = True
+        if not shown:
+            t.hide()
+            t.net_shown = False
+        return t
+
+    def remove_person(self, pid):
+        t = self.people.pop(pid, None)
+        if t is not None and t.alive:
+            t.remove()
+
+    def move_people(self, real):
+        """Each other player's person goes smoothly to where they last were (a few frames behind: they're heard 20
+        times a second), and straight there when that's far (they jumped onto a pad, or moved to a new spot)."""
+        k = 1 - math.exp(-14 * real) if real else 1.0
+        for pid, t in list(self.people.items()):
+            if not t.alive:
+                del self.people[pid]  # the program removed them: they come back with their next move
+                continue
+            x, y, z, heading, shown = t.net_to
+            if shown != t.net_shown:
+                t.net_shown = shown
+                t.show() if shown else t.hide()
+            far = math.dist((t.x, t.y, t.z), (x, y, z)) > 8
+            if (x, y, z) != (t.x, t.y, t.z):
+                if far or abs(x - t.x) + abs(y - t.y) + abs(z - t.z) < 0.002:
+                    t.x, t.y, t.z = x, y, z
+                else:
+                    t.x += (x - t.x) * k
+                    t.y += (y - t.y) * k
+                    t.z += (z - t.z) * k
+                t.push()
+            turn = ((heading - t.heading + 180) % 360) - 180
+            if turn:
+                t.heading = heading % 360 if far or abs(turn) < 0.2 else (t.heading + turn * k) % 360
+                t.push_rotation()
+
+    # ---- the message on the HUD
+    def say(self, words, seconds=3.0):
+        """A line on a dark pill at the top of the window, for `seconds` (None: until the next one). None hides it."""
+        if self.off:
+            return
+        g = self.game
+        box, text = self.pill
+        self.pill_text = words
+        self.pill_until = None if words is None or seconds is None else time.monotonic() + seconds
+        if words is None:
+            for s in (box, text):
+                if s is not None and s.alive:
+                    s.hide()
+            return
+        self.said.append(words)
+        size = 16
+        w, h = len(words) * size * 0.56 + 30, size + 16
+        if box is None or not box.alive:
+            hud = g.hud()
+            box = hud.make("rect", g.W / 2, 30, {"w": w, "h": h, "radius": h / 2, "color": "#11141a", "alpha": 0.62,
+                                                 "z": 5e5 + 1}, own=False)
+            text = hud.make("text", g.W / 2, 30, {"text": words, "size": size, "bold": True, "color": "#ffffff",
+                                                  "ax": 0.5, "ay": 0.5, "z": 5e5 + 2}, own=False)
+        else:
+            box.w = w
+            box.send(w=w, visible=True)
+            text.words = words
+            text.send(text=words, visible=True)
+            box.hidden = text.hidden = False
+        self.pill = (box, text)
+
+    def state_dump(self):
+        """For the autopilot's reports."""
+        return {"state": self.state, "role": self.role, "me": self.me, "name": self.name(), "room": self.room,
+                "players": self.player_names(), "shared": dict(self.values), "pending": dict(self.pending),
+                "message": self.pill_text, "said": list(self.said),
+                "others": [[t.data.get("name"), round(t.x, 2), round(t.y, 2), round(t.z, 2), round(t.heading, 1),
+                            not t.hidden] for _, t in sorted(self.people.items()) if t.alive]}
+
+
+class GameNet:
+    """What every game window and world gets for multiplayer (Game takes these methods, just below; world:others
+    is a 3D world's)."""
+    NAMES = [("host", "net_host"), ("join", "net_join"), ("leave", "net_leave"), ("connected", "net_connected"),
+             ("hosting", "net_hosting"), ("players", "net_players"), ("my_name", "net_my_name"), ("send", "net_send"),
+             ("on_message", "on_message"), ("on_join", "on_join"), ("on_leave", "on_leave"), ("share", "net_share"),
+             ("shared", "net_shared")]
+
+    def network(self):
+        if getattr(self, "net", None) is None:
+            self.net = Net(self)
+        return self.net
+
+    def net_host(self, name=MISSING):
+        return self.network().host(name)
+
+    def net_join(self, where=MISSING):
+        return self.network().join(where)
+
+    def net_leave(self):
+        return self.network().leave()
+
+    def net_connected(self):
+        return self.network().connected()
+
+    def net_hosting(self):
+        return self.network().hosting()
+
+    def net_players(self):
+        return self.network().player_names()
+
+    def net_my_name(self, name=MISSING):
+        return self.network().my_name(name)
+
+    def net_send(self, message, value=None):
+        return self.network().send(message, value)
+
+    def on_message(self, fn):
+        net = self.network()
+        return net.on(net.msg_fns, fn, "on_message")
+
+    def on_join(self, fn):
+        net = self.network()
+        return net.on(net.join_fns, fn, "on_join")
+
+    def on_leave(self, fn):
+        net = self.network()
+        return net.on(net.leave_fns, fn, "on_leave")
+
+    def net_share(self, name, value):
+        return self.network().share(name, value)
+
+    def net_shared(self, name, default=None):
+        return self.network().shared(name, default)
+
+    def net_others(self):
+        return self.network().others()
+
+
+for _attr in ("network", "net_others", *(attr for _, attr in GameNet.NAMES)):
+    setattr(Game, _attr, getattr(GameNet, _attr))
+Game2D.NAMES = Game2D.NAMES + GameNet.NAMES
+World3D.NAMES = World3D.NAMES + GameNet.NAMES + [("others", "net_others")]
+HINTS["game"].update({k: v for k, v in NET_HINTS.items() if v != "others" and k not in HINTS["game"]})
+HINTS["world"].update({k: v for k, v in NET_HINTS.items() if k not in HINTS["world"]})
+NEEDS_3D["others"] = ("The other players are people in a 3D world. Make the game with tgame.world(...) and give it a "
+                      "player, or in 2D use game:players() for their names and game:on_message to hear where they are.")
+for _kind in ("game", "world"):
+    GIVES[_kind].update({"connected": "$bool", "hosting": "$bool", "players": "$list", "my_name": "$text"})
+    HANDLERS[_kind].update({"on_message": (0, 3, "3 inputs (the message, the value sent with it and who sent it)"),
+                            "on_join": (0, 1, "1 input (the name of the player who joined)"),
+                            "on_leave": (0, 1, "1 input (the name of the player who left)")})
+GIVES["world"]["others"] = "$list"

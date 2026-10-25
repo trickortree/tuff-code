@@ -25,6 +25,9 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'tuffview', privileges: { standa
 
 let win;
 let runProc = null;
+// "Run a second player": another copy of the program beside runProc, to try a multiplayer game alone (one copy
+// hosts, the other joins). Its own slot, so starting or stopping it never touches the first copy.
+let run2Proc = null;
 
 const settingsPath = () => path.join(app.getPath('userData'), 'settings.json');
 
@@ -119,17 +122,28 @@ function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
 
+// A new run starts over: the second player (if any) goes too, so both copies always run the same code.
 function startRun(file, id) {
   if (runProc) runProc.kill();
+  if (run2Proc) run2Proc.kill();
+  runProc = spawnTuff(file, id, 'run', (proc) => { if (runProc === proc) runProc = null; });
+}
+
+function startSecond(file, id) {
+  if (run2Proc) run2Proc.kill();
+  run2Proc = spawnTuff(file, id, 'run2', (proc) => { if (run2Proc === proc) run2Proc = null; });
+}
+
+// Runs a Tuff program and sends what it says to the Run panel as <channel>:data and <channel>:exit.
+function spawnTuff(file, id, channel, ended) {
   const { cmd, args: fullArgs } = tuffCommand([file]);
-  const out = (stream, text) => send('run:data', { id, stream, text });
+  const out = (stream, text) => send(`${channel}:data`, { id, stream, text });
   out('cmd', `${cmd} ${fullArgs.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')}\n`);
   const proc = spawn(cmd, fullArgs, {
     cwd: path.dirname(file),
     windowsHide: true,
     env: { ...process.env, TUFF_IDE: '1', PYTHONIOENCODING: 'utf-8' },
   });
-  runProc = proc;
   proc.stdout.setEncoding('utf8');
   proc.stderr.setEncoding('utf8');
   proc.stdout.on('data', (d) => out('stdout', d));
@@ -139,9 +153,10 @@ function startRun(file, id) {
     ? `Could not start the Tuff runtime (${err.message}). Try reinstalling TuffCode.\n`
     : `Could not start Python (${err.message}). Is Python installed?\n`));
   proc.on('close', (code, signal) => {
-    if (runProc === proc) runProc = null;
-    send('run:exit', { id, code: code ?? (signal ? -1 : 0) });
+    ended(proc);
+    send(`${channel}:exit`, { id, code: code ?? (signal ? -1 : 0) });
   });
+  return proc;
 }
 
 function createWindow() {
@@ -365,8 +380,14 @@ ipcMain.handle('run:start', (_e, file, id) => startRun(file, id));
 ipcMain.handle('run:input', (_e, text) => {
   if (runProc && runProc.stdin.writable) runProc.stdin.write(text);
 });
+// Stop ends both copies; the second player's own button ends only it (run2:stop).
 ipcMain.handle('run:stop', () => {
   if (runProc) runProc.kill();
+  if (run2Proc) run2Proc.kill();
+});
+ipcMain.handle('run2:start', (_e, file, id) => startSecond(file, id));
+ipcMain.handle('run2:stop', () => {
+  if (run2Proc) run2Proc.kill();
 });
 
 let building = false;
@@ -442,20 +463,24 @@ ipcMain.handle('tuff:check', (_e, source) => checkSource(source));
 
 // Tuff Engine's preview: tuff.py --scene runs a tgame program's setup with no window (the editor's text, which may
 // not be saved, with the game file's folder for its pictures) and gives back what it made as JSON. A newer request
-// stops the one still running, which then resolves to { superseded: true }.
-let sceneProc = null;
-let sceneSeq = 0;
-ipcMain.handle('engine:scene', async (_e, file, source) => {
-  const stop = () => { if (sceneProc) { sceneProc.superseded = true; sceneProc.kill(); } };
+// with the same tag stops the one still running, which then resolves to { superseded: true }: 'main' is the game
+// being edited, 'previews' the Add tab's pictures (tuff-engine.js), so one never stops the other.
+const sceneProcs = new Map();  // tag -> the process running
+const sceneSeqs = new Map();   // tag -> its last request's number
+let sceneNo = 0;
+ipcMain.handle('engine:scene', async (_e, file, source, tag = 'main') => {
+  tag = tag === 'previews' ? 'previews' : 'main';
+  const stop = () => { const p = sceneProcs.get(tag); if (p) { p.superseded = true; p.kill(); } };
   stop();
-  const n = ++sceneSeq;
+  const n = ++sceneNo;
+  sceneSeqs.set(tag, n);
   const t0 = Date.now();
   const dir = path.join(app.getPath('temp'), 'tuffcode-scene');
   await fsp.mkdir(dir, { recursive: true });
   const src = path.join(dir, `scene-${process.pid}-${n}.tuf`);
   const out = path.join(dir, `scene-${process.pid}-${n}.json`);
   await fsp.writeFile(src, String(source), 'utf8');
-  if (n !== sceneSeq) { // a newer request came while this one was writing its file
+  if (n !== sceneSeqs.get(tag)) { // a newer request came while this one was writing its file
     fsp.rm(src, { force: true }).catch(() => {});
     return { superseded: true, ms: Date.now() - t0 };
   }
@@ -463,17 +488,17 @@ ipcMain.handle('engine:scene', async (_e, file, source) => {
   const { cmd, args } = tuffCommand(['--scene', String(file), src, out]);
   const result = await new Promise((resolve) => {
     const proc = spawn(cmd, args, { cwd: path.dirname(String(file)), windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
-    sceneProc = proc;
+    sceneProcs.set(tag, proc);
     let err = '';
     proc.stdout.resume();
     proc.stderr.on('data', (d) => { if (err.length < 4000) err += d; });
     proc.stdin.on('error', () => {});
     proc.stdin.end();
     const timer = setTimeout(() => { proc.timedOut = true; proc.kill(); }, 5000);
-    proc.on('error', (e) => { clearTimeout(timer); if (sceneProc === proc) sceneProc = null; resolve({ stopped: 'crashed', message: e.message }); });
+    proc.on('error', (e) => { clearTimeout(timer); if (sceneProcs.get(tag) === proc) sceneProcs.delete(tag); resolve({ stopped: 'crashed', message: e.message }); });
     proc.on('close', async () => {
       clearTimeout(timer);
-      if (sceneProc === proc) sceneProc = null;
+      if (sceneProcs.get(tag) === proc) sceneProcs.delete(tag);
       if (proc.superseded) return resolve({ superseded: true });
       if (proc.timedOut) return resolve({ stopped: 'timeout' });
       try { resolve(JSON.parse(await fsp.readFile(out, 'utf8'))); }
@@ -589,6 +614,7 @@ app.on('will-quit', () => ai.quit());
 
 app.on('window-all-closed', () => {
   if (runProc) runProc.kill();
-  if (sceneProc) sceneProc.kill();
+  if (run2Proc) run2Proc.kill();
+  for (const p of sceneProcs.values()) p.kill();
   app.quit();
 });

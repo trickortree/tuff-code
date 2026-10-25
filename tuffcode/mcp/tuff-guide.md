@@ -400,7 +400,8 @@ while game:open():
 - **The world:** `:sky`, `:fog(distance)` (0 is off), `:sun(brightness)`, `:light(x, y, z, color)`, `:ground(color)` and `:island(size)`, or `:terrain(size)` for land with hills, mountains and lakes, and `:lighting "modern"` (both below).
 - **Shapes:** `game:box(x, y, z, size, color)`, and the same for `sphere`, `cylinder`, `cone` and `plane`. size is a number, or a list: `[width, height, depth]` for a box, `[width, height]` for a cylinder or cone, and `[width, depth]` for a plane.
 - **Ready-made models:** `game:spawn("pine", x, y, z)` makes a tree, pine, rock, bush, flower, house, hut, sign, crate, fence or coin. Without a spot it picks a random one.
-- **Objects** have the sprites' methods with a z added (`:move(dx, dy, dz)`, `:glide(x, y, z, seconds)`...), plus `:shake()`, `:fall()`, `:fallen()`, `:regrow(seconds)`, `:grow()`, `:swing()`, `:glow "gold"`, `:label "Oak"` (text above it) and `:solid false` (the player walks through it).
+- **Objects** have the sprites' methods with a z added (`:move(dx, dy, dz)`, `:glide(x, y, z, seconds)`...), plus `:shake()`, `:fall()`, `:fallen()`, `:regrow(seconds)`, `:grow()`, `:swing()`, `:glow "gold"`, `:label "Oak"` (text above it) and `:solid false` (the player walks through it). A sign's label is written on its board instead, on both sides, as big as fits (long words wrap): `sign:label("Shop")`.
+- **People's looks (3D):** a person (`world:spawn("person", x, y, z)`), a ragdoll and the player in third person can be dressed: `npc:shirt("red")`, `npc:pants("black")`, `npc:skin("tan")` (pale, light, tan, medium, brown, dark, or any colour), `npc:hair("curly", "blonde")` (a style: short, swoop, bob, ponytail, buns, curly or spiky, and a colour: black, brown, blonde, ginger, grey or any colour; one or both), `npc:shoes("white")` and `npc:sleeves("short")` (or `"long"`). They can change while the game runs. Left out, tgame picks a look.
 - **The player:** `"first person"` or `"third person"`. Solid things block the way and can be stood on. `player:walk_speed 6`, `:jump_height 2`, `:hold "sword"` (axe, pickaxe, sword, torch or hammer), and `game:looking_at()` is the object in the middle of the view, or nil.
 - **Without a player:** `game:camera_at(x, y, z)` with `game:look_at(thing)`, or `game:follow(thing)` (behind it), or `game:orbit(thing)` (drag to turn around it).
 - **Testing a game:** add `game:after(2, selftest)`, call your functions in `func selftest():`, `say` what you find, and end it with `game:close()`.
@@ -632,7 +633,7 @@ while game:open():
 - **Modern lighting:** `game:lighting "modern"` lights everything softly from the sky, like newer game engines do (tone mapping, and bigger, sharper shadows), so the land, the water and the models look richer. `"simple"` (the default) is the classic look. It can change while the game runs, and a computer that can't do it stays simple.
 
 #### Physics
-`thing:physics()` makes a thing real: it falls, bounces, tumbles, knocks into other things and gets pushed. It works in 3D (boxes, spheres, cylinders and `spawn` models) and in 2D (boxes and circles). A game that never uses physics works exactly as before.
+`thing:physics()` makes a thing real: it falls, bounces, tumbles, knocks into other things and gets pushed. It works on everything in a 3D world (boxes, spheres, cylinders, cones, planes and `spawn` models, people and signs too) and in 2D (boxes, circles, lines, text and pictures). Things weigh what they are, so heavy things are hard to push. A game that never uses physics works exactly as before.
 ```tuff
 mention tgame
 
@@ -644,40 +645,41 @@ label = world:hud():text("Hits: 0", 90, 30)
 for i in range(0, 4):
     crate = world:box(0, i * 1.05, -10, 1, "wood")   # a tower of crates
     crate:physics()                       # it falls, tumbles and can be pushed
-    crate:mass(2)                         # kg
+    crate:weight(20)                      # kg: light enough to knock over
     crate:on_hit(bumped)
 ball = world:sphere(0, 1, 2, 1, "red"):physics()     # physics() gives back the thing
-ball:mass(5)
+ball:weight(80)                           # a heavy ball
 ball:bounce(0.4)                          # 0 doesn't bounce, 1 bounces right back up
 dummy = world:ragdoll(4, 0, -8, "blue")   # a person made of parts that flops when it's hit
 car = world:car(-5, 1, 6, "orange")
-car:drive()                               # the arrow keys or WASD drive it, and the camera follows
+player = world:player("third person")
+player:move_to(-7.5, 0, 6)                # by the car: F gets in, and F again gets out
 
 func bumped(other, strength):             # something hit a crate: what, and how hard
     if strength > 2:
         hits += 1
         label:set "Hits: " + hits
 
-func kick(key):                           # Space rolls the ball at the tower
-    ball:push(0, 2, -40)
+func kick(key):                           # K rolls the ball at the tower
+    ball:push(0, 1, -15)                  # it weighs 80 kg, so it goes a bit slower than that
 
 func boom(key):                           # B blows everything away from the tower
     world:explode(0, 0, -10, 15, 8)
 
-world:on_key("space", kick)
+world:on_key("k", kick)
 world:on_key("b", boom)
 
 while world:open():
     world:frame()
 ```
 - **Kinds of physics:** `thing:physics()` (or `"dynamic"`) falls and can be pushed, `thing:physics("static")` stays where it is but things bump into it and land on it (a floor, a wall), `"kinematic"` is moved only by your code but pushes other things (and carries the player standing on it, like a lift), and `"off"` turns it off (`"on"` and `"falls"` mean dynamic too, `"fixed"` and `"solid"` static, `"none"` off). It gives back the thing, so it chains: `ball = world:sphere(0, 5, 0, 1, "red"):physics()`.
-- **What it's made of:** `:mass(2)` is how heavy it is in kg (by default it comes from its size), `:bounce(0.6)` how bouncy it is from 0 to 1, and `:friction(0.4)` how grippy it is (0 is slippery, like ice).
-- **Moving it:** `:push(x, y, z)` kicks it (a bigger number kicks harder, and heavy things move less), `:spin(x, y, z)` sets it spinning, and `:velocity(x, y, z)` sets how fast it's moving each way. `:velocity()` gives back `[x, y, z]`. `:sleep()` stops it until something wakes it, and `:wake()` wakes it.
-- **Hits:** `crate:on_hit(bumped)` runs `func bumped(other, strength):` when something hits it: `other` is what hit it and `strength` how hard (under 1 is a gentle touch). It works on the player too. `:touches`, `:x()`, `:y()`, `:spot()` always give where a physics thing really is.
+- **What it's made of:** `:weight(25)` is how heavy it is in kg (`:mass` is the same). By default things weigh what they are: a crate 25 kg, a chest 40, a person 70, a rock 300, a tree 400, a house 6000, and the shapes 50 kg a cubic metre (a 1 m box is 50 kg); `:scale` makes them heavier or lighter. `:weight()` gives it back. `:bounce(0.6)` is how bouncy it is from 0 to 1, and `:friction(0.4)` how grippy it is (0 is slippery, like ice).
+- **Moving it:** `:push(x, y, z)` kicks it: the numbers are the speed it gives a 50 kg thing (a 1 m box), so a heavier thing moves less and a lighter one flies off faster. (Before 1.3.0 a 1 m box weighed 1 kg: a game that sets `:mass` numbers from then needs about 50 times them now.) `:spin(x, y, z)` sets it spinning, and `:velocity(x, y, z)` sets how fast it's moving each way (whatever it weighs). `:velocity()` gives back `[x, y, z]`. `:sleep()` stops it until something wakes it, and `:wake()` wakes it.
+- **Hits:** `crate:on_hit(bumped)` runs `func bumped(other, strength):` when something hits it: `other` is what hit it and `strength` how hard (under 1 is a gentle touch; heavy and fast things hit harder). It works on the player too. `:touches`, `:x()`, `:y()`, `:spot()` always give where a physics thing really is.
 - **The world:** with physics on, the land, the ground, the island, the buildings and every other solid thing stay put, and physics things land on them (water isn't solid). `world:gravity(-9.8)` is how strong gravity is (-9.8 is like on Earth and the default, 0 floats like in space). `world:explode(x, y, z, strength, radius)` pushes every physics thing near a spot away from it, less the further away it is.
-- **The player** walks into physics things and pushes them, can stand on them, and gets knocked by them. Its keys work as before.
-- **A car:** `car = world:car(x, y, z, "red")` is a car with four wheels, springy suspension and steering. `car:drive()` lets the arrow keys or WASD drive it while the camera follows (the player gets in), and `car:drive(false)` stops (the player gets out beside its door). `car:engine(2)` gives it more power (1 is normal), `car:speed()` is how fast it's going in km/h, and `car:flip()` puts it back on its wheels after a crash.
-- **A ragdoll:** `dummy = world:ragdoll(x, y, z, "blue")` is a person made of jointed parts (a head, a body, arms and legs) that flops over when it's hit or pushed: `dummy:push(0, 4, -6)`.
+- **The player** walks into physics things and shoves them as hard as a person can (it weighs 70 kg): a crate slides away, a 300 kg rock doesn't budge. `player:weight(90)` makes it shove harder. It can stand on physics things and gets knocked by them. Its keys work as before. With `player:can_grab()` it can lift things up to 100 kg ("Too heavy to lift" over that), and a heavy thing doesn't fly as far when it's thrown.
+- **A car:** `car = world:car(x, y, z, "red")` is a car with four wheels, springy suspension and steering. It weighs 1200 kg, so it shoves crates and ragdolls out of its way. The player walks up to it and presses **F** to get in ("F: Get in" shows): the arrow keys or WASD drive it and the camera follows. F again gets out, beside the driver's door, and the car stays parked. `car:drive()` starts the game with the player in it (with no player, the keys drive it from the start), and `car:drive(false)` gets out. `car:on_enter(got_in)` and `car:on_exit(got_out)` run when the player gets in and out (with F or `car:drive`), and `car:driven()` and `player:in_car()` say whether it's in. A game that uses F itself (`world:on_key("f", ...)`) keeps it: then F doesn't get in cars, so use `car:drive()` there. `car:engine(2)` gives it more power (1 is normal), `car:speed()` is how fast it's going in km/h, and `car:flip()` puts it back on its wheels after a crash.
+- **A ragdoll:** `dummy = world:ragdoll(x, y, z, "blue")` is a person made of jointed parts (a head, a body, arms and legs) that flops over when it's hit or pushed: `dummy:push(0, 4, -6)`. It weighs 70 kg and dresses like a person (`dummy:shirt("red")`, `dummy:hair("ponytail")`).
 - **2D:** the same methods with x and y, and y goes down the screen. `game:gravity(900)` is in pixels a second each second, and `game:walls(true)` makes the edges of the screen walls.
 ```tuff
 mention tgame
@@ -793,12 +795,71 @@ while world:open():
 - **Level pieces (3D):** `world:jump_pad(x, y, z, 15)` is a glowing pad that launches the player (and physics things) up at 15 m/s. `boost = world:boost_pad(x, y, z, 20)` shoots the player forward the way it faces, and `boost:turn(90)` aims it. Any object (not a car or a ragdoll: they always use physics) moves along spots with `lift:path([[0, 2, 0], [10, 2, 0], [10, 6, 0]], 3)`: there and back at 3 m/s, or round and round with `"loop"` as a third input. The player rides it (and physics things do too), and `lift:path()` stops it.
 - **Tips:** y is the height above the land here too, and a paused game pauses all of these. Make a door, a pad, a key or a person with one top-level line so Tuff Engine can show it, and keep `:say` and `:path` lines right after the thing.
 
+#### Multiplayer
+Games on the same network (the same Wi-Fi, or cables to the same router) can play together. One game **hosts** a room, the others **join** it. In a 3D world, everyone else's player shows up in your world as a person with their name over their head, walking where they walk. Messages and shared values work in 2D and 3D.
+```tuff
+mention tgame
+
+world = tgame.world("Tag")
+world:sky "day"
+world:ground "grass"
+me = world:player("third person")
+me:move_to(random(-8, 8), 0, random(-8, 8))   # everyone starts somewhere else
+label = world:hud():text("", 480, 570, 22, "white")
+last_tag = 0
+
+menu = world:main_menu("Tag")
+menu:button("Host a game", host_game)
+menu:button("Join a game", join_game, "secondary")
+
+func host_game():
+    world:host("Tag")                         # a room the others on this network can find
+    world:share("it", world:my_name())        # the host starts as "it" (everyone sees shared values)
+    menu:hide()
+
+func join_game():
+    world:join()                              # finds a room on this network and goes in
+    menu:hide()
+
+func got(message, value, sender):             # a message from another player
+    if message == "tag" and value == world:my_name():
+        last_tag = world:time()               # just tagged: no tagging back for 2 seconds
+        world:shake(0.6)
+
+func left(name):                              # a player left: if they were "it", the host is now
+    if world:hosting() and world:shared("it", "") == name:
+        world:share("it", world:my_name())
+
+func step(dt):
+    it = world:shared("it", "")
+    label:set "It: " + it
+    if it == world:my_name() and world:time() - last_tag > 2:
+        for p in world:others():              # the other players' people
+            if me:distance(p) < 1.5:
+                last_tag = world:time()
+                world:send("tag", p:get("name"))
+                world:share("it", p:get("name"))
+
+world:on_message(got)
+world:on_leave(left)
+world:every_frame step
+```
+- **Hosting:** `game:host("Tag")` makes a room called Tag (`game:host()` names it after the game's title). `game:hosting()` is true from the next line. The first time a computer hosts, Windows may ask whether TuffCode can use the network: choose **Allow** (private networks are enough). The top of the window says "Hosting "Tag" on 192.168.1.20" for a few seconds: that's the address others can join by.
+- **Joining:** `game:join()` looks for a room on the network and goes in (one for the same game first). `game:join("Tag")` goes in the room called Tag, and `game:join("192.168.1.20")` goes straight to that computer (for networks that hide rooms, like some school Wi-Fi). Joining takes a moment: the game keeps running meanwhile ("Looking for a game to join..." shows at the top), and `game:connected()` is true once it's in. A game hosts or joins, not both: `game:leave()` leaves the room first (a host leaving closes the room for everyone).
+- **Players:** `game:players()` is a list of everyone's names, yours too, the host's first. Names are "Player 1" (the host), "Player 2" and so on, or what each game chose with `game:my_name("Sam")` (two Sams become Sam and Sam 2). `game:my_name()` gives your own. `game:on_join(fn)` runs `func fn(name):` for each other player who comes in (and, when you join, for each player already there), and `game:on_leave(fn)` runs `func fn(name):` when one goes, or when the host leaves (then for everyone).
+- **Messages:** `game:send("score", 10)` sends a message to every other player, with a value if you like (numbers, text, true/false, lists and tables, like `game:send("at", [me:x(), me:y()])`). `game:on_message(fn)` runs `func fn(message, value, sender):` for each one that arrives: the message, its value (nil if none) and the sender's name. Messages sent before the game is in a room wait until it's in; in no room at all, they go nowhere.
+- **Shared values:** `game:share("coins", 5)` sets a value every player sees, and `game:shared("coins", 0)` reads it (the second input until someone shares it). The host keeps them, so a player who joins later gets them all. Values shared before joining only fill in what the room doesn't have yet: the room's own values win.
+- **Other players (3D):** each other player's player is a person in your world, in their own shirt color (the host's blue, then red, green, orange...), with their name over its head. It walks where they walk and hides when they hide. `world:others()` is a list of them, as objects: `me:distance(p)`, `me:touches(p)`, `p:get("name")` (their name), `p:animate("wave")`. They don't block the way (`p:solid(true)` if they should), and `game:clear()` leaves them.
+- **2D:** there's no player in 2D, so nobody shows up by themselves: send where your sprite is (`game:send("at", [me:x(), me:y()])` every frame) and move a sprite for them in `on_message`.
+- **Trying it alone:** in TuffCode, a file that uses `:host(` or `:join(` gets a **Run a second player** button (two people) right after Run, and in the run options menu. It runs another copy of the same game beside the first, so host in one window and join in the other (with a Host/Join menu like the Tag game's, click Host in one and Join in the other). If the game isn't running yet, it starts both. The Run panel puts a P1 or P2 chip on each line, so you can tell which copy said what. The button stops only the second player; Stop, a new Run and closing TuffCode end both.
+- **Tips:** try it with two computers on the same network: run the game in TuffCode on each, then host on one and join on the other. On one computer, use Run a second player, or run a copy made with Build exe beside it (games built with Build exe host and join too). Tuff Engine's preview never hosts or joins.
+
 #### Games Tuff Engine can edit
 TuffCode's Tuff Engine tab (`Ctrl+Shift+G`) builds tgame games by clicking and dragging, and writes everything as normal Tuff code. It can only show and edit simple top-level lines, so when you change a game someone is building in it:
 - Make each new thing with **one top-level line and plain numbers**, like `coin = game:circle(200, 200, 14, "gold")` or `tree = game:spawn("tree", -5, 0, -10)`. Things made in a loop, a function or a chained line (`game:spawn("sign"):label "Hi"`) still work, but show as "Made by your code" and can't be dragged.
 - Put new lines **above** any `while game:open():` loop.
 - Make the land with one line (`land = game:terrain(200)`) and change it with **one top-level line per edit**, like `land:hill(20, -10, 30, 8)`, so Tuff Engine can list them under the land, change their numbers and remove them.
-- Give a thing its physics with **one top-level line each, right after it**, like `crate:physics()`, `crate:mass(2)`, `crate:bounce(0.6)` or `crate:friction(0.4)`, so its Physics section in Tuff Engine shows and changes them.
+- Give a thing its physics with **one top-level line each, right after it**, like `crate:physics()`, `crate:weight(25)`, `crate:bounce(0.6)` or `crate:friction(0.4)`, so its Physics section in Tuff Engine shows and changes them. A person's look works the same way (`npc:shirt("red")` right after it) for its Clothes and hair section.
 - Make a door, a key, a jump pad, a boost pad or a talking person with **one top-level line**, like `door = game:door(0, 0, -5)`, and put its `door:needs(key)`, `npc:say("Hi!")` or `lift:path(...)` line **right after it**, so Tuff Engine's 3D Add tab and its Objects list show them. Write a path's spots as numbers, like `lift:path([[0, 1, -6], [8, 1, -6]], 3)`, so moving the platform in Tuff Engine moves its spots with it.
 - Add behaviour as a **func registered with one line**, like `game:every_frame coin_spin` or `coin:clicked coin_clicked`. Functions under a `# Tuff Engine:` comment were written by Tuff Engine, and it keeps that comment and `play_again` up to date as the game changes. Changing one is fine: Tuff Engine then shows it as the person's own code.
 

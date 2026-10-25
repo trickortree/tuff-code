@@ -1,0 +1,4 @@
+mention tgame
+
+# Multiplayer rooms by name: the tests host and join with lines of their own (the autopilot's "tuff" steps).
+game = tgame.window("Rooms", 320, 240)
