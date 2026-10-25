@@ -475,8 +475,14 @@ export default async (t, ctx) => {
   // (On a Mac the temp folder is reached through /var, a link to /private/var: compare the real paths.)
   const samePath = (x, y) => { try { return fs.realpathSync(x) === fs.realpathSync(y); } catch { return x === y; } };
   await waitFor(`(window.TuffEngine.debug().file || '').endsWith('island_walk.tuf')`, 6000);
-  check(fs.existsSync(island) && fs.readFileSync(island, 'utf8') === repoGame('island_walk.tuf') && samePath(await ev(`document.querySelector('#en-file').value`), island),
-    'New file makes island_walk.tuf with the template and opens it in Tuff Engine', await ev(`document.querySelector('#en-file').value`));
+  // (Tuff Engine switches to the file first, then fills its file list; and on a busy machine the file can be saved a
+  // moment after that. Both are waited for.)
+  const islandSaved = () => fs.existsSync(island) && fs.readFileSync(island, 'utf8') === repoGame('island_walk.tuf');
+  const islandListed = async () => samePath(await ev(`document.querySelector('#en-file').value`), island);
+  for (let tries = 0; tries < 30 && !(islandSaved() && await islandListed()); tries++) await t.sleep(200);
+  const islandShown = await ev(`document.querySelector('#en-file').value`);
+  check(islandSaved() && samePath(islandShown, island), 'New file makes island_walk.tuf with the template and opens it in Tuff Engine',
+    { file: islandShown, engine: (await dbg()).file, tabs: await ev(`[...document.querySelectorAll('#tabs .tab')].map((x) => x.textContent.trim() + (x.classList.contains('active') ? '*' : '')).join(',')`), exists: fs.existsSync(island), same: fs.existsSync(island) && fs.readFileSync(island, 'utf8') === repoGame('island_walk.tuf') });
   check(await settle(25000), 'the 3D world loads', await dbg());
   // GitHub's Intel Macs have no WebGL: there Tuff Engine says it can't show 3D, and only the code is checked.
   const gl = (await dbg()).webgl !== false;

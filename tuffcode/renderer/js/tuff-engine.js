@@ -2571,7 +2571,8 @@ func coin_collect(dt):
 
   function pvKey(P) {
     const models = (S.assets?.models || []).filter((f) => f.reach).map((f) => f.rel).sort();
-    return JSON.stringify([P.game?.mode, S.file && ide.rel(S.file.replace(/[\\/][^\\/]*$/, '')), models, S.assetEpoch]);
+    // (A changed picture or sound doesn't change them: only the models do.)
+    return JSON.stringify([P.game?.mode, S.file && ide.rel(S.file.replace(/[\\/][^\\/]*$/, '')), models, models.length ? S.assetEpoch : 0]);
   }
 
   // The picture for a tile: the engine's (3D), one drawn here (2D and the screen's), or null (its icon for now).
@@ -2581,13 +2582,11 @@ func coin_collect(dt):
     return pvFlat(t.id, is3);
   }
 
-  // Starts making the 3D pictures if they aren't made (or being made) for this game folder and its models. A 2D game
-  // forgets them (a 3D one makes them again). A run that made none is tried again the next time the tab shows.
+  // Starts making the 3D pictures if they aren't made (or being made) for this game folder and its models. They're
+  // kept while a 2D game shows (pvPic doesn't use them there), so going back to a 3D world doesn't make them again.
+  // A run that made none is tried again the next time the tab shows.
   function pvStart(P) {
-    if (P.game?.mode !== '3d' || S.webgl === false || !S.file) {
-      if (P.game?.mode !== '3d') { PV.key = null; PV.pics.clear(); }
-      return;
-    }
+    if (P.game?.mode !== '3d' || S.webgl === false || !S.file) return;
     const key = pvKey(P);
     if (PV.key === key) return;
     PV.key = key;
