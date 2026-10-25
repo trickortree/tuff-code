@@ -73,7 +73,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .rw-btn.run2 svg { fill: #5fb865; }
 .rw-btn.run2 .i-stop, .rw-btn.run2.running .i-players { display: none; }
 .rw-btn.run2.running .i-stop { display: block; fill: #f75464; }
-.rw-btn.run2.running::after { content: "2"; position: absolute; right: 3px; bottom: 2px; font: 800 9px/1 var(--font-ui); color: #f75464; }
+.rw-btn.run2.running::after { content: "2"; position: absolute; right: 3px; bottom: 1px; font: 800 11px/1 var(--font-ui); color: #f75464; }
 .run-widget { position: relative; }
 .run-widget.building::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: -3px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, transparent, var(--accent), transparent); background-size: 200% 100%; animation: buildbar 1.1s linear infinite; }
 @keyframes buildbar { from { background-position: 100% 0; } to { background-position: -100% 0; } }
@@ -199,7 +199,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #run-output .tline { border-radius: 3px; }
 #run-output .tline.notice { color: var(--yellow); }
 /* With a second player running, each line starts with a chip saying which copy said it. */
-#run-output.two [data-who]::before { content: "P" attr(data-who); display: inline-block; min-width: 18px; margin-right: 8px; padding: 0 4px; border-radius: 4px; font: 700 10.5px/16px var(--font-ui); text-align: center; vertical-align: 1px; color: #fff; background: var(--accent); }
+#run-output.two [data-who]::before { content: "P" attr(data-who); display: inline-block; min-width: 18px; margin-right: 8px; padding: 0 4px; border-radius: 4px; font: 700 11px/16px var(--font-ui); text-align: center; vertical-align: 1px; color: #fff; background: var(--accent); }
 #run-output.two [data-who="2"]::before { background: #e5484d; }
 #run-output .tline.flash { animation: lineflash .7s ease-out; }
 @keyframes lineflash { from { background: color-mix(in srgb, var(--accent) 35%, transparent); } }
