@@ -401,14 +401,16 @@ def _quiet_window():
     features = [f for a in off for f in a.split("=", 1)[1].split(",") if f] + ["CalculateNativeWinOcclusion"]
     args = [a for a in args if a not in off and a not in QUIET_FLAGS] + QUIET_FLAGS
     os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = " ".join(args + ["--disable-features=" + ",".join(dict.fromkeys(features))])
-    x, y = 20000, 0
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            metric = ctypes.windll.user32.GetSystemMetrics
-            x, y = metric(76) + metric(78) + 400, metric(77)  # the virtual screen's left + its width, its top
-        except Exception:
-            pass
+    if sys.platform != "win32":
+        # A Mac's window has to be on a screen (pywebview looks for the screen it's on: off them all, it can't open),
+        # so it only stays out of the way of the windows in front.
+        return {"on_top": False}
+    try:
+        import ctypes
+        metric = ctypes.windll.user32.GetSystemMetrics
+        x, y = metric(76) + metric(78) + 400, metric(77)  # the virtual screen's left + its width, its top
+    except Exception:
+        x, y = 20000, 0
     return {"x": x, "y": y, "focus": False, "on_top": False}
 
 
