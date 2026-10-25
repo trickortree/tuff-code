@@ -27,6 +27,7 @@
 - **Only one host:** \`world:hosting()\` is true on the computer that hosts, for things only one game should do, like starting the timer or placing the coins.
 
 ### Good to know
+- **Try it on your own:** in a game that hosts or joins, a two-people button shows next to Run. It runs a second player, another copy of your game, so you can host in one window and join in the other. The Run panel marks each line P1 or P2.
 - The first time a computer hosts, Windows may ask if TuffCode can use the network. Click **Allow**.
 - Games you build with Build exe can host and join too, so you can share your game and play it together.
 - Claude, Codex, Antigravity and Pumice 1 know all of it, and the checker catches mistakes like a message that isn't text.`,
