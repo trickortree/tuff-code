@@ -67,6 +67,7 @@ export async function connect(app, { timeout = 90000 } = {}) {
   ws.onclose = () => { for (const p of pending.values()) { clearTimeout(p.timer); p.reject(new Error('The TuffCode window closed')); } pending.clear(); };
   // A page that never answers fails the call instead of hanging the run.
   const send = (method, params = {}, ms = 60000) => new Promise((resolve, reject) => {
+    if (ws.readyState > 1) return reject(new Error('The TuffCode window closed')); // a suite closed it: no 60 s wait
     const mid = ++id;
     const timer = setTimeout(() => { pending.delete(mid); reject(new Error(`${method}: no answer after ${ms / 1000} s`)); }, ms);
     pending.set(mid, { resolve, reject, timer });
