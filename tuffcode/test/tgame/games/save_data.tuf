@@ -1,0 +1,60 @@
+# Saved game data (game:save, :load, :saved and :forget). The tests run this game several times with the same
+# TUFF_SAVE_DIR, so each run finds what the one before it saved. The autopilot calls the functions below (and
+# tries saves that can't work with its "tuff" steps, so this file still passes --check).
+mention tgame
+mention tap
+
+game = tgame.window("Save Test", 400, 300)
+game:title "Save Test: running"                 # a new window title doesn't move the saves
+runs = game:load("runs", 0) + 1
+game:save("runs", runs)
+say "run " + runs
+label = game:text("Run " + runs, 200, 150, 32, "white")
+
+func save_all():
+    pet = tap.data()
+    pet:set("hp", 7.5)
+    stats = tap.data()
+    stats:set("level", 3)
+    stats:set("name", "Ada")
+    stats:set("items", ["sword", "key"])
+    stats:set("pet", pet)
+    game:save("best", 42)
+    game:save("name", "Ada Lovelace")
+    game:save("done", true)
+    game:save("nothing", nil)
+    game:save("list", [1, 2.5, "three", [4, 5], false])
+    game:save("stats", stats)
+    say "saved"
+
+func show_all():
+    say "best " + game:load("best", 0)
+    say "name " + game:load("name", "nobody")
+    say "done " + game:load("done", false)
+    say "nothing " + game:saved("nothing") + " " + text(game:load("nothing", 5))
+    items = game:load("list", [])
+    if len(items) > 3:
+        items:add("more")
+        say "list " + text(items) + " " + len(items) + " " + items[3][1]
+    else:
+        say "list " + text(items)
+    stats = game:load("stats")
+    if stats is nil:
+        say "stats none"
+    else:
+        say "stats " + stats:get("level") + " " + stats:get("name") + " " + text(stats:get("items")) + " " + stats:get("pet"):get("hp")
+    say "missing " + game:load("missing", "none") + " " + text(game:load("missing")) + " " + game:saved("missing")
+
+func forget_some():
+    game:forget("best")
+    game:forget("never saved")
+    say "forgot best " + game:saved("best") + " " + game:load("best", 0) + " " + game:saved("name")
+
+func forget_all():
+    game:forget()
+    say "forgot all " + game:saved("name") + " " + game:saved("runs") + " " + text(game:load("stats"))
+
+func step(dt):
+    nil
+
+game:every_frame step

@@ -1615,6 +1615,7 @@
     stop: { label: 'Stop', sc: 'Ctrl+F2', run: () => api.run.stop() },
     build: { label: `Build ${BUILD_WORD}…`, sc: 'Ctrl+F9', run: () => openBuildDialog() },
     replayIntro: { label: 'Replay Intro', run: playIntro },
+    whatsNew: { label: "What's New", run: () => window.TuffWhatsNew?.show(state.version) || toast(`There are no notes for TuffCode ${state.version}.`, 'info') },
     about: { label: 'About TuffCode', run: () => toast(`TuffCode ${state.version} — the IDE for the Tuff language. github.com/trickortree/tuff-code`, 'info', 6000) },
     checkUpdates: { label: 'Check for Updates…', run: () => { openSettings(); showSettingsPage('updates'); api.update.check(); } },
   };
@@ -1635,7 +1636,7 @@
     ['View', ['toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'engine', 'sep', 'zen', 'zoomIn', 'zoomOut', 'zoomReset', 'sep', 'settings', 'devtools']],
     ['Go', ['searchEverywhere', 'goToFile', 'goToSymbol', 'sep', 'goToDefinition', 'findUses', 'sep', 'reopenTab', 'nextTab', 'prevTab']],
     ['Run', ['run', 'rerun', 'stop', 'sep', 'build', 'sep', 'liveCheck']],
-    ['Help', ['learn', 'replayIntro', 'sep', 'checkUpdates', 'about']],
+    ['Help', ['learn', 'replayIntro', 'whatsNew', 'sep', 'checkUpdates', 'about']],
   ];
 
   function buildMenubar() {
@@ -2183,9 +2184,11 @@
     // After an update the intro plays once more, but nothing else starts over: the folder, tabs,
     // Learn Tuff progress, settings and plugins all carry on (they live in userData, which updates keep).
     const updated = !firstRun && s.introVersion !== state.version;
+    const before = s.introVersion; // (the intro saves the new one when it ends)
 
     window.TuffStudio.init(window.TuffIDE);
     window.TuffEngine?.init(window.TuffIDE);
+    window.TuffWhatsNew?.init({ openWeb: (url) => api.openWeb(url), focusEditor: () => editor?.focus() });
     if (firstRun) {
       const introDone = playIntro();
       await openFolder(root);
@@ -2200,6 +2203,8 @@
       if (!state.tabs.length && !last) await openFile(join(root, 'main.tuf'), { quiet: true });
       if (introDone) {
         await introDone;
+        // Updated from a version that played the intro before: "Here's what's changed!", once.
+        if (before) await window.TuffWhatsNew?.maybeShow(state.version, s, saveSettings);
       } else {
         enterIDE();
         editor?.focus();

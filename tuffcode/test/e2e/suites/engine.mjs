@@ -136,6 +136,8 @@ export default async (t, ctx) => {
   check(st?.mode === '2d' && st.sceneBg === '#1e3a8a', 'the preview is the real engine: a navy 800 × 600 game area', st);
   check(await ev(`document.querySelector('#en-kind').textContent`) === '2D game 800×600', 'the bar says what it is: 2D game 800×600', await ev(`document.querySelector('#en-kind').textContent`));
   await t.shot('engine_2d_empty.png');
+  check(!(await ev(`!!document.querySelector('.en-tile[data-tile="car"], .en-tile[data-tile="ragdoll"]')`)), "a 2D game's Add tab has no Car or Ragdoll (they need a 3D world)", null);
+  check(!(await ev(`!!document.querySelector('.en-tile[data-tile="door"], .en-tile[data-tile="jump_pad"], .en-tile[data-tile="platform"], .en-tile[data-tile="person"]')`)), "... and no Level pieces (doors, pads, platforms and people are 3D)", null);
 
   const versions = [];
   for (const id of ['player', 'coin', 'enemy', 'ball']) {
@@ -185,6 +187,21 @@ export default async (t, ctx) => {
   // ---------------- Play: the real game, with the coin where the kid dragged it
   const py = ctx.packaged ? null : python();
   const canPlay = ctx.packaged || (py && spawnSync(py[0], [...py.slice(1), '-c', 'import webview'], { windowsHide: true }).status === 0);
+  // Code Tuff Engine wrote, played in tgame by its autopilot (steps: dumps, held keys, close): what it printed and
+  // its dumps. null when this Python can't play games (and on a packaged app, whose Play is tested above).
+  const playCode = (name, src, steps) => {
+    if (!py || !canPlay) return null;
+    const dir = fs.mkdtempSync(path.join(PLAY, `${name}-`));
+    const file = path.join(dir, `${name}.tuf`);
+    fs.writeFileSync(file, src);
+    const plan = path.join(dir, 'plan.json');
+    fs.writeFileSync(plan, JSON.stringify({ on_top: false, timeout: 20, out: dir, steps }));
+    const env = { ...process.env, TUFF_TGAME_AUTOPILOT: plan, PYTHONIOENCODING: 'utf-8' };
+    delete env.TUFF_IDE;
+    const r = spawnSync(py[0], [...py.slice(1), path.join(REPO, 'tuff.py'), file], { cwd: dir, encoding: 'utf8', timeout: 60000, windowsHide: true, env });
+    const dump = (n) => { try { return JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')); } catch { return null; } };
+    return { code: r.status, out: `${r.stdout || ''}${r.stderr || ''}`, dump };
+  };
   if (!canPlay) t.skip('Play', 'the Python that runs tuff.py has no pywebview (py -m pip install pywebview)');
   else {
     const playW = await ev(`document.querySelector('#en-play').offsetWidth`);
@@ -553,6 +570,287 @@ export default async (t, ctx) => {
   check(await m3() === w3, 'one Ctrl+Z brings the 3D world back', firstDiff(await m3(), w3));
   await settle(25000);
 
+  // ================================================================ physics: the Inspector's Physics section, Car and Ragdoll
+  // A box gets its physics in its Inspector: Off, Falls (crate:physics()) or Fixed (crate:physics("static")), then
+  // Bounce typed in (crate:bounce(0.6)), each one line right after the box and one Ctrl+Z; Off takes them all out.
+  // Objects badges the things that use physics, and the 3D Add tab has Car (the arrow keys drive it) and Ragdoll.
+  // The preview doesn't simulate, so the code, the Inspector and tuff --check are checked (the scene shows the
+  // physics lines once tgame's runtime has them; before that, it stops at the first one with a banner).
+  const physFile = path.join(ctx.root, 'phys.tuf');
+  const physStart = 'mention tgame\n\ngame = tgame.world("My World", 960, 600)\ngame:sky "day"\ngame:island(80)\ncrate = game:box(0, 2, -6, 1, "wood")\n';
+  fs.writeFileSync(physFile, physStart);
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(physFile)})`);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(physFile)}`, 6000);
+  await settle(25000);
+  const mp = () => ev(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(physFile)})).getValue().replace(/\\r\\n/g, '\\n'))()`);
+  const mpIs = (want) => waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(physFile)})).getValue().replace(/\\r\\n/g, '\\n') === ${JSON.stringify(want)})()`, 6000);
+  const mpNot = (was) => waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(physFile)})).getValue().replace(/\\r\\n/g, '\\n') !== ${JSON.stringify(was)})()`, 6000);
+  const physUi = () => ev(`(() => { const p = document.querySelector('#en-physics'); const s = p?.closest('.pf-sec'); return p ? { chips: [...p.querySelectorAll('.pf-chip')].map((b) => b.dataset.v + ':' + b.textContent + (b.classList.contains('sel') ? '*' : '')).join(), nums: [...s.querySelectorAll('.en-num span')].map((x) => x.textContent).join() } : null; })()`);
+  const badged = () => ev(`[...document.querySelectorAll('#en-objects .sd-layer')].filter((r) => r.querySelector('.en-phys')).map((r) => r.dataset.key).join()`);
+  const physUndo = async (want) => { await ev(`document.querySelector('#en-stage').focus()`); await t.key('z', CTRL); await mpIs(want); };
+  await ev(`window.TuffEngine.test.select('v:crate')`);
+  await waitFor(`!!document.querySelector('#en-physics')`, 4000);
+  let pu = await physUi();
+  check(pu?.chips === 'off:Off*,dynamic:Falls,static:Fixed' && pu.nums === '' && await badged() === '', "a box's Inspector has a Physics section: Off (chosen), Falls and Fixed, and Objects badges nothing yet", { pu, badged: await badged() });
+  await clickSel('#en-physics .pf-chip[data-v="dynamic"]');
+  await mpNot(physStart);
+  const falls = await mp();
+  check(falls === `${physStart}crate:physics()\n`, 'Falls writes crate:physics() right after the box', firstDiff(falls, `${physStart}crate:physics()\n`));
+  await waitFor(`document.querySelector('#en-physics .pf-chip.sel')?.dataset.v === 'dynamic'`, 4000);
+  pu = await physUi();
+  check(pu?.nums === 'Mass,Bounce,Friction' && await badged() === 'v:crate', 'then it has Mass, Bounce and Friction, and Objects shows a physics badge on the crate', { pu, badged: await badged() });
+  let bounceRect = null;
+  for (let tries = 0; tries < 20 && !bounceRect; tries++) {
+    bounceRect = await ev(`(() => { const l = [...document.querySelectorAll('#en-inspector .en-num')].find((x) => x.querySelector('span')?.textContent === 'Bounce'); const i = l && l.querySelector('input'); if (!i) return null; i.id = 'en-test-bounce'; i.scrollIntoView({ block: 'center' }); const r = i.getBoundingClientRect(); return r.width ? [r.left, r.top] : null; })()`);
+    if (!bounceRect) await t.sleep(100);
+  }
+  await t.click(bounceRect[0] + 20, bounceRect[1] + 10);
+  await t.type('0.6', 60);
+  await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(physFile)})).getValue().includes('crate:bounce(0.6)'))()`, 4000);
+  await ev(`document.querySelector('#en-stage').focus()`);
+  const bounced = await mp();
+  check(bounced === `${falls}crate:bounce(0.6)\n`, 'typing 0.6 in Bounce writes crate:bounce(0.6) under it', firstDiff(bounced, `${falls}crate:bounce(0.6)\n`));
+  await clickSel('.en-left .en-tabs button[data-tab="objects"]');
+  await ev(`document.querySelector('#en-physics')?.scrollIntoView({ block: 'center' }); 1`);
+  await t.shot('engine_physics_box.png');
+  await clickSel('#en-physics .pf-chip[data-v="static"]');
+  await mpNot(bounced);
+  const fixedLines = changedLines(bounced, await mp());
+  check(fixedLines?.length === 1 && fixedLines[0][2] === 'crate:physics("static")', 'Fixed changes that one line to crate:physics("static")', fixedLines);
+  await physUndo(bounced);
+  check(await mp() === bounced, 'one Ctrl+Z makes it fall again', firstDiff(await mp(), bounced));
+  await ev(`window.TuffEngine.test.select('v:crate')`);
+  await waitFor(`!!document.querySelector('#en-physics .pf-chip[data-v="off"]')`, 4000);
+  await clickSel('#en-physics .pf-chip[data-v="off"]');
+  await mpIs(physStart);
+  check(await mp() === physStart, 'Off takes its physics lines out (physics and bounce), in one step', firstDiff(await mp(), physStart));
+  await waitFor(`!document.querySelector('#en-objects .en-phys')`, 4000);
+  check(await badged() === '', 'and the badge goes', await badged());
+  await physUndo(bounced);
+  check(await mp() === bounced, 'one Ctrl+Z brings them both back', firstDiff(await mp(), bounced));
+  await settle(25000);
+
+  // Car and Ragdoll, in the Add tab's Physics tiles.
+  await clickSel('.en-left .en-tabs button[data-tab="add"]');
+  const physTiles = await ev(`(() => { const c = [...document.querySelectorAll('#en-add .sd-cat')].find((x) => x.textContent === 'Physics'); const g = c?.nextElementSibling; return g ? [...g.querySelectorAll('.en-tile')].map((b) => b.dataset.tile + ':' + b.textContent).join() : null; })()`);
+  check(physTiles === 'car:Car,ragdoll:Ragdoll', "a 3D world's Add tab has Physics tiles: Car and Ragdoll", physTiles);
+  await clickSel('.en-tile[data-tile="car"]');
+  await mpNot(bounced);
+  const withCar = await mp();
+  const carAdded = withCar.slice(bounced.length);
+  check(withCar.startsWith(bounced) && /^car = game:car\(-?[\d.]+, 1, -?[\d.]+, "red"\)\ncar:drive\(\)\n$/.test(carAdded) && (await dbg()).sel === 'v:car',
+    'Car writes car = game:car(x, 1, z, "red") and car:drive() (there\'s no player to share the arrow keys with), and selects it', carAdded);
+  await waitFor(`!!document.querySelector('#en-inspector .pf-sec-h') && [...document.querySelectorAll('#en-inspector .pf-sec-h')].some((h) => h.textContent === 'Car')`, 4000);
+  const carUi = await ev(`(() => { const s = [...document.querySelectorAll('#en-inspector .pf-sec')].find((x) => x.querySelector('.pf-sec-h')?.textContent === 'Car'); return { secs: [...document.querySelectorAll('#en-inspector .pf-sec-h')].map((h) => h.textContent).join(), text: s?.textContent || '', engine: s?.querySelector('input[type="number"]')?.value }; })()`);
+  check(/Drive it/.test(carUi.text) && carUi.engine === '1' && !/Behaviours|Moves/.test(carUi.secs), "the car's Inspector has a Car section (Drive it, Engine 1), and no Behaviours or Moves", carUi);
+  check((await badged()).split(',').includes('v:car'), 'Objects badges the car: it always uses physics', await badged());
+  await clickSel('.en-left .en-tabs button[data-tab="add"]');
+  await clickSel('.en-tile[data-tile="ragdoll"]');
+  await mpNot(withCar);
+  const withDummy = await mp();
+  check(withDummy.startsWith(withCar) && /^dummy = game:ragdoll\(-?[\d.]+, 0, -?[\d.]+, "blue"\)\n$/.test(withDummy.slice(withCar.length)), 'Ragdoll writes dummy = game:ragdoll(x, 0, z, "blue")', withDummy.slice(withCar.length));
+  await settle(25000);
+  await t.shot('engine_physics.png');
+  check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'phys_check.tuf'), withDummy), path.join(ctx.tmp, 'phys_check.tuf'))).trim()), 'the physics the Inspector and the tiles wrote passes tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'phys_check.tuf')));
+  await physUndo(withCar);
+  check(await mp() === withCar, 'one Ctrl+Z takes the ragdoll away', firstDiff(await mp(), withCar));
+  // A car can be turned: its Look section has an Angle (car:turn_to, which tgame turns its body by too).
+  await ev(`window.TuffEngine.test.select('v:car')`);
+  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-sec-h')].some((h) => h.textContent === 'Car')`, 4000);
+  const carLook = await ev(`(() => { const s = [...document.querySelectorAll('#en-inspector .pf-sec')].find((x) => x.querySelector('.pf-sec-h')?.textContent === 'Look'); return [...(s?.querySelectorAll('.en-num span') || [])].map((x) => x.textContent).join(); })()`);
+  check(carLook === 'Angle', "the car's Look section has an Angle, so it can face any way", carLook);
+  // The player has the arrow keys (the Car tile's rule, the other way round): Player after a car that drives takes
+  // that car's car:drive() out in the same step and says so, so at Play the player walks instead of sitting in the car.
+  await clickSel('.en-left .en-tabs button[data-tab="add"]');
+  await clickSel('.en-tile[data-tile="player"]');
+  await mpNot(withCar);
+  const withPlayer = await mp();
+  const walkSay = (await toasts()).filter((x) => /arrow keys/.test(x)).pop() || '';
+  check(withPlayer === withCar.replace('car:drive()\n', 'player = game:player("first person")\n') && walkSay === 'Player walks with the arrow keys now, so car waits. Turn on Drive it in its Inspector to drive it instead.',
+    'Player after a car that drives: car:drive() goes in the same step (the player has the arrow keys now), and it says so', { added: withPlayer.slice(bounced.length), walkSay });
+  check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'car_player.tuf'), withPlayer), path.join(ctx.tmp, 'car_player.tuf'))).trim()), 'and that world passes tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'car_player.tuf')));
+  const walked = playCode('car_player', withPlayer, [{ at: 0.6, dump: 'a.json' }, { at: 0.8, hold: 's', for: 1.2 }, { at: 2.4, dump: 'b.json' }, { at: 2.6, close: true }]);
+  if (walked) {
+    const [pa, pb] = [walked.dump('a.json')?.player, walked.dump('b.json')?.player];
+    check(walked.code === 0 && pa && pb && pb[2] > pa[2] + 2, `at Play the player walks (S held: z ${pa?.[2]} → ${pb?.[2]}), it isn't stuck in the car`, { code: walked.code, pa, pb, out: walked.out.slice(-300) });
+  }
+  await physUndo(withCar);
+  check(await mp() === withCar, 'one Ctrl+Z gives the car its car:drive() back', firstDiff(await mp(), withCar));
+  // One car has the arrow keys: a second Car waits, and Drive it on for it takes the first car's car:drive() out.
+  await clickSel('.en-left .en-tabs button[data-tab="add"]');
+  await clickSel('.en-tile[data-tile="car"]');
+  await mpNot(withCar);
+  const twoCars = await mp();
+  check(/^car1 = game:car\(-?[\d.]+, 1, -?[\d.]+, "red"\)\n$/.test(twoCars.slice(withCar.length)) && (await dbg()).sel === 'v:car1', 'a second Car waits: no car1:drive() while car has the arrow keys', twoCars.slice(withCar.length));
+  const driveOn = () => ev(`(() => { const f = [...document.querySelectorAll('#en-inspector .pf')].find((x) => x.querySelector('.pf-l')?.textContent === 'Drive it'); const s = f?.querySelector('.switch'); if (s) s.id = 'en-test-drive'; return s ? s.querySelector('input').checked : null; })()`);
+  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-l')].some((x) => x.textContent === 'Drive it')`, 4000);
+  check(await driveOn() === false, "car1's Drive it is off", await driveOn());
+  await clickSel('#en-test-drive');
+  await mpNot(twoCars);
+  const swapped = await mp();
+  check(swapped === `${twoCars.replace('car:drive()\n', '')}car1:drive()\n`, 'Drive it on for car1 writes car1:drive() and takes car:drive() out, in one step: one car drives', firstDiff(swapped, `${twoCars.replace('car:drive()\n', '')}car1:drive()\n`));
+  await ev(`window.TuffEngine.test.select('v:car')`);
+  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-l')].some((x) => x.textContent === 'Drive it')`, 4000);
+  check(await driveOn() === false, "and car's Inspector shows its Drive it off", await driveOn());
+  await physUndo(twoCars);
+  check(await mp() === twoCars, 'one Ctrl+Z gives car the arrow keys back', firstDiff(await mp(), twoCars));
+  await physUndo(withCar);
+  const physBanner = (await dbg()).banner;
+  if (physBanner) t.info(`the scene stops at the physics lines until tgame's runtime has them: ${physBanner.slice(0, 120)}`);
+
+  // ================================================================ the game kit: the 3D Add tab's Level pieces
+  // Door, Key (it locks the door: door:needs(key) after the key), Jump pad, Boost pad, Moving platform (a stone box and
+  // its lift:path line) and Talking person (a person and its npc:say line), each one undo step, and what they write
+  // passes tuff --check. Objects lists them, and a door's and a pad's Inspector has no Behaviours or Moves.
+  const kitFile = path.join(ctx.root, 'kit.tuf');
+  const kitStart = 'mention tgame\n\ngame = tgame.world("My World", 960, 600)\ngame:sky "day"\ngame:island(80)\n';
+  fs.writeFileSync(kitFile, kitStart);
+  await ev(`window.TuffIDE.openEngine(${JSON.stringify(kitFile)})`);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(kitFile)}`, 6000);
+  await settle(25000);
+  const mk = () => ev(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kitFile)})).getValue().replace(/\\r\\n/g, '\\n'))()`);
+  const mkNot = (was) => waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kitFile)})).getValue().replace(/\\r\\n/g, '\\n') !== ${JSON.stringify(was)})()`, 6000);
+  const mkIs = (want) => waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kitFile)})).getValue().replace(/\\r\\n/g, '\\n') === ${JSON.stringify(want)})()`, 6000);
+  await clickSel('.en-left .en-tabs button[data-tab="add"]');
+  const kitTiles = await ev(`(() => { const c = [...document.querySelectorAll('#en-add .sd-cat')].find((x) => x.textContent === 'Level pieces'); const g = c?.nextElementSibling; return g ? [...g.querySelectorAll('.en-tile')].map((b) => b.dataset.tile + ':' + b.textContent).join() : null; })()`);
+  check(kitTiles === 'door:Door,key:Key,jump_pad:Jump pad,boost_pad:Boost pad,platform:Moving platform,person:Talking person', "a 3D world's Add tab has Level pieces: Door, Key, Jump pad, Boost pad, Moving platform and Talking person", kitTiles);
+  const N = '-?[\\d.]+';
+  const kitSteps = [
+    ['door', `^door = game:door\\(${N}, 0, ${N}, "wood"\\)\\n$`, 'Door writes door = game:door(x, 0, z, "wood")'],
+    ['key', `^key = game:spawn\\("key", ${N}, 0, ${N}\\)\\ndoor:needs\\(key\\)\\n$`, 'Key writes key = game:spawn("key", x, 0, z), then door:needs(key): the door is locked until the player has it'],
+    ['jump_pad', `^pad = game:jump_pad\\(${N}, 0, ${N}, 15\\)\\n$`, 'Jump pad writes pad = game:jump_pad(x, 0, z, 15)'],
+    ['boost_pad', `^boost = game:boost_pad\\(${N}, 0, ${N}, 20\\)\\n$`, 'Boost pad writes boost = game:boost_pad(x, 0, z, 20)'],
+    ['platform', `^lift = game:box\\((${N}), 1, (${N}), \\[4, 0\\.4, 4\\], "stone"\\)\\nlift:path\\(\\[\\[\\1, 1, \\2\\], \\[${N}, 1, \\2\\]\\], 3\\)\\n$`, 'Moving platform writes a stone box, then lift:path([[x, 1, z], [x + 8, 1, z]], 3)'],
+    ['person', `^person = game:spawn\\("person", ${N}, 0, ${N}\\)\\nperson:say\\("Hi there!", 0\\)\\n$`, 'Talking person writes person = game:spawn("person", x, 0, z), then person:say("Hi there!", 0)'],
+  ];
+  let kitCode = kitStart;
+  for (const [tile, re, what] of kitSteps) {
+    await clickSel('.en-left .en-tabs button[data-tab="add"]');
+    await clickSel(`.en-tile[data-tile="${tile}"]`);
+    await mkNot(kitCode);
+    const now = await mk();
+    const added = now.slice(kitCode.length);
+    check(now.startsWith(kitCode) && new RegExp(re).test(added), what, added);
+    kitCode = now;
+    await settle(25000);
+  }
+  const kitObjects = await ev(`[...document.querySelectorAll('#en-objects .sd-layer')].map((r) => r.dataset.key).join()`);
+  check(['v:door', 'v:key', 'v:pad', 'v:boost', 'v:lift', 'v:person'].every((k) => kitObjects.split(',').includes(k)), 'Objects lists the door, the key, both pads, the platform and the person', kitObjects);
+  await ev(`window.TuffEngine.test.select('v:door')`);
+  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-sec-h')].some((h) => h.textContent === 'Look')`, 4000);
+  const doorSecs = await ev(`[...document.querySelectorAll('#en-inspector .pf-sec-h')].map((h) => h.textContent).join()`);
+  check(!/Behaviours|Moves/.test(doorSecs), "a door's Inspector has no Behaviours or Moves", doorSecs);
+  await ev(`window.TuffEngine.test.select('v:pad')`);
+  await waitFor(`[...document.querySelectorAll('#en-inspector .en-num span')].some((x) => x.textContent === 'Power')`, 4000);
+  const padPower = await ev(`(() => { const l = [...document.querySelectorAll('#en-inspector .en-num')].find((x) => x.querySelector('span')?.textContent === 'Power'); return l?.querySelector('input')?.value; })()`);
+  check(padPower === '15', "a jump pad's Inspector shows its Power (15)", padPower);
+  await t.shot('engine_level_pieces.png');
+  const kitCheck = path.join(ctx.tmp, 'kit_check.tuf');
+  fs.writeFileSync(kitCheck, kitCode);
+  check(/^OK/.test(ctx.tuffCheck(kitCheck).trim()), 'the level pieces the tiles wrote pass tuff --check', ctx.tuffCheck(kitCheck));
+  const beforePerson = kitCode.slice(0, kitCode.indexOf('person = '));
+  await ev(`document.querySelector('#en-stage').focus()`);
+  await t.key('z', CTRL);
+  await mkIs(beforePerson);
+  check(await mk() === beforePerson, 'one Ctrl+Z takes the talking person and its speech bubble away', firstDiff(await mk(), beforePerson));
+  const kitBanner = (await dbg()).banner;
+  if (kitBanner) t.info(`the scene stops at the level pieces until tgame's runtime has them: ${kitBanner.slice(0, 120)}`);
+  await settle(25000);
+
+  // Turning a boost pad and a door: their Inspector has an Angle, typed in like a kid (boost:turn_to 90 right after
+  // the pad), so a boost pad shoots the player the way the kid wants and a door fits a wall that runs along z.
+  const angleIn = async (text) => {
+    let r = null;
+    for (let tries = 0; tries < 20 && !r; tries++) {
+      r = await ev(`(() => { const l = [...document.querySelectorAll('#en-inspector .en-num')].find((x) => x.querySelector('span')?.textContent === 'Angle'); const i = l && l.querySelector('input'); if (!i) return null; i.id = 'en-test-angle'; i.scrollIntoView({ block: 'center' }); const b = i.getBoundingClientRect(); return b.width ? [b.left, b.top] : null; })()`);
+      if (!r) await t.sleep(100);
+    }
+    if (!r) return false;
+    await t.click(r[0] + 20, r[1] + 10);
+    await key('a', 'KeyA', 65, CTRL);
+    await ev(`document.activeElement?.select?.(); 1`);
+    await t.type(text, 30);
+    return true;
+  };
+  const inspSecs = () => ev(`[...document.querySelectorAll('#en-inspector .pf-sec-h')].map((h) => h.textContent).join()`);
+  await ev(`window.TuffEngine.test.select('v:boost')`);
+  await waitFor(`[...document.querySelectorAll('#en-inspector .en-num span')].some((x) => x.textContent === 'Power')`, 4000);
+  check(await angleIn('90'), "a boost pad's Inspector has an Angle (which way it shoots the player)", await inspSecs());
+  await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kitFile)})).getValue().includes('boost:turn_to 90'))()`, 4000);
+  await ev(`document.querySelector('#en-stage').focus()`);
+  const boostLine = kitCode.split('\n').find((l) => l.startsWith('boost = '));
+  const turnedBoost = await mk();
+  check(turnedBoost === beforePerson.replace(`${boostLine}\n`, `${boostLine}\nboost:turn_to 90\n`), 'typing 90 in it writes boost:turn_to 90 right after the boost pad', firstDiff(turnedBoost, beforePerson.replace(`${boostLine}\n`, `${boostLine}\nboost:turn_to 90\n`)));
+  await settle(25000);
+  const boostHeading = await ev(`(() => { const i = window.TuffEngine.test.thingsOf('v:boost')[0]; return window.TuffEngine.test.dump()?.things?.[i]?.heading ?? null; })()`);
+  check(boostHeading === 90, 'and the preview turns it', boostHeading);
+  await ev(`window.TuffEngine.test.select('v:door')`);
+  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-sec-h')].some((h) => h.textContent === 'Look')`, 4000);
+  check(await angleIn('90'), "a door's Inspector has an Angle too", await inspSecs());
+  await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kitFile)})).getValue().includes('door:turn_to 90'))()`, 4000);
+  await ev(`document.querySelector('#en-stage').focus()`);
+  const turnedDoor = await mk();
+  check(turnedDoor === turnedBoost.replace('door:needs(key)\n', 'door:needs(key)\ndoor:turn_to 90\n'), 'typing 90 writes door:turn_to 90 after its lines, so it fits a wall that runs along z', firstDiff(turnedDoor, turnedBoost.replace('door:needs(key)\n', 'door:needs(key)\ndoor:turn_to 90\n')));
+  const turnedCheck = path.join(ctx.tmp, 'kit_turned.tuf');
+  fs.writeFileSync(turnedCheck, turnedDoor);
+  check(/^OK/.test(ctx.tuffCheck(turnedCheck).trim()), 'the turned door and boost pad pass tuff --check', ctx.tuffCheck(turnedCheck));
+  // (Only the steps that happened are undone, so a failure here doesn't undo the tiles above.)
+  for (const changed of [turnedBoost !== beforePerson, turnedDoor !== turnedBoost]) if (changed) await t.key('z', CTRL);
+  await mkIs(beforePerson);
+  check(await mk() === beforePerson, 'two Ctrl+Z turn them back', firstDiff(await mk(), beforePerson));
+  await settle(25000);
+
+  // A moving platform's path goes with it: its spots are places in the world, so moving the platform moves each spot
+  // by as much, in the same step (otherwise at Play it slides back to where it was put). Shift+Right nudges it 2.
+  const n2 = (v) => String(+(+v).toFixed(2));
+  const liftLine = kitCode.split('\n').find((l) => l.startsWith('lift = '));
+  const [, liftX, liftZ] = liftLine.match(/^lift = game:box\((-?[\d.]+), 1, (-?[\d.]+),/);
+  const pathFor = (x, z) => `lift:path([[${n2(x)}, 1, ${n2(z)}], [${n2(+x + 8)}, 1, ${n2(z)}]], 3)`;
+  await ev(`window.TuffEngine.test.select('v:lift')`);
+  await ev(`document.querySelector('#en-stage').focus()`);
+  await key('ArrowRight', 'ArrowRight', 39, SHIFT);
+  await mkNot(beforePerson);
+  const nudgedLift = await mk();
+  const nudgedLines = changedLines(beforePerson, nudgedLift)?.map((l) => l[2]);
+  check(nudgedLines?.join('\n') === `lift = game:box(${n2(+liftX + 2)}, 1, ${liftZ}, [4, 0.4, 4], "stone")\n${pathFor(+liftX + 2, liftZ)}`, "Shift+Right nudges the platform 2 along, and its path's spots with it", nudgedLines);
+  await settle(25000);
+  const liftAt = gl ? await onScreen(await thingOf('v:lift')) : null;
+  if (liftAt) {
+    await drag(liftAt[0], liftAt[1], liftAt[0] + 110, liftAt[1] + 40, 10);
+    await mkNot(nudgedLift);
+    const draggedLift = changedLines(nudgedLift, await mk())?.map((l) => l[2]);
+    const dm = draggedLift?.[0]?.match(/^lift = game:box\((-?[\d.]+), 1, (-?[\d.]+), \[4, 0\.4, 4\], "stone"\)$/);
+    check(dm && draggedLift.length === 2 && draggedLift[1] === pathFor(dm[1], dm[2]), "dragging the platform moves it, and its path's spots with it, in one line each", draggedLift);
+    if (await mk() !== nudgedLift) { await ev(`document.querySelector('#en-stage').focus()`); await t.key('z', CTRL); }
+    await mkIs(nudgedLift);
+    check(await mk() === nudgedLift, 'one Ctrl+Z puts the platform and its path back', firstDiff(await mk(), nudgedLift));
+  }
+  if (nudgedLift !== beforePerson) { await ev(`document.querySelector('#en-stage').focus()`); await t.key('z', CTRL); }
+  await mkIs(beforePerson);
+  check(await mk() === beforePerson, 'one Ctrl+Z undoes the nudge, path and all', firstDiff(await mk(), beforePerson));
+  await settle(25000);
+
+  // Deleting the key takes the door:needs(key) line it wrote with it (or the door would need a key that's gone, and
+  // the game would stop there), and says so.
+  await ev(`window.TuffEngine.test.select('v:key')`);
+  await ev(`document.querySelector('#en-stage').focus()`);
+  await t.key('Delete');
+  await mkNot(beforePerson);
+  const noKey = await mk();
+  const keyLine = kitCode.split('\n').find((l) => l.startsWith('key = '));
+  check(noKey === beforePerson.replace(`${keyLine}\ndoor:needs(key)\n`, ''), "Delete on the key takes its line and the door's door:needs(key) out, in one step", firstDiff(noKey, beforePerson.replace(`${keyLine}\ndoor:needs(key)\n`, '')));
+  const keySay = (await toasts()).filter((x) => /^Removed/.test(x)).pop();
+  check(keySay === "Removed key, and door's lock, which needed it. Ctrl+Z brings it back.", 'and says the door has no lock now', keySay);
+  const noKeyCheck = path.join(ctx.tmp, 'kit_no_key.tuf');
+  fs.writeFileSync(noKeyCheck, noKey);
+  check(/^OK/.test(ctx.tuffCheck(noKeyCheck).trim()), 'what is left passes tuff --check', ctx.tuffCheck(noKeyCheck));
+  const noKeyRun = playCode('kit_no_key', noKey, [{ at: 0.6, dump: 'a.json' }, { at: 0.8, close: true }]);
+  if (noKeyRun) check(noKeyRun.code === 0 && !/Tuff error/.test(noKeyRun.out) && noKeyRun.dump('a.json'), 'and it plays (no "I don\'t know what \'key\' is")', noKeyRun.out.slice(-300));
+  if (noKey !== beforePerson) { await ev(`document.querySelector('#en-stage').focus()`); await t.key('z', CTRL); }
+  await mkIs(beforePerson);
+  check(await mk() === beforePerson, 'one Ctrl+Z brings the key and its lock back', firstDiff(await mk(), beforePerson));
+  await settle(25000);
+
   // ================================================================ the land: the Terrain tab, its tools, Lighting, Hills and Lake
   // A world on an island: the Terrain tab offers to swap the island for land (one step), then the brush, a hill, a
   // valley and the style each write one line (one Ctrl+Z each), the preview paints live, the Objects list and the
@@ -794,6 +1092,36 @@ export default async (t, ctx) => {
   check(lateP === 'arrows,chase,collect,hurts' && /func play_again\(\):/.test(late) && (await toasts()).includes('Coin and enemy work with player now.'),
     'Coin, Enemy, then Player: the Player gives the coin Collect it and the enemy Chases and Game over, and says so', { lateP, toasts: (await toasts()).slice(-3) });
   check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'late_check.tuf'), late), path.join(ctx.tmp, 'late_check.tuf'))).trim()), 'and that game passes tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'late_check.tuf')));
+  // A moving platform's path moves with it, in the same step: X, Y and Z (a drag and a nudge do the same), and
+  // Duplicate (the copy gets its own path, 2 along). Spots on the land ([x, z]) move too; a spot from code can't, so
+  // that path stays as it is and Tuff Engine says so.
+  const liftSrc = 'mention tgame\n\ngame = tgame.world("My World", 960, 600)\ngame:sky "day"\ngame:island(80)\nlift = game:box(0, 1, -6, [4, 0.4, 4], "stone")\nlift:path([[0, 1, -6], [8, 1, -6]], 3)\n';
+  const liftLines = (src) => changedLines(liftSrc, src)?.map((l) => l[2]).join('\n');
+  const liftMoved = await edit(liftSrc, `(P, E) => E.setArgs(P, P.byVar.lift, { x: 10, y: 1, z: -20 })`);
+  check(liftLines(liftMoved) === 'lift = game:box(10, 1, -20, [4, 0.4, 4], "stone")\nlift:path([[10, 1, -20], [18, 1, -20]], 3)', "the platform moved to 10, 1, -20: its path's spots move with it", liftLines(liftMoved));
+  const liftUp = await edit(liftSrc, `(P, E) => E.setArgs(P, P.byVar.lift, { x: 0, y: 4, z: -6 })`);
+  check(liftLines(liftUp) === 'lift = game:box(0, 4, -6, [4, 0.4, 4], "stone")\nlift:path([[0, 4, -6], [8, 4, -6]], 3)', 'Y (bottom) 4: its path goes up too', liftLines(liftUp));
+  const liftTwin = await edit(liftSrc, `(P, E) => E.duplicate(P, P.byVar.lift)`);
+  check(liftTwin === `${liftSrc}lift1 = game:box(2, 1, -6, [4, 0.4, 4], "stone")\nlift1:path([[2, 1, -6], [10, 1, -6]], 3)\n`, 'Duplicate: the copy gets its own path, 2 along like the copy (not the same track)', firstDiff(liftTwin, `${liftSrc}lift1 = game:box(2, 1, -6, [4, 0.4, 4], "stone")\nlift1:path([[2, 1, -6], [10, 1, -6]], 3)\n`));
+  const landLift = liftSrc.replace('[[0, 1, -6], [8, 1, -6]]', '[[0, -6], [8, -6]]');
+  const landMoved = await edit(landLift, `(P, E) => E.setArgs(P, P.byVar.lift, { x: 2, y: 1, z: -8 })`);
+  check(changedLines(landLift, landMoved)?.[1]?.[2] === 'lift:path([[2, -8], [10, -8]], 3)', 'spots on the land ([x, z]) move along the land', changedLines(landLift, landMoved));
+  const codeLift = liftSrc.replace('lift:path([[0, 1, -6], [8, 1, -6]], 3)', 'lift:path([[0, 1, -6], [far, 1, -6]], 3)').replace('lift = ', 'far = 8\nlift = ');
+  const codeMoved = await edit(codeLift, `(P, E) => E.setArgs(P, P.byVar.lift, { x: 10, y: 1, z: -20 })`);
+  const pathSay = (await toasts()).pop();
+  check(changedLines(codeLift, codeMoved)?.length === 1 && pathSay === "Lift's path has a spot that comes from code, so it stays where it was. Change its spots in the code.", 'a path with a spot from code (far) stays as it is, and Tuff Engine says so', { lines: changedLines(codeLift, codeMoved), pathSay });
+  const liftPlay = playCode('lift_moved', liftMoved, [{ at: 0.5, dump: 'a.json' }, { at: 2.4, dump: 'b.json' }, { at: 2.6, close: true }]);
+  if (liftPlay) {
+    const at = (n) => liftPlay.dump(n)?.objects?.find((o) => o[0] === 'box');
+    const [la, lb] = [at('a.json'), at('b.json')];
+    check(liftPlay.code === 0 && la && lb && Math.abs(la[3] + 20) < 0.1 && Math.abs(lb[3] + 20) < 0.1 && la[1] >= 9.9 && lb[1] > la[1] + 2 && lb[1] <= 18.1,
+      `at Play it rides its own track from where it was put (x ${la?.[1]} → ${lb?.[1]}, z ${la?.[3]} and ${lb?.[3]}), not back to the old one`, { code: liftPlay.code, la, lb, out: liftPlay.out.slice(-300) });
+  }
+  // A car's Angle (car:turn_to) is one of its own lines, read back as the car's (so its Inspector shows it).
+  const carSrc = 'mention tgame\n\ngame = tgame.world("My World", 960, 600)\ngame:sky "day"\ngame:island(80)\ncar = game:car(0, 1, -6, "red")\ncar:drive()\n';
+  const carTurned = await edit(carSrc, `(P, E) => E.setProp(P, P.byVar.car, 'turn_to', [90])`);
+  const carAngle = await ev(`window.TuffEngine.parse(${JSON.stringify(carTurned)}).byVar.car.props.turn_to?.args[0] ?? null`);
+  check(carTurned === `${carSrc}car:turn_to 90\n` && carAngle === 90, "a car's Angle 90 writes car:turn_to 90 after its lines, and Tuff Engine reads it back as the car's", { carTurned, carAngle });
 
   // Number fields at a kid's pace: the code follows the field, and everything typed before it's left is one Ctrl+Z.
   await ev(`window.TuffEngine.test.select('v:enemy')`);

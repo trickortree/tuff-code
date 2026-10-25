@@ -1,0 +1,14 @@
+mention tgame
+
+# Riding a moving platform, the player walks into a physics crate on it and pushes it along, as on still ground.
+world = tgame.world("Level Lift Push", 900, 560)
+world:ground "grass"
+player = world:player("first person")
+lift = world:box(0, 1, 0, [8, 0.4, 8], "stone")
+lift:path([[0, 1, 0], [6, 1, 0]], 0.8)
+crate = world:spawn("crate", 0, 1.4, -2)
+crate:physics()
+player:move_to(0, 1.4, 2)
+
+func report():
+    say "player " + player:spot() + " crate " + crate:spot() + " lift " + lift:spot()

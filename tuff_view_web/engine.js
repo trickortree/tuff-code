@@ -2,6 +2,12 @@
 // the retained scene they describe (DOM elements, 2D canvases, three.js scenes) and draws it on every animation
 // frame, at the display's own rate. Input goes back to Python as batched events.
 
+import * as anim from './anim.js';  // models that move by themselves: swaying trees, spinning coins, walking people, water
+import * as fx from './fx.js';      // tgame's effects: a shake, pop text, rain and snow, stars; its clock runs at the game's speed
+import './hud.js';  // tgame's HUD: health bars, the countdown, the arrow and the minimap (the <tg-hud> element)
+import './interact.js';  // tgame's speech bubbles (npc:say), drawn for Python's view.js as window.tgInteract
+import * as level from './level.js';  // tgame's level pieces looking alive: jump pads and boost pads glowing, whooshing
+
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
 const objs = new Map();              // id -> node
@@ -15,7 +21,7 @@ const root = document.getElementById('tv-root');
 let THREE = null;
 let threeLoading = null;
 
-const stats = { since: performance.now(), frames: 0, gaps: [], last: 0, batches: 0, cmds: 0, applyMs: 0, drawMs: 0, seq: 0 };
+const stats = { since: performance.now(), frames: 0, draws: 0, gaps: [], last: 0, batches: 0, cmds: 0, applyMs: 0, drawMs: 0, seq: 0 };
 
 function node(id) {
   const n = objs.get(id);
@@ -130,6 +136,7 @@ function create(id, kind, type, parentId, props) {
   if (n.kind === 'obj') track(n, true);
   objs.set(id, n);
   if (props) setProps(n, props);
+  n.made = true;
 }
 
 // A scene keeps its land, water and sunlight close at hand: the land's colours depend on the water near it, and
@@ -156,6 +163,7 @@ function attach(n, parent, before) {
     if (!parent || (parent.kind !== 'scene' && parent.kind !== 'obj')) throw new Error('a 3D object has to go in a scene or a group');
     n.host = parent.kind === 'scene' ? parent : parent.host;
     (parent.kind === 'scene' ? parent.scene : parent.obj).add(n.obj);
+    if (parent.anim) parent.anim.kids = -1;  // a model that moves by itself (anim.js) looks at its parts again
     n.host.dirty = true;
   } else {
     if (parent && parent.kind !== 'el') throw new Error('elements, canvases and scenes go inside an element (or the window)');
@@ -173,6 +181,7 @@ function remove(id) {
   for (const k of [...n.kids]) remove(k);
   objs.delete(id);
   if (n.parent) n.parent.kids.delete(id);
+  if (n.phys) { n.dead = true; withPhysics((p) => p.detach(n)); }
   switch (n.kind) {
     case 'shape':
       n.dead = true;
@@ -180,10 +189,11 @@ function remove(id) {
       break;
     case 'obj':
       n.obj.removeFromParent();
+      if (n.parent && n.parent.anim) n.parent.anim.kids = -1;  // (a thing swapped for another of its parts)
       labels.delete(n);
       track(n, false);
       if (n.type === 'label' && n.obj.material.map) n.obj.material.map.dispose();
-      if (n.obj.material) n.obj.material.dispose();
+      if (n.obj.material && !n.shared) n.obj.material.dispose();
       if (n.land || n.water) n.obj.geometry.dispose();  // their own, not shared like a box's
       if (n.skirt) { n.skirt.geometry.dispose(); n.skirt.material.dispose(); }
       if (n.apron) n.apron.geometry.dispose();  // its material is the land's
@@ -229,7 +239,7 @@ function call(id, method, args) {
   if (n.kind === 'scene') {
     if (method === 'pick') return pick3d(n, args.length ? args[0] : null, args.length ? args[1] : null);
     if (method === 'project') return project(n, args[0], args[1], args[2]);
-    if (method === 'lock') { n.el.requestPointerLock(); return null; }
+    if (method === 'lock') { const p = n.el.requestPointerLock(); if (p && p.catch) p.catch(() => {}); return null; }
   }
   if (n.kind === 'obj' && method === 'look') { n.obj.lookAt(args[0], args[1], args[2]); n.host.dirty = true; return null; }
   if (n.el && method === 'move') { attach(n, args[0] ? node(args[0]) : null, args[1]); return null; }
@@ -253,14 +263,15 @@ const engineCalls = {
     const at = (q) => (gaps.length ? gaps[Math.min(gaps.length - 1, Math.floor(gaps.length * q))] : 0);
     const secs = (now - stats.since) / 1000;
     const out = {
-      seconds: secs, frames: stats.frames, fps: stats.frames / secs,
+      seconds: secs, frames: stats.frames, fps: stats.frames / secs, draws: stats.draws,
       gap_median_ms: at(0.5), gap_p95_ms: at(0.95), gap_p99_ms: at(0.99), gap_max_ms: gaps.length ? gaps[gaps.length - 1] : 0,
       batches: stats.batches, cmds: stats.cmds, last_seq: stats.seq,
       apply_ms_per_batch: stats.batches ? stats.applyMs / stats.batches : 0,
       draw_ms_per_frame: stats.frames ? stats.drawMs / stats.frames : 0,
       objects: objs.size, waiting: Math.max(0, batches.length - 1),
+      physics: physics ? physics.info() : physicsJob ? 'loading' : null, anim: anim.info(), level: level.info(),
     };
-    if (reset) Object.assign(stats, { since: now, frames: 0, gaps: [], batches: 0, cmds: 0, applyMs: 0, drawMs: 0 });
+    if (reset) Object.assign(stats, { since: now, frames: 0, draws: 0, gaps: [], batches: 0, cmds: 0, applyMs: 0, drawMs: 0 });
     return out;
   },
   snapshot,
@@ -269,7 +280,58 @@ const engineCalls = {
   sound_stop: soundStop,
   sound_volume: soundVolume,
   sound_state: soundState,
+  fx(op, ...args) { return fx.call(op, args); },  // tgame's effects (fx.js)
+  // tgame's physics: 'start' loads it (physics.js and Rapier); the rest go to physics.js's OPS, in order.
+  physics(op, ...args) {
+    if (op === 'start') startPhysics(args[0] || {});
+    else withPhysics((p) => p.call(op, args));
+    return null;
+  },
 };
+
+// ---------------------------------------------------------------- physics (physics.js), loaded on first use
+
+let physics = null;           // physics.js, once it and Rapier have loaded
+let physicsJob = null;
+let physicsFailed = false;    // a step went wrong: it stops (the error was reported)
+const physicsWaiting = [];    // what came for it while it loads, in order
+
+function startPhysics(opts) {
+  if (physicsJob) return;
+  physicsJob = import('./physics.js')
+    .then((m) => m.load({ emit, report, node: (id) => objs.get(id), applied: () => stats.seq }, opts))
+    .then((m) => {
+      physics = m;
+      for (const fn of physicsWaiting.splice(0)) runPhysics(fn);
+    }, (err) => { physicsWaiting.length = 0; report(err, 'loading physics'); });
+}
+
+function withPhysics(fn) {
+  if (physics) runPhysics(fn);
+  else if (physicsJob) physicsWaiting.push(fn);
+}
+
+function runPhysics(fn) {
+  try {
+    fn(physics);
+  } catch (err) {
+    report(err, 'physics');
+  }
+}
+
+// An object's `phys` (what its body is) came, or what it was moved by: physics.js puts its body there.
+const PHYS_MOVES = new Set(['x', 'y', 'z', 'rx', 'ry', 'rz', 'rot', 'visible', 'sx', 'sy', 'sz', 'scale', 'wobble']);
+
+function physicsChanged(n, props) {
+  if ('phys' in props) {
+    n.phys = props.phys;
+    withPhysics((p) => p.attach(n));
+  }
+  if (!n.phys) return;
+  for (const k in props) {
+    if (PHYS_MOVES.has(k)) { withPhysics((p) => p.moved(n, props)); return; }
+  }
+}
 
 // ---------------------------------------------------------------- DOM elements
 
@@ -339,7 +401,7 @@ const SHAPE_DEFAULTS = {
 function makeShape(type) {
   if (!SHAPE_DEFAULTS[type]) throw new Error(`there's no 2D shape called '${type}'`);
   const p = { x: 0, y: 0, z: 0, rot: 0, sx: 1, sy: 1, scale: 1, alpha: 1, ax: 0.5, ay: 0.5, color: '#ffffff',
-    stroke: null, lw: 1, radius: 0, visible: true, pick: true, frame: null, w: null, h: null, ...SHAPE_DEFAULTS[type] };
+    stroke: null, lw: 1, radius: 0, visible: true, pick: true, frame: null, w: null, h: null, nudge: null, ...SHAPE_DEFAULTS[type] };
   if (type === 'line') p.color = null;
   return { p, fontStr: '', tw: 0 };
 }
@@ -348,10 +410,12 @@ function setShape(n, props) {
   const p = n.p;
   for (const k in props) {
     const v = props[k];
+    if (k === 'phys') continue;
     if (k === 'z' && v !== p.z) n.host.order = true;
     p[k] = v;
     if (k === 'text' || k === 'size' || k === 'font' || k === 'bold') n.fontStr = '';
   }
+  if (n.phys || 'phys' in props) physicsChanged(n, props);
   n.host.dirty = true;
 }
 
@@ -449,7 +513,9 @@ function drawShape(ctx, s, k, ox, oy) {
   const sin = Math.sin(a);
   const sx = p.sx * p.scale * k;
   const sy = p.sy * p.scale * k;
-  ctx.setTransform(cos * sx, sin * sx, -sin * sy, cos * sy, ox + p.x * k, oy + p.y * k);
+  const nx = p.nudge ? +p.nudge[0] || 0 : 0;  // drawn this far from where it is (a shake of a thing physics moves)
+  const ny = p.nudge ? +p.nudge[1] || 0 : 0;
+  ctx.setTransform(cos * sx, sin * sx, -sin * sy, cos * sy, ox + (p.x + nx) * k, oy + (p.y + ny) * k);
   ctx.globalAlpha = p.alpha;
   switch (s.type) {
     case 'rect': {
@@ -1406,12 +1472,29 @@ function texture(src, repeat) {
   return t;
 }
 
+// Parts made with `share` (a person's: there can be dozens of people, each of thirty-odd parts) share one material
+// with every other part that looks the same, so three.js draws them one after another without switching materials.
+// One the program changes later (a new colour, a glow) gets its own.
+const sharedMaterials = new Map();
+
 function material(n) {
   const p = n.p;
   const Kind = { basic: THREE.MeshBasicMaterial, lambert: THREE.MeshLambertMaterial, phong: THREE.MeshPhongMaterial,
     toon: THREE.MeshToonMaterial, standard: THREE.MeshStandardMaterial }[p.mat];
   if (!Kind) throw new Error(`there's no material called '${p.mat}'`);
   let m = n.obj.material;
+  if (n.shared) {  // changed since it was made: its own from now on
+    n.shared = false;
+    m = n.obj.material = m.clone();
+  } else if (p.share && !n.made && !p.texture && !p.ontop) {
+    const key = [p.mat, p.color, p.opacity, p.emissive, p.rough, p.metal, p.wireframe, p.flat, p.side].join(' ');
+    const ready = sharedMaterials.has(key);
+    if (!ready) sharedMaterials.set(key, new Kind());
+    if (m) m.dispose();  // the one it was made with, before it had its looks
+    m = n.obj.material = sharedMaterials.get(key);
+    n.shared = true;
+    if (ready) return;
+  }
   if (!(m instanceof Kind)) {
     if (m) m.dispose();
     m = n.obj.material = new Kind();
@@ -1440,6 +1523,8 @@ function setObj(n, props) {
     const v = props[k];
     switch (k) {
       case 'ontop':
+        if (n.shared) { n.shared = false; o.material = o.material.clone(); }  // its own
+        p.ontop = !!v;
         if (o.material) { o.material.depthTest = !v; o.material.needsUpdate = true; }
         o.renderOrder = v ? 1000 : 0;
         break;
@@ -1458,6 +1543,7 @@ function setObj(n, props) {
       case 'sz': o.scale.z = v; break;
       case 'scale': o.scale.setScalar(v); break;
       case 'visible': o.visible = !!v; break;
+      case 'anim': anim.add(n, v); break;  // how it moves by itself (anim.js)
       case 'pick': n.pick = v !== false; break;
       case 'look': o.lookAt(v[0], v[1], v[2]); break;
       case 'camera': (v ? n.host.camera : n.host.scene).add(o); break;
@@ -1465,6 +1551,8 @@ function setObj(n, props) {
         o.castShadow = !!v;
         if (o.isMesh) o.receiveShadow = !!v;
         break;
+      case 'phys': break;  // physicsChanged, below
+      case 'wobble': n.wobble = v; break;  // a physics body's shake: physics.js tilts how it's drawn by it
       case 'intensity': if (o.isLight) { p.intensity = v; o.intensity = v * lightScale(n); } break;
       case 'distance': if (o.isLight) o.distance = v; break;
       case 'ground': if (o.groundColor) o.groundColor.set(v); break;
@@ -1497,6 +1585,8 @@ function setObj(n, props) {
   if (relabel) drawLabel(n);
   if (land) buildLand(n);
   if (water) buildWater(n);
+  if (n.phys || 'phys' in props) physicsChanged(n, props);
+  if (land && n.phys) withPhysics((ph) => ph.landChanged(n));
   if (n.water) n.host.recolor = true;  // the land by it gets its sand where the water is now
   n.host.dirty = true;
 }
@@ -1829,6 +1919,9 @@ function wakeSound() {
 
 function tick(now) {
   requestAnimationFrame(tick);
+  const game = fx.time(now);  // the game's clock: physics, models and pads go at the game's speed (slow motion)
+  try { anim.frame(now, game, scenes); } catch (err) { report(err, 'animating'); }  // anim.js: before the scenes are drawn
+  level.frame(game);  // level.js's pads, on anim.js's steps (it reports its own errors)
   if (stats.last) {
     stats.gaps.push(now - stats.last);
     if (stats.gaps.length > 4000) stats.gaps.splice(0, 1000);
@@ -1836,8 +1929,16 @@ function tick(now) {
   stats.last = now;
   stats.frames++;
   const t0 = performance.now();
-  for (const c of canvases) if (c.dirty) { c.dirty = false; try { draw2d(c); } catch (err) { report(err, 'drawing a canvas'); } }
-  for (const s of scenes) if (s.dirty) { s.dirty = false; try { draw3d(s); } catch (err) { report(err, 'drawing a 3D scene'); } }
+  if (physics && !physicsFailed) {
+    try {
+      physics.step(game);  // at the game's speed (slow motion)
+    } catch (err) {
+      physicsFailed = true;  // once: an error every frame would bury everything else
+      report(err, 'physics');
+    }
+  }
+  for (const c of canvases) if (c.dirty) { c.dirty = false; stats.draws++; try { draw2d(c); } catch (err) { report(err, 'drawing a canvas'); } }
+  for (const s of scenes) if (s.dirty) { s.dirty = false; stats.draws++; try { draw3d(s); } catch (err) { report(err, 'drawing a 3D scene'); } }
   stats.drawMs += performance.now() - t0;
   flushMoves();
 }
@@ -1903,9 +2004,10 @@ function typing(el) {
   return !!el && editable(el) && !(el.tagName === 'INPUT' && /^(checkbox|radio|range|button|submit|reset|color|file|image)$/i.test(el.type));
 }
 
-// What's under the pointer: a 2D shape or 3D object first, then the element and its parents.
+// What's under the pointer: a 2D shape or 3D object first, then the element and its parents. With the mouse held
+// for looking around, the element holding it, as with the browser's lock.
 function target(e) {
-  const t = e.target;
+  const t = (passing && heldBy) || e.target;
   const n = t && t._tv !== undefined ? objs.get(t._tv) : null;
   const info = { x: e.clientX, y: e.clientY, path: domPath(t) };
   if (n && (n.kind === 'canvas' || n.kind === 'scene')) {
@@ -1930,7 +2032,7 @@ function mods(e) {
   return { shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey, meta: e.metaKey };
 }
 
-addEventListener('pointerdown', (e) => emit('mousedown', { ...target(e), button: e.button, ...mods(e) }));
+addEventListener('pointerdown', (e) => emit('mousedown', { ...target(e), button: e.button, ...mods(e), ...(e.tvLocks ? { locks: true } : null) }));
 addEventListener('pointerup', (e) => emit('mouseup', { ...target(e), button: e.button, ...mods(e) }));
 addEventListener('click', (e) => emit('click', { ...target(e), button: e.button, ...mods(e) }));
 addEventListener('dblclick', (e) => emit('dblclick', { ...target(e), button: e.button, ...mods(e) }));
@@ -1943,7 +2045,7 @@ addEventListener('pointermove', (e) => {
   moved.dy += e.movementY || 0;
 });
 addEventListener('wheel', (e) => {
-  if (!wheel) wheel = { dx: 0, dy: 0, x: e.clientX, y: e.clientY, path: domPath(e.target) };
+  if (!wheel) wheel = { dx: 0, dy: 0, x: e.clientX, y: e.clientY, path: domPath((passing && heldBy) || e.target) };
   wheel.dx += e.deltaX;
   wheel.dy += e.deltaY;
 }, { passive: true });
@@ -1968,24 +2070,77 @@ document.addEventListener('pointerlockchange', () => emit('lock', { locked: !!do
 addEventListener('resize', () => { resized = true; });
 addEventListener('blur', () => emit('blur', {}));
 addEventListener('focus', () => emit('focus', {}));
+// A press of the mouse still going on, from its pointerdown until just after its click (see passThrough). First of
+// the pointerdown listeners, so it's known before one asks to hold the mouse.
+let pressing = false;
+addEventListener('pointerdown', () => { pressing = true; }, true);
+addEventListener('pointerup', () => setTimeout(() => { pressing = false; passThrough(); }, 0), true);
 // A scene with `clicklock` locks the pointer when it's clicked (for mouse look); the browser only allows that
-// inside the click itself, so it can't wait for Python. Escape unlocks it.
+// inside the click itself, so it can't wait for Python. Escape unlocks it. That click's mousedown has `locks: true`.
 addEventListener('pointerdown', (e) => {
   wakeSound();
   const n = e.target && e.target._tv !== undefined ? objs.get(e.target._tv) : null;
   if (n && n.kind === 'scene' && n.clicklock && document.pointerLockElement !== n.el) {
+    e.tvLocks = true;
     const p = n.el.requestPointerLock();
     if (p && p.catch) p.catch(() => {});
   }
 }, true);
 addEventListener('keydown', wakeSound, true);
+
+// The mouse held for looking around without the browser's pointer lock, which shows "To show your cursor, press
+// Esc" over the game: Python holds it (tuff_view's _MouseHold keeps it in the window and measures its moves), and
+// the page stands in for the lock, so requestPointerLock, document.pointerLockElement, exitPointerLock and
+// 'pointerlockchange' work as before. As with the real lock, only a window with the focus can hold it, Escape and
+// the window losing the focus let go, and while it's held the mouse's events go to the element holding it (nothing
+// else on the page is under the pointer, so a card in the middle of the window doesn't take the game's clicks).
+// Python turns this on (nativeMouse(true)) where it can hold the mouse.
+let heldBy = null;
+let passing = false;  // the mouse's events go to heldBy
+function holdMouse(el) {
+  if (heldBy === el) return;
+  if (heldBy) heldBy.removeAttribute('data-tv-holder');
+  heldBy = el;
+  if (el) el.setAttribute('data-tv-holder', '');
+  document.documentElement.classList.toggle('tv-held', !!el);
+  passThrough();
+  emit('capture', { on: !!el });
+  document.dispatchEvent(new Event('pointerlockchange'));
+}
+// The mouse's events go to the element holding it, but not before the click that asked for the hold is over (a click
+// on a start screen holds the mouse and hides the screen), so that click still goes where it was made.
+function passThrough() {
+  passing = !!heldBy && !pressing;
+  document.documentElement.classList.toggle('tv-through', passing);
+}
+function nativeMouse(on) {
+  if (!on || nativeMouse.on) return null;
+  nativeMouse.on = true;
+  Object.defineProperty(Document.prototype, 'pointerLockElement', { configurable: true, get() { return heldBy; } });
+  Element.prototype.requestPointerLock = function () {
+    if (!document.hasFocus()) {  // another window is in front: no (the next click on the game asks again)
+      document.dispatchEvent(new Event('pointerlockerror'));
+      return Promise.reject(new DOMException("the window doesn't have the focus", 'WrongDocumentError'));
+    }
+    holdMouse(this.isConnected ? this : null);
+    return Promise.resolve();
+  };
+  Document.prototype.exitPointerLock = function () { holdMouse(null); };
+  addEventListener('keydown', (e) => { if (e.key === 'Escape' && heldBy) holdMouse(null); }, true);
+  addEventListener('blur', () => { pressing = false; holdMouse(null); });
+  const s = document.createElement('style');
+  s.textContent = 'html.tv-held, html.tv-held * { cursor: none !important; }'
+    + ' html.tv-through * { pointer-events: none !important; } html.tv-through [data-tv-holder] { pointer-events: auto !important; }';
+  document.head.appendChild(s);
+  return null;
+}
 addEventListener('error', (e) => report(e.error || new Error(e.message), 'the page'));
 addEventListener('unhandledrejection', (e) => report(e.reason, 'the page'));
 
 // ---------------------------------------------------------------- start up
 
 // What custom JS (view.js(...) in Python) gets as `tv`.
-const api = { objs, node, emit, three: () => THREE, loadThree, root, gameKeys: true };
+const api = { objs, node, emit, three: () => THREE, loadThree, root, gameKeys: true, nativeMouse };
 window.__tv = { apply };
 window.tuffView = api;
 requestAnimationFrame(tick);

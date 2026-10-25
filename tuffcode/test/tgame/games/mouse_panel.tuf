@@ -1,0 +1,21 @@
+mention tgame
+
+# A card in the middle of the screen, under the crosshair: with the mouse held for looking around, a click still goes
+# to the game (it throws the crate the player holds, and world:clicked runs), as with the browser's own lock.
+world = tgame.world("Mouse Panel", 800, 500)
+world:ground "grass"
+player = world:player("first person")
+player:can_grab()
+crate = world:box(0, 0, -2, 1, "wood")
+crate:physics()
+tip = world:panel("center")
+tip:card():text "Find the three coins!"
+clicks = 0
+
+func shoot(x, y, z):
+    clicks += 1
+
+world:clicked shoot
+
+func report():
+    say "clicks " + clicks + ", holding " + player:holding()

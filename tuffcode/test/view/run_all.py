@@ -13,6 +13,9 @@ import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# The windows open out of sight, never take the focus and make no sound (tuff_view's _quiet_window), so the
+# tests can run while someone uses the computer. TUFF_TEST_QUIET=0 shows them.
+os.environ.setdefault("TUFF_TEST_QUIET", "1")
 TESTS = ["view_ui_test.py", "view_2d_stress.py", "view_3d_test.py", "view_latency.py", "view_close_test.py",
          "view_window_test.py", "view_server_test.py"]
 

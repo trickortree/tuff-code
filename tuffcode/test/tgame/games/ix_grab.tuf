@@ -1,0 +1,23 @@
+mention tgame
+
+# Grabbing: E picks up the physics crate the player looks at, it floats in front of the player, a click throws it,
+# and E drops what's held.
+world = tgame.world("Grab", 900, 560)
+world:ground "grass"
+player = world:player("first person")
+player:move_to(0, 0, 4)
+player:can_grab()
+crate = world:spawn("crate", 0, 0, 2)
+crate:physics()
+ball = world:sphere(-3, 0, 1, 0.7, "red"):physics()
+rock = world:spawn("rock", 3, 0, 2)
+
+func report():
+    held = player:holding()
+    if held == nil:
+        say "holding nothing, crate " + crate:spot()
+    else:
+        say "holding " + held + " crate " + crate:spot()
+
+func no_grab():
+    player:can_grab(false)

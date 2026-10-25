@@ -1,0 +1,26 @@
+mention tgame
+
+# Physics: ragdolls. One stands until it's pushed, one falls from the air, and one is knocked over by a ball.
+world = tgame.world("Physics Ragdoll", 900, 560)
+world:sky "day"
+world:ground "grass"
+world:camera_at(4.5, 2.2, 4.5)
+world:look_at(0, 0.5, -0.5)
+dummy = world:ragdoll(0, 0, 0, "blue")
+flyer = world:ragdoll(2, 3, -2, "red")
+flyer:turn(90)
+target = world:ragdoll(-2, 0, -1, "green")
+crate = world:spawn("crate", -3.5, 0, 1)
+ball = nil
+
+func report():
+    say "dummy " + dummy:spot() + " speed " + dummy:speed()
+    say "flyer " + flyer:spot() + " speed " + flyer:speed()
+    say "target " + target:spot() + " speed " + target:speed()
+
+func shove():
+    dummy:push(0, 4, -6)
+
+func drop():
+    ball = world:sphere(-2, 2.2, -1, 0.5, "white"):physics()
+    ball:mass(4)

@@ -1,0 +1,18 @@
+mention tgame
+
+# The mouse held for looking around without the browser's pointer lock (no "press Esc" banner): a click on the game
+# holds it, moving the real mouse turns the player, and Escape lets go.
+world = tgame.world("Mouse Hold", 800, 500)
+world:sky "day"
+world:ground "grass"
+world:spawn("pine", 0, 0, -8)
+player = world:player("first person")
+
+func report():
+    say "locked " + world:mouse_locked() + ", angle " + round(player:angle())
+
+func lock_now():
+    world:lock_mouse()
+
+while world:open():
+    world:frame()

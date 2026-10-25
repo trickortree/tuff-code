@@ -44,6 +44,7 @@
 //   cancel {}                 Stop a drag in progress and put the thing back (Escape pressed in the parent).
 //   ask    { tag, what, i? }  Answered with `reply { tag, value, error }`:
 //            'snapshot'      a PNG data: URL of the preview, from the engine
+//            'engine', reset the engine's own numbers (frames, draws, draw time...) since the last reset: true
 //            'screen', i     where thing i (or 'player') is, in this page's CSS pixels: [x, y]; 3D: its middle
 //            'stats'         { objs, mode, sceneBg, cameraNodesVisible, things, sel, camMode, cam, outlines, marker,
 //                              load, b, scene, sel2d }
@@ -236,6 +237,9 @@
       const q = { ...p };
       delete q.clicklock; // a click locks the mouse for looking around in a game, not in the editor
       if (editorCam) for (const k of CAM_KEYS) delete q[k];
+      // The preview holds still, like a paused game: what moves by itself in a game (anim.js: swaying trees,
+      // spinning coins, rippling water) keeps the pose it was made with, so the world is drawn only when it changes.
+      q.attrs = { ...q.attrs, 'data-paused': true };
       return q;
     };
 
@@ -259,7 +263,7 @@
         case 'c': {
           const [, id, kind, type, parentId, props] = c;
           let p = props ? fix(props) : null;
-          if (kind === 'scene' && p) p = sceneProps(p);
+          if (kind === 'scene') p = sceneProps(p || {});
           if (keep && id === rawScene) { out.push(['s', keep, p || {}]); break; }
           if (p && p.camera) cameraNodes.add(mapId(id));
           out.push(['c', mapId(id), kind, type, mapId(parentId), p]);
@@ -1086,6 +1090,7 @@
   function ask(m) {
     const reply = (value, error = null) => post('reply', { tag: m.tag, value, error });
     if (m.what === 'snapshot') { send([['k', 0, 'snapshot', [], m.tag]]); return; }
+    if (m.what === 'engine') { send([['k', 0, 'stats', [!!m.reset], m.tag]]); return; }
     if (m.what === 'fetch') { askFetch(m); return; }
     if (!L) { reply(null, 'nothing is loaded yet'); return; }
     if (m.what === 'height' || m.what === 'spot') {

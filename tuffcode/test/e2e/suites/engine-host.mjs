@@ -263,6 +263,13 @@ export default async (t, ctx) => {
   stats = (await ask('stats')).value;
   check(stats.mode === '3d' && stats.sceneBg === '#bfe2ff' && stats.marker === true && stats.cameraNodesVisible === false && stats.b === 3e6, // the 3rd load (the held-load check loads the 2D game again)
     "the 3D world is in the engine: the day sky, the player's start marker, the held axe hidden from the editor camera", stats);
+  // The preview is still: the coin that spins and the tree that sways in the game hold their poses here, so the
+  // world isn't drawn again and again while the kid only types.
+  await ask('engine', { reset: true });
+  await t.sleep(1000);
+  const idle = (await ask('engine')).value;
+  check(idle && idle.frames > 20 && idle.draws <= 6,
+    `left alone, the preview doesn't draw: ${idle?.draws} draws in ${idle?.frames} display frames (${idle?.seconds?.toFixed(2)} s)`, idle);
   const fitted = (await msgs(`m.tuffHost === 'cam'`)).pop();
   check(fitted && Math.abs(fitted.tx - -2) < 0.01 && Math.abs(fitted.tz - -10) < 0.01 && fitted.el === 35 && fitted.dist > 12,
     'the camera is fitted around the world, and posted (cam)', fitted);

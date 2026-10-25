@@ -1,0 +1,33 @@
+mention tgame
+
+# Day and night: noon, sunset and midnight (with stars), then a whole day in 4 seconds, stopped, and a sky picked.
+world = tgame.world("Day and Night", 900, 560)
+land = world:terrain(160, "grass")
+land:hill(10, -25, 20, 6)
+world:camera_at(0, 3, 14)
+world:look_at(0, 4, -6)
+for i in range(10):
+    world:spawn("pine", -25 + i * 5, 0, -16)
+world:spawn("house", -4, 0, -4)
+
+func noon():
+    world:time_of_day(12)
+
+func sunset():
+    world:time_of_day(18.5)
+
+func midnight():
+    world:time_of_day(0)
+
+func fast():
+    world:time_of_day(6)
+    world:day_cycle(4)
+
+func stop():
+    world:day_cycle(0)
+
+func pick():
+    world:sky("day")
+
+func report():
+    say "hour " + world:time_of_day()

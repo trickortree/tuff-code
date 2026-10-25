@@ -90,7 +90,10 @@ main thread   tuff_view.run() → webview.start(): the window system. (On Window
 "tuff"        ALL program code: the Tuff program, every handler, every-frame function, frame(), loop().
 "tuff-view-send"  takes queued batches and calls window.run_js (blocks ~1 ms each). Daemon.
 pywebview's   one new thread per page→Python call (js_api) and per window event (closed...). They only
-threads       append to a queue under a lock and wake the Tuff thread.
+threads       append to a queue under a lock and wake the Tuff thread, and tell the mouse hold when the page
+              holds the mouse or lets go (so Escape lets go at once, even while the program is busy).
+"tuff-view-mouse" while a first-person game holds the mouse (Windows, Mac) and its window is in front: keeps the
+              cursor in the window and adds up its moves. Daemon.
 "tuff-view-files" a ThreadingHTTPServer on 127.0.0.1 serving the page and the program's assets.
 ```
 
@@ -148,7 +151,7 @@ window.run_js("__tv.apply([[seq, [cmd, ...]], ...])")      # a JS literal, no ev
 | --- | --- | --- |
 | `el` (type = tag) | an `el` or 0 (the window) | `text`, `html`, `class` (Python `cls`), `style` (dict, merged, or a CSS string), `attrs`, `show`, `before` (create only), and any DOM property (`value`, `checked`, `disabled`, `src`, `placeholder`, `type`, `id`...) |
 | `canvas` | an `el` or 0 | `bg`, `cx`/`cy` (world point at the top-left), `zoom`, `fit: [w, h]` (letterboxed logical size), `smooth` (false for pixel art), plus `el` properties. Fills its parent by default. |
-| `shape` (2D) | a `canvas` | `rect` (`w h radius`), `circle` (`r`), `ellipse` (`w h`), `line`/`poly` (`points lw stroke`), `text` (`text size font bold`), `image` (`src w h frame=[sx,sy,sw,sh]`). All: `x y z rot sx sy scale alpha ax ay color stroke lw visible pick`. `x, y` is the centre by default (`ax = ay = 0.5`); text defaults to its top-left corner. |
+| `shape` (2D) | a `canvas` | `rect` (`w h radius`), `circle` (`r`), `ellipse` (`w h`), `line`/`poly` (`points lw stroke`), `text` (`text size font bold`), `image` (`src w h frame=[sx,sy,sw,sh]`). All: `x y z rot sx sy scale alpha ax ay color stroke lw visible pick nudge` (`[dx, dy]`: drawn that far from `x, y` without moving it there). `x, y` is the centre by default (`ax = ay = 0.5`); text defaults to its top-left corner. |
 | `scene` (3D) | an `el` or 0 | `bg`, `fog: [color, near, far]`, `fov near far`, camera `cx cy cz yaw pitch roll` (degrees; yaw 0 looks down −z, positive turns left), `look: [x,y,z]`, `shadows`, `lighting` (`simple`, the default, or `modern`: ACES filmic tone mapping, an environment map made from the sky with PMREM, a softer hemisphere light, sun shadows that follow the camera; a graphics failure falls back to simple quietly) |
 | `obj` (3D) | a `scene` or an `obj` | `box` (`w h d`), `sphere` (`r seg`), `plane` (`w h`), `cylinder` (`r` or `rt rb`, `h seg`), `cone`, `torus` (`r tube`), `capsule`, `group`, lights `ambient`, `hemi` (`ground`), `sun` (`shadow area`), `point` (`distance`). All: `x y z rx ry rz sx sy sz scale visible pick look shadow camera` (true = attached to the camera, for a held axe). Material: `color opacity emissive rough metal wireframe flat mat` (`standard`, `lambert`, `phong`, `toon`, `basic`) and `texture repeat side`. Lights: `color intensity`. |
 | `obj` `terrain` | a `scene` | Land: `size` (metres across, centred on its position), `n` (points along a side), `heights` (n × n, row by row from −z to +z, each row from −x to +x), `style` (`grass desert snow rocky autumn`), `shadow`. Vertex colours by height, slope and the water near it, times a soft grain texture; earth sides and scenery land past its edges (not pickable). New heights update only the rows that changed. Picking walks the heightfield (fast enough for a brush) |
@@ -173,7 +176,7 @@ Methods (`call`/`ask`):
 
 | type | fields |
 | --- | --- |
-| `click` `dblclick` `mousedown` `mouseup` | `id` (the nearest object), `path` (that object, then its parents), `x y` (window CSS px), `button`, `shift ctrl alt meta`. Over a canvas also `cx cy` (world). Over a scene, the hit object leads `path`, plus `point dist`. |
+| `click` `dblclick` `mousedown` `mouseup` | `id` (the nearest object), `path` (that object, then its parents), `x y` (window CSS px), `button`, `shift ctrl alt meta`. Over a canvas also `cx cy` (world). Over a scene, the hit object leads `path`, plus `point dist`. A `mousedown` that locks the pointer (a click on a scene with `clicklock` that isn't locked yet) also has `locks: true`. |
 | `mousemove` | `x y dx dy` (merged per animation frame) |
 | `wheel` | `dx dy x y path` |
 | `keydown` / `keyup` | `key code` (+ `repeat` and `typing` on keydown: true when the key went to a text box, not a checkbox or slider), `shift ctrl alt meta` |

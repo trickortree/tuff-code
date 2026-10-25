@@ -1,0 +1,46 @@
+mention tgame
+
+# Physics: a crate falls onto the land, another onto a hill, and a bouncy ball bounces lower each time.
+world = tgame.world("Physics Drop", 900, 560)
+world:sky "day"
+land = world:terrain(120)
+land:hill(12, -8, 20, 4)
+world:camera_at(2, 4, 9)
+world:look_at(2, 1, -4)
+crate = world:spawn("crate", 0, 6, 0)
+crate:physics()
+crate:mass(2)
+on_hill = world:box(12, 9, -8, 1, "red"):physics()
+ball = world:sphere(-4, 8, -2, 1, "blue"):physics()
+ball:bounce(0.7)
+hits = 0
+peaks = []
+top = 0
+falling = false
+
+func bumped(other, strength):
+    hits += 1
+
+ball:on_hit bumped
+
+func watch(dt):
+    # the highest the ball got since it last went down: a bounce's top
+    y = ball:y()
+    if y > top:
+        top = y
+    v = ball:velocity()
+    if v[1] < -0.5 and not falling:
+        falling = true
+        if top > 0.3:
+            peaks:add(top)
+    if v[1] > 0.5 and falling:
+        falling = false
+        top = 0
+
+world:every_frame watch
+
+func report():
+    say "crate " + crate:spot() + " speed " + crate:speed()
+    say "hill crate y " + on_hill:y() + " ground " + land:height_at(12, -8)
+    say "hits " + hits
+    say "peaks " + peaks

@@ -1574,19 +1574,127 @@ ANCHOR_HINTS = {"middle": "center", "centre": "center", "centered": "center", "c
                 "topleft": "top left", "topright": "top right", "bottomleft": "bottom left", "bottomright": "bottom right",
                 "up": "top", "down": "bottom", "north": "top", "south": "bottom", "east": "right", "west": "left",
                 "middle top": "top", "middle bottom": "bottom"}
-GAME_UI = ("panel", "screen", "start_screen")
-GAME_UI_HINTS = {"menu": "screen", "overlay": "screen", "popup": "screen", "pop_up": "screen", "dialog": "screen",
+GAME_UI = ("panel", "screen", "start_screen", "main_menu")
+GAME_UI_HINTS = {"overlay": "screen", "popup": "screen", "pop_up": "screen", "dialog": "screen",
                  "modal": "screen", "page": "screen", "shop": "screen", "ui": "panel", "gui": "panel", "toolbar": "panel",
-                 "sidebar": "panel", "bar": "panel", "title_screen": "start_screen", "start_menu": "start_screen",
-                 "main_menu": "start_screen", "menu_screen": "start_screen", "splash": "start_screen",
-                 "intro": "start_screen", "click_to_play": "start_screen", "click_to_start": "start_screen",
-                 "startscreen": "start_screen", "start_page": "start_screen"}
+                 "sidebar": "panel", "bar": "panel", "start_menu": "start_screen",
+                 "click_to_play": "start_screen", "click_to_start": "start_screen",
+                 "startscreen": "start_screen", "start_page": "start_screen",
+                 # splash screens and main menus (game:splash, game:main_menu)
+                 "title_screen": "splash", "intro": "splash", "logo": "splash", "splash_screen": "splash",
+                 "splashscreen": "splash", "logo_screen": "splash", "intro_screen": "splash", "menu": "main_menu",
+                 "home_screen": "main_menu", "menu_screen": "main_menu", "mainmenu": "main_menu", "title_menu": "main_menu",
+                 "home_menu": "main_menu"}
 GAME_UI_METHOD_HINTS = {"close": "hide", "dismiss": "hide", "open": "show", "visible": "shown", "is_visible": "shown",
                         "is_shown": "shown", "showing": "shown", "is_open": "shown", "is_showing": "shown", "empty": "clear"}
 GAME_UI_USE = {"panel": 'bar = {owner}:panel("top left")', "screen": 'shop = {owner}:screen("Shop") or {owner}:screen("Shop", false)',
-               "start_screen": 'start = {owner}:start_screen("My Game", "Click to play")'}
+               "start_screen": 'start = {owner}:start_screen("My Game", "Click to play")',
+               "main_menu": 'menu = {owner}:main_menu("My Game")'}
 GAME_UI_TAKES = {"panel": "where the panel goes", "screen": "a title, then whether it pauses the game",
-                 "start_screen": "a title, then a hint"}
+                 "start_screen": "a title, then a hint", "main_menu": "its title"}
+
+# The mouse in a 3D world (world:lock_mouse...), filled in where tgame's tables leave it out (with_mouse): each
+# method's inputs, what mouse_locked gives back, and names people guess.
+MOUSE_INPUTS = {"lock_mouse": (), "unlock_mouse": (), "mouse_locked": (), "auto_lock": ("on",)}
+MOUSE_HINTS = {"release_mouse": "unlock_mouse", "free_mouse": "unlock_mouse", "show_cursor": "unlock_mouse",
+               "unlock_cursor": "unlock_mouse", "unlock_pointer": "unlock_mouse", "exit_pointer_lock": "unlock_mouse",
+               "capture_mouse": "lock_mouse", "hide_cursor": "lock_mouse", "lock_cursor": "lock_mouse",
+               "lock_pointer": "lock_mouse", "pointer_lock": "lock_mouse", "request_pointer_lock": "lock_mouse",
+               "is_mouse_locked": "mouse_locked", "is_locked": "mouse_locked", "locked": "mouse_locked",
+               "click_to_lock": "auto_lock", "lock_on_click": "auto_lock", "autolock": "auto_lock"}
+MOUSE_NEEDS_3D = ("Locking the mouse is for looking around in a 3D world. Make the game with tgame.world(...) and "
+                  "give it a player: world:player(\"first person\").")
+
+
+# tgame's physics as the checker knows it, filled in where tgame's own tables leave it out (with_physics): what each
+# method takes, for messages, an example ({o} is the thing's name), the input counts that fit, and how many inputs a
+# spot ([x, y, z] in 3D, [x, y] in 2D) can stand in for. A car and a ragdoll have an object's methods too.
+_THING_PHYSICS = {
+    "physics": ("nothing, or the kind of physics", '{o}:physics() or {o}:physics("static")', (0, 1), 0),
+    "mass": ("how heavy it is, in kg", "{o}:mass(2)", (1,), 0),
+    "bounce": ("how bouncy it is, from 0 to 1", "{o}:bounce(0.6)", (1,), 0),
+    "friction": ("how grippy it is, from 0 up", "{o}:friction(0.4)", (1,), 0),
+    "on_hit": ("the name of a function to run when something hits it", "{o}:on_hit(bumped)", (1,), 0),
+    "sleep": ("nothing", "{o}:sleep()", (0,), 0),
+    "wake": ("nothing", "{o}:wake()", (0,), 0),
+}
+_PHYSICS_3D = {
+    **_THING_PHYSICS,
+    "push": ("x, y and z: how hard to push it each way", "{o}:push(0, 5, -3)", (3,), 3),
+    "spin": ("how fast it keeps turning, or x, y and z to give it a spin", "{o}:spin(0, 2, 0)", (1, 3), 3),
+    "velocity": ("nothing (to read it), or x, y and z", "{o}:velocity(0, 0, -4)", (0, 3), 3),
+}
+PHYSICS_INPUTS = {
+    "world": {
+        "gravity": ("how strong gravity is (-9.8 is like on Earth)", "{o}:gravity(-9.8)", (1,), 0),
+        "explode": ("x, y and z, then how strong and how far", "{o}:explode(0, 0, 0, 12, 8)", (3, 4, 5), 3),
+        "car": ("x, y, z and a color", '{o}:car(0, 1, 10, "red")', (0, 1, 2, 3, 4), 3),
+        "ragdoll": ("x, y, z and a color", '{o}:ragdoll(5, 0, 0, "blue")', (0, 1, 2, 3, 4), 3),
+    },
+    "game": {
+        "gravity": ("how strong gravity is, in pixels a second each second (down the screen)", "{o}:gravity(900)", (1,), 0),
+        "walls": ("true or false: whether the edges of the screen are walls", "{o}:walls(true)", (0, 1), 0),
+        "explode": ("x and y, then how strong and how far", "{o}:explode(400, 300, 600, 200)", (2, 3, 4), 2),
+    },
+    "object": {**_PHYSICS_3D, "animate": ('an animation: "walk", "idle", "wave" or "none"', '{o}:animate("walk")', (1,), 0)},
+    "sprite": {
+        **_THING_PHYSICS,
+        "push": ("x and y: how hard to push it each way", "{o}:push(200, -300)", (2,), 2),
+        "velocity": ("nothing (to read it), or x and y", "{o}:velocity(0, -200)", (0, 2), 2),
+    },
+    "player": {"on_hit": _THING_PHYSICS["on_hit"]},
+    "car": {
+        **_PHYSICS_3D,
+        "drive": ("nothing, or false to stop driving it", "{o}:drive()", (0, 1), 0),
+        "engine": ("how strong its engine is (1 is normal)", "{o}:engine(1.5)", (1,), 0),
+        "speed": ("nothing: it gives back how fast it goes, in km/h", "say {o}:speed()", (0,), 0),
+        "flip": ("nothing", "{o}:flip()", (0,), 0),
+    },
+    "ragdoll": _PHYSICS_3D,
+}
+PHYSICS_KINDS = ("dynamic", "static", "kinematic", "off")
+PHYSICS_SAYS = {"dynamic": "it falls and can be pushed", "static": "it stays where it is", "kinematic": "your code moves it"}
+ANIMATIONS = ("walk", "idle", "wave", "none")
+PHYSICS_HIT = (0, 2, "2 inputs (the thing that hit it, and how hard)")
+_PUSHES = {"impulse": "push", "apply_impulse": "push", "add_impulse": "push", "kick": "push", "force": "push",
+           "add_force": "push", "apply_force": "push", "shove": "push", "throw": "push", "launch": "push",
+           "set_velocity": "velocity", "vel": "velocity", "linear_velocity": "velocity", "weight": "mass",
+           "set_mass": "mass", "bounciness": "bounce", "restitution": "bounce", "elasticity": "bounce",
+           "bouncy": "bounce", "set_bounce": "bounce", "grip": "friction", "set_friction": "friction",
+           "rigidbody": "physics", "rigid_body": "physics", "body": "physics", "enable_physics": "physics",
+           "use_physics": "physics", "add_physics": "physics", "set_physics": "physics", "collider": "physics",
+           "physical": "physics", "dynamic": "physics", "collision": "on_hit", "on_collision": "on_hit",
+           "on_collide": "on_hit", "oncollision": "on_hit", "on_touch": "on_hit", "on_contact": "on_hit",
+           "on_bump": "on_hit", "on_hit_by": "on_hit", "when_hit": "on_hit", "hit": "on_hit", "collided": "on_hit",
+           "freeze": "sleep", "rest": "sleep", "wakeup": "wake", "wake_up": "wake", "unfreeze": "wake",
+           "torque": "spin", "apply_torque": "spin", "add_torque": "spin", "angular_impulse": "spin"}
+PHYSICS_HINTS = {
+    "world": {"set_gravity": "gravity", "explosion": "explode", "blast": "explode", "boom": "explode", "bomb": "explode",
+              "kaboom": "explode", "vehicle": "car", "kart": "car", "truck": "car", "buggy": "car", "add_car": "car",
+              "make_car": "car", "rag_doll": "ragdoll", "dummy": "ragdoll", "puppet": "ragdoll", "add_ragdoll": "ragdoll"},
+    "game": {"set_gravity": "gravity", "edges": "walls", "borders": "walls", "bounds": "walls", "boundaries": "walls",
+             "screen_walls": "walls", "edge_walls": "walls", "explosion": "explode", "blast": "explode", "boom": "explode",
+             "bomb": "explode"},
+    "object": {**_PUSHES, "anim": "animate", "animation": "animate", "play_animation": "animate",
+               "set_animation": "animate", "play_anim": "animate"},
+    "sprite": _PUSHES,
+    "car": {**_PUSHES, "accelerate": "engine", "throttle": "engine", "power": "engine", "gas": "engine", "motor": "engine",
+            "horsepower": "engine", "control": "drive", "controls": "drive", "get_in": "drive", "enter": "drive",
+            "steer": "drive", "drivable": "drive", "reset": "flip", "unflip": "flip", "upright": "flip", "flip_over": "flip",
+            "kmh": "speed", "mph": "speed", "get_speed": "speed"},
+    "ragdoll": _PUSHES,
+    "player": {"on_collision": "on_hit", "on_collide": "on_hit", "collision": "on_hit", "on_bump": "on_hit"},
+}
+VALUE_HINTS["physics"] = {  # tgame itself takes "fixed", "on", "none"... (its physics_words, Checker.land_value)
+    "frozen": "static", "wall": "static", "ground": "static", "immovable": "static", "stuck": "static", "stay": "static",
+    "false": "off", "disabled": "off", "nothing": "off", "stop": "off", "yes": "dynamic", "true": "dynamic",
+    "falling": "dynamic", "rigid": "dynamic", "moving": "dynamic", "normal": "dynamic", "default": "dynamic",
+    "physics": "dynamic", "kinematics": "kinematic", "animated": "kinematic", "scripted": "kinematic", "code": "kinematic",
+    "moved": "kinematic", "manual": "kinematic"}
+VALUE_HINTS["animation"] = {
+    "walking": "walk", "run": "walk", "running": "walk", "jog": "walk", "move": "walk", "stand": "idle",
+    "standing": "idle", "rest": "idle", "breathe": "idle", "breathing": "idle", "still": "idle", "wait": "idle",
+    "waving": "wave", "hello": "wave", "hi": "wave", "off": "none", "stop": "none", "nothing": "none", "no": "none"}
 
 
 def tgame_tables():
@@ -1597,7 +1705,8 @@ def tgame_tables():
     if _TGAME is None:
         try:
             import tuff_tgame
-            _TGAME = with_game_ui(with_terrain(tuff_tgame.tables(), tuff_tgame), tuff_tgame)
+            _TGAME = with_mouse(with_game_ui(with_gamekit(with_physics(with_terrain(tuff_tgame.tables(), tuff_tgame),
+                                                                     tuff_tgame), tuff_tgame), tuff_tgame), tuff_tgame)
         except Exception:
             _TGAME = {}
     return _TGAME or None
@@ -1617,8 +1726,14 @@ def with_game_ui(tg, lib):
     def start_screen(title, hint="Click to play"):
         return None
 
-    makers = {"panel": panel, "screen": screen, "start_screen": start_screen}
-    made = {"panel": "@panel", "screen": "@screen", "start_screen": "@screen"}
+    def main_menu(title=None):
+        return None
+
+    def splash(what=None, seconds=2):
+        return None
+
+    makers = {"panel": panel, "screen": screen, "start_screen": start_screen, "main_menu": main_menu, "splash": splash}
+    made = {"panel": "@panel", "screen": "@screen", "start_screen": "@screen", "main_menu": "@screen"}
     kinds, gives, hints = dict(tg["kinds"]), dict(tg["gives"]), dict(tg["hints"])
     for kind in ("game", "world"):
         kinds[kind] = {**makers, **tg["kinds"][kind]}
@@ -1627,6 +1742,23 @@ def with_game_ui(tg, lib):
         hints[kind] = {**GAME_UI_HINTS, **tg["hints"].get(kind, {})}
     anchors = getattr(lib, "ANCHORS", ANCHORS)
     return {**tg, "kinds": kinds, "gives": gives, "hints": hints, "anchors": tuple(anchors)}
+
+
+def with_mouse(tg, lib):
+    """tgame's tables with the mouse in a 3D world filled in where they leave it out: world:lock_mouse,
+    :unlock_mouse, :mouse_locked (true or false) and :auto_lock(on), the names people guess, and what a 2D game
+    says about them (tgame's NEEDS_3D). Whatever tgame's own tables say wins."""
+    def mouse():
+        return None
+
+    def auto_lock(on=True):
+        return None
+
+    world = {**{m: (auto_lock if m == "auto_lock" else mouse) for m in MOUSE_INPUTS}, **tg["kinds"]["world"]}
+    gives = {**tg["gives"], "world": {"mouse_locked": "$bool", **tg["gives"]["world"]}}
+    hints = {**tg["hints"], "world": {**MOUSE_HINTS, **tg["hints"].get("world", {})}}
+    needs_3d = {**dict.fromkeys(MOUSE_INPUTS, MOUSE_NEEDS_3D), **tg.get("needs_3d", {})}
+    return {**tg, "kinds": {**tg["kinds"], "world": world}, "gives": gives, "hints": hints, "needs_3d": needs_3d}
 
 
 def with_terrain(tg, lib):
@@ -1651,6 +1783,269 @@ def with_terrain(tg, lib):
     hints = {**tg["hints"], **{k: {**v, **tg["hints"].get(k, {})} for k, v in TERRAIN_HINTS.items()}}
     return {**tg, "kinds": kinds, "gives": gives, "hints": hints, "styles": tuple(getattr(lib, "TERRAIN_STYLES", TERRAIN_STYLES)),
             "lightings": tuple(getattr(lib, "LIGHTINGS", LIGHTINGS))}
+
+
+def physics_input(*inputs):  # stands in for a physics method tgame's tables leave out: Checker.check_physics_inputs counts
+    return None
+
+
+def with_physics(tg, lib):
+    """tgame's tables with the physics filled in where they leave it out: the physics methods of games, worlds, sprites,
+    objects and the player (thing:physics(), :push, :on_hit, world:car...), a car and a ragdoll (an object's methods
+    and their own), what they give back (physics() gives back the thing, car:speed() a number), what on_hit gives its
+    function, the guessed names, and the kinds of physics and the animations (tgame's PHYSICS_KINDS and ANIMATIONS
+    when it has them). Whatever tgame's own tables say wins."""
+    own_kinds, own_gives = tg["kinds"], tg["gives"]
+    kinds, gives, handlers, hints = dict(own_kinds), dict(own_gives), dict(tg["handlers"]), dict(tg["hints"])
+    for kind in ("car", "ragdoll"):  # an object, with its own methods on top
+        mine = {**{m: (kind if v == "object" else v) for m, v in own_gives.get("object", {}).items()},
+                **{m: kind for m in PHYSICS_INPUTS[kind] if m != "velocity"}}
+        if kind == "car":
+            mine["speed"] = "$number"
+        kinds[kind] = own_kinds.get(kind) or {**own_kinds["object"], **dict.fromkeys(PHYSICS_INPUTS[kind], physics_input)}
+        gives[kind] = {**mine, **own_gives.get(kind, {})}
+    for kind, table in PHYSICS_INPUTS.items():
+        kinds[kind] = {**dict.fromkeys(table, physics_input), **kinds.get(kind, {})}
+        if kind in ("object", "sprite", "player"):  # the setters give back the thing (velocity() gives a list)
+            gives[kind] = {**{m: kind for m in table if m != "velocity"}, **gives.get(kind, {})}
+        if kind in ("object", "sprite", "player", "car", "ragdoll"):
+            handlers[kind] = {"on_hit": PHYSICS_HIT, **handlers.get(kind, {})}
+        hints[kind] = {**PHYSICS_HINTS.get(kind, {}), **hints.get(kind, {})}
+    gives["world"] = {"car": "car", "ragdoll": "ragdoll", **gives["world"]}
+    return {**tg, "kinds": kinds, "gives": gives, "handlers": handlers, "hints": hints, "physics_inputs": PHYSICS_INPUTS,
+            "physics_kinds": tuple(getattr(lib, "PHYSICS_KINDS", PHYSICS_KINDS)),
+            "animations": tuple(getattr(lib, "ANIMATIONS", ANIMATIONS))}
+
+
+# tgame's saved game data as the checker knows it (Checker.check_saves): game:save, :load, :saved and :forget on a
+# game or a world. For each, what it takes, for messages, an example ({o} is the game's name) and the input counts that
+# fit. The name always comes first, as text; what :save keeps can be anything JSON can hold.
+SAVE_INPUTS = {
+    "save": ("a name, then what to save", '{o}:save("best", score)', (2,)),
+    "load": ("the save's name, then what to give back when nothing was saved (if you like)", 'best = {o}:load("best", 0)', (1, 2)),
+    "saved": ("the save's name", '{o}:saved("best")', (1,)),
+    "forget": ("the save's name, or nothing to forget every save", '{o}:forget("best")', (0, 1)),
+}
+SAVE_KEEPS = "numbers, text, true/false, lists and tables"
+SAVE_KINDS = ("$number", "$text", "$bool", "$nil", "$list", "$line", "data object")  # what :save can keep
+# ---------------------------------------------------------------- the game kit (1.2.0)
+# tgame's game kit as the checker knows it, filled in where tgame's own tables leave it out (with_gamekit): effects
+# (slow_mo, shake, pop_text, weather, a day cycle), the HUD (health bars, a countdown, an arrow to a thing, a
+# minimap), interaction (grabbing, people who talk, doors and keys) and level pieces (jump and boost pads, platforms
+# that move along a path). Each method has what it takes, for messages, an example ({o} is the thing's name), the
+# input counts that fit, and where a spot can stand in for x, y and z: (how many inputs, at which input), or 0.
+_KIT_THING = {  # sprites and objects alike: a health bar
+    "health_bar": ("the most health it can have", "{o}:health_bar(100)", (1,), 0),
+    "hurt": ("how much health it loses", "{o}:hurt(10)", (1,), 0),
+    "heal": ("how much health it gets back", "{o}:heal(5)", (1,), 0),
+    "health": ("nothing: it gives back how much health it has", "say {o}:health()", (0,), 0),
+    "on_death": ("the name of a function to run when its health reaches 0", "{o}:on_death(gone)", (1,), 0),
+}
+_KIT_TALKS = {  # 3D objects (a person, a door, a car, a ragdoll) talk and move along a path
+    "say": ("the words, then how many seconds the bubble stays (0 keeps it)", '{o}:say("Hi! Find my lost cat.")', (1, 2), 0),
+    "on_talk": ("the name of a function to run when the player talks to it (E)", "{o}:on_talk(talk)", (1,), 0),
+    "path": ("a list of spots ([x, y, z]), how fast it moves (m/s), then \"loop\" to go round",
+             "{o}:path([[0, 2, 0], [10, 2, 0]], 3)", (0, 1, 2, 3), 0),
+}
+_KIT_OBJECT = {**_KIT_THING, **_KIT_TALKS}  # and have health, all but a door (DOOR_NO_HEALTH)
+_KIT_GAME = {  # a 2D game and a 3D world alike
+    "slow_mo": ("how fast everything goes (0.3 is 30%), then for how many seconds", "{o}:slow_mo(0.3, 2)", (1, 2), 0),
+    "shake": ("how hard the camera shakes (0 to 2), then for how many seconds", "{o}:shake(0.5)", (1, 2), 0),
+    "countdown": ("how many seconds, then the name of a function to run at 0", "clock = {o}:countdown(60, times_up)", (1, 2), 0),
+}
+KIT_INPUTS = {
+    "game": {**_KIT_GAME,
+             "pop_text": ("the text, x and y, then a color and a size", '{o}:pop_text("+10", 400, 300)', (3, 4, 5), (2, 1))},
+    "world": {
+        **_KIT_GAME,
+        "pop_text": ("the text, x, y and z, then a color and a size", '{o}:pop_text("+10", 0, 2, 0)', (4, 5, 6), (3, 1)),
+        "weather": ('"rain", "snow" or "none", then how strong it is (0 to 2)', '{o}:weather("rain")', (1, 2), 0),
+        "day_cycle": ("how many seconds a whole day takes (0 stops it)", "{o}:day_cycle(120)", (1,), 0),
+        "time_of_day": ("the hour, from 0 to 24 (18 is 6 pm)", "{o}:time_of_day(18)", (1,), 0),
+        "arrow_to": ("the thing to point at", "arrow = {o}:arrow_to(chest)", (1,), 0),
+        "minimap": ('nothing, or its size in pixels and then a corner', 'map = {o}:minimap(180, "top right")', (0, 1, 2), 0),
+        "door": ("x, y and z, then a color", "door = {o}:door(0, 0, -5)", (3, 4), (3, 0)),
+        "jump_pad": ("x, y and z, then how hard it launches things up (m/s)", "pad = {o}:jump_pad(0, 0, 5, 15)", (3, 4), (3, 0)),
+        "boost_pad": ("x, y and z, then how hard it shoots the player forward (m/s)", "boost = {o}:boost_pad(0, 0, 10, 20)", (3, 4), (3, 0)),
+    },
+    "sprite": _KIT_THING,
+    "object": _KIT_OBJECT,
+    "car": _KIT_OBJECT,
+    "ragdoll": _KIT_OBJECT,
+    "player": {
+        "can_grab": ("nothing, or false to turn grabbing off", "{o}:can_grab()", (0, 1), 0),
+        "holding": ("nothing: it gives back what the player is holding (or nil)", "held = {o}:holding()", (0,), 0),
+    },
+    "countdown": {
+        "add": ("how many seconds to add", "{o}:add(5)", (1,), 0),
+        "stop": ("nothing", "{o}:stop()", (0,), 0),
+        "left": ("nothing: it gives back how many seconds are left", "say {o}:left()", (0,), 0),
+    },
+    "arrow": {"hide": ("nothing", "{o}:hide()", (0,), 0), "show": ("nothing", "{o}:show()", (0,), 0)},
+    "minimap": {
+        "mark": ("a thing, then the dot's color", '{o}:mark(coin, "gold")', (1, 2), 0),
+        "unmark": ("the thing", "{o}:unmark(coin)", (1,), 0),
+        "zoom": ("how close it shows (2 is twice as close)", "{o}:zoom(2)", (1,), 0),
+    },
+    "door": {
+        **_KIT_TALKS,
+        "open": ("nothing", "{o}:open()", (0,), 0),
+        "close": ("nothing", "{o}:close()", (0,), 0),
+        "needs": ("the key: a thing the player picks up", 'key = world:spawn("key", 3, 0, 3), then {o}:needs(key)', (1,), 0),
+        "lock": ("nothing", "{o}:lock()", (0,), 0),
+        "unlock": ("nothing", "{o}:unlock()", (0,), 0),
+    },
+}
+# What the makers make (a jump pad and a boost pad are objects: they turn), and what each kit method gives back.
+KIT_MAKES = {"countdown": "countdown", "arrow_to": "arrow", "minimap": "minimap", "door": "door", "jump_pad": "object",
+             "boost_pad": "object"}
+KIT_GIVES = {"health": "$number", "left": "$number", "holding": "object"}
+KIT_HANDLERS = {"on_death": (0, 0, "no inputs"), "on_talk": (0, 0, "no inputs"), "countdown": (1, 0, "no inputs")}
+# The kit's 3D-only makers, for a 2D game: what it is, and how it's used.
+KIT_3D = {"weather": ("The weather", 'world:weather("rain")'), "day_cycle": ("A day and night cycle", "world:day_cycle(120)"),
+          "time_of_day": ("The time of day", "world:time_of_day(18)"), "arrow_to": ("An arrow to a thing", "arrow = world:arrow_to(chest)"),
+          "minimap": ("The minimap", "map = world:minimap()"), "door": ("A door", "door = world:door(0, 0, -5)"),
+          "jump_pad": ("A jump pad", "pad = world:jump_pad(0, 0, 5, 15)"), "boost_pad": ("A boost pad", "boost = world:boost_pad(0, 0, 10, 20)")}
+# What a door, a car and a ragdoll can't do though other objects can, and what to do instead: a door has no health,
+# and a car or a ragdoll always uses physics, so it can't move along a path ({o}:path() to stop one is fine).
+DOOR_NO_HEALTH = ("A door doesn't have health, so it can't have :{name}. It opens and closes ({o}:open(), {o}:close()), "
+                  "and {o}:needs(key) locks it until the player has the key.")
+NO_PATH = {"car": "A car always uses physics (it drives on its wheels), so it can't move along a path. Push it with "
+                  "{o}:push(0, 4, -6), or let the player drive it with {o}:drive().",
+           "ragdoll": "A ragdoll always uses physics (that's what makes it flop), so it can't move along a path. Push it "
+                      "with {o}:push(0, 4, -6)."}
+WEATHERS = ("rain", "snow", "none")
+CORNERS = ("top right", "top left", "bottom left", "bottom right")
+PATH_MODES = ("loop", "ping-pong")
+# Inputs that are numbers, and the numbers that can't be right: (method, input position) -> (the lowest, whether the
+# lowest itself is fine, the highest, what it needs, an example, and a number below the lowest that's fine too), like
+# Checker.PHYSICS_NUMBERS. The same as tgame's own limits, so what passes runs.
+KIT_NUMBERS = {
+    ("slow_mo", 0): (0.05, True, 1, "a speed from 0.05 to 1 (0.3 is 30% of the speed, 1 is normal again)", "{o}:slow_mo(0.3, 2)"),
+    ("slow_mo", 1): (0, True, None, "how many seconds it lasts, 0 or more", "{o}:slow_mo(0.3, 2)"),
+    ("shake", 0): (0, True, 2, "a number from 0 to 2 (1 is a good shake)", "{o}:shake(0.5)"),
+    ("shake", 1): (0, False, None, "how long it shakes, in seconds (more than 0)", "{o}:shake(1, 1.5)"),
+    ("weather", 1): (0, True, 2, "a strength from 0 to 2 after the kind (1 is normal)", '{o}:weather("snow", 1.5)'),
+    ("day_cycle", 0): (2, True, None, "how many seconds a whole day takes, 2 or more (0 stops it)", "{o}:day_cycle(120)", 0),
+    ("time_of_day", 0): (0, True, 24, "an hour from 0 to 24 (18 is 6 pm)", "{o}:time_of_day(18)"),
+    ("health_bar", 0): (0, False, None, "a number above 0: the most health it can have", "{o}:health_bar(100)"),
+    ("jump_pad", 3): (0, False, None, "how hard it launches things, a number above 0", "{o}:jump_pad(0, 0, 5, 15)"),
+    ("boost_pad", 3): (0, False, None, "how hard it boosts, a number above 0", "{o}:boost_pad(0, 0, 10, 20)"),
+    ("zoom", 0): (0, False, None, "a number above 0 (2 shows twice as close)", "{o}:zoom(2)"),
+    ("minimap", 0): (60, True, 600, "its size in pixels first, from 60 to 600 (180 is normal)", "map = {o}:minimap(180)"),
+}
+# pop_text's size, its last input (the 6th in 3D, the 5th in 2D): how tall the text is on screen, in pixels.
+POP_SIZE = {"world": (0, False, None, "a size above 0: how tall the text is on screen, in pixels (34 is normal)",
+                      '{o}:pop_text("+10", 0, 2, 0, "gold", 40)'),
+            "game": (0, False, None, "a size above 0: how tall the text is on screen, in pixels (32 is normal)",
+                     '{o}:pop_text("+10", 400, 300, "gold", 40)')}
+# Inputs written as text that the checker checks itself: (method, input position) -> what it is (pop_text's color
+# is the 4th input in 2D and the 5th in 3D, so Checker.check_kit_inputs finds it).
+KIT_VALUES = {("weather", 0): "weather", ("minimap", 1): "corner", ("path", 2): "path", ("mark", 1): "color",
+              ("door", 3): "color", ("needs", 0): "key"}
+_KIT_THING_HINTS = {"hp": "health", "get_health": "health", "life": "health", "damage": "hurt", "take_damage": "hurt",
+                    "harm": "hurt", "dmg": "hurt", "lose_health": "hurt", "add_health": "heal", "restore": "heal",
+                    "cure": "heal", "heal_up": "heal", "healthbar": "health_bar", "hp_bar": "health_bar",
+                    "life_bar": "health_bar", "show_health": "health_bar", "max_health": "health_bar",
+                    "set_health": "health_bar", "on_die": "on_death", "on_dead": "on_death", "when_dead": "on_death",
+                    "died": "on_death", "on_killed": "on_death", "on_zero": "on_death"}
+_KIT_TALKS_HINTS = {"speak": "say", "talk": "say", "bubble": "say", "speech": "say",
+                    "speech_bubble": "say", "dialog": "say", "dialogue": "say", "on_speak": "on_talk",
+                    "on_interact": "on_talk", "interact": "on_talk", "on_chat": "on_talk", "when_talked_to": "on_talk",
+                    "talked": "on_talk", "waypoints": "path", "route": "path", "patrol": "path", "move_along": "path",
+                    "follow_path": "path", "platform": "path", "moving_platform": "path"}
+_KIT_OBJECT_HINTS = {**_KIT_THING_HINTS, **_KIT_TALKS_HINTS}
+_KIT_GAME_HINTS = {"slowmo": "slow_mo", "slow_motion": "slow_mo", "slowdown": "slow_mo", "slow": "slow_mo",
+                   "bullet_time": "slow_mo", "time_scale": "slow_mo", "timescale": "slow_mo", "screen_shake": "shake",
+                   "camera_shake": "shake", "shake_screen": "shake", "shake_camera": "shake", "quake": "shake",
+                   "floating_text": "pop_text", "float_text": "pop_text", "popup_text": "pop_text", "damage_text": "pop_text",
+                   "text_popup": "pop_text", "poptext": "pop_text", "timer": "countdown", "count_down": "countdown",
+                   "countdown_timer": "countdown", "time_limit": "countdown", "clock": "countdown"}
+KIT_HINTS = {
+    "game": _KIT_GAME_HINTS,
+    "world": {**_KIT_GAME_HINTS, "rain": "weather", "snow": "weather", "set_weather": "weather", "climate": "weather",
+              "day_night": "day_cycle", "day_night_cycle": "day_cycle", "daynight": "day_cycle", "time_cycle": "day_cycle",
+              "set_time": "time_of_day", "hour": "time_of_day", "time_of_the_day": "time_of_day", "waypoint": "arrow_to",
+              "compass": "arrow_to", "pointer": "arrow_to", "arrow": "arrow_to", "point_to": "arrow_to",
+              "objective": "arrow_to", "marker": "arrow_to", "map": "minimap", "mini_map": "minimap", "radar": "minimap",
+              "gate": "door", "doorway": "door", "add_door": "door", "make_door": "door", "jumppad": "jump_pad",
+              "bounce_pad": "jump_pad", "launch_pad": "jump_pad", "launchpad": "jump_pad", "trampoline": "jump_pad",
+              "spring": "jump_pad", "booster": "boost_pad", "speed_pad": "boost_pad", "boostpad": "boost_pad",
+              "dash_pad": "boost_pad", "speed_boost": "boost_pad", "boost": "boost_pad"},
+    "sprite": _KIT_THING_HINTS,
+    "object": _KIT_OBJECT_HINTS,
+    "car": _KIT_OBJECT_HINTS,
+    "ragdoll": _KIT_OBJECT_HINTS,
+    "player": {"grab": "can_grab", "can_pick_up": "can_grab", "pick_up": "can_grab", "pickup": "can_grab",
+               "grabbing": "can_grab", "enable_grab": "can_grab", "carry": "can_grab", "can_carry": "can_grab",
+               "held": "holding", "held_item": "holding", "is_holding": "holding", "carrying": "holding", "grabbed": "holding"},
+    "countdown": {"time_left": "left", "remaining": "left", "seconds": "left", "seconds_left": "left", "get": "left",
+                  "value": "left", "pause": "stop", "cancel": "stop", "end": "stop", "add_time": "add", "extend": "add",
+                  "more": "add", "plus": "add"},
+    "arrow": {"off": "hide", "on": "show", "remove": "hide"},
+    "minimap": {"add": "mark", "track": "mark", "dot": "mark", "marker": "mark", "add_marker": "mark", "pin": "mark",
+                "remove": "unmark", "untrack": "unmark", "remove_marker": "unmark", "scale": "zoom", "zoom_in": "zoom"},
+    "door": {**_KIT_TALKS_HINTS, "shut": "close", "unlock_with": "needs", "requires": "needs", "require": "needs",
+             "need": "needs", "needs_key": "needs", "key": "needs", "locked_by": "needs", "set_key": "needs"},
+}
+VALUE_HINTS["weather"] = {
+    "raining": "rain", "rainy": "rain", "storm": "rain", "stormy": "rain", "drizzle": "rain", "showers": "rain",
+    "thunder": "rain", "wet": "rain", "snowing": "snow", "snowy": "snow", "blizzard": "snow", "snowfall": "snow",
+    "winter": "snow", "flakes": "snow", "clear": "none", "sunny": "none", "sun": "none", "dry": "none", "off": "none",
+    "stop": "none", "nothing": "none", "no": "none", "normal": "none", "fine": "none"}
+VALUE_HINTS["corner"] = {k: v for k, v in ANCHOR_HINTS.items() if v in CORNERS}
+VALUE_HINTS["path"] = {"round": "loop", "around": "loop", "go round": "loop", "circle": "loop", "repeat": "loop",
+                       "cycle": "loop", "forever": "loop", "loops": "loop", "looping": "loop", "looped": "loop"}
+PATH_SAYS = {"ping-pong": "there and back, the default"}
+
+
+def kit_input(*inputs):  # stands in for a kit method tgame's tables leave out: Checker.check_physics_inputs counts
+    return None
+
+
+def with_gamekit(tg, lib):
+    """tgame's tables with the game kit filled in where they leave it out: the effects, the HUD, interaction and the
+    level pieces (game:slow_mo, world:weather, enemy:health_bar, game:countdown, world:minimap, player:can_grab,
+    npc:say, world:door, world:jump_pad, lift:path...), what the countdown, the arrow, the minimap and a door have
+    (under the names tgame gives them, once it makes them itself), what they give back, the functions they run, the
+    guessed names, and the weathers, corners and path modes (tgame's own when it has them). "key" is a kit model
+    from 1.2.0, so world:spawn("key") is fine before tgame lists it. Whatever tgame's own tables say wins."""
+    own_kinds, own_gives = tg["kinds"], tg["gives"]
+    kinds, gives, handlers, hints = dict(own_kinds), dict(own_gives), dict(tg["handlers"]), dict(tg["hints"])
+    made = {k: k for k in ("countdown", "arrow", "minimap", "door")}  # the kit's own kinds, by the names tgame gives them
+    for owner in ("game", "world"):
+        for maker, kind in KIT_MAKES.items():
+            theirs = own_gives.get(owner, {}).get(maker)
+            if maker in KIT_INPUTS[owner] and kind in made and theirs and not theirs.startswith("$"):
+                made[kind] = theirs
+            if maker in KIT_INPUTS[owner]:
+                gives[owner] = {maker: made.get(kind, kind), **gives.get(owner, {})}
+    inputs = {}
+    for name, table in KIT_INPUTS.items():
+        kind = made.get(name, name)
+        inputs[kind] = table
+        base = own_kinds.get(kind) or (own_kinds["object"] if name == "door" else {})
+        kinds[kind] = {**dict.fromkeys(table, kit_input), **base, **kinds.get(kind, {})}
+        mine = {m: KIT_GIVES.get(m, kind) for m in table}
+        if name == "door" and kind not in own_gives:  # a door is an object: its methods give back the door
+            mine = {**{m: (kind if v == "object" else v) for m, v in own_gives.get("object", {}).items()}, **mine}
+        gives[kind] = {**mine, **gives.get(kind, {})}
+        handlers[kind] = {**{m: KIT_HANDLERS[m] for m in table if m in KIT_HANDLERS}, **handlers.get(kind, {})}
+        hints[kind] = {**KIT_HINTS.get(name, {}), **hints.get(kind, {})}
+    own_check, kit = tg["check"], tuple(getattr(lib, "KIT", ()))
+
+    def check(kind, method, index, value, base_dir=None):
+        if (kind, method, index) == ("world", "spawn", 0) and str(value).strip().lower() == "key" and "key" not in kit:
+            return None
+        return own_check(kind, method, index, value, base_dir)
+
+    return {**tg, "kinds": kinds, "gives": gives, "handlers": handlers, "hints": hints, "check": check, "kit_inputs": inputs,
+            "kit_kinds": tuple(made.values()),
+            "weathers": tuple(getattr(lib, "WEATHERS", WEATHERS)), "corners": tuple(getattr(lib, "CORNERS", CORNERS)),
+            "path_modes": tuple(getattr(lib, "PATH_MODES", PATH_MODES)),
+            # the values tgame checks itself, with the other ways it understands them ("rainy", "around"...)
+            "own_values": tuple(w for w, f in (("weather", "WEATHER_WORDS"), ("corner", "corner_name"), ("path", "path_mode"))
+                                if hasattr(lib, f))}
 
 
 def nodes(x):
@@ -1726,10 +2121,17 @@ class Checker:
     EVENT_GIVES = {"click": (0, "a button click"), "button": (0, "a button click"), "opened": (0, ":opened"),
                    "every": (0, ":every"), "after": (0, ":after"), "change": (1, ":change"), "enter": (1, ":enter")}
     HANDLER_POS = {"click": 0, "opened": 0, "change": 0, "enter": 0, "button": 1, "every": 1, "after": 1,
-                   "every_frame": 0, "on_key": 1, "clicked": 0, "game_over": 1}
-    TGAME_KINDS = ("game", "world", "sprite", "object", "player", "hud", "group", "terrain")  # what tgame makes
+                   "every_frame": 0, "on_key": 1, "clicked": 0, "game_over": 1, "on_hit": 0}
+    TGAME_KINDS = ("game", "world", "sprite", "object", "player", "hud", "group", "terrain", "car", "ragdoll", "countdown",
+                   "arrow", "minimap", "door")  # what tgame makes (and the game kit's, by tgame's names: is_tgame)
     # tgame inputs written as text that the checker checks itself: (kind, method, input position) -> what it is.
-    LAND_VALUES = {("world", "terrain", 1): "style", ("terrain", "style", 0): "style", ("world", "lighting", 0): "lighting"}
+    LAND_VALUES = {("world", "terrain", 1): "style", ("terrain", "style", 0): "style", ("world", "lighting", 0): "lighting",
+                   **{(k, "physics", 0): "physics" for k in ("object", "sprite", "car", "ragdoll")}, ("object", "animate", 0): "animation"}
+    # Physics inputs that are numbers, and the numbers that can't be right: method -> (the lowest, whether the lowest
+    # itself is fine, the highest, what it needs, an example).
+    PHYSICS_NUMBERS = {"mass": (0, False, None, "a number above 0", "{o}:mass(2)"),
+                       "bounce": (0, True, 1, "a number from 0 (no bounce) to 1 (it bounces right back up)", "{o}:bounce(0.6)"),
+                       "friction": (0, True, None, "a number from 0 (slippery, like ice) up", "{o}:friction(0.4)")}
     # What tap's functions make, and what the methods of those give back (left out: it depends, like :json).
     TAP_MAKES = {"get": "response", "post": "response", "put": "response", "delete": "response", "data": "data object"}
     TAP_GIVES = {"response": {"status": "$number", "ok": "$bool", "text": "$text"},
@@ -1917,7 +2319,7 @@ class Checker:
                 return self.atgui_kind(obj[1:], e)
             if obj in self.TAP_GIVES:
                 return self.TAP_GIVES[obj].get(e.name)
-            if obj in self.TGAME_KINDS:
+            if self.is_tgame(obj):
                 tg = tgame_tables()
                 return tg["gives"].get(obj, {}).get(e.name) if tg else None
             gui = gui_tables()
@@ -2483,7 +2885,9 @@ class Checker:
         if obj in self.TYPE:
             self.problem(e, f"{self.TYPE[obj].capitalize()} doesn't have any :methods.")
             return
-        if obj in self.TGAME_KINDS:
+        if obj in ("game", "world") and self.check_saves(e, obj):  # game:save and the rest (saved game data)
+            return
+        if self.is_tgame(obj):
             self.check_tgame(e, obj, bare_fix)
             return
         gui = gui_tables()
@@ -2526,6 +2930,46 @@ class Checker:
         if to_text(arg.value) not in choices:
             self.problem(arg, f"'{to_text(arg.value)}' isn't one of this dropdown's choices: {', '.join(choices)}.")
 
+    def check_saves(self, e, obj):
+        """game:save, game:load, game:saved and game:forget (tgame's saved game data, SAVE_INPUTS): how many inputs
+        they got, a name that isn't text (like the score written first: game:save(score, "best")), and what
+        game:save can't keep: a function, a sprite, a widget... Also game:delete(enemy), written to take a thing out
+        of the game. True when it was one of these: nothing else needs checking."""
+        tg = tgame_tables()
+        methods = tg["kinds"].get(obj, {}) if tg else {}
+        name, n = e.name, len(e.args)
+        owner = e.obj.name if e.obj.kind == "var" else obj
+        if name == "delete" and name not in methods and n == 1 and self.kind(e.args[0]) in ("sprite", "object", "car", "ragdoll"):
+            thing = e.args[0].name if e.args[0].kind == "var" else None
+            how = f"To take {thing} out of the game, use {thing}:remove()." if thing else \
+                "To take a thing out of the game, use its :remove(), like enemy:remove()."
+            self.problem(e, f"{a_kind(obj).capitalize()} doesn't have :delete. {how} ({owner}:forget(\"best\") forgets a save.)")
+            return True
+        rule = SAVE_INPUTS.get(name)
+        if rule is None or name not in methods:
+            return False
+        takes, example, counts = rule
+        use = example.format(o=owner)
+        if n not in counts:
+            self.problem(e, f"{owner}:{name} got the wrong number of inputs ({n}). It takes {takes}, like: {use}")
+            return True
+        if e.args:
+            a, k = e.args[0], self.kind(e.args[0])
+            if a.kind == "const" and isinstance(a.value, str) and not a.value.strip():
+                self.problem(a, f"A save needs a name, like \"best\": {use}")
+            elif k is not None and k not in ("$text", "$line"):
+                what = "a library" if k.startswith("$module:") else self.what(k)
+                self.problem(a, f"{owner}:{name} needs the save's name as text first, like {use}, not {what}.")
+        if name == "save":
+            k = self.kind(e.args[1])
+            if k is not None and k not in SAVE_KINDS:
+                what = "a library" if k.startswith("$module:") else self.what(k)
+                self.problem(e.args[1], f"{owner}:save can keep {SAVE_KEEPS}, not {what}.")
+        return True
+    def is_tgame(self, kind):
+        """Whether tgame made it: one of its kinds, or the game kit's under the names tgame gives them."""
+        return kind in self.TGAME_KINDS or kind in ((tgame_tables() or {}).get("kit_kinds") or ())
+
     def check_tgame(self, e, obj, bare_fix):
         """A method of something tgame made: its name, its input count, the function an event runs, and inputs
         written as text that have to be a color, a sky, a key, a sound, a land style, a lighting or a file tgame knows."""
@@ -2536,6 +2980,29 @@ class Checker:
         name, n = e.name, len(e.args)
         what = a_kind(obj).capitalize()
         game_ui = obj in ("game", "world") and name in GAME_UI
+        if name not in methods and obj == "game" and name in ("car", "ragdoll"):
+            self.problem(e, f"The {name} needs a 3D world. Make the game with tgame.world, like: world = tgame.world(\"Physics Fun\"), "
+                            f"then {name} = world:{name}(...)")
+            return
+        if name not in methods and obj == "game" and name in KIT_3D:
+            noun, use = KIT_3D[name]
+            self.problem(e, f"{noun} needs a 3D world. Make the game with tgame.world, like: world = tgame.world(\"My Game\"), then {use}")
+            return
+        health = name if name in _KIT_THING else _KIT_THING_HINTS.get(name.lower())
+        if name not in methods and obj == "door" and health in _KIT_THING and health not in methods:  # door:health_bar
+            self.problem(e, DOOR_NO_HEALTH.format(name=name, o=e.obj.name if e.obj.kind == "var" else obj))
+            return
+        if name == "path" and obj in NO_PATH and e.args:  # car:path([...]): path() stops nothing, which is fine
+            self.problem(e, NO_PATH[obj].format(o=e.obj.name if e.obj.kind == "var" else obj))
+            return
+        if name not in methods and obj == "game" and name in MOUSE_INPUTS:  # world:lock_mouse... on a 2D game
+            self.problem(e, tg.get("needs_3d", {}).get(name) or MOUSE_NEEDS_3D)
+            return
+        if name not in methods and obj in ("game", "world") and name == "physics":
+            owner = e.obj.name if e.obj.kind == "var" else obj
+            self.problem(e, f"{what} doesn't have :physics. Each thing turns its own on, like crate:physics(), and "
+                            f"{owner}:gravity({'-9.8' if obj == 'world' else '900'}) changes how strong gravity is.")
+            return
         if name not in methods:
             alt = tg["hints"].get(obj, {}).get(name.lower())
             at = atgui_tables()
@@ -2549,8 +3016,12 @@ class Checker:
             else:
                 self.problem(e, method_help(what, name, list(methods)))
             return
+        physics = tg.get("physics_inputs", {}).get(obj, {}).get(name) or tg.get("kit_inputs", {}).get(obj, {}).get(name)
         if obj == "terrain" and name in TERRAIN_INPUTS:
             if not self.check_land_inputs(e):
+                return
+        elif physics:
+            if not self.check_physics_inputs(e, obj, methods[name], physics, bare_fix):
                 return
         elif not accepts(methods[name], n):
             owner = e.obj.name if e.obj.kind == "var" else obj
@@ -2562,6 +3033,8 @@ class Checker:
             return
         if game_ui:
             self.check_game_ui(e, tg)
+            return
+        if obj in ("game", "world") and name in ("splash", "auto_lock") and not self.check_intro_inputs(e):
             return
         event = tg["handlers"].get(obj, {}).get(name)
         fn = e.args[event[0]] if event and len(e.args) > event[0] else None
@@ -2596,6 +3069,99 @@ class Checker:
                 msg = self.land_value(land, a.value, tg) if land else tg["check"](obj, name, i, a.value, base)
                 if msg:
                     self.problem(a, msg)
+        if physics and name in self.PHYSICS_NUMBERS and len(e.args) == 1:
+            self.check_physics_number(e, self.PHYSICS_NUMBERS[name])
+        if obj in tg.get("kit_inputs", {}) and name in tg["kit_inputs"][obj]:
+            self.check_kit_inputs(e, obj, tg)
+
+    def check_physics_inputs(self, e, obj, fn, physics, bare_fix):
+        """How many inputs a physics method got. A spot ([x, y, z], or [x, y] in 2D) can go in place of its x, y and z,
+        and once tgame has the method itself, the ways it takes count too. True when the count can be right."""
+        name, n = e.name, len(e.args)
+        takes, example, counts, spot = physics
+        spot, at = spot if isinstance(spot, tuple) else (spot, 0)  # the game kit's spots can come after other inputs
+        at_list = len(e.args) > at and self.kind(e.args[at]) in ("$list", None)
+        partial = spot > 1 and at < n < at + spot and self.kind(e.args[at]) == "$number"  # x without its y and z
+        fits = (n in counts or (spot > 1 and at_list and n + spot - 1 in counts)
+                or (fn not in (physics_input, kit_input) and accepts(fn, n) and not partial))
+        if fits:
+            return True
+        owner = e.obj.name if e.obj.kind == "var" else obj
+        if e.bare and 0 in counts:
+            self.problem(e, bare_fix)
+        else:
+            self.problem(e, f"{owner}:{name} got the wrong number of inputs ({n}). It takes {takes}, like: {example.format(o=owner)}")
+        return False
+
+    def check_physics_number(self, e, rule, a=None):
+        """thing:mass, :bounce and :friction (or the input a, like the game kit's numbers) written with a number that
+        can't be right, or with text or true/false. A rule can have one more number that's fine (day_cycle's 0)."""
+        low, low_ok, high, needs, example, *also = rule
+        a = e.args[0] if a is None else a
+        if a.kind == "neg" and a.value.kind == "const" and isinstance(a.value.value, (int, float)) and not isinstance(a.value.value, bool):
+            v = -a.value.value
+        elif a.kind == "const" and a.value is not None:
+            v = a.value
+        else:
+            return
+        number = isinstance(v, (int, float)) and not isinstance(v, bool)
+        if number and v in also:
+            return
+        if not number or v < low or (v == low and not low_ok) or (high is not None and v > high):
+            owner = e.obj.name if e.obj.kind == "var" else "thing"
+            self.problem(a, f"{owner}:{e.name} needs {needs}, like {example.format(o=owner)}.")
+
+    def check_kit_inputs(self, e, obj, tg):
+        """The game kit's inputs that can't be right: numbers out of range (a shake from 0 to 2, an hour from 0 to 24,
+        a health bar above 0...), a weather, a minimap's corner or a path's "loop" that tgame doesn't know (with "did
+        you mean"), a color it doesn't know, the minimap's corner where its size goes, and the key's name where a door
+        needs the key itself. After a spot ([x, y, z]), or the thing pop_text floats over, the inputs count as if x, y
+        and z were written out."""
+        name = e.name
+        owner = e.obj.name if e.obj.kind == "var" else obj
+        spot = tg["kit_inputs"][obj][name][3]
+        spot, at = spot if isinstance(spot, tuple) else (spot, 0)
+        first = self.kind(e.args[at]) if len(e.args) > at else None
+        over = name == "pop_text" and first in ("sprite", "object", "car", "ragdoll", "door", "player")
+        shift = spot - 1 if spot > 1 and (first == "$list" or over) else 0
+        for i, a in enumerate(e.args):
+            j = i + shift if i > at else i  # where it would be with x, y and z written out
+            text = a.kind == "const" and isinstance(a.value, str)
+            if text and tg["check"](obj, name, i, a.value, None):
+                continue  # tgame's own check says so already
+            what = KIT_VALUES.get((name, j)) or ("color" if name == "pop_text" and j == (4 if obj == "world" else 3) else None)
+            if text and name == "minimap" and j == 0 and self.kit_value("corner", a.value, tg) is None:
+                self.problem(a, f'{owner}:minimap takes its size first, then the corner, like: map = {owner}:minimap(180, "{a.value.strip().lower()}")')
+            elif text and what == "key":
+                self.problem(a, f'{owner}:needs takes the key itself, not its name, like: key = world:spawn("key", 3, 0, 3), then {owner}:needs(key)')
+            elif text and what in tg.get("own_values", ()):
+                continue  # tgame's own check found nothing wrong
+            elif text and what:
+                msg = self.kit_value(what, a.value, tg, owner)
+                if msg:
+                    self.problem(a, msg)
+            elif (name, j) in KIT_NUMBERS:
+                self.check_physics_number(e, KIT_NUMBERS[(name, j)], a)
+            elif name == "pop_text" and j == (5 if obj == "world" else 4):
+                self.check_physics_number(e, POP_SIZE["world" if obj == "world" else "game"], a)
+
+    def kit_value(self, what, value, tg, owner="thing"):
+        """A weather, a minimap's corner, a path's mode or a color written as text: one tgame knows (None), or what's
+        wrong, with a "did you mean"."""
+        if what == "color":
+            return tg["check"]("object", "color", 0, value, None)
+        names = {"weather": tg.get("weathers", WEATHERS), "corner": tg.get("corners", CORNERS), "path": tg.get("path_modes", PATH_MODES)}[what]
+        low = " ".join(value.strip().lower().replace("_", " ").replace("-", " ").split()) if what == "corner" else value.strip().lower()
+        if low in names:
+            return None
+        guess = VALUE_HINTS[what].get(low)
+        hint = guess if guess in names else next(iter(difflib.get_close_matches(low, names, n=1, cutoff=0.6)), None)
+        shown = [f'"{x}"' + (f" ({PATH_SAYS[x]})" if what == "path" and x in PATH_SAYS else "") for x in names]
+        listed = f"{', '.join(shown[:-1])} or {shown[-1]}"
+        msg = {"weather": f'The weather can be {listed}, not "{value}".',
+               "corner": f'The minimap can go in the {listed} corner, not "{value}".',
+               "path": f'{owner}:path\'s third input can be {listed}, not "{value}".'}[what]
+        return msg + (f" Did you mean \"{hint}\"?" if hint else "")
 
     def check_land_inputs(self, e):
         """How many inputs one of the land's methods got. A spot ([x, z]) can go in place of each x and z, and a
@@ -2621,14 +3187,23 @@ class Checker:
         return False
 
     def land_value(self, what, value, tg):
-        """A land style or a lighting written as text: one tgame knows, or a "did you mean"."""
-        names = tg["styles"] if what == "style" else tg["lightings"]
+        """A land style, a lighting, a kind of physics or an animation written as text: one tgame knows, or a "did you
+        mean". A kind of physics can be one of tgame's other words for it too ("fixed" is "static", "on" is "dynamic")."""
+        names = {"style": tg["styles"], "lighting": tg["lightings"], "physics": tg.get("physics_kinds", PHYSICS_KINDS),
+                 "animation": tg.get("animations", ANIMATIONS)}[what]
         low = value.strip().lower()
+        if what == "physics":
+            low = tg.get("physics_words", {}).get(low, low)
         if low in names:
             return None
         guess = VALUE_HINTS[what].get(low)
         hint = guess if guess in names else next(iter(difflib.get_close_matches(low, names, n=1, cutoff=0.6)), None)
-        thing, shown = ("The land's style", list(names)) if what == "style" else ("The lighting", [f'"{x}"' for x in names])
+        if what == "style":
+            thing, shown = "The land's style", list(names)
+        elif what == "physics":
+            thing, shown = "A thing's physics", [f'"{x}"' + (f" ({PHYSICS_SAYS[x]})" if x in PHYSICS_SAYS else "") for x in names]
+        else:
+            thing, shown = "The lighting" if what == "lighting" else "A character's animation", [f'"{x}"' for x in names]
         msg = f"{thing} can be {', '.join(shown[:-1])} or {shown[-1]}, not \"{value}\"."
         return msg + (f" Did you mean \"{hint}\"?" if hint else "")
 
@@ -2659,6 +3234,34 @@ class Checker:
             bad = next((a for a, k in zip(e.args, kinds) if k in funcs), None)
             if bad is not None:
                 self.problem(bad, f"A start screen takes a title and a hint, both text, like: {use}. A click on it starts the game by itself.")
+        elif name == "main_menu":
+            if kinds and kinds[0] in funcs + ("$list", "$bool"):
+                self.problem(e.args[0], f"A main menu's input is its title, like: {use}. Then add buttons to it: menu:button(\"Play\", play).")
+
+    def check_intro_inputs(self, e):
+        """game:splash(what, seconds) and world:auto_lock(on): a function, a list or true/false where the picture or
+        text goes, seconds that aren't a number above 0, and text where true or false goes. True when they can be right."""
+        owner = e.obj.name if e.obj.kind == "var" else ("world" if e.name == "auto_lock" else "game")
+        kinds = [self.kind(a) for a in e.args]
+        if e.name == "auto_lock":
+            if kinds and kinds[0] in ("$text", "$number", "$list", "$func", "$builtin"):
+                self.problem(e.args[0], f"{owner}:auto_lock takes true or false (without quotes), like: {owner}:auto_lock(false)")
+                return False
+            return True
+        if kinds and kinds[0] in ("$func", "$builtin", "$list", "$bool"):
+            self.problem(e.args[0], f"{owner}:splash takes a picture file or some text, then how many seconds it shows, like: "
+                                    f"{owner}:splash(\"logo.png\", 3). The game starts by itself after the splash screens.")
+            return False
+        if len(e.args) > 1:
+            a = e.args[1]
+            inner = a.value if a.kind == "neg" else a
+            v = getattr(inner, "value", None) if inner.kind == "const" else None
+            number = isinstance(v, (int, float)) and not isinstance(v, bool)
+            v = -v if number and a.kind == "neg" else v
+            if kinds[1] in ("$text", "$bool", "$list", "$func", "$builtin") or (number and v <= 0):
+                self.problem(a, f"{owner}:splash's second input is how many seconds it shows: a number above 0, like {owner}:splash(\"logo.png\", 3).")
+                return False
+        return True
 
     def anchor_problem(self, value, anchors):
         """Where a panel goes, written as text: one of the places tgame knows (in any case, with - or _ for the
@@ -3009,6 +3612,8 @@ class Checker:
 
 # atgui's event methods too, so a missing event function gets "Make it with func" (atgui's checks are just above).
 Checker.HANDLER_POS = {**Checker.HANDLER_POS, "clicked": 0, "hover": 0, "focus": 0, "key": 1, "closed": 0, "item": 1}
+# And the game kit's: enemy:on_death(gone), npc:on_talk(talk), game:countdown(60, times_up).
+Checker.HANDLER_POS = {**Checker.HANDLER_POS, "on_death": 0, "on_talk": 0, "countdown": 1}
 
 
 # ---------------------------------------------------------------- Tuff Engine's preview (tuff.py --scene)

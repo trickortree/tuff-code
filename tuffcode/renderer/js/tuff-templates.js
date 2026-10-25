@@ -365,4 +365,127 @@ func step(dt):                             # dt is 0 while a screen pauses the g
 
 game:every_frame step
 ` },
+    { id: 'car_smash', name: 'Car smash (physics, 3D)', desc: 'A tgame 3D world with real physics: a car you drive with the arrow keys into towers of crates that fall and tumble (thing:physics(), :mass, :friction, :bounce), a bouncy ball, a ragdoll that flops over, crate:on_hit counting the crates knocked over, an explosion on B (world:explode) and car:flip on F.', code: `mention tgame
+
+game = tgame.world("Car Smash", 960, 600)
+game:sky "day"
+game:lighting "modern"
+land = game:terrain(160)                   # with physics on, the land is solid
+land:hill(45, 10, 40, 6)                   # a hill to drive up
+game:gravity(-9.8)                         # how strong gravity is (this is the default)
+
+# Towers of crates: physics things fall, tumble and get knocked over.
+towers = [[0, -20], [-12, -30], [12, -34]]
+for spot in towers:
+    for i in range(0, 5):
+        crate = game:box(spot[0], i * 1.05, spot[1], 1, "wood")
+        crate:physics()                    # it falls and can be pushed
+        crate:mass(1.5)                    # kg
+        crate:friction(0.6)
+        crate:on_hit(crate_hit)
+
+ball = game:sphere(-6, 0, -10, 1.2, "red"):physics()   # physics() gives back the thing
+ball:bounce(0.7)                           # 0 doesn't bounce, 1 bounces right back up
+dummy = game:ragdoll(6, 0, -16, "blue")    # a person made of parts that flops when it's hit
+
+car = game:car(0, 1, 6, "orange")
+car:drive()                                # the arrow keys or WASD drive it, and the camera follows
+car:engine(1.5)                            # a bit more power than normal
+car:on_hit(car_hit)
+
+hud = game:hud()
+score_label = hud:text("Knocked: 0", 100, 30)
+speed_label = hud:text("Speed: 0 km/h", 100, 64)
+hud:text("Arrows drive, F flips the car, B goes boom", 480, 580, 18)
+score = 0
+
+func crate_hit(other, strength):           # what hit it, and how hard
+    if strength > 3:
+        score += 1
+        score_label:set "Knocked: " + score
+
+func car_hit(other, strength):
+    if strength > 20:
+        game:sound "hit"
+
+func flip(key):
+    car:flip()                             # back on its wheels
+
+func boom(key):
+    game:explode(car:x(), 0, car:z() - 6, 25, 10)   # pushes everything near it away
+    game:sound "boom"
+
+func step(dt):
+    speed_label:set "Speed: " + round(car:speed()) + " km/h"
+
+game:on_key("f", flip)
+game:on_key("b", boom)
+game:every_frame step
+` },
+    { id: 'snow_course', name: 'Snowy obstacle course (game kit, 3D)', desc: 'A tgame 3D world built from the game kit: snow at sunset (world:weather, :time_of_day), a person who talks when you press E (:say, :on_talk), a jump pad, a boost pad and a moving platform (:path), a key that opens a locked door (:needs), a countdown, a minimap and an arrow to what to find next, a snowman with a health bar, and pop_text, slow_mo and shake when you win.', code: `mention tgame
+
+game = tgame.world("Snowy Course", 960, 600)
+game:sky "sunset"
+land = game:terrain(140, "snow")
+game:weather("snow", 1.2)                  # "rain", "snow" or "none", then how strong (0 to 2)
+game:time_of_day(17)                       # 5 pm: a low sun
+player = game:player("third person")
+map = game:minimap(160, "top left")        # the land and the player, in a corner
+
+coach = game:spawn("person", 0, 0, 4)
+coach:say("Press E to talk to me!", 0)     # 0 keeps the bubble up
+coach:on_talk(coach_talk)
+
+pad = game:jump_pad(0, 0, -6, 12)          # launches you up onto the ledge
+ledge = game:box(0, 0, -14, [8, 3, 6], "stone")
+boost = game:boost_pad(0, 3, -13.5, 22)    # shoots you along the ledge, towards the lift
+lift = game:box(0, 3, -22, [4, 0.4, 4], "wood")
+lift:path([[0, 3, -22], [12, 6, -22], [12, 6, -34]], 3, "loop")   # round and round, and you ride it
+key = game:spawn("key", 12, 6, -34)        # walk into it to pick it up
+map:mark(key, "gold")
+door = game:door(0, 0, -44, "wood")
+door:needs(key)                            # "Locked!" until you have the key
+goal = game:spawn("chest", 0, 0, -50)
+arrow = game:arrow_to(key)                 # an arrow at the screen's edge, with how far it is
+
+snowman = game:sphere(-6, 0, -2, 1.2, "snow")
+snowman:health_bar(3)                      # click it three times
+snowman:clicked melt
+snowman:on_death(melted)
+
+clock = game:countdown(120, times_up)      # top right; red under 10 seconds
+has_key = false
+done = false
+
+func coach_talk():
+    coach:say("Jump pad, boost pad, ride the lift, grab the key, open the door!", 6)
+
+func melt(thing):
+    snowman:hurt(1)
+    game:pop_text("-1", snowman:spot(), "red")
+
+func melted():
+    snowman:hide()
+    clock:add(10)
+    game:pop_text("+10 s", -6, 1, -2, "gold")
+
+func times_up():
+    game:pause("Out of time!")
+
+func step(dt):
+    if not has_key and player:distance(key) < 1.5:
+        has_key = true
+        game:pop_text("Got the key!", player:spot(), "gold")
+        map:unmark(key)
+        game:arrow_to(goal)                # the arrow points at the chest now
+    if not done and player:touches(goal):
+        done = true
+        clock:stop()
+        arrow:hide()
+        game:slow_mo(0.3, 2)               # everything at 30% for 2 seconds
+        game:shake(0.5)
+        game:pop_text("You made it!", goal:spot(), "gold", 60)   # 60 pixels tall
+
+game:every_frame step
+` },
 ];

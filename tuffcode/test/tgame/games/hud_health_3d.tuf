@@ -1,0 +1,26 @@
+mention tgame
+
+# Health bars in 3D: a crate that falls with physics (its bar goes with it), a guard with a label (its bar sits over
+# the label), and the player's own health along the bottom. Hurting and healing, and :on_death running once each
+# time the health runs out.
+world = tgame.world("Health 3D", 900, 560)
+world:ground()
+me = world:player()
+me:health_bar(100)
+crate = world:spawn("crate", -2, 4, -6)
+crate:physics()
+crate:health_bar(100)
+guard = world:spawn("person", 2, 0, -6)
+guard:set("name", "guard")
+guard:label "Guard"
+guard:health_bar(50)
+deaths = 0
+
+func gone(thing):
+    deaths += 1
+    say "gone " + thing:get("name")
+
+guard:on_death gone
+
+func report():
+    say "crate " + crate:health() + " guard " + guard:health() + " me " + me:health() + " deaths " + deaths

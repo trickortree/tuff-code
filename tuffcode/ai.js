@@ -365,22 +365,33 @@ function targetOf(question, code) {
 // them in the message the model answers "ask my name" with a window (37 of Qwen's 105 failed write tasks
 // in Phase 1 did).
 const WINDOW_SECTIONS = ['App windows (tgui / mtgui)', 'Events: what the function gets', 'Timers', 'Pages (several screens in one window)', 'Layout and size', 'Looking good', 'atgui'];
-// The guide splits at every heading, so tgame's "Menus, buttons and screens in games", "Land and lighting (3D)"
-// and "Games Tuff Engine can edit" are sections of their own. A game request about menus, buttons or screens
-// always gets the menus one (sectionsFor).
+// The guide splits at every heading, so tgame's "Menus, buttons and screens in games", "Land and lighting (3D)",
+// "Physics", "Game kit" and "Games Tuff Engine can edit" are sections of their own. A game request about menus,
+// buttons or screens always gets the menus one (sectionsFor).
 const GAME_UI_SECTION = 'Menus, buttons and screens in games';
-const GAME_SECTIONS = ['tgame', GAME_UI_SECTION, 'Land and lighting (3D)', 'Games Tuff Engine can edit'];
+// Splash screens, a main menu, or locking and freeing the mouse in 3D: the guide's section on them.
+const INTRO_SECTION = 'Splash screens, main menus and the mouse';
+const INTRO = /\b(splash|intro (screen|video)s?|logo screens?|main ?menus?|home (screen|menu)s?)\b|\b(mouse|cursor|pointer)\b.*\b(lock(s|ed|ing)?|unlock(s|ed|ing)?|free|release[sd]?|captur(e|es|ed)|grab(s|bed)?|visible|hidden)\b|\b(lock(s|ed|ing)?|unlock(s|ed|ing)?|free|release|capture|grab|show|hide)\b.*\b(mouse|cursor|pointer)\b/;
+const GAME_SECTIONS = ['tgame', GAME_UI_SECTION, INTRO_SECTION, 'Land and lighting (3D)', 'Physics', 'Game kit', 'Games Tuff Engine can edit'];
 const SECTIONS = {
   console: { skip: [...WINDOW_SECTIONS, 'Libraries', ...GAME_SECTIONS, 'tap'] },
   window: { first: ['App windows (tgui / mtgui)'], skip: [...GAME_SECTIONS, 'tap', 'Live lines and clearing (console programs)'] },
   game: { first: ['tgame'], skip: [...WINDOW_SECTIONS, 'tap'] },
   web: { first: ['tap'], skip: [...WINDOW_SECTIONS, ...GAME_SECTIONS] },
 };
+// tgame's "Saving" (game:save and game:load) is a game section too: "save my high score" in a console program
+// shouldn't get it.
+for (const target of ['console', 'window', 'web']) SECTIONS[target].skip.push('Saving');
 // The sections for a request (and how many): a game's menus, buttons or screens add the guide's section on them,
 // with room left for one more, like the land for a 3D world.
+// Splash screens, main menus and the mouse only come when the request is about them (not in the place of the land's).
 function sectionsFor(target, question) {
-  if (target !== 'game' || !GAME_UI.test(question.toLowerCase())) return { n: 2, want: SECTIONS[target] };
-  return { n: 3, want: { ...SECTIONS.game, first: [...SECTIONS.game.first, GAME_UI_SECTION] } };
+  const q = question.toLowerCase();
+  const ui = target === 'game' && GAME_UI.test(q), intro = target === 'game' && INTRO.test(q);
+  const want = target === 'game' && !intro ? { ...SECTIONS.game, skip: [...SECTIONS.game.skip, INTRO_SECTION] } : SECTIONS[target];
+  if (!ui && !intro) return { n: 2, want };
+  const first = [...want.first, ...(ui ? [GAME_UI_SECTION] : []), ...(intro ? [INTRO_SECTION] : [])];
+  return { n: first.length + 1, want: { ...want, first } };
 }
 const WANT = {
   write: 'a Tuff program that does what they describe',
@@ -409,6 +420,7 @@ const TARGET = {
   world: 'It\'s a tgame 3D world: start with mention tgame, then game = tgame.world("Title"). Hills, lakes and mountains go on land = game:terrain(200).',
   web: 'It uses the web: start with mention tap, then res = tap.get(url).',
   gameUi: 'Buttons, text boxes and menus go on the game, not in an app window: bar = game:panel("top left") pins widgets to it (bar:button("Shop", open_shop)), shop = game:screen("Shop") is a screen over it that pauses the game (shop:hide() until it\'s needed), and start = game:start_screen("Title", "Click to play") waits for a click to play.',
+  intro: 'Splash screens are game:splash("logo.png", 3) or game:splash("Some text") (game:splash() is "Made with Tuff"), and a main menu is menu = game:main_menu("Title") with menu:button("Play", play), where func play(): menu:hide(). In 3D, world:lock_mouse() and world:unlock_mouse() lock and free the mouse; screens free it by themselves while they show.',
 };
 const NOT_PYTHON = 'Tuff, not Python: func (not def), true, false and nil, x is y, items:add(x) (not .append), "Hi " + name (no f-strings), and range(1, 3) gives 1, 2, 3.';
 
@@ -472,6 +484,7 @@ function improve(input) {
   if (kind === 'write' || kind === 'edit' || (kind === 'fix' && target !== 'console')) {
     lines.push(TARGET[target === 'console' && ASKS.test(question) ? 'consoleAsks' : in3d ? 'world' : target]);
     if (target === 'game' && GAME_UI.test(question.toLowerCase())) lines.push(TARGET.gameUi);
+    if (target === 'game' && INTRO.test(question.toLowerCase())) lines.push(TARGET.intro);
   }
   lines.push(`A good answer: ${GOOD[kind]}`);
   if (kind === 'write' || kind === 'fix' || kind === 'edit') lines.push(NOT_PYTHON);

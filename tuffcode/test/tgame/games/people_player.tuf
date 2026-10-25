@@ -1,0 +1,13 @@
+mention tgame
+
+# The player in third person holding an axe, from the camera that follows it, standing and walking.
+world = tgame.world("Player", 1100, 620)
+world:sky "day"
+world:ground "grass"
+player = world:player("third person")
+player:hold("axe")
+world:spawn("pine", -3, 0, -8)
+world:spawn("rock", 2, 0, -6)
+
+while world:open():
+    world:frame()

@@ -1,0 +1,32 @@
+mention tgame
+
+# Every model in the kit on the grass, for a look at how they're made: nature and buildings at the back, the small
+# things in front, and two people (one waving). The autopilot moves the camera in for close-ups and switches the
+# lighting; walk() sends the second person off walking.
+game = tgame.world("Models", 1100, 620)
+game:sky "day"
+game:ground "grass"
+x = -9
+for name in ["tree", "pine", "house", "hut", "tree", "pine"]:
+    game:spawn(name, x, 0, -9)
+    x += 3.6
+x = -7.5
+for name in ["rock", "bush", "flower", "sign", "crate", "fence", "coin", "chest", "flower", "bush", "rock"]:
+    game:spawn(name, x, 0, -4.5)
+    x += 1.5
+waver = game:spawn("person", -1.2, 0, -2)
+waver:turn_to(180)
+waver:animate "wave"
+walker = game:spawn("person", 1.2, 0, -2)
+walker:turn_to(180)
+game:camera_at(0, 3.2, 3.5)
+game:look_at(0, 1.2, -6.5)
+
+func walk():
+    walker:turn_to(90)
+    walker:glide(4, 0, -2, 3)
+
+func still():
+    waver:animate "none"
+    walker:animate "idle"
+    say "animate " + waver:animate("auto")

@@ -1,0 +1,36 @@
+mention tgame
+
+# Level pieces: a jump pad launches the player up (and a physics crate dropped on another one), and a boost pad,
+# turned to face +x, shoots the player that way.
+world = tgame.world("Level Pads", 900, 560)
+world:ground "grass"
+player = world:player("first person")
+player:move_to(0, 0, 6)
+pad = world:jump_pad(0, 0, 2, 15)
+boost = world:boost_pad(-6, 0, -4, 20)
+boost:turn(90)
+bouncer = world:jump_pad(5, 0, -3, 10)
+crate = world:spawn("crate", 5, 3, -3)
+crate:physics()
+world:spawn("tree", -9, 0, -12)
+world:spawn("rock", 8, 0, -9)
+peak = 0
+crate_peak = 0
+
+func watch(dt):
+    if player:y() > peak:
+        peak = player:y()
+    if crate:y() > crate_peak:
+        crate_peak = crate:y()
+
+world:every_frame watch
+
+func report():
+    say "peak " + peak + " crate peak " + crate_peak
+    say "player " + player:spot()
+
+func reset():
+    peak = 0
+
+func to_boost():
+    player:move_to(-6, 0, -4)

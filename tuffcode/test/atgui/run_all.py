@@ -15,6 +15,9 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# The windows open out of sight, never take the focus and make no sound (tuff_view's _quiet_window), so the
+# tests can run while someone uses the computer. TUFF_TEST_QUIET=0 shows them.
+os.environ.setdefault("TUFF_TEST_QUIET", "1")
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 TUFF = os.path.join(REPO, "tuff.py")
 GUIDE = os.path.join(REPO, "tuffcode", "mcp", "tuff-guide.md")
@@ -260,7 +263,10 @@ def main():
         R.check(res.get("items") == 1000 and res.get("second_lines") == 100, "1,000 items, 100 with a second line", res)
         disp = (res.get("display_gap_ms") or {}).get("median") or 16.7
         gaps = res.get("gap_ms") or {}
-        R.check((gaps.get("p95") or 99) <= disp * 1.5 + 2 and res.get("long_frames", 99) <= 3,
+        # Out of sight (TUFF_TEST_QUIET), the window is on no screen, so its frames aren't timed to one: now and then
+        # one comes a display frame late. On a screen, nearly all come at the display's rate.
+        late = 2.0 if os.environ.get("TUFF_TEST_QUIET") == "1" else 1.5
+        R.check((gaps.get("p95") or 99) <= disp * late + 2 and res.get("long_frames", 99) <= 3,
                 f"scrolling keeps the display's rate: {res.get('scroll_fps')} fps, frame gaps {gaps} ms "
                 f"(display {disp} ms), {res.get('long_frames')} long frames")
         R.check(res.get("picked") == "Picked Item 900" and res.get("selected"), f"picking item 900 works ({res.get('pick_ms')} ms)", res)

@@ -1,0 +1,39 @@
+mention tgame
+
+# A moving platform with physics on: a physics crate on it rides along (it's a kinematic body in the page), across
+# and up, and so does the player standing on it.
+world = tgame.world("Level Lift Physics", 900, 560)
+world:ground "grass"
+player = world:player("third person")
+lift = world:box(0, 1, 0, [4, 0.4, 4], "stone")
+lift:path([[0, 1, 0], [8, 1, 0], [8, 5, 0]], 2.5)
+crate = world:spawn("crate", -1, 1.4, 1)
+crate:physics()
+player:move_to(1, 1.4, -1)
+gap_low = 99
+gap_high = -99
+crate_low = 99
+crate_high = -99
+drift = 0
+dx0 = 0
+started = false
+
+func watch(dt):
+    if world:time() < 0.6:
+        return
+    if not started:
+        started = true
+        dx0 = crate:x() - lift:x()
+    gap = player:y() - (lift:y() + 0.4)
+    gap_low = min(gap_low, gap)
+    gap_high = max(gap_high, gap)
+    c = crate:y() - (lift:y() + 0.4)
+    crate_low = min(crate_low, c)
+    crate_high = max(crate_high, c)
+    drift = max(drift, abs(crate:x() - lift:x() - dx0))
+
+world:every_frame watch
+
+func report():
+    say "gap " + gap_low + " " + gap_high + " crate " + crate_low + " " + crate_high + " drift " + drift
+    say "lift " + lift:spot() + " crate " + crate:spot() + " player " + player:spot()

@@ -63,6 +63,8 @@ SOUNDS = {
 SOUND_FILES = (".wav", ".mp3", ".ogg", ".m4a")
 IMAGE_FILES = (".png", ".gif", ".jpg", ".jpeg", ".webp", ".bmp", ".svg")
 MODEL_FILES = (".glb",)
+# Files a splash screen can't show (game:splash "intro.mp4"): anything else that isn't a picture is text to show.
+NOT_PICTURES = SOUND_FILES + MODEL_FILES + (".mp4", ".webm", ".mov", ".avi", ".mkv", ".txt", ".tuf", ".pdf", ".ico")
 
 SKIES = {
     # sky: [top, horizon, below]; fog color; sun color and brightness; hemisphere sky/ground color and brightness;
@@ -80,7 +82,10 @@ SKIES = {
     "space": {"sky": ["#000000", "#05060d", "#000000"], "fog": None, "sun": ("#ffffff", 2.4),
               "hemi": ("#4050a0", "#101010", 0.35), "at": (40, 30, 30), "far": 0},
 }
-KIT = ("tree", "pine", "rock", "bush", "flower", "house", "hut", "sign", "crate", "fence", "coin")
+KIT = ("tree", "pine", "rock", "bush", "flower", "house", "hut", "sign", "crate", "fence", "coin", "chest", "person", "key")
+# How a model from the kit can move by itself (thing:animate): "auto" is the model's own (a person walks while it
+# moves and stands breathing when it doesn't; trees sway; coins spin), "none" holds it still.
+ANIMATIONS = ("auto", "walk", "idle", "wave", "none")
 HOLDABLE = ("axe", "pickaxe", "sword", "torch", "hammer")
 EDGE_MODES = ("bounce", "wrap", "stop", "none")
 PLAYER_MODES = ("first person", "third person")
@@ -91,6 +96,12 @@ LIGHTINGS = ("simple", "modern")
 ANCHORS = ("top left", "top", "top right", "left", "center", "right", "bottom left", "bottom", "bottom right")
 ANCHOR_WORDS = {"centre": "center", "middle": "center", "mid": "center", "centered": "center", "upper": "top",
                 "lower": "bottom"}
+# What thing:physics(kind) can make a thing: falls and gets pushed, never moves, moved by the program, or no body.
+PHYSICS_KINDS = ("dynamic", "static", "kinematic", "off")
+PHYSICS_WORDS = {"on": "dynamic", "falls": "dynamic", "fall": "dynamic", "fixed": "static", "still": "static",
+                 "solid": "static", "none": "off", "no": "off"}
+# Kit models that get a capsule for a body when they use physics (people and creatures), not a box.
+CAPSULE_KINDS = ("person", "character", "villager", "npc", "enemy", "zombie", "robot", "knight", "player")
 
 # Methods people coming from other engines guess, and the tgame name (for "Use :box instead").
 HINTS = {
@@ -111,22 +122,60 @@ HINTS = {
                 "down": "lower", "level": "flatten", "flat": "flatten", "soften": "smooth", "blur": "smooth"},
     "sprite": {"goto": "move_to", "go_to": "move_to", "position": "move_to", "rotate": "turn", "rotation": "angle",
                "collide": "touches", "collides": "touches", "colliding": "touches", "hits": "touches", "touching": "touches",
-               "velocity": "speed", "fill": "color", "colour": "color", "text": "set", "on_click": "clicked", "delete": "remove",
-               "destroy": "remove", "kill": "remove", "wrap": "on_edge", "bounce": "on_edge", "keep_on_screen": "on_edge"},
+               "fill": "color", "colour": "color", "text": "set", "on_click": "clicked", "delete": "remove",
+               "destroy": "remove", "kill": "remove", "wrap": "on_edge", "keep_on_screen": "on_edge"},
     "object": {"goto": "move_to", "go_to": "move_to", "position": "move_to", "rotate": "turn", "rotation": "angle",
-               "collide": "touches", "collides": "touches", "touching": "touches", "hits": "touches", "velocity": "speed",
+               "collide": "touches", "collides": "touches", "touching": "touches", "hits": "touches",
                "colour": "color", "on_click": "clicked", "delete": "remove", "destroy": "remove", "kill": "remove",
                "text": "label", "name": "label", "chop": "shake", "topple": "fall"},
     "player": {"goto": "move_to", "position": "move_to", "speed": "walk_speed", "jump_power": "jump_height",
-               "holds": "hold", "equip": "hold", "aim": "looking_at", "target": "looking_at"},
+               "holds": "hold", "equip": "hold", "aim": "looking_at", "target": "looking_at", "on_collision": "on_hit",
+               "on_collide": "on_hit", "collided": "on_hit"},
 }
+# Physics names people bring from other engines (Unity, Godot, pygame's pymunk...), for sprites and objects alike.
+PHYSICS_HINTS = {"rigidbody": "physics", "rigid_body": "physics", "add_physics": "physics", "enable_physics": "physics",
+                 "use_physics": "physics", "body": "physics", "impulse": "push", "apply_impulse": "push", "add_force": "push",
+                 "apply_force": "push", "force": "push", "kick": "push", "throw": "push", "weight": "mass",
+                 "bounciness": "bounce", "restitution": "bounce", "elasticity": "bounce", "on_collision": "on_hit",
+                 "on_collide": "on_hit", "on_contact": "on_hit", "collided": "on_hit", "on_bump": "on_hit",
+                 "torque": "spin", "apply_torque": "spin", "add_torque": "spin", "linear_velocity": "velocity",
+                 "set_velocity": "velocity", "freeze": "sleep", "unfreeze": "wake", "wake_up": "wake"}
+HINTS["sprite"].update(PHYSICS_HINTS)
+HINTS["object"].update(PHYSICS_HINTS)
+HINTS["world"].update({"set_gravity": "gravity", "explosion": "explode", "blast": "explode", "bomb": "explode",
+                       "vehicle": "car", "kart": "car", "buggy": "car", "doll": "ragdoll", "dummy": "ragdoll"})
+HINTS["game"].update({"set_gravity": "gravity", "explosion": "explode", "blast": "explode", "bomb": "explode",
+                      "edges": "walls", "borders": "walls", "bounds": "walls", "screen_walls": "walls"})
+HINTS["car"] = {**HINTS["object"], "accelerate": "engine", "power": "engine", "throttle": "engine", "control": "drive",
+                "steer": "drive", "drive_with_keys": "drive", "reset": "flip", "unflip": "flip", "upright": "flip",
+                "kmh": "speed", "mph": "speed"}
+HINTS["ragdoll"] = {**HINTS["object"], "hit": "push", "flop": "push"}
+# What a 2D game can't make, with what to do instead.
+NEEDS_3D = {"car": "The car needs a 3D world. Make the game with tgame.world(...) to drive one.",
+            "ragdoll": "A ragdoll needs a 3D world. Make the game with tgame.world(...) for one."}
 # Names people guess for menus, the same in 2D and 3D.
-UI_HINTS = {"menu": "screen", "overlay": "screen", "popup": "screen", "dialog": "screen", "modal": "screen",
-            "title_screen": "start_screen", "start_menu": "start_screen", "main_menu": "start_screen",
-            "splash": "start_screen", "splash_screen": "start_screen", "click_to_play": "start_screen", "ui": "panel",
+UI_HINTS = {"overlay": "screen", "popup": "screen", "dialog": "screen", "modal": "screen",
+            "start_menu": "start_screen", "click_to_play": "start_screen", "ui": "panel",
             "gui": "panel", "toolbar": "panel", "sidebar": "panel"}
+# ... and for splash screens and main menus (game:splash, game:main_menu).
+UI_HINTS.update({"title_screen": "splash", "intro": "splash", "logo": "splash", "splash_screen": "splash",
+                 "splashscreen": "splash", "logo_screen": "splash", "intro_screen": "splash", "menu": "main_menu",
+                 "home_screen": "main_menu", "menu_screen": "main_menu", "mainmenu": "main_menu",
+                 "title_menu": "main_menu", "home_menu": "main_menu"})
 HINTS["game"].update(UI_HINTS)
 HINTS["world"].update(UI_HINTS)
+# The mouse in a 3D world: locked for looking around, or free (world:lock_mouse...), and the names people guess.
+MOUSE_NAMES = ("lock_mouse", "unlock_mouse", "mouse_locked", "auto_lock")
+HINTS["world"].update({
+    "release_mouse": "unlock_mouse", "free_mouse": "unlock_mouse", "show_cursor": "unlock_mouse", "show_mouse": "unlock_mouse",
+    "unlock_cursor": "unlock_mouse", "unlock_pointer": "unlock_mouse", "exit_pointer_lock": "unlock_mouse",
+    "release_pointer": "unlock_mouse", "capture_mouse": "lock_mouse", "hide_cursor": "lock_mouse", "hide_mouse": "lock_mouse",
+    "lock_cursor": "lock_mouse", "lock_pointer": "lock_mouse", "pointer_lock": "lock_mouse", "request_pointer_lock": "lock_mouse",
+    "grab_mouse": "lock_mouse", "is_mouse_locked": "mouse_locked", "mouse_is_locked": "mouse_locked", "is_locked": "mouse_locked",
+    "locked": "mouse_locked", "cursor_locked": "mouse_locked", "pointer_locked": "mouse_locked", "click_to_lock": "auto_lock",
+    "lock_on_click": "auto_lock", "autolock": "auto_lock", "auto_lock_mouse": "auto_lock"})
+NEEDS_3D.update(dict.fromkeys(MOUSE_NAMES, "Locking the mouse is for looking around in a 3D world. Make the game with "
+                                           "tgame.world(...) and give it a player: world:player(\"first person\")."))
 
 KEY_CODES = {"Space": "space", "ArrowUp": "up", "ArrowDown": "down", "ArrowLeft": "left", "ArrowRight": "right",
              "Enter": "enter", "NumpadEnter": "enter", "Escape": "escape", "Tab": "tab", "Backspace": "backspace",
@@ -314,6 +363,12 @@ class Methods(dict):
             def hint(*_args):
                 raise rt.error(f"{what} doesn't have :{name}. Use :{alt} instead.")
             return hint
+        if self.what == "A game" and str(name).lower() in NEEDS_3D:
+            message, rt = NEEDS_3D[str(name).lower()], self.rt
+
+            def needs_3d(*_args):
+                raise rt.error(message)
+            return needs_3d
         return default
 
 
@@ -379,6 +434,8 @@ class Game:
         ("height", "height"), ("background", "background"), ("random_spot", "random_spot"),
         ("group", "group"), ("hud", "get_hud"), ("clear", "clear"), ("panel", "panel"), ("screen", "make_screen"),
         ("start_screen", "start_screen"),
+        ("slow_mo", "slow_mo"), ("shake", "shake"), ("pop_text", "pop_text"),
+        ("splash", "splash"), ("main_menu", "main_menu"),
     ]
 
     def __init__(self, lib, title, width, height):
@@ -386,9 +443,12 @@ class Game:
         self.tv = tuff_view
         self.lib, self.rt = lib, lib.rt
         self.W, self.H = width, height
+        self.save_file = SavedData(self, title)  # game:save and game:load (saved game data) keep this first title
         self.ui = None  # the game's menus (GameUI), once game:panel or a screen made them
         self.closed = self.close_seen = False
         self.down, self.just = set(), set()
+        self.input_paused = False  # this frame's keys and clicks were a screen's: the game was paused, or they hid one
+        self.lock_click = False  # this frame's click is the one that locks the mouse for looking around
         self.ticks, self.key_fns, self.click_fns, self.timers = [], [], [], []
         self.clock = 0.0
         self.last = None
@@ -413,6 +473,8 @@ class Game:
         self.fake_lock = False
         self.blurs = 0
         self.sound_count = 0
+        self.phys = None  # the game's physics (Physics), once something uses it
+        self.fx = None  # its effects (Effects): slow motion, a shake, pop text, weather, the time of day
         self.base = getattr(getattr(self.rt, "interp", None), "base_dir", None) or os.getcwd()
         if SCENE is not None:
             self.autopilot = None
@@ -523,6 +585,10 @@ class Game:
         now = time.perf_counter()
         if self.work_from is not None:
             self.work.append(now - self.work_from)
+        if self.phys is not None:
+            self.phys.frame()
+        if self.fx is not None:
+            self.fx.before_frame()
         self.before_frame()
         try:
             self.view.frame()
@@ -536,13 +602,20 @@ class Game:
         self.frames += 1
         self.just = set()
         self.wheel = 0.0
+        ui = self.ui
+        hides = ui.hides if ui is not None else 0
+        self.input_paused, self.lock_click = self.is_paused, False
         self.handle(self.view.events())
+        if self.ui is not None and self.ui.hides != hides:  # a key hid a screen (E in on_key closed a note): that's all it did
+            self.input_paused = True
         if self.autopilot:
             self.autopilot.tick(t)
         if self.closed or not self.view.is_open:
             self.closed = True
             return 0
         dt = 0.0 if self.is_paused else real
+        if self.fx is not None:
+            dt = self.fx.frame(dt, real)  # slow motion slows everything that goes by dt
         if dt:
             self.clock += dt
             self.run_timers()
@@ -638,6 +711,8 @@ class Game:
                 name = MOUSE_BUTTONS.get(e.get("button", 0), "mouse")
                 self.down.add(name)
                 self.just.add(name)
+                if e.get("locks") and not self.fake_lock:  # the page asked to lock the mouse in this click
+                    self.lock_click = True
             elif t == "mouseup":
                 self.down.discard(MOUSE_BUTTONS.get(e.get("button", 0), "mouse"))
             elif t == "blur":  # the window lost focus: keys held now come up without telling us
@@ -649,14 +724,23 @@ class Game:
                 self.wheel += e.get("dy", 0) or 0
             elif t == "lock":
                 self.locked = bool(e.get("locked"))
+                self.on_lock()
                 self.lock_changed()
             elif t == "model":  # a .glb finished loading: now its size is known, for collisions and its label
                 thing = self.by_node.get(e.get("id"))
                 if thing is not None and e.get("size"):
                     thing.dims = tuple(max(0.01, float(v)) for v in e["size"])
                     thing.push()
-            elif t == "tg-lock" and ui is not None:  # the page asked to lock the mouse (a start screen's click)
-                ui.lock_asks += 1
+                    if self.phys is not None:
+                        self.phys.dirty.add(thing)  # its body is the model's size too
+            elif t == "phys" and self.phys is not None:  # where physics moved things this frame, and what hit what
+                self.phys.report(e)
+            elif t == "tg-lock":  # the page asked to lock the mouse (a start screen's click, world:lock_mouse...)
+                self.lock_asks += 1
+                if ui is not None:
+                    ui.lock_asks += 1
+            elif t == "tg-splash" and ui is not None:  # a splash screen ended, or all of them did
+                ui.splash_event(e)
             elif t == "tg-autopilot":
                 print(f"[autopilot] {e.get('message')}", flush=True)
             elif t == "close":
@@ -775,6 +859,18 @@ class Game:
     def volume(self, percent):
         self.view.call(0, "sound_volume", clamp(self.num(percent, ":volume"), 0, 100) / 100)
 
+    # ---- effects (Effects): slow motion, a shake, pop text
+    def effects(self):
+        if self.fx is None:
+            self.fx = Effects(self)
+        return self.fx
+
+    def slow_mo(self, speed=0.3, seconds=None):
+        self.effects().slow_mo(speed, seconds)
+
+    def shake(self, strength=0.5, seconds=0.4):
+        self.effects().shake(strength, seconds)
+
     # ---- the window
     def set_title(self, text):
         self.view.set_title(self.rt.text(text))
@@ -796,11 +892,22 @@ class Game:
         return Group(self).native
 
     def clear(self):
-        """Removes every sprite and object the program made (the player stays)."""
+        """Removes every sprite and object the program made (the player and a countdown stay). What it removes stops
+        moving by itself as it goes (it leaves self.movers)."""
         for thing in list(self.things):
             thing.remove()
         self.things = {}
-        self.movers = set()
+
+    # ---- physics
+    def physics_on(self):
+        """The game's physics, started the first time something uses it (that's when the page loads Rapier)."""
+        if self.phys is None:
+            self.phys = Physics(self)
+        return self.phys
+
+    def gravity(self, strength):
+        g = self.num(strength, ":gravity")
+        self.physics_on().set_gravity(g)
 
     # ---- menus, buttons and screens: atgui's widgets on the game
     def menus(self):
@@ -823,6 +930,46 @@ class Game:
         ui = self.menus()
         return StartScreen(ui, self.view.title if title is None else ui.lib.text(title), ui.lib.text(hint)).native()
 
+    # ---- splash screens and the main menu (Splashes and MainMenu, after StartScreen)
+    lock_asks = 0  # times the page asked the browser to lock the mouse (for the autopilot's reports)
+
+    def splash(self, what=None, seconds=2):
+        """A splash screen at the start of the game, before any main menu or start screen: a picture file from the
+        project folder (shown fitted, on black) or some text. game:splash() is "Made with Tuff"."""
+        ui = self.menus()
+        if self.rt.callable(what):
+            raise self.rt.error("game:splash takes a picture file or some text, then how many seconds it shows, "
+                                "like game:splash(\"logo.png\", 3). The game starts by itself after the splash screens.")
+        secs = self.num(seconds, ":splash")
+        if not secs > 0:
+            raise self.rt.error(":splash needs a number of seconds above 0, like game:splash(\"logo.png\", 3).")
+        if self.rt.plain(what) is None:
+            ui.splashes().add("tuff", None, secs, "Made with Tuff")
+            return None
+        text = ui.lib.text(what)
+        low = text.strip().lower()
+        if low.endswith(IMAGE_FILES):
+            url, _ = self.file_url(text, "picture", IMAGE_FILES)
+            ui.splashes().add("picture", url, secs, text.strip())
+        elif low.endswith(NOT_PICTURES):
+            raise self.rt.error(f"'{text.strip()}' can't be a splash screen. Use a picture from your project folder "
+                                "(.png, .jpg or .gif), or some text.")
+        else:
+            ui.splashes().add("text", text, secs, text)
+        return None
+
+    def main_menu(self, title=None):
+        """A main menu: a screen with a big title and wide buttons, shown when the game starts (after the splash
+        screens), with the game paused and the mouse free until menu:hide()."""
+        ui = self.menus()
+        if self.rt.callable(title):
+            raise self.rt.error("A main menu's input is its title, like: menu = game:main_menu(\"My Game\"). "
+                                "Then add buttons to it: menu:button(\"Play\", play).")
+        return MainMenu(ui, self.view.title if title is None else ui.lib.text(title)).native()
+
+    def on_lock(self):
+        """The page's mouse lock changed (World3D keeps track of why)."""
+
     def stats(self):
         """Numbers for the autopilot's reports."""
         def spread(xs):
@@ -832,6 +979,525 @@ class Game:
         (tm, tp), (em, ep) = spread(self.work), spread(self.engine)
         return {"fps": self.fps(), "frames": self.frames, "tuff_ms_median": tm, "tuff_ms_p95": tp,
                 "engine_ms_median": em, "engine_ms_p95": ep}
+
+
+# ---------------------------------------------------------------- effects: slow motion, a shake, pop text, weather, the time of day
+
+WEATHERS = ("rain", "snow", "none")
+WEATHER_WORDS = {"rainy": "rain", "raining": "rain", "storm": "rain", "stormy": "rain", "drizzle": "rain", "showers": "rain",
+                 "wet": "rain", "snowy": "snow", "snowing": "snow", "blizzard": "snow", "snowfall": "snow", "clear": "none",
+                 "sunny": "none", "off": "none", "nothing": "none", "dry": "none", "stop": "none", "no": "none", "": "none"}
+# The day, hour by hour: the sky it looks like then. Between two hours the sky is a mix of the two.
+DAY = ((0, "night"), (4.5, "night"), (6.5, "dawn"), (8.5, "day"), (16, "day"), (18.5, "sunset"), (20.5, "night"), (24, "night"))
+# The hour a day_cycle or time_of_day starts from, for the sky the world has (a "day" sky is the morning).
+SKY_HOURS = {"day": 9, "sunset": 18.5, "dawn": 6.5, "night": 0, "cloudy": 12, "space": 12}
+POP_SECONDS = 1.1  # how long pop text floats before it's gone
+# Names people guess for the effects, and the tgame name (for "Use :slow_mo instead").
+FX_HINTS = {"slowmo": "slow_mo", "slow_motion": "slow_mo", "slowmotion": "slow_mo", "bullet_time": "slow_mo",
+            "time_scale": "slow_mo", "timescale": "slow_mo", "set_time_scale": "slow_mo", "slow_down": "slow_mo",
+            "camera_shake": "shake", "screen_shake": "shake", "shake_camera": "shake", "shake_screen": "shake",
+            "screenshake": "shake", "quake": "shake", "earthquake": "shake", "float_text": "pop_text",
+            "floating_text": "pop_text", "damage_text": "pop_text", "popup_text": "pop_text", "pop_up_text": "pop_text",
+            "text_pop": "pop_text", "damage_number": "pop_text", "popup_number": "pop_text", "score_popup": "pop_text"}
+HINTS["game"].update(FX_HINTS)
+HINTS["world"].update({**FX_HINTS, "rain": "weather", "snow": "weather", "set_weather": "weather", "climate": "weather",
+                       "precipitation": "weather", "day_night": "day_cycle", "day_night_cycle": "day_cycle",
+                       "daynight": "day_cycle", "daylight_cycle": "day_cycle", "time_cycle": "day_cycle",
+                       "night_cycle": "day_cycle", "cycle": "day_cycle", "set_time": "time_of_day", "hour": "time_of_day",
+                       "time_of_the_day": "time_of_day", "set_hour": "time_of_day", "daytime": "time_of_day",
+                       "clock_time": "time_of_day"})
+NEEDS_3D.update({"weather": "The weather needs a 3D world. Make the game with tgame.world(...) for rain or snow.",
+                 "day_cycle": "Day and night need a 3D world, with a sky. Make the game with tgame.world(...) for them.",
+                 "time_of_day": "The time of day needs a 3D world, with a sky. Make the game with tgame.world(...) for it."})
+
+
+def weather_problem(name):
+    return (f"The weather can be \"rain\", \"snow\" or \"none\", not \"{name}\"."
+            + did_you_mean(str(name).strip().lower(), WEATHERS))
+
+
+def _rgb(h):
+    h = h.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+
+
+def _hex(c):
+    return "#" + "".join(f"{round(clamp(v, 0.0, 1.0) * 255):02x}" for v in c)
+
+
+def mix_color(a, b, t):
+    """The color a part t (0 to 1) of the way from a to b (hex colors; None stays None)."""
+    if a is None or b is None:
+        return a or b
+    return _hex([x + (y - x) * t for x, y in zip(_rgb(a), _rgb(b))])
+
+
+def sun_at(hour):
+    """Where the light comes from at an hour: the sun rises in the east at 6, is high at noon and sets in the west at
+    18, and the moon goes on round (lower) through the night, so shadows turn smoothly all day."""
+    h = hour % 24
+    turn = math.radians(90 + (h - 6) / 12 * 180)
+    up = math.sin((h - 6) / 12 * math.pi)
+    el = math.radians(15 + (50 * up if up > 0 else -35 * up))
+    return (70 * math.cos(el) * math.sin(turn), 70 * math.sin(el), -70 * math.cos(el) * math.cos(turn))
+
+
+class Effects:
+    """A game's effects, made the first time the program uses one: slow motion (the frame's dt, so the game clock,
+    timers, things that move by themselves and the player slow down, and the page's clock for physics and animation),
+    shaking the camera (3D) or the game (2D), text that pops up from a spot and floats away, and in a 3D world the
+    weather and the time of day (the sky, the sun, the light and the fog, worked out here and sent like world:sky's).
+
+    The page draws its part in tuff_view_web/fx.js (the shake, pop text in 3D, rain and snow, the wet ground, the
+    stars). Pop text in 2D is sprites. Everything holds still while the game is paused, and in Tuff Engine's preview
+    (tuff.py --scene) nothing goes to the page but the sky."""
+
+    def __init__(self, game):
+        self.game = game
+        self.live = SCENE is None
+        self.speed = 1.0           # how fast the game runs now (slow motion eases it down and back)
+        self.slow = None           # [the speed it eases to, real seconds left (None: until slow_mo(1))]
+        self.sent = {"speed": 1.0, "pause": False}
+        self.pops = []             # 2D: [text, its shadow, age, x, y, size]
+        self.weather_ = "none"
+        self.strength = 1.0
+        self.hour = None           # the time of day (0-24), once day_cycle or time_of_day set it
+        self.cycle = 0.0           # seconds for a whole day (0: the time holds still)
+        self.sky_due = 0.0         # seconds until the day's sky goes again
+        self.look_sent = None      # what the sky was made from last time (to notice world:sky, :fog, :sun, :terrain)
+        self.stars = 0.0
+
+    def send(self, op, *args):
+        if self.live and not self.game.closed:
+            self.game.view.call(0, "fx", op, *args)
+
+    def target(self):
+        """The page's node that shakes: a world's scene, or a 2D game's canvas."""
+        g = self.game
+        return int(g.scene if g.three_d else g.node)
+
+    # ---- every frame
+    def frame(self, dt, real):
+        """The frame's dt at the game's speed (0 while paused), after slow motion and the time of day moved on."""
+        g = self.game
+        if not g.is_paused and real:
+            want = 1.0
+            if self.slow is not None:
+                want, left = self.slow
+                if left is not None:
+                    self.slow[1] = left - real
+                    if self.slow[1] <= 0:
+                        self.slow, want = None, 1.0
+            if self.speed != want:  # quickly into slow motion, gently back out of it
+                self.speed += (want - self.speed) * min(1.0, real * (25 if want < self.speed else 6))
+                if abs(self.speed - want) < 0.003:
+                    self.speed = want
+        dt *= self.speed
+        if dt and self.hour is not None and self.cycle:
+            self.hour = (self.hour + dt * 24 / self.cycle) % 24
+            self.sky_due -= dt
+        if self.pops:
+            self.move_pops(dt)
+        return dt
+
+    def before_frame(self):
+        """Before the frame goes: the game's speed and pausing for the page, and the sky when it changed."""
+        g = self.game
+        paused = bool(g.is_paused)
+        if paused != self.sent["pause"]:
+            self.sent["pause"] = paused
+            self.send("pause", paused)
+        if abs(self.speed - self.sent["speed"]) > 0.002 or (self.speed == 1.0 != self.sent["speed"]):
+            self.sent["speed"] = self.speed
+            self.send("speed", round(self.speed, 4))
+        if g.three_d and (self.hour is not None or self.weather_ != "none"):
+            due = self.hour is not None and self.cycle and self.sky_due <= 0
+            if due or self.look_sent != self.look_key():
+                self.show_sky()
+
+    # ---- slow motion
+    def slow_mo(self, speed, seconds):
+        g = self.game
+        k = g.num(speed, ":slow_mo")
+        if not 0.05 <= k <= 1:
+            raise g.rt.error(f":slow_mo needs a speed from 0.05 to 1 (0.3 is 30%, 1 is normal speed), like "
+                             f"{g.KIND}:slow_mo(0.3, 2).")
+        secs = None if seconds is None else g.num(seconds, ":slow_mo")
+        if secs is not None and secs < 0:
+            raise g.rt.error(":slow_mo needs how many seconds it lasts (0 or more), like "
+                             f"{g.KIND}:slow_mo(0.3, 2).")
+        self.slow = None if k == 1 else [k, secs or None]
+
+    # ---- shaking
+    def shake(self, strength, seconds):
+        g = self.game
+        s = g.num(strength, ":shake")
+        secs = g.num(seconds, ":shake")
+        if not 0 <= s <= 2:
+            raise g.rt.error(f":shake needs a strength from 0 to 2 (0.5 is a bump, 2 is an earthquake), like {g.KIND}:shake(0.5).")
+        if secs <= 0:
+            raise g.rt.error(f":shake needs how long it shakes, in seconds (more than 0), like {g.KIND}:shake(1, 1.5).")
+        self.send("shake", self.target(), s, min(secs, 60))
+
+    # ---- pop text
+    def pop_text(self, text, x, y, z, color, size):
+        g = self.game
+        words = g.rt.text(text)
+        c = g.color(color)
+        px = g.num(size, ":pop_text")
+        if px <= 0:
+            raise g.rt.error(f":pop_text needs a size above 0 (how tall the text is), like {g.KIND}:pop_text(\"+10\", "
+                             + ("0, 1, 0, \"gold\", 40)." if g.three_d else "100, 50, \"gold\", 40)."))
+        if g.three_d:
+            self.send("pop", self.target(), words, x, y, z, c, min(px, 400))
+            return
+        common = {"text": words, "size": px, "bold": True, "ax": 0.5, "ay": 0.5}
+        shadow = g.make("text", x + px * 0.06, y + px * 0.06, {**common, "color": "#000000", "alpha": 0.55, "z": 1e5}, own=False)
+        front = g.make("text", x, y, {**common, "color": c, "z": 1e5 + 1}, own=False)
+        self.pops.append([front, shadow, 0.0, x, y, px])
+        while len(self.pops) > 80:
+            for s in self.pops.pop(0)[:2]:
+                s.remove()
+
+    def move_pops(self, dt):
+        """2D pop text floats up and fades (its sprites are tgame's own: game:clear leaves them to finish)."""
+        keep = []
+        for pop in self.pops:
+            front, shadow, age, x, y, px = pop
+            age += dt
+            if age >= POP_SECONDS:
+                front.remove()
+                shadow.remove()
+                continue
+            f = age / POP_SECONDS
+            rise = (1 - (1 - f) ** 3) * max(40.0, px * 1.6)
+            alpha = 1.0 if f < 0.55 else 1 - (f - 0.55) / 0.45
+            grow = 1 + 0.3 * math.sin(min(1.0, f / 0.22) * math.pi)
+            front.send(y=y - rise, alpha=round(alpha, 3), scale=round(grow, 3))
+            shadow.send(y=y - rise + px * 0.06, alpha=round(alpha * 0.55, 3), scale=round(grow, 3))
+            pop[2] = age
+            keep.append(pop)
+        self.pops = keep
+
+    # ---- the weather (3D)
+    def weather(self, kind, strength):
+        g = self.game
+        name = g.rt.text(kind).strip().lower()
+        name = WEATHER_WORDS.get(name, name)
+        if name not in WEATHERS:
+            raise g.rt.error(weather_problem(name))
+        k = g.num(strength, ":weather")
+        if not 0 <= k <= 2:
+            raise g.rt.error(":weather needs a strength from 0 to 2 (1 is normal), like world:weather(\"rain\", 1.5).")
+        self.weather_, self.strength = (name, k) if k > 0 else ("none", 0.0)
+        self.send("weather", self.target(), self.weather_, self.strength)
+        self.sky_changed()
+        if self.weather_ == "none" and self.hour is None:
+            self.show_sky()  # back to the plain sky, which the world shows again from now on
+
+    def grounds(self):
+        """The page's nodes of the ground: the land, world:ground and world:island (they look wet in the rain)."""
+        g = self.game
+        ids = [int(t.node) for t in g.things if getattr(t, "floor", False) and t.alive]
+        if g.land is not None:
+            ids.append(int(g.land.node))
+        return ids
+
+    # ---- the time of day (3D)
+    def day_cycle(self, seconds):
+        g = self.game
+        secs = g.num(seconds, ":day_cycle")
+        if secs != 0 and secs < 2:
+            raise g.rt.error(":day_cycle needs how many seconds a whole day takes (2 or more), like world:day_cycle(120). "
+                             "world:day_cycle(0) stops the time where it is.")
+        if self.hour is None:
+            self.hour = float(SKY_HOURS.get(g.sky_name, 12))
+        self.cycle = float(secs)
+        self.sky_changed()
+
+    def time_of_day(self, hour):
+        g = self.game
+        if hour is None:
+            return tidy(self.hour if self.hour is not None else SKY_HOURS.get(g.sky_name, 12))
+        h = g.num(hour, ":time_of_day")
+        if not 0 <= h <= 24:
+            raise g.rt.error(":time_of_day needs an hour from 0 to 24 (18 is 6 pm), like world:time_of_day(18).")
+        self.hour = h % 24
+        self.sky_changed()
+        return None
+
+    def chose_sky(self):
+        """world:sky: a sky the program picks stops the day where it is (the weather still changes it)."""
+        self.hour, self.cycle = None, 0.0
+        self.look_sent = None
+        if self.stars:
+            self.stars = 0.0
+            self.send("stars", self.target(), 0)
+
+    # ---- the sky they make
+    def sky_changed(self):
+        """The sky goes again before the next frame (in Tuff Engine's preview, which has no frames, right away)."""
+        self.look_sent = None
+        if not self.live:
+            self.show_sky()
+
+    def look_key(self):
+        """What the sky is made from, besides the time: when one of these changes, the sky goes again."""
+        g = self.game
+        land = g.land.size if g.land is not None else None
+        return (g.sky_name, g.fog_far, g.sun_strength, land, self.weather_, self.strength, len(self.grounds()))
+
+    def day_look(self, hour):
+        """The sky at an hour, as SKIES has them: a mix of the two skies either side of it in DAY."""
+        h = hour % 24
+        a, b, t = "night", "night", 0.0
+        for (h0, s0), (h1, s1) in zip(DAY, DAY[1:]):
+            if h0 <= h <= h1:
+                a, b, t = s0, s1, ease((h - h0) / (h1 - h0))
+                break
+        A, B = SKIES[a], SKIES[b]
+
+        def lerp(p, q):
+            return p + (q - p) * t
+        return {"sky": [mix_color(p, q, t) for p, q in zip(A["sky"], B["sky"])], "fog": mix_color(A["fog"], B["fog"], t),
+                "sun": (mix_color(A["sun"][0], B["sun"][0], t), lerp(A["sun"][1], B["sun"][1])),
+                "hemi": (mix_color(A["hemi"][0], B["hemi"][0], t), mix_color(A["hemi"][1], B["hemi"][1], t),
+                         lerp(A["hemi"][2], B["hemi"][2])),
+                "at": sun_at(h), "far": lerp(A["far"], B["far"]), "stars": (a == "night") * (1 - t) + (b == "night") * t}
+
+    def weathered(self, look):
+        """The sky with the weather: rain makes it greyer and darker, with less sun and thicker fog that hides the
+        stars; snow makes it paler, with a little less sun and some fog."""
+        k = self.strength if self.weather_ != "none" else 0.0
+        if not k:
+            return look
+        w = min(1.0, k)
+        rain = self.weather_ == "rain"
+
+        def grey(c):
+            r, g_, b = _rgb(c)
+            lum = 0.3 * r + 0.59 * g_ + 0.11 * b
+            if rain:
+                return mix_color(c, _hex([lum * 0.72, lum * 0.75, lum * 0.8]), 0.78 * w)
+            lum = min(1.0, lum * 1.05 + 0.18)
+            return mix_color(c, _hex([lum * 0.97, lum * 0.99, lum]), 0.75 * w)
+        out = dict(look)
+        out["sky"] = [grey(c) for c in look["sky"]]
+        out["fog"] = grey(look["fog"]) if look["fog"] else None
+        out["sun"] = (grey(look["sun"][0]), look["sun"][1] * (1 - (0.6 if rain else 0.3) * w))
+        out["hemi"] = (grey(look["hemi"][0]), look["hemi"][1], look["hemi"][2] * ((1 - 0.1 * w) if rain else (1 + 0.05 * w)))
+        out["thick"] = 1 + (0.9 if rain else 0.55) * k  # the fog comes this many times closer
+        out["stars"] = look.get("stars", 0) * (1 - w)
+        return out
+
+    def show_sky(self):
+        """Sends the sky (as World3D.apply_sky does) for the time of day and the weather."""
+        g = self.game
+        self.look_sent = self.look_key()
+        base = self.day_look(self.hour) if self.hour is not None else {**SKIES[g.sky_name], "stars": 0.0}
+        s = self.weathered(base)
+        far = g.fog_far if g.fog_far is not None else g.sky_far(s)
+        far = far / s.get("thick", 1)
+        g.view.set(g.scene, sky=s["sky"], bg=s["sky"][1], fog=[s["fog"], far * 0.3, far] if (s["fog"] and far) else None)
+        g.view.set(g.hemi, color=s["hemi"][0], ground=s["hemi"][1], intensity=s["hemi"][2])
+        x, y, z = s["at"]
+        g.view.set(g.sun_node, color=s["sun"][0], intensity=s["sun"][1] * g.sun_strength, x=x, y=y, z=z)
+        stars = round(s["stars"], 3)
+        if stars != self.stars:
+            self.stars = stars
+            self.send("stars", self.target(), stars)
+        self.send("wet", self.target(), min(1.0, self.strength) if self.weather_ == "rain" else 0, self.grounds())
+        # The next sky goes when the day has moved on a little (every frame for a day of a few seconds).
+        self.sky_due = min(0.1, self.cycle / 1200) if self.cycle else 0.0
+
+    def state(self):
+        """For the autopilot's reports: Python's side and the page's."""
+        out = {"speed": round(self.speed, 3), "slow": self.slow and [self.slow[0], self.slow[1] and round(self.slow[1], 2)],
+               "weather": self.weather_, "strength": self.strength,
+               "hour": None if self.hour is None else round(self.hour, 3), "cycle": self.cycle, "stars": self.stars,
+               "pops": len(self.pops)}
+        if self.live and not self.game.closed:
+            try:
+                out["page"] = self.game.view.ask(0, "fx", "info")
+            except Exception as exc:
+                out["page"] = {"error": str(exc)}
+        return out
+
+
+# ---------------------------------------------------------------- physics on sprites and objects
+
+def physics_problem(word):
+    return (f"Physics can be \"dynamic\" (it falls and gets pushed), \"static\" (it never moves), \"kinematic\" (your code "
+            f"moves it) or \"off\", not \"{word}\".{did_you_mean(word, PHYSICS_KINDS)}")
+
+
+class Physical:
+    """What sprites (2D) and objects (3D) share for physics. A thing with a body of its own (thing:physics()) is in the
+    page's physics (Rapier, see Physics): a dynamic one falls, tumbles, bounces and gets pushed, and the page tells
+    Python where it went every frame; a static one never moves; a kinematic one is moved by the program and pushes
+    dynamic ones out of its way. push, spin and velocity work on dynamic ones."""
+    D = 3  # numbers in a push, a velocity, a position (a sprite's: 2)
+    EXAMPLE = "crate"
+
+    def phys_init(self):
+        self.phys_kind = None  # its own body: None, "dynamic", "static" or "kinematic"
+        self.mass_ = self.bounce_ = self.friction_ = None
+        self.hit_fns = []
+        self.vel = [0.0] * self.D  # its speed, as physics last reported it
+        self.phys_sent = None  # its body, as the page last heard of it
+        self.moved_in = 0  # the batch that took the program's last move of its body to the page (see phys_moved)
+
+    def phys_name(self):
+        """What it's called in a message ("box:mass needs...")."""
+        return self.kind
+
+    def phys_changed(self):
+        if self.game.phys is not None:
+            self.game.phys.sync(self)
+
+    def dynamic(self):
+        return self.phys_kind == "dynamic" and self.game.phys is not None
+
+    def phys_moved(self):
+        """The program moved its body (or set its speed): the page's reports from before that reached the page are
+        old, and don't put it back (a ball sent back up as it lands isn't sent up twice)."""
+        if self.dynamic() and self.game.phys.live:
+            self.moved_in = self.game.view.batch
+
+    def need_dynamic(self, what):
+        if self.dynamic():
+            return
+        n = self.phys_name()
+        if self.phys_kind is None:
+            raise self.rt.error(f"{n}:{what} works on things with physics. Turn it on first, like {self.EXAMPLE}:physics().")
+        raise self.rt.error(f"A {self.phys_kind} {n} doesn't move by itself, so :{what} can't move it. "
+                            f"{n}:physics() lets it fall and be pushed.")
+
+    def phys_vector(self, args, what, example):
+        """D numbers (or one list of them), for push, spin and velocity."""
+        rt = self.rt
+        given = [a for a in args if a is not MISSING]
+        if len(given) == 1 and isinstance(rt.plain(given[0]), list):
+            given = list(rt.plain(given[0]))
+        if len(given) != self.D:
+            raise rt.error(f"{self.phys_name()}:{what} needs {'x, y and z' if self.D == 3 else 'x and y'}, like {example}.")
+        return [rt.number(v, f":{what}") for v in given]
+
+    def physics(self, kind=MISSING):
+        rt = self.rt
+        if kind is MISSING:
+            k = "dynamic"
+        elif isinstance(rt.plain(kind), bool):
+            k = "dynamic" if rt.plain(kind) else "off"
+        else:
+            k = rt.text(kind).strip().lower()
+            k = PHYSICS_WORDS.get(k, k)
+            if k not in PHYSICS_KINDS:
+                raise rt.error(physics_problem(k))
+        self.can_have_physics(k)
+        ph = self.game.physics_on()
+        was = self.phys_kind
+        self.phys_kind = None if k == "off" else k
+        if k == "dynamic":
+            self.stop_moving()  # from now on physics moves it
+        elif was == "dynamic":
+            self.push()  # it stays where physics left it
+            self.after_physics()
+        ph.sync(self)
+        return self.native
+
+    def can_have_physics(self, kind):
+        pass
+
+    def stop_moving(self):
+        self.vx = self.vy = self.spin_speed = 0.0
+        if self.D == 3:
+            self.vz = 0.0
+        self.busy()
+
+    def after_physics(self):
+        pass
+
+    def mass(self, kg):
+        m = self.num(kg, ":mass")
+        if m <= 0:
+            raise self.rt.error(f"{self.phys_name()}:mass needs a number above 0, like {self.EXAMPLE}:mass(2).")
+        self.mass_ = m
+        self.phys_changed()
+        return self.native
+
+    def bounce(self, amount=MISSING):
+        v = self.rt.plain(amount)
+        if amount is MISSING or isinstance(v, (str, bool)) or not 0 <= self.num(amount, ":bounce") <= 1:
+            edges = " To bounce off the window's edges, use :on_edge(\"bounce\")." if self.D == 2 else ""
+            raise self.rt.error(f"{self.phys_name()}:bounce needs how bouncy it is, from 0 to 1, like "
+                                f"{self.EXAMPLE}:bounce(0.6).{edges}")
+        self.bounce_ = self.num(amount, ":bounce")
+        self.phys_changed()
+        return self.native
+
+    def friction(self, amount):
+        f = self.num(amount, ":friction")
+        if f < 0:
+            raise self.rt.error(f"{self.phys_name()}:friction needs a number of 0 or more, like {self.EXAMPLE}:friction(0.4).")
+        self.friction_ = f
+        self.phys_changed()
+        return self.native
+
+    def kick(self, x, y=MISSING, z=MISSING):  # thing:push (push() sends where a thing is)
+        v = self.phys_vector([x, y, z], "push", f"{self.EXAMPLE}:push(0, 5, -3)" if self.D == 3 else "ball:push(200, -300)")
+        self.need_dynamic("push")
+        self.game.phys.send("push", int(self.node), *v)
+        return self.native
+
+    def velocity(self, x=MISSING, y=MISSING, z=MISSING):
+        if x is MISSING:
+            return [tidy(v) for v in self.velocity_now()]
+        v = self.phys_vector([x, y, z], "velocity", f"{self.EXAMPLE}:velocity(0, 0, -4)" if self.D == 3 else "ball:velocity(100, 0)")
+        if self.dynamic():
+            self.vel = list(v)
+            self.game.phys.send("velocity", int(self.node), *v)
+            self.phys_moved()
+        else:  # without physics, it moves that fast by itself (like :speed)
+            self.set_speed(v)
+        return self.native
+
+    def velocity_now(self):
+        """Its speed each way: physics's, or the one it moves by itself."""
+        if self.dynamic():
+            return self.vel
+        return [self.vx, self.vy] + ([self.vz] if self.D == 3 else [])
+
+    def set_speed(self, v):
+        self.vx, self.vy = v[0], v[1]
+        if self.D == 3:
+            self.vz = v[2]
+        self.busy()
+
+    def on_hit(self, fn):
+        self.hit_fns.append(self.game.lib.check_fn(fn, ":on_hit"))
+        self.phys_changed()  # its body reports hits now
+        return self.native
+
+    def sleep(self):
+        self.need_dynamic("sleep")
+        self.game.phys.send("sleep", int(self.node))
+        return self.native
+
+    def wake(self):
+        self.need_dynamic("wake")
+        self.game.phys.send("wake", int(self.node))
+        return self.native
+
+    def phys_dump(self):
+        """For Tuff Engine (tuff.py --scene): its physics settings, or None."""
+        if self.phys_kind is None:
+            return None
+        return {"kind": self.phys_kind, "mass": tidy(self.mass_) if self.mass_ is not None else None,
+                "bounce": tidy(self.bounce_) if self.bounce_ is not None else None,
+                "friction": tidy(self.friction_) if self.friction_ is not None else None}
 
 
 # ---------------------------------------------------------------- 2D
@@ -931,8 +1597,10 @@ class Layer:
         return self.make("image", x, y, {"src": url, "w": w, "h": h, "file": g.rt.text(file)}).native
 
     def clear_layer(self):
+        """hud:clear(): removes what the program drew on it. tgame's own (the "E: Talk" hint, the crosshair, the pause
+        screen) stay, as with game:clear."""
         for s in list(self.sprites):
-            if s.layer is self:
+            if s.layer is self and s in self.game.things:
                 s.remove()
 
 
@@ -952,11 +1620,36 @@ class Game2D(Game, Layer):
     KIND = "game"
     BACKGROUND = "#101218"
     NAMES = Game.NAMES + [("box", "box"), ("circle", "circle"), ("line", "line"), ("text", "text"), ("image", "image"),
-                          ("camera", "camera")]
+                          ("camera", "camera"), ("gravity", "gravity"), ("explode", "explode"), ("walls", "walls")]
 
     def __init__(self, lib, title, width, height):
         Layer.__init__(self, self, scrolls=True)
         Game.__init__(self, lib, title, width, height)
+
+    def explode(self, x=MISSING, y=MISSING, strength=MISSING, radius=MISSING):
+        x, y, (strength, radius) = self.place([x, y, strength, radius], (600, 150), "explode")
+        s, r = self.num(strength, ":explode"), self.num(radius, ":explode")
+        if r <= 0:
+            raise self.rt.error(":explode needs a radius above 0 (how far it reaches), like game:explode(400, 300, 600, 150).")
+        self.physics_on().send("explode", x, y, s, r)
+
+    def walls(self, on=True):
+        """The window's edges as walls that physics sprites bounce off (or not, with game:walls(false))."""
+        ph = self.physics_on()
+        ph.walls_ = self.rt.truthy(on)
+        ph.send("walls", ph.walls_, self.W, self.H)
+
+    def pop_text(self, text="", x=MISSING, y=MISSING, color=MISSING, size=MISSING):
+        t = thing_of(x)
+        if isinstance(t, Sprite):  # over a sprite: game:pop_text("+1", coin)
+            given = [a for a in (y, color, size) if a is not MISSING]
+            if len(given) > 2:
+                raise self.rt.error(":pop_text got too many inputs.")
+            color, size = given + ["white", 32][len(given):]
+            x, y = t.x, t.y - max(t.h, t.r * 2, t.size_ if t.shape == "text" else 0) * t.k / 2 - 8
+        else:
+            x, y, (color, size) = self.place([x, y, color, size], ("white", 32), "pop_text")
+        self.effects().pop_text(text, x, y, None, color, size)
 
     def setup(self):
         self.bg = self.BACKGROUND
@@ -1015,7 +1708,7 @@ class Game2D(Game, Layer):
         return self.cx, self.cy, self.cx + self.W, self.cy + self.H
 
 
-class Sprite:
+class Sprite(Physical):
     """A shape, some text or a picture in a 2D game (or on a HUD)."""
     NAMES = [
         ("x", "get_x"), ("y", "get_y"), ("spot", "spot"), ("move", "move"), ("move_to", "move_to"), ("glide", "glide"),
@@ -1025,7 +1718,11 @@ class Sprite:
         ("color", "set_color"), ("layer", "set_layer"), ("flip", "flip"), ("align", "align"), ("hide", "hide"),
         ("show", "show"), ("remove", "remove"), ("set", "set"), ("get", "get"), ("value", "value"),
         ("clicked", "clicked"), ("shake", "shake"),
+        ("physics", "physics"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
+        ("velocity", "velocity"), ("on_hit", "on_hit"), ("sleep", "sleep"), ("wake", "wake"),
     ]
+    D = 2
+    EXAMPLE = "ball"
     counter = 0
 
     def __init__(self, layer, shape, x, y, props):
@@ -1055,6 +1752,8 @@ class Sprite:
         self.alive = True
         self.hidden = False
         self.dx = self.dy = 0.0  # a shake's offset, drawn but not where the sprite is
+        self.phys_init()
+        self.spin_rate = 0.0  # physics: how fast it turns (degrees a second), as the page last reported
         self.node = g.view.shape(layer.node, shape, x=self.x, y=self.y, **props)
         layer.sprites.append(self)
         g.by_node[int(self.node)] = self
@@ -1075,7 +1774,15 @@ class Sprite:
             self.game.view.set(self.node, **props)
 
     def push(self):
+        if self.dynamic():  # its body goes there; a shake only nudges where it's drawn
+            self.send(x=self.x, y=self.y, nudge=[self.dx, self.dy])
+            self.phys_moved()
+            return
         self.send(x=self.x + self.dx, y=self.y + self.dy)
+
+    def push_rot(self):
+        self.send(rot=self.rot)
+        self.phys_moved()
 
     def moved(self):
         if self.edge != "none":
@@ -1087,6 +1794,44 @@ class Sprite:
             self.game.movers.add(self)
         else:
             self.game.movers.discard(self)
+
+    # ---- physics (see Physical)
+    def phys_name(self):
+        return {"rect": "box"}.get(self.shape, self.shape)
+
+    def can_have_physics(self, kind):
+        if self.layer is not self.game:
+            raise self.rt.error("Only sprites in the game can use physics, not the ones on the HUD.")
+
+    def kick(self, x, y=MISSING):
+        return Physical.kick(self, x, y)
+
+    def velocity(self, x=MISSING, y=MISSING):
+        return Physical.velocity(self, x, y)
+
+    def phys_spec(self):
+        """Its body for the page (physics.js), in the game's pixels: a box, a ball, or a line's capsule."""
+        if not self.alive or self.phys_kind is None or self.game.phys is None:
+            return None
+        k = self.k
+        if self.shape == "circle":
+            shape, size = "ball", tidy(max(0.5, self.r * k))
+        elif self.shape == "line":
+            (ax, ay), (bx, by) = self.points
+            length = math.hypot(bx - ax, by - ay) * k
+            turn = math.degrees(math.atan2(by - ay, bx - ax)) - 90  # a capsule lies along its own y
+            shape, size = "capsule", [tidy(length / 2), 2, tidy((ax + bx) / 2 * k), tidy((ay + by) / 2 * k), tidy(turn)]
+        else:
+            hw, hh = self.half()
+            shape, size = "box", [tidy(hw), tidy(hh)]
+        return {"kind": self.phys_kind, "shape": shape, "size": size, "mass": self.mass_, "bounce": self.bounce_,
+                "friction": self.friction_, "hits": bool(self.hit_fns)}
+
+    def from_physics(self, b):
+        """Where physics moved it: [id, x, y, angle, vx, vy, spin] (it isn't sent back)."""
+        self.x, self.y, self.rot = b[1], b[2], b[3] % 360
+        self.vel = [b[4], b[5]]
+        self.spin_rate = b[6]
 
     # ---- size and collisions (rotation is left out: boxes stay boxes)
     def half(self):
@@ -1183,19 +1928,23 @@ class Sprite:
 
     def turn(self, degrees):
         self.rot = (self.rot + self.num(degrees, ":turn")) % 360
-        self.send(rot=self.rot)
+        self.push_rot()
         return self.native
 
     def turn_to(self, degrees):
         self.rot = self.num(degrees, ":turn_to") % 360
-        self.send(rot=self.rot)
+        self.push_rot()
         return self.native
 
     def angle(self):
         return tidy(self.rot)
 
     def spin(self, degrees_per_second):
-        self.spin_speed = self.num(degrees_per_second, ":spin")
+        n = self.num(degrees_per_second, ":spin")
+        if self.dynamic():  # with physics it's a twist (an angular kick), like 3D's
+            self.game.phys.send("spin", int(self.node), n)
+            return self.native
+        self.spin_speed = n
         self.busy()
         return self.native
 
@@ -1208,11 +1957,19 @@ class Sprite:
         cx, cy = self.center()
         if tx != cx or ty != cy:
             self.rot = math.degrees(math.atan2(ty - cy, tx - cx)) % 360
-            self.send(rot=self.rot)
+            self.push_rot()
         return self.native
 
-    def speed(self, vx, vy=0):
-        self.vx, self.vy = self.num(vx, ":speed"), self.num(vy, ":speed")
+    def speed(self, vx=MISSING, vy=0):
+        if vx is MISSING:  # how fast it goes (pixels a second)
+            return tidy(math.hypot(*self.velocity_now()))
+        v = [self.num(vx, ":speed"), self.num(vy, ":speed")]
+        if self.dynamic():
+            self.vel = v
+            self.game.phys.send("velocity", int(self.node), *v)
+            self.phys_moved()
+            return self.native
+        self.vx, self.vy = v
         self.busy()
         return self.native
 
@@ -1303,11 +2060,15 @@ class Sprite:
             self.send(size=a)
         else:
             self.send(lw=a)
+        if self.phys_kind is not None:
+            self.phys_changed()  # its body's size too
         return self.native
 
     def set_scale(self, k):
         self.k = self.num(k, ":scale")
         self.send(scale=self.k)
+        if self.phys_kind is not None:
+            self.phys_changed()
         return self.native
 
     def set_color(self, color):
@@ -1353,6 +2114,8 @@ class Sprite:
             self.game.things.pop(self, None)
             if self in self.layer.sprites:
                 self.layer.sprites.remove(self)
+            if self.game.phys is not None and self.phys_sent is not None:
+                self.game.phys.forget(self)  # a hit it was in still names it
 
     # ---- its own values, and text
     def set(self, a, b=MISSING):
@@ -1393,7 +2156,7 @@ class Sprite:
 
     # ---- every frame, while it moves by itself
     def tick(self, dt):
-        moved = False
+        moved = glided = False
         if self.vx or self.vy:
             self.x += self.vx * dt
             self.y += self.vy * dt
@@ -1407,7 +2170,7 @@ class Sprite:
             if a[0] == "glide":
                 e = ease(t)
                 self.x, self.y = a[3] + (a[5] - a[3]) * e, a[4] + (a[6] - a[4]) * e
-                moved = True
+                moved = glided = True
             elif a[0] == "shake":
                 self.dx = math.sin(a[1] * 70) * 6 * (1 - t)
                 moved = True
@@ -1415,10 +2178,14 @@ class Sprite:
                 self.anims.remove(a)
                 if a[0] == "shake":
                     self.dx = 0.0
-        if moved:
+        if moved and self.dynamic() and not glided:  # physics moves it: a shake only nudges where it's drawn
+            self.send(nudge=[self.dx, self.dy])
+        elif moved:
             if self.edge != "none":
                 self.apply_edge(True)
             self.push()
+            if self.dynamic():  # a glide carries it: no speed builds up meanwhile
+                self.game.phys.send("velocity", int(self.node), 0, 0)
         self.busy()
 
 
@@ -1507,7 +2274,13 @@ class World3D(Game):
         ("island", "island"), ("box", "box"), ("sphere", "sphere"), ("cylinder", "cylinder"), ("cone", "cone"),
         ("plane", "plane"), ("spawn", "spawn"), ("player", "player"), ("camera_at", "camera_at"),
         ("look_at", "look_at"), ("follow", "follow"), ("orbit", "orbit"), ("looking_at", "looking_at"),
-        ("terrain", "terrain"), ("lighting", "lighting"),
+        ("terrain", "terrain"), ("lighting", "lighting"), ("gravity", "gravity"), ("explode", "explode"),
+        ("car", "car"), ("ragdoll", "ragdoll"),
+        ("weather", "weather"), ("day_cycle", "day_cycle"), ("time_of_day", "time_of_day"),
+        ("door", "door"),
+        ("jump_pad", "jump_pad"), ("boost_pad", "boost_pad"),
+        ("lock_mouse", "lock_mouse"), ("unlock_mouse", "unlock_mouse"), ("mouse_locked", "mouse_locked"),
+        ("auto_lock", "auto_lock"),
     ]
 
     def setup(self):
@@ -1524,6 +2297,7 @@ class World3D(Game):
         self.cam_look = None
         self.orbit_state = None
         self.the_player = None
+        self.driving = None  # the car the keys drive (car:drive)
         self.island_r = None
         self.land = None  # the Terrain, once world:terrain made it
         self.lighting_name = "simple"
@@ -1537,6 +2311,7 @@ class World3D(Game):
         self.camera_dirty = True
         self.crosshair = None
         self.hint = None
+        self.interact = None  # talking, grabbing, doors and keys (Interaction), once something uses them
 
     def hud(self):
         if self.hud_layer is None:
@@ -1563,6 +2338,8 @@ class World3D(Game):
         name = self.rt.text(preset).strip().lower()
         if name not in SKIES:
             raise self.rt.error(f"The sky can be {', '.join(SKIES)}, not \"{name}\".")
+        if self.fx is not None:
+            self.fx.chose_sky()
         self.apply_sky(name)
 
     def background(self, color):
@@ -1601,6 +2378,7 @@ class World3D(Game):
         t = Thing(self, "ground", 0, 0, 0, (sz, 0.01, sz), [("plane", {"w": sz, "h": sz, "rx": -90, "color": c, "shadow": True}, True)])
         t.solid_ = False
         t.floor = True
+        t.floor_color = c  # for a minimap (the HUD)
         return t.native
 
     def island(self, size=80):
@@ -1626,6 +2404,8 @@ class World3D(Game):
         if name not in TERRAIN_STYLES:
             raise self.rt.error(style_problem(name))
         self.land = Terrain(self, sz, name)
+        if self.phys is not None:
+            self.phys.dirty.add(self.land)
         s = SKIES[self.sky_name]
         if self.fog_far is None and s["fog"] and s["far"]:
             far = self.sky_far(s)
@@ -1644,6 +2424,9 @@ class World3D(Game):
         return y + self.land.at(x, z) if self.land is not None else y
 
     def before_frame(self):
+        if self.is_paused != getattr(self, "page_paused", False) and SCENE is None:
+            self.page_paused = self.is_paused  # the page's animations (anim.js) hold still while the game is paused
+            self.view.set(self.scene, attrs={"data-paused": self.page_paused})
         if self.land is not None and self.land.dirty:
             self.land.push()
 
@@ -1744,6 +2527,90 @@ class World3D(Game):
         t.push_rotation()
         return t.native
 
+    # ---- physics
+    def explode(self, x=MISSING, y=MISSING, z=MISSING, strength=MISSING, radius=MISSING):
+        x, y, z, (strength, radius) = self.where([x, y, z, strength, radius], (10, 6), "explode")
+        s, r = self.num(strength, ":explode"), self.num(radius, ":explode")
+        if r <= 0:
+            raise self.rt.error(":explode needs a radius above 0 (how far it reaches), like world:explode(0, 0, 0, 12, 8).")
+        self.physics_on().send("explode", x, self.above(x, y, z), z, s, r)
+
+    def car(self, x=MISSING, y=MISSING, z=MISSING, color=MISSING):
+        x, y, z, (color,) = self.where([x, y, z, color], ("red",), "car")
+        return Car(self, x, self.above(x, y, z), z, color).native
+
+    def ragdoll(self, x=MISSING, y=MISSING, z=MISSING, color=MISSING):
+        x, y, z, (color,) = self.where([x, y, z, color], ("blue",), "ragdoll")
+        return Ragdoll(self, x, self.above(x, y, z), z, color).native
+
+    # ---- effects (Effects): pop text, the weather, the time of day
+    def pop_text(self, text="", x=MISSING, y=MISSING, z=MISSING, color=MISSING, size=MISSING):
+        t = thing_of(x)
+        if isinstance(t, (Thing, Player)):  # over a thing: world:pop_text("+1", coin)
+            given = [a for a in (y, z, color, size) if a is not MISSING]
+            if len(given) > 2:
+                raise self.rt.error(":pop_text got too many inputs.")
+            color, size = given + ["white", 34][len(given):]
+            x, y, z = t.x, t.y + t.height() + 0.15, t.z
+        else:
+            x, y, z, (color, size) = self.where([x, y, z, color, size], ("white", 34), "pop_text")
+            y = self.above(x, y, z)
+        self.effects().pop_text(text, x, y, z, color, size)
+
+    def weather(self, kind="rain", strength=1):
+        self.effects().weather(kind, strength)
+
+    def day_cycle(self, seconds=120):
+        self.effects().day_cycle(seconds)
+
+    def time_of_day(self, hour=None):
+        if hour is None and self.fx is None:
+            return tidy(SKY_HOURS.get(self.sky_name, 12))
+        return self.effects().time_of_day(hour)
+    # ---- talking, grabbing, doors and keys (see Interaction)
+    def interaction(self):
+        if self.interact is None:
+            self.interact = Interaction(self)
+        return self.interact
+
+    def door(self, x=MISSING, y=MISSING, z=MISSING, color=MISSING):
+        x, y, z, (color,) = self.where([x, y, z, color], ("wood",), "door")
+        return Door(self, x, self.above(x, y, z), z, color).native
+    # ---- level pieces: jump pads, boost pads and things on paths (Level, after the ragdoll)
+    def level(self):
+        """The world's level pieces, made by the first one."""
+        if getattr(self, "level_", None) is None:
+            self.level_ = Level(self)
+        return self.level_
+
+    def jump_pad(self, x=MISSING, y=MISSING, z=MISSING, power=MISSING):
+        return self.level().make_pad("jump", [x, y, z, power])
+
+    def boost_pad(self, x=MISSING, y=MISSING, z=MISSING, power=MISSING):
+        return self.level().make_pad("boost", [x, y, z, power])
+
+    def stop_chase(self):
+        """The camera stops following the car it drives (the program put the camera somewhere else)."""
+        if self.cam_mode == "drive":
+            self.cam_mode = "fixed"
+            if self.phys is not None:
+                self.phys.send("chase", None)
+
+    def drive_keys(self):
+        """The keys, as the controls of the car being driven (sent when they change)."""
+        car = self.driving
+        if not car.alive:
+            self.driving = None
+            self.stop_chase()
+            return
+        d = self.down
+        controls = (0, 0, 0) if self.is_paused else (
+            ("w" in d or "up" in d) - ("s" in d or "down" in d), ("a" in d or "left" in d) - ("d" in d or "right" in d),
+            int("space" in d))
+        if controls != car.controls:
+            car.controls = controls
+            self.phys.send("drive", int(car.node), *controls)
+
     # ---- the camera and the player
     def player(self, mode="first person"):
         m = self.rt.text(mode).strip().lower().replace("-", " ").replace("_", " ")
@@ -1758,13 +2625,16 @@ class World3D(Game):
         self.the_player = Player(self, m)
         if SCENE is not None: SCENE.player_made = list(SCENE.interp.lines)
         self.cam_mode = "player"
-        self.view.set(self.scene, clicklock=True)
+        self.view.set(self.scene, clicklock=self.clicks_lock())
+        if getattr(self, "hud_js", None) is not None:  # a minimap or an arrow made first measures from the player now
+            self.hud_js.player()
         return self.the_player.native
 
     def camera_at(self, x=MISSING, y=MISSING, z=MISSING):
         x, y, z, _ = self.where([x, y, z], (), "camera_at")
         if self.cam_mode == "player":
             raise self.rt.error("The player has the camera. Use player:move_to to move the player instead.")
+        self.stop_chase()
         self.cam_mode = "fixed"
         self.cam = [x, self.above(x, y, z), z]
         if self.cam_look is not None:
@@ -1797,6 +2667,7 @@ class World3D(Game):
             raise self.rt.error(f"world:follow needs an object to follow, not {self.rt.what(target)}.")
         if self.cam_mode == "player":
             raise self.rt.error("The player has the camera, so the world can't follow something else.")
+        self.stop_chase()
         self.cam_mode = "follow"
         self.cam_target = (t, self.num(distance, ":follow"), self.num(height, ":follow"))
         self.camera_dirty = True
@@ -1811,6 +2682,7 @@ class World3D(Game):
             tx, ty, tz, _ = self.where([x, y, z], (), "orbit")
             target = (tx, self.above(tx, ty, tz), tz)
         dist = max(4.0, math.dist(self.cam, self.point_of(target)))
+        self.stop_chase()
         self.cam_mode = "orbit"
         self.orbit_state = {"target": target, "yaw": self.cam_yaw + 180, "elev": 25.0, "dist": dist}
         self.camera_dirty = True
@@ -1906,12 +2778,145 @@ class World3D(Game):
     def lock_changed(self):
         if self.hint is not None:  # "Click the game to look around": not while it's locked, or under a screen
             covered = self.ui is not None and self.ui.showing
-            self.hint.hide() if (self.locked or self.fake_lock or covered) else self.hint.show()
+            no_click = not (self.clicks_lock() or self.lock_want)  # world:auto_lock(false): a click doesn't lock it
+            self.hint.hide() if (self.locked or self.fake_lock or covered or no_click) else self.hint.show()
+
+    # ---- the mouse: locked for looking around, or free (to read a note, use a shop or a menu)
+    auto_lock_on = None  # world:auto_lock(on); None: a click on the game locks the mouse once there's a player
+    lock_want = False  # world:lock_mouse() the browser hasn't allowed yet: the next click on the game locks it
+    freeing = False  # tgame let go of the mouse itself, so the unlock coming isn't the player's Escape
+    fake_freed = False  # a screen let go of the autopilot's pretend lock: it comes back when the lock is asked again
+    escaped_at = -1e9  # when the player let go of the mouse with Escape
+    escaped = False  # the player let go of it with Escape, and nothing has locked it since
+    asked_at = -1e9  # when the page was last asked to lock it
+    mouse_js = False  # MOUSE_JS is on the page
+
+    def lock_mouse(self):
+        """Lock the mouse for looking around: now if the page allows it (tuff_view's hold: while the game's window has
+        the focus; the browser's own lock: in a click or a key press, or just after one), or else on the next click on
+        the game. Under a screen, once the last screen hides. After the player let go of it with Escape, only their
+        next click on the game locks it (as browsers want), so a program that asks every frame doesn't take the mouse
+        straight back, or ask the page 60 times a second."""
+        ui = self.ui
+        if ui is not None and ui.showing:
+            ui.relock = True
+        elif not self.mouse_locked():
+            if self.escaped or (self.lock_want and time.perf_counter() - self.asked_at < 1.0):
+                self.want(True)
+            else:
+                self.want_lock()
+        self.lock_changed()
+
+    def unlock_mouse(self):
+        """Let go of the mouse, and keep it free until lock_mouse or a click on the game."""
+        self.want(False)
+        if self.ui is not None:
+            self.ui.relock = self.ui.menu_played = False
+        self.free_mouse()
+        self.fake_freed = False
+        self.lock_changed()
+
+    def mouse_locked(self):
+        return bool(self.locked or self.fake_lock)
+
+    def auto_lock(self, on=True):
+        """Whether a click on the game locks the mouse (it does once there's a player): world:auto_lock(false)
+        leaves locking to the program (world:lock_mouse)."""
+        self.auto_lock_on = self.rt.truthy(on)
+        self.view.set(self.scene, clicklock=self.auto_lock_on)
+        self.lock_changed()
+
+    def clicks_lock(self):
+        return self.the_player is not None if self.auto_lock_on is None else self.auto_lock_on
+
+    def mouse_held(self):
+        """Is the mouse locked (or the autopilot acting as if it were), or did the player let go of it with Escape a
+        moment ago? The same Escape often opens a pause menu, and the lock comes back when it closes."""
+        return self.locked or self.fake_lock or time.perf_counter() - self.escaped_at < 0.6
+
+    def want(self, on):
+        """The next click on the game locks the mouse, even with auto_lock(false) (MOUSE_JS)."""
+        if on != self.lock_want:
+            self.lock_want = on
+            if SCENE is None:
+                self.view.set(self.scene, attrs={"data-tg-want": True if on else None})
+
+    def want_lock(self):
+        self.want(True)
+        self.ask_lock()
+
+    def ask_lock(self):
+        """Ask the page to lock the mouse now. The browser allows it only in a click or a key press, or just after
+        one, which is when this runs: a menu's button was clicked, or a screen's Close."""
+        if SCENE is not None or self.closed:
+            return
+        self.mouse_page()
+        self.view.js("window.__tgMouse.lock()")
+        self.asked_at = time.perf_counter()
+        if self.fake_freed:  # the autopilot acted as if it was locked: it is again, as a browser allows it here
+            self.fake_freed, self.fake_lock = False, True
+
+    def free_mouse(self):
+        if self.locked:
+            self.freeing = True
+        if SCENE is None:
+            self.view.call(0, "unlock")
+        if self.fake_lock:
+            self.fake_lock, self.fake_freed = False, True
+
+    def mouse_page(self):
+        if not self.mouse_js and SCENE is None:
+            self.mouse_js = True
+            self.view.js(MOUSE_JS)
+
+    def on_lock(self):
+        if self.locked:
+            self.want(False)
+            self.escaped = False
+            ui = self.ui
+            # Locked under a screen (asked for just before it showed): let go again until it's gone. A start
+            # screen's own click locks it on purpose, as it hides.
+            if ui is not None and ui.showing and not any(isinstance(s, StartScreen) and s.is_shown for s in ui.screens):
+                self.free_mouse()
+                ui.relock = True
+        elif self.freeing:
+            self.freeing = False
+        else:
+            self.escaped_at = time.perf_counter()
+            self.escaped = True
+
+    def covered(self, showing):
+        """A screen, the main menu or a splash showed or hid (GameUI.changed). The mouse is free while any of them
+        shows; when the last one goes, the lock comes back if it was locked before, and after a main menu (its Play
+        button starts the game) if a click on the game locks it."""
+        ui = self.ui
+        if showing:
+            if self.mouse_held():
+                self.free_mouse()
+                ui.relock = True
+            return
+        lock = ui.relock or (ui.menu_played and self.clicks_lock())
+        ui.relock = ui.menu_played = False
+        if lock:
+            self.want_lock()
+
+    def mouse_state(self):
+        """For the autopilot's reports."""
+        return {"locked": self.mouse_locked(), "asks": self.lock_asks, "want": self.lock_want, "auto": self.clicks_lock(),
+                "relock": bool(self.ui is not None and self.ui.relock)}
 
     def update(self, dt, real):
+        if self.interact is not None:
+            self.interact.update(dt)
+        if getattr(self, "level_", None) is not None:  # platforms move and pads launch, before the player walks
+            self.level_.frame(dt)
+        if self.driving is not None:
+            self.drive_keys()
         p = self.the_player
         if p is not None:
             p.update(dt, real)
+            if self.phys is not None:
+                self.phys.player_sync(p)
             return
         mode = self.cam_mode
         if mode == "follow":
@@ -1996,6 +3001,7 @@ class Terrain:
         self.sea = None  # [level, water node]
         self.edits = []  # for Tuff Engine (tuff.py --scene): each edit and the lines that made it
         self.alive = True
+        self.phys_sent = None  # with physics on, the land is a heightfield of its own heights (physics.js)
         self.dirty = True  # the heights go with the first frame, after the setup's edits
         self.node = world.view.obj(world.scene, "terrain", size=self.size, n=n, style=style, shadow=True)
         self.native = world.rt.native("terrain", methods(self, "terrain", self.NAMES, world.rt), self.show_text)
@@ -2003,6 +3009,9 @@ class Terrain:
 
     def show_text(self, nested=False):
         return f"<terrain {tidy(self.size)} wide>"
+
+    def phys_spec(self):
+        return {"kind": "static", "shape": "land"} if self.world.phys is not None else None
 
     def heights(self):
         """The heights to the hundredth of a metre (whole ones as 0, not 0.0: most of the land is often flat)."""
@@ -2121,7 +3130,8 @@ class Terrain:
         """What stands in this part of the land (objects and the player), with the land's height under each."""
         w = self.world
         out = [(t, self.at(t.x, t.z)) for t in w.things if isinstance(t, Thing) and t.alive and t.on_land
-               and not getattr(t, "floor", False) and x0 <= t.x <= x1 and z0 <= t.z <= z1]
+               and not getattr(t, "floor", False) and t.phys_kind != "dynamic"  # physics moves those with the land
+               and x0 <= t.x <= x1 and z0 <= t.z <= z1]
         p = w.the_player
         if p is not None and x0 <= p.x <= x1 and z0 <= p.z <= z1:
             out.append((p, self.at(p.x, p.z)))
@@ -2288,82 +3298,320 @@ class Terrain:
                 "sea": tidy(self.sea[0]) if self.sea is not None else None, "edits": self.edits}
 
 
+def animation_problem(name):
+    return (f"object:animate can be \"walk\", \"idle\", \"wave\", \"auto\" or \"none\", not \"{name}\"."
+            + did_you_mean(name, ANIMATIONS))
+
+
 def kit(name):
-    """A built-in low-poly model: (size, solid body, parts, solid). Parts are (type, engine props, main part?)."""
+    """A built-in model: (size, solid body, parts, solid). Parts are (type, engine props, main part?); every part
+    casts and gets shadows, and colours vary a little from one model to the next. A part's "anim" says how the page
+    moves the model (tuff_view_web/anim.js): a "tree", "pine", "bush" or "flower" sways in the wind, a "coin" spins
+    and bobs, and each part of a "person" says which limb it is and where it turns ([style, role, pivot])."""
+    size, body, parts, solid = _kit(name)
+    return size, body, [(type_, {"shadow": True, **p}, main) for type_, p, main in parts], solid
+
+
+def _kit(name):
     rnd = random.random
     shade = lambda base, spread=0.08: _shade(base, (rnd() - 0.5) * 2 * spread)
     if name == "tree":
         leaf = shade("#4f9d3a")
-        return ((2.2, 3.4, 2.2), (0.5, 3.4, 0.5), [
-            ("cylinder", {"rt": 0.17, "rb": 0.26, "h": 1.7, "y": 0.85, "seg": 7, "color": "#7a5230", "flat": True, "shadow": True}, False),
-            ("sphere", {"r": 0.95, "y": 2.2, "seg": 7, "color": leaf, "flat": True, "shadow": True}, True),
-            ("sphere", {"r": 0.7, "x": 0.45, "y": 2.75, "z": 0.15, "seg": 6, "color": _shade(leaf, 0.06), "flat": True, "shadow": True}, True),
-            ("sphere", {"r": 0.62, "x": -0.4, "y": 2.65, "z": -0.25, "seg": 6, "color": _shade(leaf, -0.05), "flat": True, "shadow": True}, True),
-        ], True)
+        bark = shade("#7a5230", 0.06)
+        parts = [
+            ("cylinder", {"rt": 0.15, "rb": 0.22, "h": 1.8, "y": 0.9, "seg": 10, "color": bark, "rough": 0.95, "anim": "tree"}, False),
+            ("cylinder", {"rt": 0.21, "rb": 0.34, "h": 0.32, "y": 0.16, "seg": 10, "color": _shade(bark, -0.1), "rough": 0.95}, False),
+            ("cylinder", {"rt": 0.035, "rb": 0.075, "h": 0.62, "x": 0.25, "y": 1.6, "rz": -45, "seg": 6, "color": bark, "rough": 0.95}, False),
+        ]
+        # Clumps of leaves, lighter at the top, each tree's a little differently placed.
+        for r, x, y, z, light in ((0.88, 0, 2.22, 0, 0), (0.62, 0.56, 2.52, 0.24, 0.07), (0.6, -0.52, 2.46, -0.3, -0.07),
+                                  (0.54, -0.22, 2.34, 0.55, -0.02), (0.5, 0.04, 2.92, -0.06, 0.14)):
+            parts.append(("sphere", {"r": r, "x": x + (rnd() - 0.5) * 0.12, "y": y, "z": z + (rnd() - 0.5) * 0.12, "sy": 0.92, "seg": 14,
+                                     "color": _shade(leaf, light), "rough": 0.7}, True))
+        return ((2.2, 3.4, 2.2), (0.5, 3.4, 0.5), parts, True)
     if name == "pine":
         leaf = shade("#2f6b3a")
-        return ((2.3, 3.9, 2.3), (0.5, 3.9, 0.5), [
-            ("cylinder", {"rt": 0.14, "rb": 0.2, "h": 1.0, "y": 0.5, "seg": 6, "color": "#6b4428", "flat": True, "shadow": True}, False),
-            ("cone", {"r": 1.15, "h": 1.5, "y": 1.6, "seg": 7, "color": leaf, "flat": True, "shadow": True}, True),
-            ("cone", {"r": 0.9, "h": 1.3, "y": 2.45, "seg": 7, "color": _shade(leaf, 0.05), "flat": True, "shadow": True}, True),
-            ("cone", {"r": 0.6, "h": 1.1, "y": 3.25, "seg": 7, "color": _shade(leaf, 0.1), "flat": True, "shadow": True}, True),
-        ], True)
+        bark = shade("#6b4428", 0.06)
+        parts = [("cylinder", {"rt": 0.1, "rb": 0.19, "h": 1.3, "y": 0.65, "seg": 8, "color": bark, "rough": 0.95, "anim": "pine"}, False)]
+        for i, (r, h, y) in enumerate([(1.15, 1.3, 1.3), (0.95, 1.15, 1.95), (0.72, 1.0, 2.6), (0.46, 0.9, 3.25)]):
+            parts.append(("cone", {"r": r, "h": h, "y": y, "seg": 11, "ry": rnd() * 32, "color": _shade(leaf, -0.05 + i * 0.05),
+                                   "rough": 0.8, "flat": True}, True))
+        return ((2.3, 3.9, 2.3), (0.5, 3.9, 0.5), parts, True)
     if name == "rock":
         s = 0.8 + rnd() * 0.5
-        return ((1.3 * s, 0.85 * s, 1.2 * s), None, [
-            ("sphere", {"r": 0.65 * s, "y": 0.3 * s, "sy": 0.7, "seg": 5, "color": shade("#8e8e86", 0.1), "flat": True, "shadow": True}, True),
-        ], True)
+        stone = shade(random.choice(["#8e8e86", "#8a8478", "#80868a"]), 0.08)
+        turn, lean = rnd() * 360, (rnd() - 0.5) * 14
+        parts = [
+            ("sphere", {"r": 0.65, "y": 0.26 * s, "sx": s, "sy": 0.7 * s, "sz": 0.92 * s, "ry": turn, "rz": lean, "seg": 8,
+                        "color": stone, "rough": 0.95, "flat": True}, True),
+            ("sphere", {"r": 0.36, "x": 0.44 * s, "y": 0.08 * s, "z": 0.3 * s, "sx": s, "sy": 0.7 * s, "sz": 0.9 * s, "ry": turn + 40,
+                        "seg": 6, "color": _shade(stone, -0.08), "rough": 0.95, "flat": True}, True),
+        ]
+        if rnd() < 0.5:  # some have moss on top: the same shape, a little smaller, poking out of the top
+            parts.append(("sphere", {"r": 0.65, "y": 0.33 * s, "sx": 0.84 * s, "sy": 0.62 * s, "sz": 0.78 * s, "ry": turn, "rz": lean,
+                                     "seg": 8, "color": shade("#5d7f3a", 0.06), "rough": 1, "flat": True}, False))
+        return ((1.3 * s, 0.85 * s, 1.2 * s), None, parts, True)
     if name == "bush":
         leaf = shade("#3f8a35")
-        return ((1.5, 0.95, 1.5), None, [
-            ("sphere", {"r": 0.55, "y": 0.45, "seg": 6, "color": leaf, "flat": True, "shadow": True}, True),
-            ("sphere", {"r": 0.42, "x": 0.45, "y": 0.35, "z": 0.1, "seg": 6, "color": _shade(leaf, 0.06), "flat": True, "shadow": True}, True),
-            ("sphere", {"r": 0.4, "x": -0.4, "y": 0.33, "z": -0.15, "seg": 6, "color": _shade(leaf, -0.05), "flat": True, "shadow": True}, True),
-        ], False)
+        parts = [
+            ("sphere", {"r": 0.55, "y": 0.45, "sy": 0.9, "seg": 14, "color": leaf, "rough": 0.75, "anim": "bush"}, True),
+            ("sphere", {"r": 0.42, "x": 0.45, "y": 0.34, "z": 0.1, "seg": 12, "color": _shade(leaf, 0.07), "rough": 0.75}, True),
+            ("sphere", {"r": 0.4, "x": -0.42, "y": 0.32, "z": -0.15, "seg": 12, "color": _shade(leaf, -0.07), "rough": 0.75}, True),
+            ("sphere", {"r": 0.34, "x": 0.02, "y": 0.34, "z": 0.42, "seg": 12, "color": _shade(leaf, 0.03), "rough": 0.75}, True),
+            ("sphere", {"r": 0.3, "x": -0.08, "y": 0.66, "z": -0.05, "seg": 12, "color": _shade(leaf, 0.12), "rough": 0.75}, True),
+        ]
+        if rnd() < 0.45:  # berries
+            berry = random.choice(["#d63a4a", "#7a4ad6", "#f2f2f2"])
+            for bx, by, bz in ((0.32, 0.55, 0.32), (-0.4, 0.5, 0.2), (0.6, 0.38, -0.12), (-0.15, 0.32, 0.72)):
+                parts.append(("sphere", {"r": 0.045, "x": bx, "y": by, "z": bz, "seg": 8, "color": berry, "rough": 0.35}, False))
+        return ((1.5, 0.95, 1.5), None, parts, False)
     if name == "flower":
         petal = random.choice(["#ff5d8f", "#ffd23f", "#ffffff", "#b388ff", "#ff8a3d"])
-        return ((0.3, 0.5, 0.3), None, [
-            ("cylinder", {"r": 0.025, "h": 0.42, "y": 0.21, "seg": 5, "color": "#3f8a35"}, False),
-            ("sphere", {"r": 0.1, "y": 0.45, "seg": 6, "color": petal, "flat": True}, True),
-        ], False)
+        middle = "#7a4a1e" if petal == "#ffd23f" else "#ffc93d"
+        parts = [
+            ("cylinder", {"r": 0.018, "h": 0.42, "y": 0.21, "seg": 6, "color": "#3f8a35", "anim": "flower"}, False),
+            ("sphere", {"r": 0.06, "x": 0.055, "y": 0.13, "sx": 1.6, "sy": 0.3, "sz": 0.7, "rz": 25, "seg": 8, "color": "#4a9a3c"}, False),
+        ]
+        for ry in (0, 60, 120):  # three crossed ovals make six petals
+            parts.append(("sphere", {"r": 0.1, "y": 0.43, "sy": 0.22, "sz": 0.38, "ry": ry, "seg": 10, "color": _shade(petal, (rnd() - 0.5) * 0.08),
+                                     "rough": 0.6}, True))
+        parts.append(("sphere", {"r": 0.04, "y": 0.445, "sy": 0.7, "seg": 8, "color": middle, "rough": 0.9}, False))
+        return ((0.3, 0.5, 0.3), None, parts, False)
     if name == "house":
-        return ((3.2, 3.6, 3.2), (3.0, 2.2, 3.0), [
-            ("box", {"w": 3, "h": 2.2, "d": 3, "y": 1.1, "color": "#e9dcc4", "flat": True, "shadow": True}, True),
-            ("cone", {"r": 2.55, "h": 1.4, "y": 2.9, "ry": 45, "seg": 4, "color": "#b5483b", "flat": True, "shadow": True}, False),
-            ("box", {"w": 0.7, "h": 1.25, "d": 0.06, "y": 0.62, "z": 1.51, "color": "#6b4428"}, False),
-            ("box", {"w": 0.55, "h": 0.5, "d": 0.06, "x": -0.85, "y": 1.35, "z": 1.51, "color": "#9fd3ff", "emissive": "#1d3550"}, False),
-            ("box", {"w": 0.55, "h": 0.5, "d": 0.06, "x": 0.85, "y": 1.35, "z": 1.51, "color": "#9fd3ff", "emissive": "#1d3550"}, False),
-        ], True)
+        wall = shade("#ece0c8", 0.04)
+        trim = shade("#7a5536", 0.06)
+        frame = "#f4efe6"
+        roof = shade(random.choice(["#b5483b", "#a8443a", "#9c4c3c"]), 0.05)
+        glass = {"color": "#a9d8f5", "emissive": "#1d3550", "rough": 0.1, "metal": 0.3}
+        parts = [
+            ("box", {"w": 3.12, "h": 0.24, "d": 3.12, "y": 0.12, "color": shade("#8f8a80", 0.05), "rough": 0.95}, False),
+            ("box", {"w": 3, "h": 1.98, "d": 3, "y": 1.21, "color": wall, "rough": 0.9}, True),
+            # The roof's two slopes and its ridge, over the gables: a prism along x (a 3-sided cylinder on its side) in
+            # the walls' colour.
+            ("box", {"w": 3.5, "h": 0.1, "d": 2.26, "y": 2.93, "z": 0.86, "rx": 38.9, "color": roof, "rough": 0.75}, False),
+            ("box", {"w": 3.5, "h": 0.1, "d": 2.26, "y": 2.93, "z": -0.86, "rx": -38.9, "color": roof, "rough": 0.75}, False),
+            ("box", {"w": 3.6, "h": 0.1, "d": 0.2, "y": 3.63, "color": _shade(roof, -0.25), "rough": 0.8}, False),
+            ("cylinder", {"r": 1, "h": 2.98, "seg": 3, "y": 2.64, "rx": -90, "rz": -90, "sx": 1.72, "sz": 0.86, "color": wall,
+                          "rough": 0.9, "flat": True}, True),
+            ("box", {"w": 0.34, "h": 0.9, "d": 0.34, "x": 0.85, "y": 3.05, "z": -0.55, "color": shade("#9a5a44", 0.06), "rough": 0.95}, False),
+            ("box", {"w": 0.42, "h": 0.08, "d": 0.42, "x": 0.85, "y": 3.52, "z": -0.55, "color": "#5d5d5d", "rough": 0.9}, False),
+            # the door, its frame, its knob and a step
+            ("box", {"w": 0.86, "h": 1.36, "d": 0.05, "y": 0.9, "z": 1.51, "color": trim, "rough": 0.85}, False),
+            ("box", {"w": 0.7, "h": 1.24, "d": 0.06, "y": 0.86, "z": 1.52, "color": shade("#6b4428", 0.06), "rough": 0.85}, False),
+            ("sphere", {"r": 0.045, "x": 0.24, "y": 0.84, "z": 1.565, "seg": 10, "color": "#d9b45a", "metal": 0.8, "rough": 0.3,
+                        "emissive": "#3a2a00"}, False),
+            ("box", {"w": 1.0, "h": 0.12, "d": 0.32, "y": 0.06, "z": 1.66, "color": "#9a958b", "rough": 0.95}, False),
+        ]
+        for cx in (-1.46, 1.46):  # timber corners
+            for cz in (-1.46, 1.46):
+                parts.append(("box", {"w": 0.16, "h": 1.98, "d": 0.16, "x": cx, "y": 1.21, "z": cz, "color": trim, "rough": 0.85}, False))
+        for wx in (-0.85, 0.85):  # front windows: frame, glass, cross bars, sill
+            parts += [
+                ("box", {"w": 0.66, "h": 0.62, "d": 0.05, "x": wx, "y": 1.45, "z": 1.51, "color": frame, "rough": 0.7}, False),
+                ("box", {"w": 0.54, "h": 0.5, "d": 0.05, "x": wx, "y": 1.45, "z": 1.525, **glass}, False),
+                ("box", {"w": 0.04, "h": 0.5, "d": 0.03, "x": wx, "y": 1.45, "z": 1.555, "color": frame, "rough": 0.7}, False),
+                ("box", {"w": 0.54, "h": 0.04, "d": 0.03, "x": wx, "y": 1.45, "z": 1.555, "color": frame, "rough": 0.7}, False),
+                ("box", {"w": 0.74, "h": 0.06, "d": 0.14, "x": wx, "y": 1.12, "z": 1.56, "color": trim, "rough": 0.85}, False),
+            ]
+        for sx in (-1.51, 1.51):  # a window on each side
+            parts += [
+                ("box", {"w": 0.05, "h": 0.62, "d": 0.66, "x": sx, "y": 1.45, "color": frame, "rough": 0.7}, False),
+                ("box", {"w": 0.05, "h": 0.5, "d": 0.54, "x": sx * 1.01, "y": 1.45, **glass}, False),
+                ("box", {"w": 0.03, "h": 0.5, "d": 0.04, "x": sx * 1.02, "y": 1.45, "color": frame, "rough": 0.7}, False),
+            ]
+        return ((3.2, 3.6, 3.2), (3.0, 2.2, 3.0), parts, True)
     if name == "hut":
+        thatch = shade("#d9b45a", 0.06)
         return ((2.8, 3.1, 2.8), (2.4, 1.7, 2.4), [
-            ("cylinder", {"r": 1.25, "h": 1.7, "y": 0.85, "seg": 9, "color": "#a0703c", "flat": True, "shadow": True}, True),
-            ("cone", {"r": 1.75, "h": 1.4, "y": 2.35, "seg": 9, "color": "#d9b45a", "flat": True, "shadow": True}, False),
-            ("box", {"w": 0.6, "h": 1.1, "d": 0.08, "y": 0.55, "z": 1.22, "color": "#4a2f1a"}, False),
+            ("cylinder", {"r": 1.32, "h": 0.2, "y": 0.1, "seg": 16, "color": shade("#8f8a80", 0.05), "rough": 0.95, "flat": True}, False),
+            ("cylinder", {"r": 1.25, "h": 1.5, "y": 0.95, "seg": 18, "color": shade("#b07d45", 0.06), "rough": 0.95}, True),
+            ("torus", {"r": 1.265, "tube": 0.035, "y": 0.55, "rx": 90, "seg": 36, "color": "#6e4a26", "rough": 0.9}, False),
+            ("torus", {"r": 1.265, "tube": 0.035, "y": 1.4, "rx": 90, "seg": 36, "color": "#6e4a26", "rough": 0.9}, False),
+            ("cone", {"r": 1.8, "h": 1.0, "y": 2.15, "seg": 18, "color": thatch, "rough": 1, "flat": True}, False),
+            ("cone", {"r": 1.25, "h": 1.1, "y": 2.55, "seg": 18, "ry": 10, "color": _shade(thatch, 0.07), "rough": 1, "flat": True}, False),
+            ("cylinder", {"r": 0.05, "h": 0.22, "y": 3.05, "seg": 6, "color": "#6e4a26"}, False),
+            ("box", {"w": 0.74, "h": 1.24, "d": 0.1, "y": 0.82, "z": 1.2, "color": "#8a6038", "rough": 0.9}, False),
+            ("box", {"w": 0.58, "h": 1.08, "d": 0.1, "y": 0.76, "z": 1.23, "color": "#4a2f1a", "rough": 0.9}, False),
         ], True)
     if name == "sign":
+        board = shade("#c08a4d", 0.05)
+        edge = _shade(board, -0.3)
         return ((1.2, 1.6, 0.2), (0.3, 1.6, 0.2), [
-            ("cylinder", {"r": 0.06, "h": 1.2, "y": 0.6, "seg": 6, "color": "#6b4428"}, False),
-            ("box", {"w": 1.2, "h": 0.6, "d": 0.08, "y": 1.25, "color": "#c08a4d", "flat": True, "shadow": True}, True),
+            ("cylinder", {"rt": 0.055, "rb": 0.065, "h": 1.5, "y": 0.75, "z": -0.07, "seg": 8, "color": "#6b4428", "rough": 0.95}, False),
+            ("box", {"w": 1.12, "h": 0.52, "d": 0.06, "y": 1.25, "color": board, "rough": 0.85}, True),
+            ("box", {"w": 1.1, "h": 0.014, "d": 0.066, "y": 1.25, "color": edge, "rough": 0.9}, False),
+            ("box", {"w": 1.2, "h": 0.07, "d": 0.09, "y": 1.525, "color": edge, "rough": 0.85}, False),
+            ("box", {"w": 1.2, "h": 0.07, "d": 0.09, "y": 0.975, "color": edge, "rough": 0.85}, False),
+            ("box", {"w": 0.07, "h": 0.6, "d": 0.09, "x": -0.565, "y": 1.25, "color": edge, "rough": 0.85}, False),
+            ("box", {"w": 0.07, "h": 0.6, "d": 0.09, "x": 0.565, "y": 1.25, "color": edge, "rough": 0.85}, False),
         ], True)
     if name == "crate":
-        return ((0.9, 0.9, 0.9), None, [
-            ("box", {"w": 0.9, "h": 0.9, "d": 0.9, "y": 0.45, "color": "#b07a42", "flat": True, "shadow": True}, True),
-            ("box", {"w": 0.94, "h": 0.12, "d": 0.94, "y": 0.06, "color": "#7a5230"}, False),
-            ("box", {"w": 0.94, "h": 0.12, "d": 0.94, "y": 0.84, "color": "#7a5230"}, False),
-        ], True)
+        wood = shade("#b07a42", 0.05)
+        edge = _shade(wood, -0.3)
+        parts = [
+            ("box", {"w": 0.84, "h": 0.84, "d": 0.84, "y": 0.45, "color": wood, "rough": 0.85}, True),
+            ("box", {"w": 0.9, "h": 0.1, "d": 0.9, "y": 0.05, "color": edge, "rough": 0.85}, False),
+            ("box", {"w": 0.9, "h": 0.1, "d": 0.9, "y": 0.85, "color": edge, "rough": 0.85}, False),
+        ]
+        for cx in (-0.4, 0.4):  # corner posts
+            for cz in (-0.4, 0.4):
+                parts.append(("box", {"w": 0.1, "h": 0.7, "d": 0.1, "x": cx, "y": 0.45, "z": cz, "color": edge, "rough": 0.85}, False))
+        for f in (-0.43, 0.43):  # a brace across each side
+            parts.append(("box", {"w": 0.98, "h": 0.09, "d": 0.03, "y": 0.45, "z": f, "rz": 45 * (1 if f > 0 else -1), "color": edge, "rough": 0.85}, False))
+            parts.append(("box", {"w": 0.03, "h": 0.09, "d": 0.98, "x": f, "y": 0.45, "rx": 45 * (1 if f > 0 else -1), "color": edge, "rough": 0.85}, False))
+        return ((0.9, 0.9, 0.9), None, parts, True)
     if name == "fence":
-        return ((2.0, 1.0, 0.16), None, [
-            ("box", {"w": 0.14, "h": 1.0, "d": 0.14, "x": -0.93, "y": 0.5, "color": "#8a6038"}, False),
-            ("box", {"w": 0.14, "h": 1.0, "d": 0.14, "x": 0.93, "y": 0.5, "color": "#8a6038"}, False),
-            ("box", {"w": 2.0, "h": 0.12, "d": 0.08, "y": 0.75, "color": "#b5895a", "shadow": True}, True),
-            ("box", {"w": 2.0, "h": 0.12, "d": 0.08, "y": 0.4, "color": "#b5895a", "shadow": True}, True),
-        ], True)
+        wood = shade("#8a6038", 0.05)
+        rail = shade("#b5895a", 0.05)
+        parts = []
+        for px in (-0.93, 0, 0.93):
+            h = 0.92 if px else 0.86
+            parts.append(("box", {"w": 0.14 if px else 0.1, "h": h, "d": 0.14 if px else 0.1, "x": px, "y": h / 2, "color": wood, "rough": 0.9}, False))
+            parts.append(("cone", {"r": 0.1 if px else 0.071, "h": 0.1, "x": px, "y": h + 0.05, "ry": 45, "seg": 4, "color": wood, "rough": 0.9,
+                                   "flat": True}, False))
+        parts += [
+            ("box", {"w": 2.0, "h": 0.12, "d": 0.06, "y": 0.72, "z": 0.05, "color": rail, "rough": 0.85}, True),
+            ("box", {"w": 2.0, "h": 0.12, "d": 0.06, "y": 0.38, "z": 0.05, "color": _shade(rail, -0.06), "rough": 0.85}, True),
+        ]
+        return ((2.0, 1.0, 0.16), None, parts, True)
     if name == "coin":
+        gold = {"color": "#f2c230", "emissive": "#6a5000", "metal": 0.45, "rough": 0.35}
         return ((0.7, 1.3, 0.12), None, [
-            ("cylinder", {"r": 0.32, "h": 0.08, "y": 0.9, "rx": 90, "seg": 18, "color": "#f2c230", "emissive": "#5a4300",
-                          "metal": 0.6, "rough": 0.35}, True),
+            ("cylinder", {"r": 0.3, "h": 0.07, "y": 0.9, "rx": 90, "seg": 28, **gold, "anim": "coin"}, True),
+            ("torus", {"r": 0.3, "tube": 0.035, "y": 0.9, "seg": 36, **gold}, True),
+            ("cylinder", {"r": 0.16, "h": 0.1, "y": 0.9, "rx": 90, "seg": 6, **gold, "color": "#ffd95a", "flat": True}, True),
+        ], False)
+    if name == "chest":
+        wood = shade("#9a6234", 0.05)
+        iron = {"color": "#4a4d52", "metal": 0.6, "rough": 0.45}
+        return ((0.9, 0.75, 0.6), None, [
+            ("box", {"w": 0.86, "h": 0.42, "d": 0.56, "y": 0.21, "color": wood, "rough": 0.85}, True),
+            ("cylinder", {"r": 0.28, "h": 0.86, "y": 0.42, "rz": 90, "seg": 18, "color": _shade(wood, 0.06), "rough": 0.85}, True),
+            ("box", {"w": 0.08, "h": 0.44, "d": 0.58, "x": -0.3, "y": 0.21, **iron}, False),
+            ("box", {"w": 0.08, "h": 0.44, "d": 0.58, "x": 0.3, "y": 0.21, **iron}, False),
+            ("cylinder", {"r": 0.29, "h": 0.08, "x": -0.3, "y": 0.42, "rz": 90, "seg": 18, **iron}, False),
+            ("cylinder", {"r": 0.29, "h": 0.08, "x": 0.3, "y": 0.42, "rz": 90, "seg": 18, **iron}, False),
+            ("box", {"w": 0.12, "h": 0.15, "d": 0.05, "y": 0.42, "z": 0.29, "color": "#f2c230", "emissive": "#3a2a00", "metal": 0.7,
+                     "rough": 0.3}, False),
+        ], True)
+    if name == "person":
+        return ((0.7, 1.75, 0.5), None, person_parts(), True)
+    if name == "key":
+        # An old gold key floating upright (it spins and bobs like a coin): a ring to hold, a shaft and its teeth.
+        gold = {"color": "#f2c230", "emissive": "#5a4200", "metal": 0.55, "rough": 0.3}
+        return ((0.4, 1.2, 0.1), None, [
+            ("torus", {"r": 0.11, "tube": 0.032, "y": 1.0, "seg": 28, **gold, "anim": "coin"}, True),
+            ("sphere", {"r": 0.045, "y": 0.87, "seg": 10, **gold}, True),
+            ("cylinder", {"r": 0.026, "h": 0.4, "y": 0.66, "seg": 10, **gold}, True),
+            ("box", {"w": 0.1, "h": 0.045, "d": 0.035, "x": 0.06, "y": 0.5, **gold}, True),
+            ("box", {"w": 0.07, "h": 0.04, "d": 0.035, "x": 0.045, "y": 0.58, **gold}, True),
         ], False)
     raise KeyError(name)
+
+
+# A person's joints, standing (feet at 0, facing -z, its right +x): where its limbs turn. The kit's person, the
+# player in third person and the ragdoll are all made by person_parts, so they look alike.
+NECK, SHOULDER, ELBOW, HIP, KNEE = 1.4, (0.262, 1.27), 1.02, (0.094, 0.76), 0.43
+HEAD = (1.555, 0.178)  # its head's middle, and how round it is
+WAIST = 0.855  # where its shirt meets its trousers, under a belt
+CHEST = (0.212, 0.188)  # how wide its body is at the shoulders and at the waist (half)
+SHIRTS = ("#e5484d", "#3574f0", "#2fa36b", "#f2a33a", "#8e5bd8", "#14b8a6")
+SKINS = ("#f1c9a5", "#e0ac7e", "#c68a5c", "#8d5a3b", "#ffd9b8")
+HAIRS = ("#2b2018", "#5a3a22", "#a8692e", "#e3c06b", "#1c1c1c", "#b5482b")
+PANTS = ("#2f3e5c", "#3b3b44", "#5b4636", "#24456b")
+SHOES = ("#3a2a22", "#26262c", "#f4f1ea", "#c8473a", "#2f6fd0")
+HAIR_STYLES = ("short", "swoop", "bob", "ponytail", "buns", "curly", "spiky")
+
+
+def person_parts(shirt=None, skin=None, hair=None, pants=None, style=None, sleeves=None, shoes=None):
+    """A chunky toy person (the kit's, the player in third person, and the ragdoll's look), facing -z like
+    everything that walks forward: shoes, legs that bend at the knee, hips with a belt, a broad body with round
+    shoulders the arms hang from, arms that bend at the elbow, mitten hands, a short neck and a big friendly head
+    (eyes, eyebrows, a nose and a smile) with one of a few hair styles. Long sleeves or rolled up to the elbow.
+
+    Each part tells anim.js which part it is and where it turns ([style, role, pivot, the pivot of the limb it hangs
+    from]): a thigh turns at the hip and its shin at the knee (and with the thigh), an upper arm at the shoulder and
+    its forearm and hand at the elbow, the head at the neck. The shirt's parts are the main ones (person:color)."""
+    pick = random.choice
+    shirt, skin, hair, pants = shirt or pick(SHIRTS), skin or pick(SKINS), hair or pick(HAIRS), pants or pick(PANTS)
+    style, sleeves, shoes = style or pick(HAIR_STYLES), sleeves or pick(("long", "long", "rolled")), shoes or pick(SHOES)
+    sx, sy = SHOULDER
+    hx, hy = HIP
+    parts = []
+
+    def part(type_, role, main=False, **p):
+        # Parts that look the same share a material in the page ("share"): a crowd draws about as fast as before.
+        side = -1 if role.endswith("_l") else 1
+        pivots = {"leg": [[hx * side, hy, 0]], "shin": [[hx * side, KNEE, 0], [hx * side, hy, 0]],
+                  "arm": [[sx * side, sy, 0]], "forearm": [[sx * side, ELBOW, 0], [sx * side, sy, 0]],
+                  "head": [[0, NECK, 0]]}.get(role.split("_")[0], [None])
+        parts.append((type_, {**p, "share": True, "anim": ["person", role] + pivots}, main))
+
+    cloth, soft = {"rough": 0.88}, {"rough": 0.6}
+    for side, x in (("l", -1), ("r", 1)):  # its right is +x (it faces -z)
+        # A leg: the thigh's round ends are the hip and the knee, so it bends without a gap. The shin goes down into
+        # a big round shoe.
+        part("capsule", "leg_" + side, r=0.086, h=hy - KNEE, x=hx * x, y=(hy + KNEE) / 2, seg=10, color=pants, **cloth)
+        part("capsule", "shin_" + side, r=0.084, h=KNEE - 0.11, x=hx * x, y=(KNEE + 0.11) / 2, seg=10, color=pants, **cloth)
+        part("sphere", "shin_" + side, r=0.1, x=hx * x, y=0.062, z=-0.045, sx=1.02, sy=0.62, sz=1.42, seg=12, color=shoes, rough=0.55)
+    for side, x in (("l", -1), ("r", 1)):
+        # An arm grows out of the round end of the shoulders: its top is the shoulder, so it turns there without a
+        # gap, and it hangs flush against the body. The elbow is the upper arm's other end.
+        part("capsule", "arm_" + side, True, r=0.077, h=sy - ELBOW, x=sx * x, y=(sy + ELBOW) / 2, seg=10, color=shirt, **cloth)
+        part("capsule", "forearm_" + side, sleeves == "long", r=0.073, h=0.2, x=sx * x, y=ELBOW - 0.1, seg=10,
+             color=shirt if sleeves == "long" else skin, **(cloth if sleeves == "long" else soft))
+        part("sphere", "forearm_" + side, r=0.088, x=sx * x, y=0.765, sx=0.84, sy=1.08, sz=1.02, seg=12, color=skin, **soft)
+        part("sphere", "forearm_" + side, r=0.036, x=(sx - 0.03) * x, y=0.8, z=-0.066, sy=1.2, seg=8, color=skin, **soft)
+    # The hips (their round ends are the hip joints), a belt where the shirt meets the trousers, and its buckle.
+    part("capsule", "body", r=0.088, h=hx * 2, y=hy, rz=90, sz=1.25, seg=12, color=pants, **cloth)
+    part("cylinder", "body", r=CHEST[1] + 0.008, h=0.055, y=WAIST, sz=0.68, seg=16, color="#3d2b20", rough=0.7)
+    part("box", "body", w=0.075, h=0.052, d=0.02, y=WAIST, z=-(CHEST[1] + 0.008) * 0.68 - 0.002, color="#e8b84a", metal=0.4, rough=0.35)
+    # A broad body, a little wider at the top, rounded over at the top, with a round shoulder each side that the arm
+    # grows out of (the round ends of a bar across the shoulders), and a short neck.
+    part("cylinder", "torso", True, rt=CHEST[0], rb=CHEST[1], h=sy - WAIST, y=(sy + WAIST) / 2, sz=0.64, seg=16, color=shirt, **cloth)
+    part("sphere", "torso", True, r=CHEST[0], y=sy, sy=0.46, sz=0.64, seg=16, color=shirt, **cloth)
+    part("capsule", "torso", True, r=0.087, h=sx * 2, y=sy, rz=90, seg=12, color=shirt, **cloth)
+    part("cylinder", "torso", rt=0.058, rb=0.066, h=0.12, y=NECK - 0.01, seg=12, color=_shade(skin, -0.08), **soft)
+    # The head: big and round, with eyes (a white and a pupil, big enough to see from afar), eyebrows, a little nose
+    # and a smile (a ring sunk into the face, its lower half showing). The face is laid out on a head 0.17 round, and
+    # grows with the head (k).
+    y, r = HEAD
+    k = r / 0.17
+    part("sphere", "head", r=r, y=y, sx=1.06, seg=20, color=skin, **soft)
+    for x in (-0.064 * k, 0.064 * k):
+        part("sphere", "head", r=0.043 * k, x=x, y=y + 0.002 * k, z=-0.151 * k, sx=0.9, sy=1.18, sz=0.5, seg=12, color="#ffffff", rough=0.4)
+        part("sphere", "head", r=0.025 * k, x=x * 0.94, y=y - 0.003 * k, z=-0.167 * k, sy=1.2, sz=0.55, seg=10, color="#1b1b24", rough=0.25)
+        part("capsule", "head", r=0.012 * k, h=0.05 * k, x=x * 1.03, y=y + 0.075 * k, z=-0.139 * k, rz=90 - (8 if x > 0 else -8), sz=0.7,
+             seg=6, color=_shade(hair, -0.35), rough=0.8)
+    part("sphere", "head", r=0.027 * k, y=y - 0.035 * k, z=-0.168 * k, sy=0.85, seg=10, color=_shade(skin, -0.07), **soft)
+    part("torus", "head", r=0.045 * k, tube=0.011 * k, y=y - 0.055 * k, z=-0.144 * k, seg=20, color="#7a2e2a", rough=0.6)
+    for type_, p in hair_parts(style, y, k):
+        part(type_, "head", **p, color=hair, rough=0.75)
+    return parts
+
+
+def hair_parts(style, y, k=1.0):
+    """A hair style's parts on a head whose middle is at y (k: how big the head is, 1 for 0.17 round): a cap over
+    the top and back, and what makes the style."""
+    def at(type_, **p):
+        return (type_, {key: v * k if key in ("r", "h", "x", "z") else y + v * k if key == "y" else v for key, v in p.items()})
+    cap = at("sphere", r=0.181, y=0.03, z=0.022, sx=1.07, sy=0.88, seg=20)
+    if style == "curly":  # a big round mop
+        return [at("sphere", r=0.2, y=0.05, z=0.03, sx=1.06, sy=0.84, seg=14),
+                at("sphere", r=0.15, y=-0.01, z=0.09, sx=1.28, sy=0.92, seg=12)]
+    if style == "bob":  # down to the chin all round the back, with a fringe
+        return [cap, at("sphere", r=0.185, y=-0.015, z=0.065, sx=1.04, sy=0.95, seg=18),
+                at("sphere", r=0.15, y=0.085, z=-0.015, sx=1.12, sy=0.42, sz=0.95, seg=14)]
+    if style == "ponytail":
+        return [cap, at("capsule", r=0.055, h=0.16, y=-0.03, z=0.2, rx=-18, seg=10), at("sphere", r=0.05, y=0.06, z=0.175, seg=10)]
+    if style == "buns":
+        return [cap, at("sphere", r=0.068, x=-0.13, y=0.125, z=0.02, seg=12), at("sphere", r=0.068, x=0.13, y=0.125, z=0.02, seg=12)]
+    if style == "spiky":
+        return [cap] + [at("cone", r=0.06, h=0.12, x=x, y=0.15, z=z, rx=rx, rz=rz, seg=6, flat=True)
+                        for x, z, rx, rz in ((-0.07, -0.02, -15, 25), (0.0, -0.05, -25, 0), (0.07, -0.02, -15, -25))]
+    if style == "swoop":  # swept up and over at the front
+        return [cap, at("sphere", r=0.1, x=0.03, y=0.125, z=-0.054, sx=1.5, sy=0.62, sz=0.9, rz=-14, seg=14)]
+    return [cap, at("sphere", r=0.12, x=-0.02, y=0.105, z=-0.057, sx=1.35, sy=0.45, sz=0.72, rz=8, seg=14)]
 
 
 def held_parts(name):
@@ -2395,17 +3643,23 @@ def _shade(hex_color, amount):
     return "#" + "".join(f"{clamp(c, 0, 255):02x}" for c in rgb)
 
 
-class Thing:
+class Thing(Physical):
     """An object in a 3D world: a shape, a model from the kit, the ground, a light or something held."""
+    KIND = "object"
     NAMES = [
         ("x", "get_x"), ("y", "get_y"), ("z", "get_z"), ("spot", "spot"), ("move", "move"), ("move_to", "move_to"),
         ("glide", "glide"), ("forward", "forward"), ("turn", "turn"), ("turn_to", "turn_to"), ("angle", "angle"),
         ("spin", "spin"), ("look_at", "look_at"), ("speed", "speed"), ("shake", "shake"), ("fall", "fall"),
         ("fallen", "is_fallen"), ("grow", "grow"), ("regrow", "regrow"), ("swing", "swing"), ("size", "size"),
         ("scale", "set_scale"),
+        ("animate", "animate"),
         ("color", "set_color"), ("glow", "glow"), ("hide", "hide"), ("show", "show"), ("remove", "remove"),
         ("solid", "solid"), ("touches", "touches"), ("distance", "distance"), ("label", "label"),
         ("clicked", "clicked"), ("set", "set"), ("get", "get"),
+        ("physics", "physics"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
+        ("velocity", "velocity"), ("on_hit", "on_hit"), ("sleep", "sleep"), ("wake", "wake"),
+        ("say", "say"), ("on_talk", "on_talk"),
+        ("path", "path"),
     ]
 
     def __init__(self, world, kind, x, y, z, size, parts, body=None, parent=None, pick=True, camera=False):
@@ -2431,6 +3685,8 @@ class Thing:
         self.label_node = None
         self.label_text = ""
         self.on_land = parent is None and not camera  # held things have their own x, y, z (in the hand)
+        self.phys_init()
+        self.quat = None  # how physics has turned it ([x, y, z, w]), once it has
         v = world.view
         props = {"x": self.x, "y": self.y, "z": self.z}
         if camera:
@@ -2449,8 +3705,10 @@ class Thing:
             v.set(self.node, pick=False)
         if parent is None and not camera:
             world.adopt(self)
-        self.native = world.rt.native("object", methods(self, "object", self.NAMES, world.rt), self.show_text)
+        self.native = world.rt.native(self.KIND, methods(self, self.KIND, self.NAMES, world.rt), self.show_text)
         self.native.tg = self
+        if world.phys is not None:
+            world.phys.dirty.add(self)  # solid things get a body that doesn't move (once it's settled, at the frame)
 
     def show_text(self, nested=False):
         return f"<{self.kind} at {tidy(self.x)}, {tidy(self.y)}, {tidy(self.z)}>"
@@ -2474,13 +3732,104 @@ class Thing:
 
     def push(self):
         self.send(self.node, x=self.x, y=self.y, z=self.z)
+        self.push_label()
+        self.phys_moved()
+
+    def push_label(self):
         if self.label_node is not None:
             top = self.y + (0.9 if self.fallen else self.height() + 0.25)
             self.send(self.label_node, x=self.x, y=top, z=self.z)
 
-    def push_rotation(self):
-        rx, ry, rz = euler(self.heading, self.tilt_axis, self.tilt, self.pitch)
+    def push_rotation(self, anim=False):
+        """Sends how it's turned. A thing physics moves turns its body only when the program turns it (turn, look_at);
+        a shake's or a fall's tilt (anim) only tilts how it's drawn (its wobble), not its body."""
+        dyn = self.dynamic()
+        if dyn:
+            self.send(self.node, wobble=self.wobble())
+            if anim:
+                return
+        tilt, pitch = (0.0, 0.0) if dyn else (self.tilt, self.pitch)
+        if self.quat is not None and not tilt and not pitch:  # tumbled by physics: as it lies
+            rx, ry, rz = euler_of_quat(self.quat)
+        else:
+            rx, ry, rz = euler(self.heading, self.tilt_axis, tilt, pitch)
         self.send(self.node, rx=rx, ry=ry, rz=rz)
+        self.phys_moved()
+
+    def wobble(self):
+        """A shake's or a fall's tilt as a turn about its level axis in the world ([x, y, z, w]), or None."""
+        if not self.tilt:
+            return None
+        kx, kz = self.tilt_axis
+        h = math.radians(self.tilt) / 2
+        return [round(kx * math.sin(h), 5), 0.0, round(kz * math.sin(h), 5), round(math.cos(h), 5)]
+
+    def turn_by(self, degrees, to=None):
+        """Turns it about the up axis (clockwise from above), however physics has turned it (to: to face that way)."""
+        if self.quat is not None:
+            self.quat = quat_mul(yaw_quat(-(degrees if to is None else to - self.heading)), self.quat)
+            self.heading = heading_of(self.quat)
+        else:
+            self.heading = (self.heading + degrees) % 360 if to is None else to % 360
+        self.push_rotation()
+
+    # ---- physics (see Physical)
+    def can_have_physics(self, kind):
+        if not self.on_land:
+            raise self.rt.error("Only things in the world can use physics, not something the player holds.")
+        if getattr(self, "floor", False):
+            raise self.rt.error(f"The {self.kind} is solid for physics already: it doesn't need :physics.")
+        if kind != "off":
+            self.solid_ = True
+
+    def after_physics(self):
+        self.push_rotation()
+
+    def phys_spec(self):
+        """Its body for the page (physics.js): its own (thing:physics), or a fixed one for something solid, the
+        ground or the island. None: no body."""
+        w = self.world
+        if not self.alive or w.phys is None or not self.on_land:
+            return None
+        kind = self.phys_kind
+        base = {"mass": self.mass_, "bounce": self.bounce_, "friction": self.friction_, "hits": bool(self.hit_fns)}
+        if kind is None:
+            if getattr(self, "floor", False):
+                half = self.dims[0] / 2
+                if self.kind == "island":  # the grass's cylinder, its top at 0
+                    return {**base, "kind": "static", "shape": "cylinder", "size": [1.5, tidy(half)], "cy": -1.5}
+                return {**base, "kind": "static", "shape": "box", "size": [tidy(half), 0.5, tidy(self.dims[2] / 2)], "cy": -0.5}
+            if not self.solid_ or self.fallen:
+                return None
+            kind = "static"
+        if kind == "static" and getattr(self, "route", None) is not None:  # on a path (Route): it carries what's on it
+            kind = "kinematic"
+        shape, size, cy = self.phys_shape(kind)
+        return {**base, "kind": kind, "shape": shape, "size": size, "cy": cy}
+
+    def phys_shape(self, kind):
+        """(shape, size, how high its middle is above its position): a ball for a sphere, a cylinder or a cone for
+        those, a capsule for a person, and a box for everything else (a fixed tree's is its trunk)."""
+        kx, ky, kz = self.k
+        w, h, d = self.body if kind == "static" and self.body else self.dims
+        hy = max(h * ky, 0.02) / 2
+        if self.kind == "sphere":
+            r = w / 2 * max(kx, ky, kz)
+            return "ball", tidy(r), tidy(r)
+        if self.kind in ("cylinder", "cone"):
+            return self.kind, [tidy(hy), tidy(w * max(kx, kz) / 2)], tidy(hy)
+        if self.kind in CAPSULE_KINDS:
+            r = max(w * kx, d * kz) / 2
+            return "capsule", [tidy(max(0.01, hy - r)), tidy(r)], tidy(hy)
+        return "box", [tidy(w * kx / 2), tidy(hy), tidy(d * kz / 2)], tidy(hy)
+
+    def from_physics(self, b):
+        """Where physics moved it: [id, x, y, z, qx, qy, qz, qw, vx, vy, vz] (it isn't sent back). y is its lowest point."""
+        self.x, self.y, self.z = b[1], b[2], b[3]
+        self.quat = b[4:8]
+        self.heading = heading_of(self.quat)
+        self.vel = b[8:11]
+        self.push_label()  # its label follows it (the thing itself is where the page put it)
 
     def push_scale(self):
         self.send(self.node, sx=self.k[0], sy=self.k[1], sz=self.k[2])
@@ -2540,20 +3889,26 @@ class Thing:
         return self.native
 
     def turn(self, degrees):
-        self.heading = (self.heading + self.num(degrees, ":turn")) % 360
-        self.push_rotation()
+        self.turn_by(self.num(degrees, ":turn"))
         return self.native
 
     def turn_to(self, degrees):
-        self.heading = self.num(degrees, ":turn_to") % 360
-        self.push_rotation()
+        self.turn_by(0, to=self.num(degrees, ":turn_to"))
         return self.native
 
     def angle(self):
         return tidy(self.heading)
 
-    def spin(self, degrees_per_second):
-        self.spin_speed = self.num(degrees_per_second, ":spin")
+    def spin(self, a, b=MISSING, c=MISSING):
+        if self.dynamic():  # a twist (an angular kick): about x, y and z, or one number about the up axis
+            v = [0, self.num(a, ":spin"), 0] if b is MISSING and not isinstance(self.rt.plain(a), list) else \
+                self.phys_vector([a, b, c], "spin", f"{self.EXAMPLE}:spin(0, 2, 0)")
+            self.game.phys.send("spin", int(self.node), *v)
+            return self.native
+        if b is not MISSING or isinstance(self.rt.plain(a), list):
+            raise self.rt.error(f"{self.kind}:spin(x, y, z) twists things with physics. Without physics it spins "
+                                f"at so many degrees a second, like {self.kind}:spin(90).")
+        self.spin_speed = self.num(a, ":spin")
         self.busy()
         return self.native
 
@@ -2564,12 +3919,18 @@ class Thing:
         else:
             tx, _, tz, _ = self.world.where([x, y, z], (), "look_at")
         if (tx, tz) != (self.x, self.z):
-            self.heading = math.degrees(math.atan2(tx - self.x, -(tz - self.z))) % 360
-            self.push_rotation()
+            self.turn_by(0, to=math.degrees(math.atan2(tx - self.x, -(tz - self.z))))
         return self.native
 
-    def speed(self, vx, vy=0, vz=0):
-        self.vx, self.vy, self.vz = self.num(vx, ":speed"), self.num(vy, ":speed"), self.num(vz, ":speed")
+    def speed(self, vx=MISSING, vy=0, vz=0):
+        if vx is MISSING:  # how fast it goes (metres a second)
+            return tidy(math.hypot(*self.velocity_now()))
+        v = [self.num(vx, ":speed"), self.num(vy, ":speed"), self.num(vz, ":speed")]
+        if self.dynamic():
+            self.vel = v
+            self.game.phys.send("velocity", int(self.node), *v)
+            return self.native
+        self.vx, self.vy, self.vz = v
         self.busy()
         return self.native
 
@@ -2601,6 +3962,8 @@ class Thing:
         self.anims.append(["fall", 0.0, 1.1, (dz, -dx)])
         self.was_solid = self.solid_
         self.solid_ = False
+        if self.world.phys is not None:
+            self.world.phys.dirty.add(self)  # a fallen tree is no longer in the way
         self.busy()
         return self.native
 
@@ -2633,16 +3996,29 @@ class Thing:
         self.busy()
         return self.native
 
+    def animate(self, how="auto"):
+        """How it moves by itself, in the page (anim.js): a person can "walk", "idle" (stand breathing) or "wave";
+        "auto" is the model's own way (a person walks while it moves, trees sway, coins spin); "none" holds it still."""
+        name = self.rt.text(how).strip().lower()
+        if name not in ANIMATIONS:
+            raise self.rt.error(animation_problem(name))
+        if name in ("walk", "idle", "wave") and self.kind not in ("person", "player"):
+            raise self.rt.error(f"Only a person can {name}: world:spawn(\"person\") makes one. This is a {self.kind}.")
+        self.send(self.node, anim=name)
+        return self.native
+
     def stand_up(self):
         self.fallen = False
         self.tilt = 0.0
         if getattr(self, "was_solid", None) is not None:
             self.solid_ = self.was_solid
-        self.push_rotation()
-        self.push()
+        if self.world.phys is not None:
+            self.world.phys.dirty.add(self)
+        self.push_rotation(anim=True)
+        self.push_label() if self.dynamic() else self.push()
 
     def tick(self, dt):
-        moved = rotated = False
+        moved = rotated = glided = False
         if self.vx or self.vy or self.vz:
             g = self.ground()
             self.x += self.vx * dt
@@ -2663,7 +4039,7 @@ class Thing:
                 (x0, y0, z0), (x1, y1, z1) = a[3], a[4]
                 self.x, self.y, self.z = x0 + (x1 - x0) * e, y0 + (y1 - y0) * e, z0 + (z1 - z0) * e
                 self.y += self.ground()
-                moved = True
+                moved = glided = True
             elif kind == "shake":
                 self.tilt_axis = a[3]
                 self.tilt = math.sin(a[1] * 42) * 7 * (1 - t)
@@ -2694,10 +4070,14 @@ class Thing:
                     self.tilt = 0.0
                 elif kind == "swing":
                     self.pitch = 0.0
-        if moved:
+        if moved and self.dynamic() and not glided:  # physics moves it: a grow or a fall only changes how it looks
+            self.push_label()
+        elif moved:
             self.push()
+            if self.dynamic():  # a glide carries it: no speed builds up meanwhile
+                self.game.phys.send("velocity", int(self.node), 0, 0, 0)
         if rotated:
-            self.push_rotation()
+            self.push_rotation(anim=True)
         self.busy()
 
     # ---- how it looks
@@ -2712,6 +4092,7 @@ class Thing:
         self.k = [w / bw if bw else 1, h / bh if bh else 1, d / bd if bd else 1]
         self.push_scale()
         self.push()
+        self.phys_changed()  # its body grows with it
         return self.native
 
     def size_base(self):
@@ -2722,6 +4103,7 @@ class Thing:
         self.k = [n, n, n]
         self.push_scale()
         self.push()
+        self.phys_changed()
         return self.native
 
     def set_color(self, color):
@@ -2765,9 +4147,17 @@ class Thing:
         w.things.pop(self, None)
         for node in [self.node] + [n for n, _ in self.parts]:
             w.by_node.pop(int(node), None)
+        if w.phys is not None:
+            w.phys.dirty.discard(self)  # its body went with its object
+            if self.phys_sent is not None:
+                w.phys.forget(self)
+            if w.driving is self:  # the player gets out where the car was
+                self.drive(False)
 
     def solid(self, on=True):
         self.solid_ = self.rt.truthy(on)
+        if self.world.phys is not None:
+            self.world.phys.dirty.add(self)
         return self.native
 
     # ---- other objects
@@ -2814,7 +4204,7 @@ class Thing:
             if not t or not self.alive:
                 return self.native
             self.label_node = w.view.obj(w.scene, "label", text=t)
-            self.push()
+            self.push_label()
         else:
             self.send(self.label_node, text=t)
         self.send(self.label_node, visible=bool(t) and not self.hidden)
@@ -2834,6 +4224,18 @@ class Thing:
     def get(self, name):
         return self.data.get(self.rt.plain(name))
 
+    # ---- talking (see Interaction)
+    def say(self, text, seconds=4):
+        self.world.interaction().say(self, text, seconds)
+        return self.native
+
+    def on_talk(self, fn):
+        self.world.interaction().on_talk(self, fn)
+        return self.native
+    # ---- moving along a path by itself (Route, with the level pieces)
+    def path(self, spots=MISSING, speed=MISSING, how=MISSING):
+        return self.world.level().set_route(self, spots, speed, how)
+
 
 def boxes_touch(a, b):
     return a[0] < b[3] and b[0] < a[3] and a[1] < b[4] and b[1] < a[4] and a[2] < b[5] and b[2] < a[5]
@@ -2848,7 +4250,8 @@ class Player:
         ("x", "get_x"), ("y", "get_y"), ("z", "get_z"), ("spot", "spot"), ("move_to", "move_to"),
         ("turn_to", "turn_to"), ("angle", "angle"), ("walk_speed", "walk_speed"), ("jump_height", "jump_height"),
         ("jump", "jump"), ("hold", "hold"), ("looking_at", "looking_at"), ("touches", "touches"),
-        ("distance", "distance"), ("hide", "hide"), ("show", "show"),
+        ("distance", "distance"), ("hide", "hide"), ("show", "show"), ("on_hit", "on_hit"),
+        ("can_grab", "can_grab"), ("holding", "holding"),
     ]
     RADIUS = 0.32
     TALL = 1.75
@@ -2863,12 +4266,15 @@ class Player:
         self.pitch = 0.0
         self.vy = 0.0
         self.on_ground = True
+        self.phys_ground = -1.0  # the game's time when physics last said it stands on something physics moves
         self.speed = 5.0
         self.jump_v = math.sqrt(2 * GRAVITY * 1.2)
         self.alive = True
         self.hidden = False
         self.held = None
         self.body = None
+        self.hit_fns = []
+        self.teleported = False  # moved somewhere by the program: physics puts its capsule there (no walking there)
         if world is None:
             return
         self.cam_pos = None
@@ -2876,11 +4282,9 @@ class Player:
                                       lambda nested=False: f"<player at {tidy(self.x)}, {tidy(self.y)}, {tidy(self.z)}>")
         self.native.tg = self
         if mode == "third person":
-            self.body = Thing(world, "player", 0, 0, 0, (0.6, self.TALL, 0.6), [
-                ("capsule", {"r": 0.3, "h": 0.75, "y": 0.72, "seg": 10, "color": "#3574f0", "flat": True, "shadow": True}, True),
-                ("sphere", {"r": 0.22, "y": 1.48, "seg": 12, "color": "#f1c9a5", "shadow": True}, False),
-                ("box", {"w": 0.28, "h": 0.08, "d": 0.06, "y": 1.52, "z": -0.2, "color": "#2b2b2b"}, False),
-            ], pick=False)
+            parts = [(t, {**p, "shadow": True}, main)
+                     for t, p, main in person_parts("#3574f0", "#f1c9a5", "#5a3a22", "#2f3e5c", "short", "long", "#3a2a22")]
+            self.body = Thing(world, "player", 0, 0, 0, (0.6, self.TALL, 0.6), parts, pick=False)
             self.body.solid_ = False
             world.things.pop(self.body, None)
         hud = world.hud()
@@ -2925,7 +4329,12 @@ class Player:
         self.x, self.y, self.z, _ = self.world.where([x, y, z], (), "move_to")
         self.y = self.world.above(self.x, self.y, self.z)
         self.vy = 0.0
+        self.teleported = True
         self.place_camera(1)
+        return self.native
+
+    def on_hit(self, fn):
+        self.hit_fns.append(self.world.lib.check_fn(fn, ":on_hit"))
         return self.native
 
     def turn_to(self, degrees):
@@ -2945,10 +4354,15 @@ class Player:
         return self.native
 
     def jump(self):
-        if self.on_ground:
+        if self.grounded():
             self.vy = self.jump_v
             self.on_ground = False
         return self.native
+
+    def grounded(self):
+        """On the ground, for a jump: on the land or something solid, or (physics said so a moment ago) on a thing
+        physics moves, which Python's walking doesn't see under it."""
+        return self.on_ground or (self.vy <= 0 and self.world.clock - self.phys_ground < 0.15)
 
     def hold(self, item="axe"):
         name = self.rt.text(item).strip().lower()
@@ -2963,7 +4377,8 @@ class Player:
             self.held.heading = -15
             self.held.tilt, self.held.tilt_axis = 18, (0.0, 1.0)
         else:
-            self.held = Thing(w, name, 0.38, 0.75, -0.1, (0.3, 0.8, 0.1), held_parts(name), parent=self.body.node, pick=False)
+            # In the right hand as it hangs: the page (anim.js) moves it with the hand, gripped upright in the fist.
+            self.held = Thing(w, name, SHOULDER[0], 0.765, 0, (0.3, 0.8, 0.1), held_parts(name), parent=self.body.node, pick=False)
         self.held.solid_ = False
         self.held.push_rotation()
         if SCENE is not None: SCENE.held_made = list(SCENE.interp.lines)
@@ -2971,6 +4386,15 @@ class Player:
 
     def looking_at(self, reach=None):
         return self.world.looking_at(reach)
+
+    # ---- grabbing (see Interaction)
+    def can_grab(self, on=True):
+        self.world.interaction().can_grab(self.rt.truthy(on))
+        return self.native
+
+    def holding(self):
+        it = self.world.interact
+        return it.held.native if it is not None and it.held is not None else None
 
     def touches(self, other):
         v = self.rt.plain(other)
@@ -3010,7 +4434,15 @@ class Player:
 
     # ---- walking, every frame
     def solids(self):
-        return [t for t in self.world.things if isinstance(t, Thing) and t.alive and t.solid_ and not t.hidden]
+        """What stops the player here: solid things, except what physics moves (the page's physics stops the player
+        at those, and pushes them). A kinematic thing is here: the program moves it, so a lift carries the player.
+        So is a door that's shut (a locked one stays shut), unless it shut on the player: then it can walk out."""
+        out = [t for t in self.world.things if isinstance(t, Thing) and t.alive and t.solid_ and not t.hidden
+               and t.phys_kind != "dynamic"]
+        it = self.world.interact
+        if it is not None:
+            out += [d.panel for d in it.doors if d.shut() and not boxes_touch(self.box3(), d.panel.box3())]
+        return out
 
     def blocked(self, x, z, y, solids):
         r = self.RADIUS
@@ -3043,6 +4475,9 @@ class Player:
 
     def update(self, dt, real):
         w = self.world
+        if w.driving is not None:  # in the car: the keys and the camera are the car's
+            w.view.mouse_delta()  # and the mouse's moves go (kept, they'd spin the view on getting out)
+            return
         look = w.locked or w.fake_lock
         mdx, mdy = w.view.mouse_delta()
         if look and not w.is_paused:
@@ -3091,7 +4526,7 @@ class Player:
             else:
                 self.try_step(self.x, nz, solids)
             self.keep_inside()
-        if "space" in w.just and self.on_ground:
+        if "space" in w.just and self.grounded():
             self.vy = self.jump_v
             self.on_ground = False
         self.vy -= GRAVITY * dt
@@ -3148,6 +4583,1339 @@ class Player:
             w.cam = list(self.cam_pos)
             w.aim(self.x, self.y + 1.3, self.z)
         w.push_camera()
+
+
+# ---------------------------------------------------------------- physics (Rapier, in the page)
+
+def quat_mul(a, b):
+    """a then b... as three.js and Rapier do it: the rotation b, then a ([x, y, z, w])."""
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return [aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz]
+
+
+def yaw_quat(degrees):
+    """A turn about the up axis (counterclockwise from above, like three.js's ry)."""
+    h = math.radians(degrees) / 2
+    return [0.0, math.sin(h), 0.0, math.cos(h)]
+
+
+def heading_of(q):
+    """The way something turned by q faces (its -z), as tgame's heading: degrees clockwise from above."""
+    x, y, z, w = q
+    fx, fz = -2 * (x * z + w * y), -(1 - 2 * (x * x + y * y))
+    if abs(fx) < 1e-9 and abs(fz) < 1e-9:  # facing straight up or down: its up says where it faces
+        fx, fz = -2 * (x * y - w * z), -2 * (y * z + w * x)
+    return math.degrees(math.atan2(fx, -fz)) % 360
+
+
+def euler_of_quat(q):
+    """three.js rotation (x, y, z in degrees, XYZ order) for a quaternion."""
+    x, y, z, w = q
+    m11, m12, m13 = 1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)
+    m22, m23 = 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)
+    m32, m33 = 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)
+    ry = math.asin(clamp(m13, -1.0, 1.0))
+    if abs(m13) < 0.9999999:
+        rx, rz = math.atan2(-m23, m33), math.atan2(-m12, m11)
+    else:
+        rx, rz = math.atan2(m32, m22), 0.0
+    return math.degrees(rx), math.degrees(ry), math.degrees(rz)
+
+
+class Physics:
+    """A game's physics: Rapier, stepping in the game's page (tuff_view_web/physics.js), started by the first thing
+    that uses it. Python tells the page what each thing's body is (a `phys` property on its object: kind, shape,
+    size, mass, bounce...) and sends the program's kicks, twists and explosions. Every frame the page sends back
+    where the physics things went and what hit what (a "phys" event); the things keep those values and never send
+    them back. A thing moved by the program (move_to, glide...) goes on from there in the page, and the reports from
+    before the page had that move (each says the last batch it had) leave the thing be.
+
+    In a 3D world, solid things (buildings, rocks, trees' trunks, things made solid), the land, the island and the
+    ground become bodies that don't move, and the player becomes a capsule that walks into physics things, pushes
+    them and stands on them: Python walks it as always, sends each step, and the page says where it ended up.
+
+    In Tuff Engine's preview (tuff.py --scene) nothing is sent: the settings are only kept, for its Inspector."""
+
+    def __init__(self, game):
+        self.game = game
+        self.d3 = game.three_d
+        self.live = SCENE is None
+        self.gravity_ = -9.8 if self.d3 else 900.0
+        self.walls_ = False
+        self.paused = False
+        self.dirty = set()  # things whose body may have changed: they're checked once, at the frame
+        # Things removed in the last frames, by their object's id: the page reports a hit a few steps after it
+        # starts, so a bullet removed as it hits is still what hit the target. {id: (thing, frame it went)}
+        self.gone = {}
+        # The player (3D): its moves the page hasn't made yet, [seq, (dx, dy, dz)], and where the page will have it
+        self.seq = self.first_seq = 0
+        self.moves = collections.deque()
+        self.sent = None
+        self.send("start", {"dim": 3 if self.d3 else 2, "gravity": self.gravity_})
+        if self.d3:
+            self.dirty.update(t for t in game.things if isinstance(t, Thing))
+            if game.land is not None:
+                self.dirty.add(game.land)
+
+    def send(self, op, *args):
+        if self.live and not self.game.closed:
+            self.game.view.call(0, "physics", op, *args)
+
+    def set_gravity(self, g):
+        self.gravity_ = g
+        self.send("gravity", g)
+
+    def sync(self, t):
+        """Tells the page what t's body is now, if that changed."""
+        self.dirty.discard(t)
+        spec = t.phys_spec() if t.alive else None
+        if spec != t.phys_sent:
+            t.phys_sent = spec
+            if self.live and t.alive:
+                self.game.view.set(t.node, phys=spec)
+
+    def frame(self):
+        """Before each frame goes: the bodies that changed, and pausing (physics stops while the game is paused)."""
+        for t in list(self.dirty):
+            self.sync(t)
+        if self.gone:
+            self.gone = {i: g for i, g in self.gone.items() if self.game.frames - g[1] < 30}
+        paused = bool(self.game.is_paused)
+        if paused != self.paused:
+            self.paused = paused
+            self.send("pause", paused)
+
+    # ---- the player's capsule (3D)
+    def player_sync(self, p):
+        """After the player walked: its move goes to the page (a teleport when the program moved it)."""
+        at = (p.x, p.y, p.z)
+        if self.sent is None or p.teleported:
+            p.teleported = False
+            self.seq += 1
+            self.first_seq = self.seq  # reports from before it are about where it was
+            self.moves.clear()
+            self.sent = at
+            self.send("player_to", self.seq, *at)
+            if self.game.driving is not None:  # in a car (from the start): its capsule stays out of the way
+                self.send("player_off")
+            return
+        d = (at[0] - self.sent[0], at[1] - self.sent[1], at[2] - self.sent[2])
+        if not any(d):
+            return
+        self.seq += 1
+        self.moves.append((self.seq, d))
+        self.sent = at
+        self.send("player", self.seq, *d, *at)
+
+    def player_report(self, p, rep):
+        """Where the page's capsule is after the moves up to `done`: the player is there, plus the moves the page
+        hasn't made yet. Standing on a physics thing, it's on the ground. Not when the program has just moved the
+        player (move_to, getting out of a car): that goes to the page next, and the capsule's spot is the old one."""
+        done, x, y, z, grounded = rep
+        if p.teleported or done < self.first_seq or self.sent is None:
+            return
+        while self.moves and self.moves[0][0] <= done:
+            self.moves.popleft()
+        for _, d in self.moves:
+            x, y, z = x + d[0], y + d[1], z + d[2]
+        p.x, p.y, p.z = x, y, z
+        self.sent = (x, y, z)
+        if grounded and p.vy <= 0:
+            p.vy, p.on_ground, p.phys_ground = 0.0, True, self.game.clock
+
+    # ---- what the page says
+    def who(self, i):
+        """The thing a body in a report belongs to (0: the player; -1: a wall)."""
+        g = self.game
+        if i == 0:
+            return getattr(g, "the_player", None)
+        land = getattr(g, "land", None)
+        if land is not None and i == int(land.node):
+            return land
+        t = g.by_node.get(i)
+        return t if t is not None or i not in self.gone else self.gone[i][0]
+
+    def forget(self, t):
+        """t was removed: for a few frames more, a hit it was in still names it."""
+        self.gone[int(t.node)] = (t, self.game.frames)
+
+    def report(self, e):
+        g = self.game
+        seen = e.get("seq")  # the last batch the page had applied: a thing moved in a later one isn't there yet
+        for b in e.get("b") or ():
+            t = g.by_node.get(b[0])
+            if t is not None and t.alive and hasattr(t, "from_physics") and (seen is None or seen >= t.moved_in):
+                t.from_physics(b)
+        p = e.get("p")
+        if p and getattr(g, "the_player", None) is not None:
+            self.player_report(g.the_player, p)
+        c = e.get("c")
+        if c and getattr(g, "cam_mode", None) == "drive":  # where the chase camera is
+            g.cam, g.cam_yaw, g.cam_pitch = list(c[:3]), c[3] % 360, c[4]
+        for a, b, strength in e.get("h") or ():
+            self.hit(a, b, strength)
+
+    def hit(self, a, b, strength):
+        """Something hit something: each one with an on_hit function gets it, with the other and how hard (N·s)."""
+        ta, tb = self.who(a), self.who(b)
+        for me, other, oid in ((ta, tb, b), (tb, ta, a)):
+            fns = getattr(me, "hit_fns", None)
+            if not fns or not getattr(me, "alive", True):
+                continue
+            value = "wall" if oid == -1 else getattr(other, "native", None)
+            for fn in list(fns):
+                self.game.fire(fn, value, tidy(strength))
+
+    def state(self):
+        """For the autopilot's reports."""
+        bodies = []
+        for t in self.game.things:
+            if not t.alive or t.phys_kind is None:
+                continue
+            if isinstance(t, Sprite):
+                bodies.append([t.phys_name(), round(t.x, 2), round(t.y, 2), round(t.rot, 1), round(math.hypot(*t.vel), 2)])
+            else:
+                q = t.quat or [0, 0, 0, 1]
+                up = 1 - 2 * (q[0] * q[0] + q[2] * q[2])  # 1: upright, 0: on its side, -1: upside down
+                bodies.append([t.kind, round(t.x, 2), round(t.y - t.ground(), 3), round(t.z, 2), round(math.hypot(*t.vel), 2),
+                               round(t.heading, 1), round(up, 3)])
+        return {"gravity": self.gravity_, "walls": self.walls_, "bodies": bodies}
+
+
+class Car(Thing):
+    """world:car: a car to drive. In the page it's Rapier's ray-cast vehicle: a body on four wheels that are rays with
+    springs, so it rolls over the land, leans in corners and can roll over (car:flip puts it back on its wheels).
+    car:drive gives it the keys (W or up goes, S or down brakes and then backs up, A and D or left and right steer,
+    Space brakes) and the camera, which follows it from behind. car:speed is how fast it goes, in km/h."""
+    KIND = "car"
+    NAMES = [(n, "car_speed" if n == "speed" else a) for n, a in Thing.NAMES] + [
+        ("drive", "drive"), ("engine", "engine"), ("flip", "flip")]
+    EXAMPLE = "car"
+    MASS = 150
+    WHEEL_R = 0.36
+    REST = 0.35  # the springs' length
+    CY = 0.79    # the body's middle above the car's position (the ground under its wheels)
+    HALF = [0.9, 0.32, 1.9]
+    WHEELS = ((-0.82, 0.64, -1.25), (0.82, 0.64, -1.25), (-0.82, 0.64, 1.25), (0.82, 0.64, 1.25))  # front first (-z)
+
+    def __init__(self, world, x, y, z, color):
+        c = world.color(color)
+        trim, light, back = "#2b2d31", "#fff6d8", "#d4202a"
+        paint = {"color": c, "metal": 0.35, "rough": 0.38, "shadow": True}
+        parts = [
+            ("box", {"w": 1.8, "h": 0.52, "d": 3.8, "y": 0.74, **paint}, True),
+            ("box", {"w": 1.46, "h": 0.44, "d": 1.8, "y": 1.2, "z": 0.2, "color": "#1f2a36", "metal": 0.6, "rough": 0.15,
+                     "shadow": True}, False),
+            ("box", {"w": 1.52, "h": 0.07, "d": 1.86, "y": 1.45, "z": 0.2, **paint}, True),
+            ("box", {"w": 1.84, "h": 0.16, "d": 0.14, "y": 0.52, "z": -1.92, "color": trim}, False),
+            ("box", {"w": 1.84, "h": 0.16, "d": 0.14, "y": 0.52, "z": 1.92, "color": trim}, False),
+        ] + [("box", {"w": 0.34, "h": 0.13, "d": 0.05, "x": sx * 0.6, "y": 0.84, "z": -1.91, "color": light,
+                      "emissive": "#fff2c0", "mat": "basic"}, False) for sx in (-1, 1)
+             ] + [("box", {"w": 0.3, "h": 0.12, "d": 0.05, "x": sx * 0.62, "y": 0.86, "z": 1.91, "color": back,
+                           "emissive": "#7a0a10"}, False) for sx in (-1, 1)]
+        wheels = [("group", {"x": wx, "y": wy - 0.28, "z": wz}, False) for wx, wy, wz in self.WHEELS]
+        super().__init__(world, "car", x, y, z, (1.9, 1.5, 3.9), parts + wheels)
+        self.wheel_nodes = [node for node, _ in self.parts[len(parts):]]
+        for wn in self.wheel_nodes:  # each wheel: a tyre and a hub, turned to roll along z
+            for part in (world.view.obj(wn, "cylinder", r=self.WHEEL_R, h=0.26, rz=90, seg=22, color="#24262b", rough=0.92, shadow=True),
+                         world.view.obj(wn, "cylinder", r=0.2, h=0.28, rz=90, seg=12, color="#c0c6cf", metal=0.7, rough=0.3)):
+                world.by_node[int(part)] = self
+        self.phys_kind = "dynamic"
+        self.kmh = 0.0
+        self.controls = (0, 0, 0)
+        world.physics_on().sync(self)
+
+    def can_have_physics(self, kind):
+        if kind != "dynamic":
+            raise self.rt.error("A car always uses physics (it drives on its wheels).")
+
+    def phys_spec(self):
+        if not self.alive or self.world.phys is None:
+            return None
+        return {"kind": "dynamic", "shape": "car", "size": self.HALF, "cy": self.CY, "wheel_r": self.WHEEL_R,
+                "rest": self.REST, "mass": self.mass_ or self.MASS, "bounce": self.bounce_, "friction": self.friction_,
+                "hits": bool(self.hit_fns), "wheels": [[int(n), *xyz] for n, xyz in zip(self.wheel_nodes, self.WHEELS)]}
+
+    def from_physics(self, b):
+        """Like an object's, and the car's speed (km/h, forward)."""
+        Thing.from_physics(self, b)
+        self.kmh = b[11] if len(b) > 11 else 0.0
+
+    def car_speed(self):
+        return tidy(self.kmh)
+
+    def drive(self, on=True):
+        w = self.world
+        ph = w.physics_on()
+        if self.rt.truthy(on):
+            if w.driving is not None and w.driving is not self:
+                w.driving.drive(False)
+            w.driving = self
+            if w.cam_mode != "player":
+                w.cam_mode = "drive"
+            w.camera_dirty = False
+            ph.send("chase", int(self.node))
+            p = w.the_player
+            if p is not None:  # in the car: its figure and its capsule aren't left standing where it got in
+                if p.body is not None:
+                    p.body.hide()
+                ph.send("player_off")
+        elif w.driving is self:
+            w.driving = None
+            self.controls = (0, 0, 0)
+            ph.send("drive", int(self.node), 0, 0, 0)
+            ph.send("chase", None)
+            if w.cam_mode == "drive":
+                w.cam_mode = "fixed"
+                w.push_camera()  # the camera stays where it was, behind the car
+            p = w.the_player
+            if p is not None:  # out of the car, beside its door
+                h = math.radians(self.heading)
+                p.x, p.z = self.x - math.cos(h) * 2.2, self.z - math.sin(h) * 2.2
+                p.y, p.vy = w.ground_y(p.x, p.z), 0.0
+                p.teleported = True  # its capsule comes back there (player_to)
+                if p.body is not None and not p.hidden:
+                    p.body.show()
+                p.place_camera(1)
+        if getattr(w, "hud_js", None) is not None:
+            w.hud_js.player()  # the minimap and the arrow measure from the car while it's driven
+        return self.native
+
+    def engine(self, power):
+        n = self.num(power, ":engine")
+        if n < 0:
+            raise self.rt.error("car:engine needs a number of 0 or more (1 is normal), like car:engine(1.5).")
+        self.world.physics_on().send("engine", int(self.node), n)
+        return self.native
+
+    def flip(self):
+        self.world.physics_on().send("flip", int(self.node))
+        return self.native
+
+
+# A ragdoll's parts: name, shape, size (a ball's radius; a box's half sizes; a capsule's half length and radius), its
+# middle when it stands (feet at 0), mass (kg), and which part of a person (person_parts) it's dressed as. They're a
+# little slimmer than the person they look like, so parts that aren't joined don't touch as it stands. And its
+# joints: the two parts, where they meet (the person's own joints), "ball" (turns any way) or "hinge" (bends one way,
+# about x: forward is more), and how far a hinge bends.
+_SX, _SY = SHOULDER
+_HX, _HY = HIP
+_BEND = WAIST + 0.025  # where its body bends at the waist: the chest's box starts a little above it, so bending
+#                        doesn't push the chest into the tops of its legs
+RAGDOLL = (
+    ("head", "ball", 0.165, (0, HEAD[0], 0), 1.0, "head"),
+    ("chest", "box", (0.17, (_SY - _BEND - 0.05) / 2, 0.125), (0, (_SY + _BEND + 0.05) / 2, 0), 3.0, "torso"),
+    ("hips", "box", (0.16, 0.1, 0.115), (0, _BEND - 0.06, 0), 2.0, "body"),
+    ("left arm", "capsule", ((_SY - ELBOW) / 2, 0.07), (-_SX, (_SY + ELBOW) / 2, 0), 0.6, "arm_l"),
+    ("right arm", "capsule", ((_SY - ELBOW) / 2, 0.07), (_SX, (_SY + ELBOW) / 2, 0), 0.6, "arm_r"),
+    ("left hand", "capsule", (0.13, 0.065), (-_SX, ELBOW - 0.1, 0), 0.4, "forearm_l"),
+    ("right hand", "capsule", (0.13, 0.065), (_SX, ELBOW - 0.1, 0), 0.4, "forearm_r"),
+    ("left leg", "capsule", ((_HY - KNEE) / 2, 0.08), (-_HX, (_HY + KNEE) / 2, 0), 1.2, "leg_l"),
+    ("right leg", "capsule", ((_HY - KNEE) / 2, 0.08), (_HX, (_HY + KNEE) / 2, 0), 1.2, "leg_r"),
+    ("left foot", "capsule", ((KNEE - 0.084) / 2, 0.08), (-_HX, (KNEE + 0.084) / 2, 0), 0.8, "shin_l"),
+    ("right foot", "capsule", ((KNEE - 0.084) / 2, 0.08), (_HX, (KNEE + 0.084) / 2, 0), 0.8, "shin_r"),
+)
+RAGDOLL_JOINTS = (
+    ("chest", "head", (0, NECK, 0), "ball", None),
+    ("chest", "hips", (0, _BEND, 0), "hinge", (-0.8, 0.3)),
+    ("chest", "left arm", (-_SX, _SY, 0), "ball", None),
+    ("chest", "right arm", (_SX, _SY, 0), "ball", None),
+    ("left arm", "left hand", (-_SX, ELBOW, 0), "hinge", (0, 2.0)),
+    ("right arm", "right hand", (_SX, ELBOW, 0), "hinge", (0, 2.0)),
+    ("hips", "left leg", (-_HX, _HY, 0), "hinge", (-0.5, 1.2)),
+    ("hips", "right leg", (_HX, _HY, 0), "hinge", (-0.5, 1.2)),
+    ("left leg", "left foot", (-_HX, KNEE, 0), "hinge", (-2.0, 0)),
+    ("right leg", "right foot", (_HX, KNEE, 0), "hinge", (-2.0, 0)),
+)
+RAGDOLL_MASS = sum(p[4] for p in RAGDOLL)
+
+
+class Ragdoll(Thing):
+    """world:ragdoll: a person made of parts held together by joints (a ball for the head, boxes for the chest and
+    hips, capsules for the arms and legs), dressed like the kit's person (in the shirt colour it's given, with hair
+    and a face). Made standing on the ground, it stands still until something hits it or it's pushed, then flops
+    over; made in the air, it falls. Its x and z are its chest's, its y its lowest part's; a push goes to its chest."""
+    KIND = "ragdoll"
+    EXAMPLE = "dummy"
+
+    def __init__(self, world, x, y, z, color):
+        # Each physics part is a group where its body is (physics moves it), holding the person's parts for that
+        # part of the body, where they are on the person.
+        look = {}
+        for type_, p, main in person_parts(world.color(color)):
+            look.setdefault(p["anim"][1], []).append((type_, {k: v for k, v in p.items() if k != "anim"}, main))
+        super().__init__(world, "ragdoll", x, y, z, (0.6, 1.7, 0.3),
+                         [("group", {"x": at[0], "y": at[1], "z": at[2]}, False) for _, _, _, at, _, _ in RAGDOLL])
+        for (node, _), (_, _, _, at, _, role) in zip(list(self.parts), RAGDOLL):
+            for type_, p, main in look[role]:
+                p = {**p, "x": p.get("x", 0) - at[0], "y": p.get("y", 0) - at[1], "z": p.get("z", 0) - at[2], "shadow": True}
+                child = world.view.obj(node, type_, **p)
+                world.by_node[int(child)] = self
+                self.parts.append((child, main))
+        self.phys_kind = "dynamic"
+        self.standing = self.y - self.ground() < 0.05  # on the ground: it stands until something knocks it over
+        world.physics_on().sync(self)
+
+    def can_have_physics(self, kind):
+        if kind != "dynamic":
+            raise self.rt.error("A ragdoll always uses physics (that's what makes it flop).")
+
+    def phys_spec(self):
+        if not self.alive or self.world.phys is None:
+            return None
+        names = [p[0] for p in RAGDOLL]
+        scale = (self.mass_ / RAGDOLL_MASS) if self.mass_ else 1.0
+        return {"kind": "dynamic", "shape": "ragdoll", "main": names.index("chest"), "bounce": self.bounce_,
+                "friction": self.friction_, "hits": bool(self.hit_fns), "stand": self.standing,
+                "parts": [[int(node), shape, size, list(at), round(mass * scale, 4)]
+                          for (node, _), (_, shape, size, at, mass, _) in zip(self.parts, RAGDOLL)],
+                "joints": [[names.index(a), names.index(b), list(at), kind, list(lim) if lim else None]
+                           for a, b, at, kind, lim in RAGDOLL_JOINTS]}
+
+
+# ---------------------------------------------------------------- talking, grabbing, doors and keys (3D)
+
+TALK_REACH = 3.0  # how near the player has to be to talk to someone (npc:on_talk) or to grab something
+DOOR_REACH = 2.5  # how near a door has to be for E to open or close it
+HOLD_AT = 2.2     # how far in front of the player's eyes a held thing floats
+THROW = 13.0      # how fast a thrown thing flies off (metres a second)
+# Little sounds for the page's synth (like SOUNDS): a door swinging open, banging shut, rattling when it's locked, a
+# thing picked up and thrown.
+INTERACT_SOUNDS = {
+    "open": [[300, 0, 0.22, "triangle", 0.45, 150], [700, 0, 0.12, "noise", 0.18, 200]],
+    "shut": [[120, 0, 0.14, "sine", 1, 55], [900, 0, 0.06, "noise", 0.5, 150]],
+    "locked": [[220, 0, 0.06, "square", 0.45], [180, 0.08, 0.07, "square", 0.45]],
+    "grab": [[440, 0, 0.07, "sine", 0.7, 760]],
+    "throw": [[1100, 0, 0.2, "noise", 0.55, 250]],
+}
+
+
+def name_of(t):
+    """What a message calls a thing: its label ("Gold Key"), or what it is ("key")."""
+    return t.label_text.strip() or t.kind
+
+
+def door_local(heading, dx, dz):
+    """A world offset in a door's own space (x along the door, z through it), for a door facing `heading`."""
+    h = math.radians(heading)
+    return dx * math.cos(h) + dz * math.sin(h), -dx * math.sin(h) + dz * math.cos(h)
+
+
+def door_world(heading, lx, lz):
+    """A door's own offset as a world one (door_local the other way)."""
+    h = math.radians(heading)
+    return lx * math.cos(h) - lz * math.sin(h), lx * math.sin(h) + lz * math.cos(h)
+
+
+class Interaction:
+    """A world's talking, grabbing, doors and keys: made by the first npc:say, npc:on_talk, world:door or
+    player:can_grab, and run every frame by World3D.update.
+
+    E does the first of these that it can: talk to the nearest one with an on_talk within 3 m, open or close the
+    nearest door within 2.5 m, or grab the physics thing the player is looking at within 3 m (with player:can_grab).
+    A hint at the bottom says what E will do ("E: Talk"). A held thing floats in front of the player (its speed is set
+    toward that spot every frame, so it still bumps into things), a click throws it and E drops it. Walking into a key
+    (the kit's "key", or anything a door needs) picks it up, and walking into a door opens it, away from the player.
+    Speech bubbles are drawn by the page (tuff_view_web/interact.js); this keeps them over whoever's talking."""
+
+    def __init__(self, world):
+        self.world = world
+        self.grab_on = False
+        self.held = None
+        self.talkers = {}  # thing -> its on_talk functions
+        self.doors = []
+        self.keys = {}     # things the player picked up (a dict used as an ordered set)
+        self.wanted = {}   # things a door needs: walking into them picks them up, like a key
+        self.bubbles = {}  # thing -> [its bubble's node, when it goes (the game's clock) or None, its words, where it is]
+        self.hint = self.hint_bg = self.note = self.note_bg = None
+        self.hint_text = self.note_text = None
+        self.note_until = 0.0
+
+    # ---- what the program asks for
+    def say(self, t, text, seconds):
+        w = self.world
+        words = w.rt.text(text)
+        secs = w.num(seconds, ":say")
+        if secs < 0:
+            raise w.rt.error(":say needs how many seconds the bubble shows (0 keeps it), like npc:say(\"Hi!\", 3).")
+        if not words.strip():
+            self.unsay(t)
+            return
+        b = self.bubbles.get(t)
+        if b is None:
+            b = self.bubbles[t] = [w.view.obj(w.scene, "group", pick=False), None, "", None]
+        b[1] = w.clock + secs if secs > 0 else None
+        b[2] = words
+        b[3] = None  # placed again below
+        w.view.js(f"window.tgInteract && window.tgInteract.say(tv, {int(b[0])}, {json.dumps(words)})")
+        self.follow(t, b)
+
+    def unsay(self, t):
+        b = self.bubbles.pop(t, None)
+        if b is not None and not self.world.closed:
+            self.world.view.remove(b[0])
+
+    def on_talk(self, t, fn):
+        self.talkers.setdefault(t, []).append(self.world.lib.check_fn(fn, ":on_talk"))
+
+    def can_grab(self, on):
+        self.grab_on = on
+        if on:
+            self.world.physics_on()  # what it grabs are physics things
+        elif self.held is not None:
+            self.drop()
+
+    def is_locked(self, door):
+        return door.locked_ or (door.need is not None and door.need not in self.keys)
+
+    # ---- every frame
+    def update(self, dt):
+        w = self.world
+        for t, b in list(self.bubbles.items()):
+            if not t.alive or (b[1] is not None and w.clock >= b[1]):
+                self.unsay(t)
+            else:
+                self.follow(t, b)
+        if self.note_text is not None and w.clock >= self.note_until:
+            self.show_note(None)
+        p = w.the_player
+        if p is None or w.driving is not None or w.closed:
+            self.show_hint(None)
+            return
+        if w.is_paused:
+            return
+        self.pick_up(p)
+        for d in self.doors:
+            if d.alive:
+                d.near_player(p, self)
+        if self.held is not None:
+            self.carry(p)
+        do, what = self.choice(p)
+        # An E that hid a screen (a note the program closes with E) only hides it, and the click that locks the mouse
+        # again (after Escape) isn't a throw.
+        mine = not w.input_paused
+        if mine and "e" in w.just and do is not None:
+            do(what)
+            do, what = self.choice(p)
+        elif mine and "mouse" in w.just and self.held is not None and not w.lock_click:
+            self.throw(p)
+            do, what = self.choice(p)
+        self.show_hint(self.hint_for(do, what))
+
+    def follow(self, t, b):
+        """A bubble stays over the one talking (and hides with it)."""
+        at = (t.x, t.y + (0.9 if t.fallen else t.height()) + 0.3, t.z, t.hidden)
+        if at != b[3]:
+            b[3] = at
+            self.world.view.set(b[0], x=at[0], y=at[1], z=at[2], visible=not t.hidden)
+
+    def choice(self, p):
+        """What E does now: (a function, what it's given), or (None, None)."""
+        if self.held is not None:
+            return self.drop, None
+        near = [(math.hypot(t.x - p.x, t.z - p.z), i, t) for i, t in enumerate(self.talkers)
+                if t.alive and not t.hidden and self.talkers[t]]
+        near = [n for n in near if n[0] <= TALK_REACH]
+        if near:
+            return self.talk, min(near)[2]
+        doors = [(math.hypot(d.x - p.x, d.z - p.z), i, d) for i, d in enumerate(self.doors) if d.alive and not d.hidden]
+        doors = [n for n in doors if n[0] <= DOOR_REACH]
+        if doors:
+            return self.use_door, min(doors)[2]
+        if self.grab_on:
+            t = self.aimed_at(p)
+            if t is not None:
+                return self.grab, t
+        return None, None
+
+    def hint_for(self, do, what):
+        if do is None:
+            return None
+        if do == self.drop:
+            return "E: Drop     Click: Throw"
+        if do == self.talk:
+            return "E: Talk"
+        if do == self.use_door:
+            return "E: Close" if what.want else "E: Open"
+        return "E: Grab"
+
+    # ---- talking
+    def talk(self, t):
+        for fn in list(self.talkers.get(t, ())):
+            self.world.fire(fn)
+
+    # ---- grabbing and throwing
+    def eyes(self, p):
+        """Where the player looks from and which way: (x, y, z) and a direction (first person: the way it looks;
+        third person: level, the way it faces)."""
+        pitch = math.radians(clamp(p.pitch, -60, 60)) if p.mode == "first person" else 0.0
+        h = math.radians(p.heading)
+        f = (math.sin(h) * math.cos(pitch), math.sin(pitch), -math.cos(h) * math.cos(pitch))
+        return (p.x, p.y + (p.EYE if p.mode == "first person" else 1.1), p.z), f
+
+    def middle(self, t):
+        return t.x, t.y + t.height() / 2, t.z
+
+    def aimed_at(self, p):
+        """The physics thing nearest along the player's view within reach (a thing counts if the view passes within
+        its own size of its middle)."""
+        o, f = self.eyes(p)
+        best = None
+        for t in self.world.things:
+            if not isinstance(t, Thing) or isinstance(t, Car) or not t.alive or t.hidden or not t.dynamic():
+                continue
+            m = self.middle(t)
+            d = (m[0] - o[0], m[1] - o[1], m[2] - o[2])
+            along = d[0] * f[0] + d[1] * f[1] + d[2] * f[2]
+            r = max(0.3, max(t.dims[0] * t.k[0], t.dims[1] * t.k[1], t.dims[2] * t.k[2]) / 2)
+            if along <= 0 or along > TALK_REACH + r:
+                continue
+            off = math.dist(d, (f[0] * along, f[1] * along, f[2] * along))
+            if off <= r * 0.9 + (0.15 if p.mode == "first person" else 0.6) and (best is None or along < best[0]):
+                best = (along, t)
+        return best[1] if best else None
+
+    def grab(self, t):
+        self.held = t
+        self.world.view.call(0, "tones", INTERACT_SOUNDS["grab"], 0.2)
+
+    def drop(self, _=None):
+        self.held = None
+
+    def carry(self, p):
+        """The held thing goes toward its spot in front of the player: its speed is set that way every frame."""
+        t = self.held
+        if not t.alive or t.hidden or not t.dynamic():
+            self.held = None
+            return
+        o, f = self.eyes(p)
+        want = (o[0] + f[0] * HOLD_AT, max(o[1] + f[1] * HOLD_AT, p.y + 0.2 + t.height() / 2), o[2] + f[2] * HOLD_AT)
+        gap = [a - b for a, b in zip(want, self.middle(t))]
+        if math.hypot(*gap) > 4.5:  # stuck behind something, or left behind: it's let go
+            self.held = None
+            return
+        v = [g * 12 for g in gap]
+        speed = math.hypot(*v)
+        if speed > 18:
+            v = [c * 18 / speed for c in v]
+        t.vel = v
+        self.world.phys.send("velocity", int(t.node), *v)
+
+    def throw(self, p):
+        t, self.held = self.held, None
+        _, f = self.eyes(p)
+        v = [f[0] * THROW, f[1] * THROW + (2.0 if p.mode == "first person" else 3.5), f[2] * THROW]
+        t.vel = v
+        self.world.phys.send("velocity", int(t.node), *v)
+        self.world.view.call(0, "tones", INTERACT_SOUNDS["throw"], 0.2)
+
+    # ---- doors and keys
+    def use_door(self, d):
+        if d.want:
+            d.swing_to(0)
+        elif self.is_locked(d):
+            self.locked(d)
+        else:
+            d.open_from(self.world.the_player, auto=True)
+
+    def locked(self, d):
+        need = f" You need the {name_of(d.need)}." if d.need is not None and d.need not in self.keys else ""
+        self.show_note("Locked!" + need)
+        self.world.view.call(0, "tones", INTERACT_SOUNDS["locked"], 0.25)
+
+    def pick_up(self, p):
+        """Walking into a key (or something a door needs) picks it up: it disappears."""
+        box = p.box3()
+        for t in list(self.world.things):
+            if not isinstance(t, Thing) or t in self.keys or not t.alive or t.hidden:
+                continue
+            if (t.kind == "key" or t in self.wanted) and boxes_touch(box, t.box3()):
+                self.keys[t] = None
+                if self.held is t:
+                    self.held = None
+                t.hide()
+                self.world.view.call(0, "tones", SOUNDS["coin"], 0.3)
+                self.show_note(f"You got the {name_of(t)}!")
+
+    # ---- the hint and the messages on the HUD
+    def pill(self, words, y, size, fg, sprites):
+        """A line of words on a dark rounded box in the middle of the window, at y: (box, text), made or changed."""
+        hud = self.world.hud()
+        w, h = len(words) * size * 0.56 + 30, size + 18
+        box, text = sprites
+        if box is None:
+            box = hud.make("rect", self.world.W / 2, y, {"w": w, "h": h, "radius": h / 2, "color": "#11141a",
+                                                         "alpha": 0.62, "z": 5e5 + 1}, own=False)
+            text = hud.make("text", self.world.W / 2, y, {"text": words, "size": size, "bold": True, "color": fg,
+                                                          "ax": 0.5, "ay": 0.5, "z": 5e5 + 2}, own=False)
+        else:
+            box.w = w
+            box.send(w=w, visible=True)
+            text.words = words
+            text.send(text=words, visible=True)
+            box.hidden = text.hidden = False
+        return box, text
+
+    def show_hint(self, words):
+        if words == self.hint_text:
+            return
+        self.hint_text = words
+        if words is None:
+            for s in (self.hint_bg, self.hint):
+                if s is not None:
+                    s.hide()
+            return
+        self.hint_bg, self.hint = self.pill(words, self.world.H - 70, 17, "#ffffff", (self.hint_bg, self.hint))
+
+    def show_note(self, words):
+        self.note_text = words
+        if words is None:
+            for s in (self.note_bg, self.note):
+                if s is not None:
+                    s.hide()
+            return
+        self.note_until = self.world.clock + 1.8
+        self.note_bg, self.note = self.pill(words, self.world.H / 2 + 64, 22, "#ffe9a8", (self.note_bg, self.note))
+
+    def state(self):
+        """For the autopilot's reports."""
+        return {"grab": self.grab_on, "held": self.held.kind if self.held is not None else None,
+                "bubbles": [b[2] for t, b in self.bubbles.items() if t.alive], "hint": self.hint_text,
+                "note": self.note_text, "keys": [t.kind for t in self.keys],
+                "doors": [{"angle": round(d.angle, 1), "open": bool(d.want), "locked": self.is_locked(d)}
+                          for d in self.doors if d.alive]}
+
+
+class Door(Thing):
+    """world:door: a door in its frame. The door itself swings on a hinge at its left side (seen from the front, which
+    faces -z like everything; door:turn turns the whole doorway). tgame swings it a little every frame and, since a
+    door turns physics on, it's a kinematic body there: it pushes physics things out of its way. Shut, it stops the
+    player like anything solid (Player.solids). The player walking into it, or pressing E near it, opens it away from
+    the player, and it shuts again a few seconds after the player's gone through; door:open() opens it until
+    door:close(). A locked one (door:lock(), or door:needs(key) until the player has picked up that key) stays shut
+    and says "Locked!"."""
+    KIND = "door"
+    NAMES = Thing.NAMES + [("open", "open"), ("close", "close"), ("needs", "needs"), ("lock", "lock"),
+                           ("unlock", "unlock")]
+    EXAMPLE = "door"
+    WIDE, TALL, THICK = 1.0, 2.0, 0.08  # the door itself (its frame is a little bigger)
+    SWING = 100  # how far it opens (degrees)
+    STAYS = 3.0  # seconds it stays open after the player went through
+
+    def __init__(self, world, x, y, z, color):
+        c = world.color(color)
+        frame = {"color": _shade(c, -0.3), "rough": 0.85}
+        parts = [
+            ("box", {"w": 0.14, "h": 2.14, "d": 0.2, "x": -0.58, "y": 1.07, **frame}, False),
+            ("box", {"w": 0.14, "h": 2.14, "d": 0.2, "x": 0.58, "y": 1.07, **frame}, False),
+            ("box", {"w": 1.3, "h": 0.14, "d": 0.22, "y": 2.1, **frame}, False),
+            ("box", {"w": 1.02, "h": 0.03, "d": 0.24, "y": 0.015, "color": "#8f8a80", "rough": 0.95}, False),
+        ]
+        super().__init__(world, "door", x, y, z, (1.3, 2.17, 0.24), [(t, {"shadow": True, **p}, m) for t, p, m in parts])
+        self.solid_ = False   # the doorway is open: the door itself is what's in the way
+        self.angle = 0.0      # how far it has swung (degrees, one way or the other)
+        self.want = 0.0       # where it's swinging to (0: shut)
+        self.swinging = None  # [from, to, seconds so far, seconds it takes]
+        self.locked_ = False
+        self.need = None
+        self.close_at = None  # opened by the player: when it may shut again (the game's clock)
+        self.at_door = False  # the player is in the doorway (so a locked door says so once each time)
+        ph = world.physics_on()
+        wood = {"rough": 0.8}
+        knob = {"color": "#d9b45a", "metal": 0.8, "rough": 0.3, "emissive": "#3a2a00"}
+        W, T, D = self.WIDE, self.TALL, self.THICK
+        panel = [("box", {"w": W, "h": T, "d": D, "y": T / 2, "color": c, **wood}, True)]
+        for py in (0.5, 1.45):  # two sunk panels on each side
+            for pz in (-D / 2 - 0.005, D / 2 + 0.005):
+                panel.append(("box", {"w": W * 0.66, "h": 0.66, "d": 0.012, "y": py, "z": pz, "color": _shade(c, -0.16),
+                                      **wood}, False))
+        for pz in (-D / 2 - 0.035, D / 2 + 0.035):
+            panel.append(("sphere", {"r": 0.045, "x": W / 2 - 0.12, "y": 1.0, "z": pz, "seg": 10, **knob}, False))
+        self.panel = Thing(world, "door panel", x, y, z, (W, T, D), [(t, {"shadow": True, **p}, m) for t, p, m in panel])
+        world.things.pop(self.panel, None)  # it's the door's: a program only sees the door
+        for node in [self.panel.node] + [n for n, _ in self.panel.parts]:
+            world.by_node[int(node)] = self  # clicking it, looking at it or hitting it is the door
+        self.panel.phys_kind = "kinematic"
+        ph.dirty.add(self.panel)
+        world.interaction().doors.append(self)
+        self.place_panel()
+
+    def can_have_physics(self, kind):
+        raise self.rt.error("A door swings on its hinge by itself: it doesn't need :physics.")
+
+    def place_panel(self):
+        """The door where its hinge and its swing put it."""
+        p = getattr(self, "panel", None)
+        if p is None:
+            return
+        hx, hz = door_world(self.heading, -self.WIDE / 2, 0)
+        ox, oz = door_world(self.heading + self.angle, self.WIDE / 2, 0)
+        p.x, p.y, p.z = self.x + hx + ox, self.y, self.z + hz + oz
+        p.heading = (self.heading + self.angle) % 360
+        p.push()
+        p.push_rotation()
+
+    def push(self):
+        super().push()
+        self.place_panel()
+
+    def push_rotation(self):
+        super().push_rotation()
+        self.place_panel()
+
+    def swing_to(self, angle):
+        if angle == self.want:
+            return
+        if not angle:
+            self.close_at = None
+            self.world.view.call(0, "tones", INTERACT_SOUNDS["shut"], 0.25)
+        elif not self.want:
+            self.world.view.call(0, "tones", INTERACT_SOUNDS["open"], 0.25)
+        self.want = angle
+        self.swinging = [self.angle, angle, 0.0, 0.75 if angle else 0.9]
+        self.busy()
+
+    def open_from(self, who, auto=False):
+        """Opens away from who (the player), or one way if there's nobody."""
+        side = door_local(self.heading, who.x - self.x, who.z - self.z)[1] if who is not None else -1.0
+        self.swing_to(-self.SWING if side > 0 else self.SWING)
+        self.close_at = self.world.clock + self.STAYS if auto else None
+
+    def shut(self):
+        """Shut (or nearly): the player can't walk through it (Player.solids). One that isn't locked opens as the
+        player comes up to it, before the player gets to it."""
+        return self.alive and not self.hidden and abs(self.angle) < 15
+
+    def near_player(self, p, it):
+        """The player walking into it opens it (or hears it's locked); opened by the player, it shuts again once the
+        player has been gone a few seconds."""
+        lx, lz = door_local(self.heading, p.x - self.x, p.z - self.z)
+        at = abs(lx) < self.WIDE / 2 + 0.25 and abs(lz) < 1.1
+        if at and not self.want:
+            if it.is_locked(self):
+                if not self.at_door:
+                    it.locked(self)
+            else:
+                self.open_from(p, auto=True)
+        self.at_door = at
+        if self.close_at is not None:
+            if abs(lx) < self.WIDE + 0.4 and abs(lz) < 1.4:
+                self.close_at = self.world.clock + self.STAYS  # not while the player's in the way
+            elif self.world.clock >= self.close_at:
+                self.swing_to(0)
+
+    def busy(self):
+        if self.swinging is not None:
+            self.world.movers.add(self)
+        else:
+            super().busy()
+
+    def tick(self, dt):
+        s = self.swinging
+        if s is not None:
+            s[2] += dt
+            t = min(1.0, s[2] / s[3])
+            # Opening, it swings a little past and settles back; shutting, it slows into its frame.
+            k = 1.0 + 2.2 * (t - 1) ** 3 + 1.2 * (t - 1) ** 2 if s[1] else ease(t)
+            self.angle = s[0] + (s[1] - s[0]) * k
+            if t >= 1:
+                self.angle, self.swinging = s[1], None
+            self.place_panel()
+        super().tick(dt)
+
+    # ---- what a program can do with it
+    def open(self):
+        if not self.want:
+            self.open_from(self.world.the_player)
+        self.close_at = None
+        return self.native
+
+    def close(self):
+        self.swing_to(0)
+        return self.native
+
+    def needs(self, key):
+        t = thing_of(key)
+        if not isinstance(t, Thing) or isinstance(t, Door):
+            raise self.rt.error("door:needs needs the thing that opens it, like door:needs(key) after "
+                                f"key = world:spawn(\"key\", 3, 0, 3). Not {self.rt.what(key)}.")
+        it = self.world.interaction()
+        self.need = t
+        it.wanted[t] = None
+        if self.want and t not in it.keys:
+            self.swing_to(0)
+        return self.native
+
+    def lock(self):
+        self.locked_ = True
+        self.swing_to(0)
+        return self.native
+
+    def unlock(self):
+        self.locked_ = False
+        self.need = None
+        return self.native
+
+    # ---- the door itself goes with its frame
+    def set_color(self, color):
+        self.panel.set_color(color)
+        return self.native
+
+    def hide(self):
+        super().hide()
+        self.panel.hide()
+        return self.native
+
+    def show(self):
+        super().show()
+        self.panel.show()
+        return self.native
+
+    def remove(self):
+        if self.alive:
+            super().remove()
+            self.panel.remove()
+
+
+HINTS["object"].update({"talk": "on_talk", "on_interact": "on_talk", "interact": "on_talk", "on_speak": "on_talk",
+                        "on_chat": "on_talk", "speak": "say", "chat": "say", "bubble": "say", "speech": "say",
+                        "dialog": "say", "dialogue": "say", "tell": "say"})
+HINTS["door"] = {**HINTS["object"], "requires": "needs", "require": "needs", "need": "needs", "key": "needs",
+                 "set_key": "needs", "needs_key": "needs", "shut": "close", "slam": "close", "swing_open": "open"}
+HINTS["player"].update({"grab": "can_grab", "pick_up": "can_grab", "pickup": "can_grab", "carry": "can_grab",
+                        "lift": "can_grab", "can_pick_up": "can_grab", "held_item": "holding", "carrying": "holding",
+                        "held_thing": "holding", "grabbed": "holding", "throw": "can_grab"})
+HINTS["world"].update({"gate": "door", "doorway": "door", "add_door": "door", "make_door": "door"})
+# ---------------------------------------------------------------- level pieces: jump pads, boost pads, moving platforms
+
+# How thing:path goes along its spots: there and back again ("ping-pong", what it does by itself) or round and round
+# ("loop"), and other words people use for them.
+PATH_MODES = ("ping-pong", "loop")
+PATH_WORDS = {"pingpong": "ping-pong", "ping pong": "ping-pong", "back and forth": "ping-pong", "there and back": "ping-pong",
+              "back": "ping-pong", "bounce": "ping-pong", "round": "loop", "around": "loop", "round and round": "loop",
+              "circle": "loop", "cycle": "loop", "repeat": "loop", "loops": "loop", "looping": "loop"}
+# A pad's whoosh when it launches something: a rush of air (noise opening up) over a tone that rises.
+WHOOSH = {"jump": [[500, 0, 0.42, "noise", 1, 4200], [190, 0, 0.32, "sine", 0.55, 760]],
+          "boost": [[900, 0, 0.5, "noise", 1, 6500], [240, 0, 0.38, "sawtooth", 0.22, 980]]}
+# A pad's colours: its dark rim, its glow, and the lighter trim (a jump pad's ring, a boost pad's arrows).
+PAD_LOOK = {"jump": ("#2b2f36", "#2ee6a6", "#b6ffe4"), "boost": ("#2b2f36", "#ff8a1f", "#ffe066")}
+PAD_POWER = {"jump": 15, "boost": 20}
+# Names people guess for the level pieces, and the tgame name.
+HINTS["world"].update({"trampoline": "jump_pad", "jumppad": "jump_pad", "bounce_pad": "jump_pad", "launch_pad": "jump_pad",
+                       "launcher": "jump_pad", "spring": "jump_pad", "springboard": "jump_pad", "booster": "boost_pad",
+                       "boostpad": "boost_pad", "speed_pad": "boost_pad", "speed_boost": "boost_pad", "dash_pad": "boost_pad",
+                       "boost": "boost_pad", "accelerator": "boost_pad", "speed_strip": "boost_pad"})
+HINTS["object"].update({"waypoints": "path", "route": "path", "patrol": "path", "follow_path": "path", "move_along": "path",
+                        "set_path": "path", "move_path": "path", "ping_pong": "path", "oscillate": "path",
+                        "move_between": "path"})
+
+
+def path_mode(text):
+    """"ping-pong" or "loop" for what a program wrote ("Loop", "ping pong", "round and round"...), or None."""
+    t = re.sub(r"[\s_]+", " ", str(text).strip().lower())
+    t = PATH_WORDS.get(t, t)
+    return t if t in PATH_MODES else None
+
+
+def path_problem(name):
+    return (f"A path can go \"ping-pong\" (there and back again) or \"loop\" (round and round, back to the first spot), "
+            f"not \"{name}\".{did_you_mean(str(name).strip().lower(), PATH_MODES)}")
+
+
+class Level:
+    """A 3D world's level pieces, made by the first one: jump pads and boost pads (Pad), and things that move along a
+    path by themselves (Route, thing:path), like a lift. Every frame, before the player walks (World3D.update), the
+    things on paths move, carrying the player that stands on them and pushing it out of their way, then the pads launch
+    whoever is on them, then a boost carries the player on until it fades. All of it holds still while the game is
+    paused, and none of it needs physics. With physics on, a thing on a path is a kinematic body in the page, so the
+    physics things on it ride along too, and a pad launches physics things as well as the player."""
+
+    def __init__(self, world):
+        self.world, self.rt = world, world.rt
+        self.pads = []     # jump pads and boost pads, oldest first
+        self.routes = {}   # thing -> its Route, in the order they started
+        self.boost = None  # the player's speed from a boost pad ([x, z], metres a second) until it fades
+
+    # ---- making them
+    def make_pad(self, how, args):
+        w = self.world
+        what = f"{how}_pad"
+        x, y, z, (power,) = w.where(args, (PAD_POWER[how],), what)
+        p = self.rt.number(power, f":{what}")
+        if p <= 0:
+            raise self.rt.error(f":{what} needs a power above 0 (how fast it launches things, in metres a second), like "
+                                f"world:{what}(0, 0, 5, {PAD_POWER[how]}).")
+        pad = Pad(w, how, x, w.above(x, y, z), z, p)
+        self.pads.append(pad)
+        return pad.native
+
+    def set_route(self, t, spots, speed, how):
+        """thing:path(spots, speed, how): it moves along the spots by itself. thing:path() stops it where it is."""
+        rt, n = self.rt, t.kind
+        if spots is MISSING:
+            self.stop(t)
+            return t.native
+        if not t.on_land:
+            raise rt.error("Only things in the world can move along a path, not something the player holds.")
+        if t.phys_kind == "dynamic" and n in ("car", "ragdoll"):  # always physics: it can't be turned off
+            raise rt.error(f"A {n} always has physics (it falls and gets pushed), so it can't move along a path. Move it "
+                           f"with {n}:push" + (", or drive it with car:drive()." if n == "car" else "."))
+        if t.phys_kind == "dynamic":
+            raise rt.error(f"{n}:path moves things that stay up by themselves, but this {n} has physics (it falls and "
+                           f"gets pushed). Turn that off first with {n}:physics(\"off\"), or move it with {n}:push.")
+        raw = rt.plain(spots)
+        example = f"{n}:path([[0, 2, 0], [10, 2, 0]], 3)"
+        if not isinstance(raw, list) or not raw:
+            raise rt.error(f"{n}:path needs a list of spots to go to, like {example}.")
+        if all(not isinstance(rt.plain(s), list) for s in raw) and len(raw) in (2, 3):
+            raise rt.error(f"{n}:path needs a list of spots, each one [x, y, z], so one spot is [[x, y, z]]. Like {example}.")
+        w = self.world
+        at = []
+        for i, s in enumerate(raw, 1):
+            s = rt.plain(s)
+            if isinstance(s, list) and len(s) == 2:  # [x, z]: on the land
+                s = [s[0], 0, s[1]]
+            if not isinstance(s, list) or len(s) != 3:
+                got = f"has {len(s)} numbers" if isinstance(s, list) else f"is {rt.what(s)}"
+                raise rt.error(f"Each spot on a path is [x, y, z] (y is the height above the ground), like [10, 2, 0]. "
+                               f"Spot {i} {got}.")
+            x, y, z = (rt.number(v, f"Spot {i} of {n}:path") for v in s)
+            at.append((x, w.above(x, y, z), z))
+        v = 3 if speed is MISSING else rt.number(speed, f"{n}:path's speed")
+        if v <= 0:
+            raise rt.error(f"{n}:path needs a speed above 0 (metres a second), like {example}.")
+        loop = False
+        if how is not MISSING:
+            word = rt.text(how)
+            mode = path_mode(word)
+            if mode is None:
+                raise rt.error(path_problem(word))
+            loop = mode == "loop"
+        if t.phys_kind == "kinematic":
+            t.phys_kind = None  # it's kinematic for physics while it's on its path anyway; the player walks on it as on a solid thing
+        t.route = Route(t, at, v, loop)
+        self.routes.pop(t, None)
+        self.routes[t] = t.route
+        t.phys_changed()
+        return t.native
+
+    def stop(self, t):
+        self.routes.pop(t, None)
+        if getattr(t, "route", None) is not None:
+            t.route = None
+            if self.world.phys is not None:
+                t.send(t.node, vel=[0, 0, 0], acc=[0, 0, 0, 0])
+            t.phys_changed()  # a fixed body again, where it stopped
+
+    # ---- every frame
+    def frame(self, dt):
+        if not dt:  # paused
+            return
+        w = self.world
+        p = w.the_player if w.driving is None else None
+        for t, route in list(self.routes.items()):
+            if not t.alive or getattr(t, "route", None) is not route:
+                self.routes.pop(t, None)
+            else:
+                self.move(t, route, dt, p)
+        if self.pads:
+            self.check_pads(dt, p)
+        if p is not None and self.boost is not None:
+            self.glide(p, dt)
+
+    def move(self, t, route, dt, p):
+        x0, y0, z0 = t.x, t.y, t.z
+        solid = p is not None and t.solid_ and not t.hidden
+        rides = solid and self.stands_on(p, t)
+        (t.x, t.y, t.z), done = route.step(dt)
+        t.push()
+        if self.world.phys is not None:  # how fast it goes, so physics moves it smoothly between frames (physics.js's glide)
+            t.send(t.node, vel=[tidy(v) for v in route.velocity()], acc=[tidy(a) for a in route.acceleration()] + [route.speed])
+        if done:  # a path to one spot: it's there now
+            self.stop(t)
+        if not solid:
+            return
+        d = (t.x - x0, t.y - y0, t.z - z0)
+        if rides:
+            # On its top, where it is now. With physics on, the ride goes to the page with the player's walk, as one
+            # move (the capsule doesn't bump into the platform: kinematic things are Python's), so riding, the player
+            # still pushes the physics things it walks into.
+            p.x, p.y, p.z = p.x + d[0], t.box3(body=True)[4], p.z + d[2]
+        elif self.shove(p, t, d) and self.world.phys is not None:
+            p.teleported = True  # pushed out of its way: the page's capsule goes there too, whatever's in the way
+
+    def stands_on(self, p, t):
+        """Is the player standing on t's top (feet on it, not jumping off)?"""
+        b = t.box3(body=True)
+        r = p.RADIUS * 0.8
+        return (p.x + r > b[0] and p.x - r < b[3] and p.z + r > b[2] and p.z - r < b[5] and abs(p.y - b[4]) < 0.08
+                and p.vy <= 0.5)
+
+    def shove(self, p, t, d):
+        """t moved into the player: if its top came up past the player's feet (no higher than a step), the player is
+        on it now; if it came from the side, the player is pushed out of its way. True if the player moved."""
+        b = t.box3(body=True)
+        r = p.RADIUS
+        if not (p.x + r > b[0] and p.x - r < b[3] and p.z + r > b[2] and p.z - r < b[5]):
+            return False
+        if p.y + p.TALL <= b[1] or p.y >= b[4]:  # over it or under it
+            return False
+        if b[4] - p.y <= 0.45 or (d[1] > 0 and b[1] <= p.y + 0.05):
+            p.y, p.vy, p.on_ground = b[4], max(p.vy, 0.0), True
+            return True
+        if not (d[0] or d[2]):
+            return False
+        if d[0]:
+            p.x = b[3] + r + 0.01 if d[0] > 0 else b[0] - r - 0.01
+        if d[2]:
+            p.z = b[5] + r + 0.01 if d[2] > 0 else b[2] - r - 0.01
+        p.keep_inside()
+        return True
+
+    def check_pads(self, dt, p):
+        w = self.world
+        self.pads = [pad for pad in self.pads if pad.alive]
+        things = None
+        for pad in self.pads:
+            for k in list(pad.cool):
+                pad.cool[k] -= dt
+                if pad.cool[k] <= 0:
+                    del pad.cool[k]
+            if pad.hidden:
+                continue
+            low, top = pad.y - 0.1, pad.y + pad.height()
+            if (p is not None and "player" not in pad.cool and p.vy <= 0.5 and low <= p.y <= top + 0.12
+                    and pad.over(p.x, p.z, p.RADIUS)):
+                pad.throw_player(p, self)
+            if w.phys is None:
+                continue
+            if things is None:  # the physics things, once a frame
+                things = [t for t in w.things if isinstance(t, Thing) and t.alive and not t.hidden and t.dynamic()]
+            for t in things:
+                if t not in pad.cool and t.vel[1] < 1 and low - 0.05 <= t.y <= top + 0.25 and pad.over(t.x, t.z):
+                    pad.throw(t)
+
+    def glide(self, p, dt):
+        """A boost pad's push: the player keeps going that way, slowing down (faster on the ground than in the air),
+        stopped by walls."""
+        vx, vz = self.boost
+        solids = p.solids()
+        nx, nz = p.x + vx * dt, p.z + vz * dt
+        if not p.blocked(nx, p.z, p.y, solids):
+            p.x = nx
+        elif not p.try_step(nx, p.z, solids):
+            vx = 0.0
+        if not p.blocked(p.x, nz, p.y, solids):
+            p.z = nz
+        elif not p.try_step(p.x, nz, solids):
+            vz = 0.0
+        p.keep_inside()
+        k = math.exp(-(2.2 if p.on_ground else 0.45) * dt)
+        vx, vz = vx * k, vz * k
+        self.boost = [vx, vz] if math.hypot(vx, vz) > 0.4 else None
+
+
+class Route:
+    """thing:path: a thing going along spots by itself at a speed, there and back again or round and round, in a
+    straight line from each spot to the next (first from where it is to the first spot). It gets going and slows down
+    gently where the path turns sharply (at the ends, at a corner), so what rides on it doesn't slide off, and goes
+    straight on through gentle bends. Every spot is where it is in the world (its height above the land when the path
+    was given)."""
+    EASE = 0.8   # seconds to get up to speed, or to stop
+    SHARP = 45   # a turn of more degrees than this stops it at the spot
+
+    def __init__(self, thing, spots, speed, loop):
+        self.speed = speed
+        self.last = spots[0]  # where it stays once it's there, on a path to one spot
+        order = spots + ([spots[0]] if loop else spots[-2::-1])
+        self.cycle = [(a, b) for a, b in zip(order, order[1:]) if math.dist(a, b) > 1e-6]
+        here = (thing.x, thing.y, thing.z)
+        first = (here, spots[0])
+        self.k = -1  # which leg of the cycle it's on (-1: on its way to the first spot)
+        self.leg = None
+        if math.dist(*first) > 1e-6:
+            self.enter(first, None, self.cycle[0] if self.cycle else None)
+        elif self.cycle:
+            self.k = 0
+            self.enter(self.cycle[0], None, self.cycle[1 % len(self.cycle)])
+        self.t = 0.0
+
+    def turn(self, a, b):
+        """How many degrees the path turns going from leg a to leg b."""
+        u = [a[1][i] - a[0][i] for i in range(3)]
+        v = [b[1][i] - b[0][i] for i in range(3)]
+        n = math.hypot(*u) * math.hypot(*v)
+        return math.degrees(math.acos(clamp(sum(x * y for x, y in zip(u, v)) / n, -1.0, 1.0))) if n else 0.0
+
+    def enter(self, leg, before, after):
+        """Starts a leg: before and after are the legs either side of it (None: it starts from still, or stops)."""
+        length = math.dist(*leg)
+        ease = min(self.EASE, length / self.speed)
+        start = before is None or self.turn(before, leg) > self.SHARP
+        end = after is None or self.turn(leg, after) > self.SHARP
+        self.leg = (leg, length, length / self.speed + ease / 2 * (start + end), ease, start, end)
+
+    def along(self, t):
+        """How far along its leg it is t seconds in."""
+        _, length, secs, ease, start, end = self.leg
+        v, a = self.speed, self.speed / ease if ease else 0.0
+        if start and t < ease:
+            return 0.5 * a * t * t
+        if end and t > secs - ease:
+            return length - 0.5 * a * (secs - t) ** 2
+        return (0.5 * v * ease if start else 0.0) + v * (t - (ease if start else 0.0))
+
+    def velocity(self):
+        """How fast it's going each way now (metres a second)."""
+        if self.leg is None:
+            return 0.0, 0.0, 0.0
+        (a, b), length, secs, ease, start, end = self.leg
+        t, v = self.t, self.speed
+        if start and t < ease:
+            v *= t / ease
+        elif end and t > secs - ease:
+            v *= max(0.0, secs - t) / ease
+        return tuple((b[i] - a[i]) / length * v for i in range(3))
+
+    def acceleration(self):
+        """How fast its speed changes each way now (metres a second, each second): getting going or slowing down at
+        the ends and corners, else nothing."""
+        if self.leg is None:
+            return 0.0, 0.0, 0.0
+        (a, b), length, secs, ease, start, end = self.leg
+        k = self.speed / ease if ease else 0.0
+        f = k if start and self.t < ease else -k if end and self.t > secs - ease else 0.0
+        return tuple((b[i] - a[i]) / length * f for i in range(3))
+
+    def step(self, dt):
+        """Goes on dt seconds: (where it is now, whether it has finished: a path to one spot)."""
+        if self.leg is None:
+            return self.last, True
+        self.t += dt
+        while self.t >= self.leg[2]:
+            self.t -= self.leg[2]
+            if not self.cycle:  # it only had to get to its one spot
+                self.leg = None
+                return self.last, True
+            before = self.leg[0]
+            self.k = (self.k + 1) % len(self.cycle)
+            self.enter(self.cycle[self.k], before, self.cycle[(self.k + 1) % len(self.cycle)])
+        (a, b), length = self.leg[0], self.leg[1]
+        f = clamp(self.along(self.t) / length, 0.0, 1.0) if length else 1.0
+        return tuple(a[i] + (b[i] - a[i]) * f for i in range(3)), False
+
+
+class Pad(Thing):
+    """world:jump_pad and world:boost_pad: a glowing pad on the ground. It's an object, so it can be moved, turned,
+    hidden, coloured or put on a path. Whoever touches a jump pad, the player or a physics thing, is launched up at its
+    power (metres a second); a boost pad shoots them forward the way it faces (pad:turn aims it), a little up too. The
+    page makes them look alive (level.js): a jump pad's glow breathes and rings rise from it, a boost pad's arrows light
+    up one after another the way it points, and each flashes with a whoosh when it launches something."""
+    COOL = 0.4  # seconds before a pad launches the same thing again (it's still leaving)
+
+    def __init__(self, world, how, x, y, z, power):
+        rim, glow, trim = PAD_LOOK[how]
+        base = {"color": rim, "metal": 0.5, "rough": 0.4, "shadow": True}
+        lit = {"color": glow, "emissive": glow, "rough": 0.35}
+        if how == "jump":
+            size = (2.2, 0.16, 2.2)
+            parts = [("cylinder", {"r": 1.1, "h": 0.12, "y": 0.06, "seg": 40, **base}, False),
+                     ("cylinder", {"r": 0.86, "h": 0.05, "y": 0.135, "seg": 40, **lit}, True),
+                     ("torus", {"r": 0.98, "tube": 0.05, "seg": 48, "rx": 90, "y": 0.13, "color": trim, "emissive": trim}, False)]
+        else:
+            size = (2.0, 0.16, 3.2)
+            parts = [("box", {"w": 2.0, "h": 0.12, "d": 3.2, "y": 0.06, **base}, False),
+                     ("box", {"w": 1.56, "h": 0.04, "d": 2.9, "y": 0.13, **lit}, True)]
+            for tip in (0.45, -0.35, -1.15):  # three arrows, back to front, pointing the way it faces (-z)
+                for side in (-1, 1):
+                    parts.append(("box", {"w": 0.15, "h": 0.03, "d": 0.67, "x": side * 0.25, "y": 0.165, "z": tip + 0.225,
+                                          "ry": side * 48, "color": trim, "emissive": trim}, False))
+        super().__init__(world, "pad", x, y, z, size, parts)
+        self.how, self.power = how, power
+        self.cool = {}  # what it launched lately ("player", or the thing): the seconds before it can again
+        self.whooshed = -1.0  # the game's clock at its last whoosh
+        ids = [int(node) for node, _ in self.parts]
+        glows, arrows = (ids[1:3], []) if how == "jump" else (ids[1:2], ids[2:])
+        world.view.js(f"window.tuffLevel && window.tuffLevel.pad(tv.node({int(self.node)}), {json.dumps(how)}, "
+                      f"{json.dumps(glows)}, {json.dumps(arrows)})")
+
+    def show_text(self, nested=False):
+        return f"<{self.how} pad at {tidy(self.x)}, {tidy(self.y)}, {tidy(self.z)}>"
+
+    def can_have_physics(self, kind):
+        if kind in ("dynamic", "kinematic"):
+            raise self.rt.error("A pad stays where it's put, so it can't fall or be pushed. Move it with pad:move_to, "
+                                "or make it move by itself with pad:path.")
+        Thing.can_have_physics(self, kind)
+
+    def phys_shape(self, kind):
+        if self.how == "jump":  # round
+            kx, ky, kz = self.k
+            hy = self.dims[1] * ky / 2
+            return "cylinder", [tidy(hy), tidy(self.dims[0] * max(kx, kz) / 2)], tidy(hy)
+        return Thing.phys_shape(self, kind)
+
+    def size(self, w, h=MISSING, d=MISSING):
+        if h is MISSING and d is MISSING and not isinstance(self.rt.plain(w), list):  # one number: how wide, still flat
+            n = self.num(w, ":size")
+            return Thing.size(self, n, self.dims[1], n * self.dims[2] / self.dims[0])
+        return Thing.size(self, w, h, d)
+
+    def set_color(self, color):
+        c = self.world.color(color)
+        for node, main in self.parts:
+            if main:
+                self.send(node, color=c, emissive=c)  # it glows in its new colour
+        return self.native
+
+    def facing(self):
+        h = math.radians(self.heading)
+        return math.sin(h), -math.cos(h)
+
+    def over(self, x, z, r=0.0):
+        """Is x, z (something r across... its radius) over the pad?"""
+        dx, dz = x - self.x, z - self.z
+        kx, _, kz = self.k
+        if self.how == "jump":
+            return math.hypot(dx, dz) <= self.dims[0] * max(kx, kz) / 2 + r * 0.5
+        h = math.radians(self.heading)
+        across, along = dx * math.cos(h) + dz * math.sin(h), dx * math.sin(h) - dz * math.cos(h)
+        return abs(across) <= self.dims[0] * kx / 2 + r * 0.5 and abs(along) <= self.dims[2] * kz / 2 + r * 0.5
+
+    def throw_player(self, p, level):
+        if self.how == "jump":
+            p.vy = self.power
+        else:
+            fx, fz = self.facing()
+            level.boost = [fx * self.power, fz * self.power]
+            p.vy = max(p.vy, min(7.0, 2.5 + self.power * 0.12))  # a little hop: it flies, rather than slides
+            self.world.view.js(f"window.tuffLevel && window.tuffLevel.streak(tv.node({int(self.world.scene)}))")
+        p.on_ground = False
+        self.cool["player"] = self.COOL
+        self.whoosh()
+
+    def throw(self, t):
+        """A physics thing on it: launched like the player (it keeps its speed across a jump pad)."""
+        vx, vy, vz = (list(t.vel) + [0.0, 0.0, 0.0])[:3]
+        if self.how == "jump":
+            v = [vx, self.power, vz]
+        else:
+            fx, fz = self.facing()
+            v = [fx * self.power, max(vy, 3.0), fz * self.power]
+        t.vel = v
+        self.world.phys.send("velocity", int(t.node), *v)
+        self.cool[t] = self.COOL
+        self.whoosh()
+
+    def whoosh(self):
+        w = self.world
+        if w.clock - self.whooshed < 0.15:  # a few at once (a pile of boxes) make one whoosh
+            return
+        self.whooshed = w.clock
+        w.view.call(0, "tones", WHOOSH[self.how], 0.3)
+        w.view.js(f"window.tuffLevel && window.tuffLevel.whoosh({int(self.node)})")
 
 
 # ---------------------------------------------------------------- menus, buttons and screens (atgui on a game)
@@ -3236,7 +6004,8 @@ addEventListener('pointerdown', (e) => {
   if (start && !e.target.closest(WIDGETS)) tg.lock();
 }, true);
 addEventListener('keydown', (e) => {
-  if ((e.key === 'Enter' || e.key === ' ') && !e.repeat && !typing(e.target) && document.querySelector('.tg-start.at-shown')) tg.lock();
+  if ((e.key === 'Enter' || e.key === ' ') && !e.repeat && !typing(e.target) && document.querySelector('.tg-start.at-shown')
+      && !document.querySelector('.tg-splashes.tg-playing')) tg.lock();  // a key during a splash screen only skips it
 }, true);
 // A clicked button, checkbox or slider keeps the keyboard, so Enter would press it again and the arrows would move it:
 // give the keys back to the game. Text boxes keep them (typing in one doesn't move the player).
@@ -3274,6 +6043,7 @@ class GameUI:
         self._native = self.click_fn = None
         self.screens = []
         self.showing = self.pausing = False  # a screen shows; one that pauses shows
+        self.shown, self.hides = [], 0  # the screens that show; how many times one hid (Game.step)
         self.relock = False  # a screen let go of the mouse, so it's locked again when the screens are gone
         self.lock_asks = 0
         atgui.add_to_page(self.scene, game=True)
@@ -3304,6 +6074,8 @@ class GameUI:
 
     def start_key(self, name):
         """Enter or Space while a start screen shows: it starts the game. True when one did."""
+        if self.splash_playing():  # any key skips a splash screen (the page does it), and that's all it does
+            return True
         if name in ("enter", "space"):
             for s in reversed(self.screens):
                 if isinstance(s, StartScreen) and s.is_shown:
@@ -3321,15 +6093,12 @@ class GameUI:
         to use it (a locked one is let go, and locked again when the last screen goes)."""
         g = self.game
         shown = [s for s in self.screens if s.is_shown and not s.dead]
+        self.hides += sum(1 for s in self.shown if s not in shown)
+        self.shown = shown
         self.showing = bool(shown)
         self.pausing = any(s.pauses for s in shown)
-        if SCENE is None and not g.closed:
-            if self.showing and g.locked:
-                g.view.call(0, "unlock")
-                self.relock = True
-            elif not self.showing and self.relock:
-                self.relock = False
-                g.view.js("window.__tg.lock()")
+        if SCENE is None and not g.closed and g.three_d:
+            g.covered(self.showing)  # the mouse: World3D.covered
         g.lock_changed()
 
     def state(self):
@@ -3350,10 +6119,47 @@ class GameUI:
         for w in self.children:
             if (isinstance(w, Screen) and w.is_shown) or (isinstance(w, Panel) and not w.hidden):
                 walk(w)
-        return {"screens": [{"title": s.title, "shown": s.is_shown, "pauses": s.pauses, "start": isinstance(s, StartScreen)}
-                            for s in self.screens],
+        return {"screens": [{"title": s.title, "shown": s.is_shown, "pauses": s.pauses, "start": isinstance(s, StartScreen),
+                             "main": isinstance(s, MainMenu)} for s in self.screens if not isinstance(s, Splashes)],
                 "showing": self.showing, "pausing": self.pausing, "texts": texts, "inputs": inputs, "values": values,
-                "lock_asks": self.lock_asks}
+                "lock_asks": self.lock_asks, "splash": self.splash_state()}
+
+    # ---- splash screens and main menus (Splashes and MainMenu, below)
+    splash_layer = None  # the splash screens (game:splash), once there are some
+    menu_played = False  # a main menu hid: when nothing covers the game, the mouse locks for looking around (3D)
+    intro_css = False  # MENU_CSS and MENU_JS are on the page
+
+    def intro_page(self):
+        if not self.intro_css:
+            self.intro_css = True
+            self.scene.call(0, "css", MENU_CSS)
+            self.scene.js(MENU_JS)
+
+    def splashes(self):
+        self.intro_page()
+        if self.splash_layer is None:
+            self.splash_layer = Splashes(self)
+        return self.splash_layer
+
+    def splash_playing(self):
+        return self.splash_layer is not None and self.splash_layer.is_shown
+
+    def splash_event(self, e):
+        if self.splash_layer is not None and e.get("id") == self.splash_layer.id:
+            self.splash_layer.event(e)
+
+    def splashes_done(self):
+        """The last splash screen ended: a main menu or start screen behind it comes in as if it just showed."""
+        for s in self.screens:
+            if s.is_shown and not s.dead and isinstance(s, (StartScreen, MainMenu)):
+                s.call("atClass", "at-shown", False)
+                s.call("atOpen")
+
+    def splash_state(self):
+        s = self.splash_layer
+        if s is None:
+            return None
+        return {"playing": s.is_shown, "items": list(s.items), "ended": list(s.ended)}
 
 
 class Panel(atgui.Container):
@@ -3449,6 +6255,244 @@ class StartScreen(Screen):
         return self.native()
 
 
+# ---------------------------------------------------------------- splash screens, main menus and the mouse
+
+# How they look (on top of UI_CSS). Splash screens: black over the whole window, each picture or text fading in and
+# out in turn while it drifts a little closer. The main menu: the game dimmed and blurred, a big title, and wide
+# buttons one under another in the middle. Both come in after GameUI's own CSS, the first time a game makes one.
+MENU_CSS = """
+.tg-ui .tg-splashes{position:fixed;inset:0;z-index:40;pointer-events:auto;background:#000;overflow:hidden;cursor:default;
+ transition:opacity .5s ease}
+.tg-ui .tg-splashes.tg-leaving{opacity:0;pointer-events:none}
+.tg-ui .tg-splash{position:absolute;inset:0;display:none;align-items:center;justify-content:center;opacity:0;
+ transition:opacity .45s ease}
+.tg-ui .tg-splash.tg-on{opacity:1}
+.tg-ui .tg-splash>*{animation:tg-drift var(--secs,2s) linear both}
+@keyframes tg-drift{from{transform:scale(.97)}to{transform:scale(1.015)}}
+.tg-ui .tg-splash-img{display:block;max-width:86%;max-height:80%;object-fit:contain;user-select:none;-webkit-user-drag:none}
+.tg-ui .tg-splash-text{max-width:min(88%,1000px);font:800 clamp(30px,6.2vw,72px)/1.1 var(--font);letter-spacing:-.03em;
+ color:#fff;text-align:center;text-wrap:balance;overflow-wrap:anywhere;white-space:pre-wrap}
+.tg-ui .tg-made{display:flex;align-items:center;gap:clamp(16px,3vw,30px)}
+.tg-ui .tg-made-t{height:clamp(64px,16vh,116px);width:auto;flex-shrink:0;overflow:visible}
+.tg-ui .tg-made-t circle{transform-box:fill-box;transform-origin:center}
+.tg-ui .tg-splash.tg-on .tg-made-t circle{animation:tg-dot .6s cubic-bezier(.2,.8,.3,1.25) both;animation-delay:var(--d)}
+@keyframes tg-dot{from{opacity:0;transform:scale(.15)}}
+.tg-ui .tg-made-words{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left}
+.tg-ui .tg-made-with{font:650 clamp(11px,1.8vh,14px)/1 var(--font);letter-spacing:.34em;text-transform:uppercase;color:#7d879c;
+ padding-left:.18em}
+.tg-ui .tg-made-name{font:800 clamp(52px,12.5vh,100px)/.92 var(--font);letter-spacing:-.045em;padding-right:.06em;
+ background:linear-gradient(115deg,#fff 32%,#b9d3ff 70%,#7fe3f5);-webkit-background-clip:text;background-clip:text;
+ -webkit-text-fill-color:transparent}
+.tg-ui .tg-splash.tg-on .tg-made-words{animation:tg-rise .7s .28s cubic-bezier(.2,.8,.2,1) both}
+.tg-ui .tg-main{position:absolute;inset:0;z-index:19;pointer-events:auto;display:flex;overflow:auto;padding:32px 28px;opacity:0;
+ transition:opacity .2s;backdrop-filter:blur(7px) saturate(1.15);
+ background:radial-gradient(110% 85% at 50% 40%,rgba(9,12,22,.3),rgba(3,4,8,.86)),linear-gradient(rgba(0,0,0,.1),rgba(0,0,0,.4))}
+.tg-ui .tg-main.at-shown{opacity:1}
+.tg-ui .tg-main-box{margin:auto;max-width:100%;display:flex;flex-direction:column;align-items:center;gap:30px;text-align:center}
+.tg-ui .tg-main-title{font-size:clamp(40px,8.6vw,92px);max-width:min(92vw,900px);text-wrap:balance}
+.tg-ui .tg-main-title::after{content:"";display:block;width:64px;height:4px;margin:22px auto 0;border-radius:4px;
+ background:linear-gradient(90deg,var(--accent),var(--accent-2));box-shadow:0 0 22px color-mix(in srgb,var(--accent) 70%,transparent)}
+.tg-ui .tg-main-body{width:min(360px,100%);--self:stretch;gap:12px;text-align:center}
+.tg-ui .tg-main-body:empty{display:none}
+.tg-ui .tg-main-body>:is(.at-text,.at-heading){color:#e6e9f0;text-shadow:0 1px 10px rgba(0,0,0,.5)}
+.tg-ui .tg-main-body>.at-text{font-size:16px}
+.tg-ui .tg-main-body>.at-small{font-size:13.5px;color:#a7aebb}
+.tg-ui .tg-main-body>:is(.at-image,.at-badge,.at-icon,.at-spinner,.at-avatar){align-self:center}
+.tg-ui .tg-main-body .at-btn{height:50px;border-radius:12px;font:650 16px/1 var(--font);gap:9px}
+.tg-ui .tg-main-body .at-btn .at-i{width:18px;height:18px}
+.tg-ui .tg-main-body .at-btn.at-primary{background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 62%,var(--accent-2)));
+ box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 12px 30px -10px color-mix(in srgb,var(--accent) 75%,transparent)}
+.tg-ui .tg-main-body .at-btn:is(.at-secondary,.at-outline,.at-ghost){background:rgba(255,255,255,.07);color:#eef1f6;
+ border-color:rgba(255,255,255,.14);backdrop-filter:blur(8px)}
+.tg-ui .tg-main-body .at-btn:hover{translate:0 -1px;filter:brightness(1.08)}
+.tg-ui .tg-main-body .at-btn:is(.at-secondary,.at-outline,.at-ghost):hover{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.26)}
+.tg-ui .tg-main-body>.at-row{justify-content:center;gap:10px}
+.tg-ui .tg-main-body>.at-row>.at-btn{flex:1 1 0}
+.tg-ui .tg-main-body .at-card{text-align:left;background:color-mix(in srgb,var(--surface) 82%,transparent);backdrop-filter:blur(12px)}
+.tg-ui .tg-main.at-shown .tg-main-title{animation:tg-rise .6s cubic-bezier(.2,.8,.2,1) both}
+.tg-ui .tg-main.at-shown .tg-main-body>*{animation:tg-rise .5s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(.08s + var(--n,7) * 45ms)}
+""" + "".join(f".tg-ui .tg-main-body>:nth-child({i + 1}){{--n:{i}}}\n" for i in range(7))
+
+# The page side of splash screens: a layer plays its pictures and texts in turn. Each fades in, stays and fades out in
+# its seconds (a picture waits until it has loaded), and a click or a key skips to the next. Python hears when each
+# one ends ('tg-splash' with i), and when they all have (done, with how many there were): then the layer fades away.
+MENU_JS = r"""
+(() => {
+  const FADE = 450, QUICK = 220;
+  HTMLElement.prototype.tgSplash = function () {
+    const layer = this;
+    layer.classList.remove('tg-leaving');
+    layer.classList.add('tg-playing');
+    layer.style.display = '';
+    if (layer._next) return null;  // playing already: it gets to the new one in turn
+    const next = () => {
+      const all = [...layer.children].filter((x) => x.classList.contains('tg-splash'));
+      const item = all.find((x) => !x.classList.contains('tg-done'));
+      if (!item) {
+        layer._next = layer._skip = null;
+        layer.classList.remove('tg-playing');
+        layer.classList.add('tg-leaving');
+        setTimeout(() => { if (!layer._next) { layer.style.display = 'none'; layer.classList.remove('tg-leaving'); } }, 520);
+        tv.emit('tg-splash', { id: layer._tv, done: true, n: all.length });
+        return;
+      }
+      const ms = Math.max(600, (+item.dataset.secs || 2) * 1000);
+      const fade = Math.min(FADE, ms / 4);
+      let timer = 0, over = false, shown = false;
+      const end = (skipped) => {
+        if (over) return;
+        over = true;
+        clearTimeout(timer);
+        const out = shown ? (skipped ? QUICK : fade) : 0;
+        item.style.transitionDuration = out + 'ms';
+        item.classList.remove('tg-on');
+        setTimeout(() => {
+          item.classList.add('tg-done');
+          item.style.display = 'none';
+          tv.emit('tg-splash', { id: layer._tv, i: all.indexOf(item), skipped });
+          next();
+        }, out);
+      };
+      const start = () => {
+        if (over) return;
+        shown = true;
+        item.style.setProperty('--secs', ms + 'ms');
+        item.style.display = 'flex';
+        void item.offsetWidth;
+        item.style.transitionDuration = fade + 'ms';
+        item.classList.add('tg-on');
+        timer = setTimeout(() => end(false), ms - fade);
+      };
+      layer._skip = () => end(true);
+      const img = item.querySelector('img');
+      if (img && !img.complete && img.decode) Promise.race([img.decode().catch(() => {}), new Promise((r) => setTimeout(r, 1500))]).then(start);
+      else start();
+    };
+    layer._next = next;
+    next();
+    return null;
+  };
+  // A click on a splash screen, or any key: the next one.
+  const playing = () => document.querySelector('.tg-splashes.tg-playing');
+  addEventListener('pointerdown', (e) => { const l = playing(); if (l && l._skip && l.contains(e.target)) l._skip(); }, true);
+  addEventListener('keydown', (e) => { const l = playing(); if (l && l._skip && !e.repeat) l._skip(); }, true);
+})();
+"""
+
+# The page side of the mouse in a 3D world (World3D.ask_lock). The browser only locks it in a click or a key press,
+# or just after one, so world:lock_mouse() and a screen that gives the lock back ask right then; if the browser says
+# no, the next click on the game locks it (the scene's data-tg-want), even after world:auto_lock(false).
+MOUSE_JS = r"""
+const m = window.__tgMouse = {};
+const world = () => [...tv.objs.values()].find((n) => n.kind === 'scene');
+m.lock = () => {
+  const s = world();
+  if (!s || document.pointerLockElement === s.el) return null;
+  tv.emit('tg-lock', {});
+  try { const p = s.el.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (err) { /* not now: the next click */ }
+  return null;
+};
+addEventListener('pointerdown', (e) => {
+  const n = e.target && e.target._tv !== undefined ? tv.objs.get(e.target._tv) : null;
+  if (n && n.kind === 'scene' && !n.clicklock && n.el.hasAttribute('data-tg-want')) {
+    if (document.pointerLockElement !== n.el) e.tvLocks = true;  // its mousedown says it locks the mouse (engine.js)
+    m.lock();
+  }
+}, true);
+"""
+
+
+def made_with_tuff():
+    """game:splash() with nothing: Tuff's dotted T (TuffCode's icon), its dots popping in one after another, and
+    "Made with Tuff"."""
+    dots = [(28 + 9 * c, 23.5 + 9 * r) for r in range(3) for c in range(9)]
+    dots += [(55 + 9 * c, 50.5 + 9 * r) for r in range(7) for c in range(3)]
+    circles = "".join(f'<circle cx="{x:g}" cy="{y:g}" r="3.1" style="--d:{round((x - 28) / 9 * 16 + (y - 23.5) / 9 * 30)}ms"/>'
+                      for x, y in dots)
+    return ('<div class="tg-made"><svg class="tg-made-t" viewBox="22 17 84 94" aria-hidden="true"><defs>'
+            '<linearGradient id="tg-made-g" gradientUnits="userSpaceOnUse" x1="23.5" y1="19" x2="104.5" y2="109">'
+            '<stop offset="0" stop-color="#3574f0"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>'
+            f'<g fill="url(#tg-made-g)">{circles}</g></svg><div class="tg-made-words"><span class="tg-made-with">Made with</span>'
+            '<span class="tg-made-name">Tuff</span></div></div>')
+
+
+class Splashes(Screen):
+    """game:splash(...): the splash screens, one black layer over the whole window that plays its pictures and texts
+    in turn when the game starts, before any main menu or start screen (those wait behind it). Each fades in and out
+    in its seconds, and a click or any key skips to the next. The page times them and says when each one ends; while
+    they play the game is paused and the mouse is free, like under any screen."""
+    kind = "splash"
+    cls = "tg-splashes"
+
+    def __init__(self, ui):
+        self.items, self.ended = [], []  # what each one shows, in order; how the ones that played ended
+        super().__init__(ui, "", True)
+
+    def build(self, title):
+        self.title_id = None
+
+    def add(self, kind, value, seconds, label):
+        """One more splash screen: a "picture" (its address), some "text", or "tuff" (Made with Tuff)."""
+        item = self.scene.el("div", self.id, cls="tg-splash", attrs={"data-secs": tidy(min(seconds, 60)), "data-kind": kind})
+        if kind == "picture":
+            self.scene.el("img", item, cls="tg-splash-img", src=value, alt="", draggable=False)
+        elif kind == "text":
+            self.scene.el("div", item, cls="tg-splash-text", text=value)
+        else:
+            self.scene.set(item, html=made_with_tuff())
+        self.items.append(label)
+        self.show()
+        self.call("tgSplash")  # the page plays it after the ones before it
+
+    def show(self):
+        if not self.is_shown and not self.dead:
+            self.is_shown = True
+            self.ui.changed()
+
+    def hide(self):
+        """Splash screens end by themselves (event)."""
+
+    def event(self, e):
+        if e.get("done"):
+            if self.is_shown and (e.get("n") or 0) >= len(self.items):  # else one came since, and the page plays it
+                self.is_shown = False
+                self.ui.changed()
+                self.ui.splashes_done()
+        elif "i" in e and len(self.ended) < len(self.items):
+            self.ended.append("skipped" if e.get("skipped") else "timed")
+
+    def set_title(self, text):
+        return self.native()
+
+
+class MainMenu(Screen):
+    """game:main_menu("Forest Walk"): a game's main menu, a screen with a big title over the dimmed game and what
+    the program adds under it (its buttons wide, one under another). It shows when the game starts, after any splash
+    screens, with the game paused behind it and the mouse free: clicks on it are never the game's, and never lock the
+    mouse. menu:hide() starts the game; in a 3D world with a player that also locks the mouse for looking around (in
+    the click on the menu's button that hid it: World3D.covered). menu:show() brings it back, like from a pause menu.
+    Other screens show over it."""
+    cls = "tg-screen tg-main"
+
+    def __init__(self, ui, title):
+        super().__init__(ui, title, True)
+
+    def build(self, title):
+        box = self.scene.el("div", self.id, cls="tg-main-box")
+        self.title_id = self.scene.el("h1", box, cls="tg-title tg-main-title", text=title, show=bool(title))
+        self.slot = self.scene.el("div", box, cls="at-col tg-main-body")
+
+    def show(self):
+        if not self.is_shown and not self.dead:
+            self.ui.menu_played = False
+        super().show()
+
+    def hide(self):
+        if self.is_shown:
+            self.ui.menu_played = True  # the game starts (or goes on)
+        super().hide()
+
+
 # ---------------------------------------------------------------- Tuff Engine's preview (tuff.py --scene)
 SCENE = None  # a Scene while tuff.py --scene runs a program's setup; None in every normal run
 
@@ -3514,6 +6558,9 @@ class Scene:
             if land is not None and int(land.node) < item["ids"][0] and not any(x["kind"] == "terrain" for x in things):
                 things.append(self.land_item(land, names, len(things)))  # in the order things were made
             item.update(i=len(things), hidden=bool(t.hidden), made=self.made.get(int(t.node), []), var=names.get(id(t)))
+            physics = t.phys_dump()  # what thing:physics, :mass, :bounce and :friction set (nothing simulates here)
+            if physics is not None:
+                item["physics"] = physics
             things.append(item)
         if land is not None and not any(x["kind"] == "terrain" for x in things):
             things.append(self.land_item(land, names, len(things)))
@@ -3563,7 +6610,268 @@ def editor_tables():
     """The names Tuff Engine offers in its menus, from the same tables a run uses."""
     return {"colors": COLORS, "skies": list(SKIES), "kit": list(KIT), "hold": list(HOLDABLE), "sounds": list(SOUNDS),
             "edges": list(EDGE_MODES), "players": list(PLAYER_MODES), "terrain_styles": list(TERRAIN_STYLES),
-            "lightings": list(LIGHTINGS), "anchors": list(ANCHORS)}
+            "lightings": list(LIGHTINGS), "anchors": list(ANCHORS), "physics": list(PHYSICS_KINDS),
+            "weathers": list(WEATHERS)}
+
+
+# ---------------------------------------------------------------- saved game data (game:save, game:load)
+
+SAVE_ENV = "TUFF_SAVE_DIR"  # a folder to keep every game's saves in instead of the usual one (the tests use it)
+SAVE_KEEPS = "numbers, text, true/false, lists and tables"
+# Names people guess for the four (from other engines, and from Python's files), with the tgame name. game:clear isn't
+# here: it's tgame's own (it removes everything the program made).
+SAVE_HINTS = {
+    "store": "save", "write": "save", "save_data": "save", "save_game": "save", "savegame": "save", "set_data": "save",
+    "persist": "save", "remember": "save", "read": "load", "get_data": "load", "load_data": "load", "load_game": "load",
+    "loadgame": "load", "read_data": "load", "recall": "load", "restore": "load", "has_save": "saved",
+    "has_saved": "saved", "is_saved": "saved", "has_data": "saved", "save_exists": "saved", "delete": "forget",
+    "delete_save": "forget", "delete_data": "forget", "reset_save": "forget", "reset_saves": "forget",
+    "clear_save": "forget", "clear_saves": "forget", "clear_data": "forget", "remove_save": "forget", "erase": "forget",
+    "unsave": "forget", "wipe": "forget",
+}
+HINTS["game"].update(SAVE_HINTS)
+HINTS["world"].update(SAVE_HINTS)
+# Names Windows keeps for itself: a file can't be called one of these, whatever comes after the dot.
+_DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
+def save_folder():
+    """Where games keep their saves: TuffSaves in the user's data folder (%APPDATA% on Windows, Application Support
+    on a Mac, ~/.local/share elsewhere), or the folder TUFF_SAVE_DIR names."""
+    own = os.environ.get(SAVE_ENV, "").strip()
+    if own:
+        return os.path.abspath(os.path.expanduser(own))
+    home = os.path.expanduser("~")
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
+    elif sys.platform == "darwin":
+        base = os.path.join(home, "Library", "Application Support")
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME", "")
+        base = xdg if os.path.isabs(xdg) else os.path.join(home, ".local", "share")
+    return os.path.join(base, "TuffSaves")
+
+
+def save_file_name(title):
+    """A game's save file: its title, made safe for a file name on every system ("Coin Dash.json")."""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", str(title))
+    name = " ".join(name.split())[:100].strip(". ")  # Windows drops dots and spaces at the end; a Mac hides a dot first
+    if not name:
+        name = "Untitled game"
+    if name.split(".")[0].upper() in _DEVICE_NAMES:
+        name += "_"
+    return name + ".json"
+
+
+def tuff_value(rt, v, name):
+    """A saved JSON value as Tuff has it: an object comes back as a table (a tap data object), arrays as lists."""
+    if isinstance(v, list):
+        return [tuff_value(rt, x, name) for x in v]
+    if isinstance(v, dict):
+        try:
+            import tuff_tap
+        except ImportError:  # an app built from a program that never mentions tap leaves tap out
+            raise rt.error(f"The save \"{name}\" has a table in it, and tables need tap: add  mention tap  at the top.")
+        return tuff_tap.Lib(rt).from_json(v)
+    return v
+
+
+class SavedData:
+    """A game's saves (game:save, game:load, game:saved and game:forget): names and values in one JSON file, read the
+    first time the game asks and written each time it saves something new, by writing a whole new file and putting it
+    in the old one's place (so a crash mid-write never leaves half a file). The file is named after the title the
+    game was made with (game:title doesn't change it), so a game run from TuffCode and the same game built with Build
+    exe share their saves, and games with other titles never see them. A damaged file is set aside as .bad and the
+    game starts with nothing saved. Tuff Engine's preview (tuff.py --scene) never reads or writes it: there :save
+    does nothing and :load gives the default."""
+
+    def __init__(self, game, title):
+        self.game, self.rt, self.title = game, game.rt, str(title)
+        self.values = None  # name -> its JSON value, once the file was read
+        self.folder = self.path = None
+        self.told = set()  # notes already shown (a folder that can't be written is said once, not on every save)
+
+    @property
+    def off(self):
+        return SCENE is not None or os.environ.get("TUFF_SCENE") == "1"
+
+    def what(self, method):
+        return f"{self.game.KIND}:{method}"
+
+    def note(self, text):
+        if text not in self.told:
+            self.told.add(text)
+            sys.stderr.write(text + "\n")
+            sys.stderr.flush()
+
+    # ---- what a program gives
+    def name_of(self, name, method, example):
+        n = self.rt.plain(name)
+        if not isinstance(n, str):
+            raise self.rt.error(f"{self.what(method)} needs the save's name as text first, like {example}, not {self.rt.what(n)}.")
+        if not n.strip():
+            raise self.rt.error(f"A save needs a name, like \"best\": {example}")
+        return n
+
+    def keepable(self, v, inside=()):
+        """The JSON value for a Tuff value :save can keep: numbers, text, true/false, nil, lists and tables (tap's
+        data objects), inside each other too. Anything else is a Tuff error on the :save line."""
+        rt = self.rt
+        v = rt.plain(v)
+        if v is None or isinstance(v, (bool, str)):
+            return v
+        if isinstance(v, (int, float)):
+            if v != v or v in (math.inf, -math.inf):
+                raise rt.error(f"{self.what('save')} can only keep ordinary numbers, not {rt.text(v)}.")
+            return v
+        table = None
+        if getattr(v, "tap", None) is not None:  # a tap data object: a table of named values
+            import tuff_tap
+            d = tuff_tap.data_of(v)
+            table = d.values if d is not None else None
+        if isinstance(v, (list, dict)) or table is not None:
+            if any(x is v for x in inside):
+                raise rt.error(f"{self.what('save')} can't keep a list or table that holds itself.")
+            inside = (*inside, v)
+            if isinstance(v, list):
+                return [self.keepable(x, inside) for x in v]
+            return {str(k): self.keepable(x, inside) for k, x in (v if table is None else table).items()}
+        raise rt.error(f"{self.what('save')} can keep {SAVE_KEEPS}, not {rt.what(v)}.")
+
+    # ---- the file
+    def read(self):
+        if self.values is None:
+            self.folder = save_folder()
+            self.path = os.path.join(self.folder, save_file_name(self.title))
+            self.values = {}
+            try:
+                with open(self.path, encoding="utf-8") as f:
+                    data = json.load(f)
+                saves = data.get("saves") if isinstance(data, dict) else None
+                if not isinstance(saves, dict):
+                    raise ValueError("not a save file")
+                self.values = saves
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError):  # not JSON, not text, not a save file, or it can't be opened
+                self.set_aside()
+        return self.values
+
+    def set_aside(self):
+        bad = self.path + ".bad"
+        try:
+            os.replace(self.path, bad)
+            kept = f" The old file is kept as {bad}."
+        except OSError:
+            kept = ""
+        self.note(f"The saved data for \"{self.title}\" was damaged, so the game starts with nothing saved.{kept}")
+
+    def write(self):
+        import tempfile
+        text = json.dumps({"game": self.title, "saves": self.values}, ensure_ascii=False, indent=2) + "\n"
+        tmp = None
+        try:
+            os.makedirs(self.folder, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(prefix=os.path.basename(self.path) + ".", suffix=".tmp", dir=self.folder)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+            for attempt in range(6):  # on Windows, a virus scanner reading the old file holds it for a moment
+                try:
+                    os.replace(tmp, self.path)
+                    break
+                except PermissionError:
+                    if attempt == 5:
+                        raise
+                    time.sleep(0.02 * (attempt + 1))
+            tmp = None
+        except OSError as exc:
+            self.note(f"Couldn't save \"{self.title}\"'s data in {self.folder} ({exc.strerror or exc}). The game goes on, "
+                      "and remembers what it saved until it closes.")
+        finally:
+            if tmp is not None:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
+    def remove_file(self):
+        try:
+            os.remove(self.path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            self.note(f"Couldn't forget \"{self.title}\"'s saves in {self.folder} ({exc.strerror or exc}).")
+
+    # ---- game:save, game:load, game:saved and game:forget
+    def save(self, name, value):
+        name = self.name_of(name, "save", f'{self.what("save")}("best", score)')
+        kept = self.keepable(value)
+        if self.off:
+            return None
+        values = self.read()
+        if name in values and json.dumps(values[name]) == json.dumps(kept):
+            return None  # the same as what's saved (a game saving its score every frame doesn't write every frame)
+        values[name] = kept
+        self.write()
+        return None
+
+    def load(self, name, default=None):
+        name = self.name_of(name, "load", f'best = {self.what("load")}("best", 0)')
+        if self.off:
+            return default
+        values = self.read()
+        return tuff_value(self.rt, values[name], name) if name in values else default
+
+    def saved(self, name):
+        name = self.name_of(name, "saved", f'{self.what("saved")}("best")')
+        return False if self.off else name in self.read()
+
+    def forget(self, name=MISSING):
+        if name is not MISSING:
+            name = self.name_of(name, "forget", f'{self.what("forget")}("best") (or nothing, to forget every save)')
+        if self.off:
+            return None
+        values = self.read()
+        if name is MISSING:
+            values.clear()
+            self.remove_file()
+        elif name in values:
+            del values[name]
+            if values:
+                self.write()
+            else:
+                self.remove_file()
+        return None
+
+
+class GameSaves:
+    """What every game window and world gets for its saves (Game takes these methods, just below)."""
+    NAMES = [("save", "save_value"), ("load", "load_value"), ("saved", "has_saved"), ("forget", "forget_saved")]
+
+    def saves(self):
+        if getattr(self, "save_file", None) is None:  # made by Game.__init__; this is for a game made some other way
+            self.save_file = SavedData(self, self.view.title)
+        return self.save_file
+
+    def save_value(self, name, value):
+        return self.saves().save(name, value)
+
+    def load_value(self, name, default=None):
+        return self.saves().load(name, default)
+
+    def has_saved(self, name):
+        return self.saves().saved(name)
+
+    def forget_saved(self, name=MISSING):
+        return self.saves().forget(name)
+
+
+for _attr in ("saves", *(attr for _, attr in GameSaves.NAMES)):
+    setattr(Game, _attr, getattr(GameSaves, _attr))
+for _cls in (Game2D, World3D):
+    _cls.NAMES = _cls.NAMES + GameSaves.NAMES
 
 
 # ---------------------------------------------------------------- the autopilot (tests)
@@ -3575,10 +6883,13 @@ class Autopilot:
         {"at": 0.5, "key": "right"}, {"at": 1, "hold": "w", "for": 0.8}, {"at": 1.2, "keydown": "a"}, {"keyup": ...},
         {"at": 2, "click": [x, y]} (window pixels), {"click_world": [x, y]} (a 2D game's own units),
         {"click_center": true}, {"look": [dx, dy]} (mouse movement), {"lock": true} (act as if the mouse were locked),
+        {"nudge_mouse": [dx, dy]}, {"hold_report": true}, {"watch_hold": true}, {"front": true} (the mouse held for
+        looking around: see hold_step),
         {"click_ui": "Play"} (the first button, item, tab or text box showing on the game's menus with these words, or
         a text box's placeholder: exactly, or else containing them), {"type": "wasd", "for": 0.5} (keys typed into the
         text box that has the keys, let go after "for" seconds),
-        {"call": "tuff_function"}, {"say": "text"}, {"mark": true} (start measuring), {"shot": "name.png"} (with
+        {"call": "tuff_function"}, {"say": "text"}, {"js": "code"} (run in the page, where
+        tv.emit('tg-autopilot', {message}) prints a line), {"mark": true} (start measuring), {"shot": "name.png"} (with
         menus: the whole page as the window shows it), {"dump": "name.json"} (add "memory": true to count the
         sprites and objects still in memory), {"close": true}]}
 
@@ -3597,6 +6908,9 @@ class Autopilot:
     def __init__(self, game, plan, here):
         self.game = game
         self.on_top = plan.get("on_top", True)
+        self.hold_mouse = bool(plan.get("hold_mouse"))
+        if not self.hold_mouse:  # the tests leave the real mouse alone, unless they test holding it
+            os.environ["TUFF_VIEW_HOLD"] = "0"
         self.out = plan.get("out") or here
         os.makedirs(self.out, exist_ok=True)
         self.steps = sorted(plan.get("steps", []), key=lambda s: s.get("at", 0))
@@ -3635,6 +6949,68 @@ class Autopilot:
         key, code = KEY_EVENTS.get(name, (name, f"Key{name.upper()}" if len(name) == 1 and name.isalpha()
                                           else f"Digit{name}" if len(name) == 1 and name.isdigit() else name))
         return f"window.dispatchEvent(new KeyboardEvent({json.dumps(kind)}, {{key: {json.dumps(key)}, code: {json.dumps(code)}, bubbles: true}}));"
+
+    def hold_step(self, v, step):
+        """{"front": true} brings the window in front of the others (as a click on it would); {"nudge_mouse": [dx, dy]}
+        moves the real cursor as a hand would, when the plan holds the real mouse ("hold_mouse"), or else the page gets
+        the move (as with "look"); {"hold_report": true} prints
+        "[autopilot] hold {...}": whether the page and the computer hold the mouse, the window is in front, the cursor
+        is kept inside the window, it's back in the middle, and where it is (Windows); {"watch_hold": true} prints
+        "[autopilot] hold watch {"page": ...}" each time the page holds the mouse or lets go, from a thread of its own,
+        so it's heard even while the program is busy."""
+        if "nudge_mouse" in step and not self.hold_mouse:  # only a plan that holds the real mouse moves the real cursor
+            v.js(self.look_js(v, *step["nudge_mouse"]))
+            return
+        hold = getattr(v, "_hold", None)
+        if step.get("watch_hold") and hold is not None:
+            import threading
+
+            def watch(was=hold.on):
+                while not self.game.closed:
+                    if hold.on != was:
+                        was = hold.on
+                        print("[autopilot] hold watch " + json.dumps({"page": was}), flush=True)
+                    time.sleep(0.01)
+            threading.Thread(target=watch, name="tgame-autopilot-watch", daemon=True).start()
+            return
+        if sys.platform != "win32" or hold is None:
+            if step.get("hold_report"):
+                print("[autopilot] hold " + json.dumps({"none": True}), flush=True)
+            return
+        import ctypes
+        from ctypes import wintypes
+        u = hold.u
+        if step.get("front") and v._hwnd:  # Windows lets the window in front give it away: borrow its input for that
+            k = ctypes.WinDLL("kernel32")
+            u.GetWindowThreadProcessId.restype = wintypes.DWORD
+            u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
+            them, me = u.GetWindowThreadProcessId(u.GetForegroundWindow(), None), k.GetCurrentThreadId()
+            u.AttachThreadInput(me, them, True)
+            try:
+                u.SetForegroundWindow(wintypes.HWND(v._hwnd))
+                u.BringWindowToTop(wintypes.HWND(v._hwnd))
+            finally:
+                u.AttachThreadInput(me, them, False)
+            return
+        if "nudge_mouse" in step:
+            x, y = hold.where()
+            hold.put(x + step["nudge_mouse"][0], y + step["nudge_mouse"][1])
+            return
+        clip = wintypes.RECT()
+        u.GetClipCursor.argtypes = [ctypes.POINTER(wintypes.RECT)]
+        u.GetClipCursor(ctypes.byref(clip))
+        area = hold.area() if v._hwnd else None
+        inside = area is not None and (clip.left, clip.top, clip.right, clip.bottom) == (area.left, area.top, area.right, area.bottom)
+        x, y = hold.where()
+        middle = area is not None and abs(x - (area.left + area.right) // 2) <= 1 and abs(y - (area.top + area.bottom) // 2) <= 1
+        print("[autopilot] hold " + json.dumps({"page": hold.on, "active": hold.active, "front": hold.ours(),
+                                                "inside": inside, "middle": middle, "cursor": [x, y]}), flush=True)
+
+    def look_js(self, v, dx, dy):
+        """The mouse moved by dx, dy, in the page (it counts for looking around, without moving the real cursor)."""
+        w, h = v.size
+        return (f"window.dispatchEvent(new PointerEvent('pointermove', {{clientX: {w / 2}, clientY: {h / 2}, movementX: {dx}, "
+                f"movementY: {dy}, bubbles: true}}));")
 
     def click_js(self, x, y):
         # A real click somewhere else takes the keys from a text box: so does this one.
@@ -3700,9 +7076,7 @@ class Autopilot:
             v.js(f"const el = document.elementFromPoint({w / 2}, {h / 2}) || document.body;"
                  f"el.dispatchEvent(new PointerEvent('{kind}', {{clientX: {w / 2}, clientY: {h / 2}, bubbles: true, button: 0}}));")
         if "look" in step:
-            dx, dy = step["look"]
-            w, h = v.size
-            v.js(f"window.dispatchEvent(new PointerEvent('pointermove', {{clientX: {w / 2}, clientY: {h / 2}, movementX: {dx}, movementY: {dy}, bubbles: true}}));")
+            v.js(self.look_js(v, *step["look"]))
         if "click_ui" in step:
             v.js(self.click_ui_js(step["click_ui"]))
         if "type" in step:
@@ -3725,6 +7099,10 @@ class Autopilot:
                 interp.run_block(tuff.Parser(tuff.tokenize(step["tuff"])).program(), interp.globals)
             except tuff.TuffError as err:
                 print(f"[autopilot] {step['tuff']}: {err.msg}", flush=True)
+        if "js" in step:  # JavaScript in the page; tv.emit('tg-autopilot', {message}) prints what it finds
+            v.js(step["js"])
+        if "nudge_mouse" in step or step.get("hold_report") or step.get("front") or step.get("watch_hold"):
+            self.hold_step(v, step)
         if "say" in step:
             print(step["say"], flush=True)
         if step.get("mark"):
@@ -3774,6 +7152,8 @@ class Autopilot:
         out["blurs"] = g.blurs  # times the window lost focus (that lets go of held keys)
         out["paused"] = g.is_paused
         out["locked"] = g.locked
+        if g.three_d:
+            out["mouse"] = g.mouse_state()  # world:mouse_locked(), the locks asked, world:auto_lock...
         out["down"] = sorted(g.down)  # the keys the game sees held
         if g.ui is not None:
             out["ui"] = g.ui.state()
@@ -3786,6 +7166,14 @@ class Autopilot:
         out["sprites"] = [[s.shape, round(s.x, 2), round(s.y, 2)] for s in g.things if isinstance(s, Sprite) and s.alive][:400]
         out["objects"] = [[t.kind, round(t.x, 2), round(t.y, 2), round(t.z, 2), t.fallen, t.data]
                           for t in g.things if isinstance(t, Thing) and t.alive][:400]
+        out["physics"] = g.phys.state() if g.phys is not None else None
+        out["effects"] = g.fx.state() if g.fx is not None else None
+        if getattr(g, "interact", None) is not None:
+            out["interact"] = g.interact.state()
+        if g.three_d and g.the_player is not None:
+            out["on_ground"] = g.the_player.on_ground
+            body = g.the_player.body  # third person: the figure the camera follows
+            out["player_shown"] = body is not None and not body.hidden
         return out
 
 
@@ -3793,12 +7181,16 @@ class Autopilot:
 
 # What each method gives back, so the checker knows what a variable holds ("$number", "$text", "$bool",
 # "$list", or another tgame kind). Left out: it depends (like :touches, :get or :looking_at).
-_SETTERS = ("move", "move_to", "glide", "forward", "turn", "turn_to", "spin", "point_at", "speed", "on_edge", "size",
+# (:speed and :velocity are left out: with no inputs they give how fast it goes.)
+_SETTERS = ("move", "move_to", "glide", "forward", "turn", "turn_to", "spin", "point_at", "on_edge", "size",
             "scale", "color", "layer", "flip", "align", "hide", "show", "set", "clicked", "shake", "look_at", "fall",
-            "grow", "regrow", "swing", "glow", "solid", "label")
+            "grow", "regrow", "swing", "glow", "solid", "label", "physics", "mass", "bounce", "friction", "push",
+            "on_hit", "sleep", "wake")
+_OBJECT_GIVES = {"x": "$number", "y": "$number", "z": "$number", "spot": "$list", "angle": "$number",
+                 "distance": "$number", "fallen": "$bool"}
 # game:panel gives a "panel" and game:screen and game:start_screen a "screen": atgui containers (tables()["ui_kinds"] has
 # their methods; what those make is atgui's, as tuff_atgui.MAKES says).
-_MENUS = {"panel": "panel", "screen": "screen", "start_screen": "screen"}
+_MENUS = {"panel": "panel", "screen": "screen", "start_screen": "screen", "main_menu": "screen"}
 GIVES = {
     "game": {"open": "$bool", "frame": "$number", "held": "$bool", "pressed": "$bool", "mouse_x": "$number",
              "mouse_y": "$number", "time": "$number", "fps": "$number", "paused": "$bool", "width": "$number",
@@ -3808,16 +7200,21 @@ GIVES = {
               "mouse_y": "$number", "time": "$number", "fps": "$number", "paused": "$bool", "width": "$number",
               "height": "$number", "random_spot": "$list", "group": "group", "hud": "hud", "light": "object",
               "ground": "object", "island": "object", "box": "object", "sphere": "object", "cylinder": "object",
-              "cone": "object", "plane": "object", "spawn": "object", "player": "player", "terrain": "terrain", **_MENUS},
+              "cone": "object", "plane": "object", "spawn": "object", "player": "player", "terrain": "terrain",
+              "car": "car", "ragdoll": "ragdoll", **_MENUS,
+              "time_of_day": "$number", "mouse_locked": "$bool"},
     "screen": {"shown": "$bool"},
     "terrain": {"height_at": "$number", **{m: "terrain" for m, _ in Terrain.NAMES if m != "height_at"}},
     "sprite": {"x": "$number", "y": "$number", "spot": "$list", "angle": "$number", "on_screen": "$bool",
                "distance": "$number", "value": "$text", **{m: "sprite" for m in _SETTERS}},
-    "object": {"x": "$number", "y": "$number", "z": "$number", "spot": "$list", "angle": "$number",
-               "distance": "$number", "fallen": "$bool", **{m: "object" for m in _SETTERS}},
+    "object": {**_OBJECT_GIVES, **{m: "object" for m in _SETTERS}},
+    "car": {**_OBJECT_GIVES, **{m: "car" for m in _SETTERS}, "speed": "$number", "drive": "car", "engine": "car",
+            "flip": "car"},
+    "ragdoll": {**_OBJECT_GIVES, **{m: "ragdoll" for m in _SETTERS}},
     "player": {"x": "$number", "y": "$number", "z": "$number", "spot": "$list", "angle": "$number",
                "distance": "$number", "hold": "object", "move_to": "player", "turn_to": "player",
-               "walk_speed": "player", "jump_height": "player", "jump": "player", "hide": "player", "show": "player"},
+               "walk_speed": "player", "jump_height": "player", "jump": "player", "hide": "player", "show": "player",
+               "on_hit": "player"},
     "hud": {"text": "sprite", "box": "sprite", "circle": "sprite", "line": "sprite", "image": "sprite"},
     "group": {"items": "$list", "count": "$number", "has": "$bool", "add": "group", "remove": "group",
               "move": "group", "hide": "group", "show": "group", "clear": "group", "color": "group"},
@@ -3825,11 +7222,15 @@ GIVES = {
 # Events: method -> (where the function goes, how many inputs the function is given, what they are).
 _EVENTS = {"every_frame": (0, 1, "1 input (the seconds since the last frame)"), "on_key": (1, 1, "1 input (the key's name)"),
            "after": (1, 0, "no inputs"), "every": (1, 0, "no inputs"), "game_over": (1, 0, "no inputs")}
+_HIT = (0, 2, "2 inputs (the thing that hit it and how hard)")
 HANDLERS = {
     "game": {**_EVENTS, "clicked": (0, 2, "2 inputs (x and y)")},
     "world": {**_EVENTS, "clicked": (0, 3, "3 inputs (the x, y and z it clicked)")},
-    "sprite": {"clicked": (0, 1, "1 input (the sprite)")},
-    "object": {"clicked": (0, 1, "1 input (the object)")},
+    "sprite": {"clicked": (0, 1, "1 input (the sprite)"), "on_hit": _HIT},
+    "object": {"clicked": (0, 1, "1 input (the object)"), "on_hit": _HIT},
+    "car": {"clicked": (0, 1, "1 input (the car)"), "on_hit": _HIT},
+    "ragdoll": {"clicked": (0, 1, "1 input (the ragdoll)"), "on_hit": _HIT},
+    "player": {"on_hit": _HIT},
 }
 # Inputs written as text that have to be one of a set of names: (kind, method) -> {input position: what}.
 _MAKERS_2D = {"box": {4: "color"}, "circle": {3: "color"}, "line": {4: "color"}, "text": {4: "color"}, "image": {0: "image"}}
@@ -3842,12 +7243,38 @@ VALUES = {
     ("object", "glow"): {0: "glow"}, ("group", "color"): {0: "color"}, ("sprite", "on_edge"): {0: "edge"},
     ("sprite", "align"): {0: "align"}, ("player", "hold"): {0: "hold"}, ("world", "terrain"): {1: "terrain style"},
     ("terrain", "style"): {0: "terrain style"}, ("world", "lighting"): {0: "lighting"},
+    **{(k, "physics"): {0: "physics"} for k in ("sprite", "object", "car", "ragdoll")},
+    **{("world", m): {1: "color", 3: "color"} for m in ("car", "ragdoll")},
+    **{(k, "color"): {0: "color"} for k in ("car", "ragdoll")}, **{(k, "glow"): {0: "glow"} for k in ("car", "ragdoll")},
     **{(k, m): {0: "key"} for k in ("game", "world") for m in ("held", "pressed")},
     **{(k, "on_key"): {0: "anykey"} for k in ("game", "world")},
     **{(k, "sound"): {0: "sound"} for k in ("game", "world")},
     **{(k, "music"): {0: "music"} for k in ("game", "world")},
     **{(k, "panel"): {0: "anchor"} for k in ("game", "world")},
+    ("world", "weather"): {0: "weather"}, ("world", "pop_text"): {4: "color"}, ("game", "pop_text"): {3: "color"},
+    **{(k, "splash"): {0: "splash"} for k in ("game", "world")},
 }
+# Talking, grabbing, doors and keys (Interaction, Door).
+for _k in ("object", "car", "ragdoll"):
+    GIVES[_k].update({"say": _k, "on_talk": _k})
+GIVES["world"]["door"] = "door"
+GIVES["player"]["can_grab"] = "player"
+GIVES["door"] = {**_OBJECT_GIVES, **{m: "door" for m in _SETTERS}, "say": "door", "on_talk": "door",
+                 **{m: "door" for m in ("open", "close", "needs", "lock", "unlock")}}
+for _k in ("object", "car", "ragdoll", "door"):
+    HANDLERS.setdefault(_k, {})["on_talk"] = (0, 0, "no inputs")
+HANDLERS["door"].update({"clicked": (0, 1, "1 input (the door)"), "on_hit": _HIT})
+VALUES.update({("world", "door"): {3: "color", 1: "color"}, ("door", "color"): {0: "color"}, ("door", "glow"): {0: "glow"}})
+
+# Saved game data (GameSaves, above): game:saved gives true or false. game:load is left out: it gives back whatever
+# was saved.
+for _kind in ("game", "world"):
+    GIVES[_kind]["saved"] = "$bool"
+# The level pieces: world:jump_pad and world:boost_pad make objects, thing:path gives the thing back, and its third
+# input is how it goes ("ping-pong" or "loop").
+GIVES["world"].update({"jump_pad": "object", "boost_pad": "object"})
+GIVES["object"]["path"] = "object"
+VALUES[("object", "path")] = {2: "path"}
 
 
 def check_value(kind, method, index, value, base_dir=None):
@@ -3889,6 +7316,8 @@ def check_value(kind, method, index, value, base_dir=None):
         return None if low in LIGHTINGS else lighting_problem(low)
     if what == "anchor":
         return None if anchor_name(value) else anchor_problem(value.strip())
+    if what == "corner":  # world:minimap's (the HUD, at the end)
+        return None if corner_name(value) else corner_problem(value.strip())
     if what == "edge":
         return None if low in EDGE_MODES else ":on_edge can be \"bounce\", \"wrap\", \"stop\" (stay on screen) or \"none\"."
     if what == "align":
@@ -3899,6 +7328,8 @@ def check_value(kind, method, index, value, base_dir=None):
         return None if ok else f"The player can be \"first person\" or \"third person\", not \"{value}\"."
     if what == "hold":
         return None if low in HOLDABLE else f"The player can hold: {', '.join(HOLDABLE)}. Not \"{value}\"."
+    if what == "physics":
+        return None if PHYSICS_WORDS.get(low, low) in PHYSICS_KINDS else physics_problem(low)
     if what == "spawn":
         if low.endswith(MODEL_FILES):
             return file_problem(MODEL_FILES, "model")
@@ -3916,8 +7347,17 @@ def check_value(kind, method, index, value, base_dir=None):
         return f"'{value}' isn't one of tgame's sounds ({', '.join(SOUNDS)}). Or play a .wav, .mp3 or .ogg file from your project folder."
     if what == "music":
         return file_problem(SOUND_FILES, "music")
+    if what == "weather":
+        return None if WEATHER_WORDS.get(low, low) in WEATHERS else weather_problem(value)
     if what == "image":
         return file_problem(IMAGE_FILES, "picture")
+    if what == "path":
+        return None if path_mode(value) else path_problem(value.strip())
+    if what == "splash":  # a picture file, or any other text to show
+        if low.endswith(IMAGE_FILES):
+            return file_problem(IMAGE_FILES, "picture")
+        if low.endswith(NOT_PICTURES):
+            return f"'{value.strip()}' can't be a splash screen. Use a picture from your project folder (.png, .jpg or .gif), or some text."
     return None
 
 
@@ -3936,9 +7376,390 @@ def tables():
 
     kinds = {}
     for kind, cls in (("game", Game2D), ("world", World3D), ("sprite", Sprite), ("object", Thing),
-                      ("player", Player), ("hud", Hud), ("group", Group), ("terrain", Terrain)):
+                      ("player", Player), ("hud", Hud), ("group", Group), ("terrain", Terrain), ("car", Car),
+                      ("ragdoll", Ragdoll), ("door", Door)):
         obj = probe(cls)
         kinds[kind] = {name: getattr(obj, attr) for name, attr in cls.NAMES}
+    kinds.update({kind: {name: getattr(probe(cls), attr) for name, attr in cls.NAMES} for kind, cls in HUD_KINDS})
     ui_kinds = {"panel": probe(Panel).methods(), "screen": probe(StartScreen).methods()}
     return {"lib": make_library(FakeRt()), "kinds": kinds, "gives": GIVES, "handlers": HANDLERS, "hints": HINTS,
-            "check": check_value, "ui_kinds": ui_kinds, "anchors": ANCHORS}
+            "check": check_value, "ui_kinds": ui_kinds, "anchors": ANCHORS, "physics_kinds": PHYSICS_KINDS,
+            "physics_words": PHYSICS_WORDS, "needs_3d": NEEDS_3D, "weathers": WEATHERS}
+
+
+# ---------------------------------------------------------------- the HUD: health bars, countdowns, arrows, minimaps
+# Health for sprites, objects and the player (thing:health_bar, :hurt, :heal, :health, :on_death), game:countdown,
+# world:arrow_to and world:minimap. The page draws them (tuff_view_web/hud.js): one <tg-hud> element over the game,
+# whose methods tgame calls like any element's. Bars, the arrow and the map follow things where the page has them,
+# so they keep up with physics too, with nothing sent each frame.
+
+CORNERS = ("top right", "top left", "bottom left", "bottom right")
+HUD_GOLD = "#f2c230"  # the arrow's colour, and a mark's unless the program gives one
+
+
+def corner_name(text):
+    """Which corner a minimap goes in ("top right"...) for what a program wrote ("Top-Right", "right top"...), or None."""
+    name = anchor_name(text)
+    return name if name in CORNERS else None
+
+
+def corner_problem(name):
+    return (f"A minimap can go in the top right, top left, bottom left or bottom right corner, not \"{name}\"."
+            + did_you_mean(str(name).strip().lower(), CORNERS))
+
+
+class HudPage:
+    """The page's side of the HUD: a <tg-hud> element (hud.js) over the game, under its HUD layer and its menus."""
+
+    def __init__(self, game):
+        self.game = game
+        under = [int(game.hud_layer.node)] if game.hud_layer is not None else []
+        if game.ui is not None and SCENE is None:
+            under.append(int(game.ui.id))
+        self.node = game.view.el("tg-hud", 0, **({"before": min(under)} if under else {}))
+        view = int(game.scene) if game.three_d else int(game.node)
+        game.view.call(self.node, "setup", {"three_d": game.three_d, "view": view, "size": [game.W, game.H]})
+
+    def call(self, method, *args):
+        self.game.view.call(self.node, method, *args)
+
+    def player(self):
+        """Tells the page where the map and the arrow measure from: the car the player drives, the player's figure in
+        third person, or (0) the camera. Sent again when that changes (the player is made, gets in or out of a car)."""
+        car, p = getattr(self.game, "driving", None), getattr(self.game, "the_player", None)
+        body = p.body if p is not None else None
+        self.call("player", int(car.node) if car is not None else int(body.node) if body is not None else 0)
+
+
+def hud_page(game):
+    if getattr(game, "hud_js", None) is None:
+        game.hud_js = HudPage(game)
+    return game.hud_js
+
+
+class Health:
+    """Health, for sprites (2D), objects (3D: cars and ragdolls too) and the player. thing:health_bar(100) gives it
+    100 health and a bar over it (an object's faces the camera; the player's goes along the bottom of the screen);
+    :hurt takes some off (the bar shrinks and flashes), :heal gives some back, :health is how much it has, and its
+    :on_death functions run once when it reaches 0 (again only if it's healed and runs out again)."""
+    NAMES = [("health_bar", "health_bar"), ("hurt", "hurt"), ("heal", "heal"), ("health", "health"),
+             ("on_death", "on_death")]
+    HELPERS = ("hp_game", "hp_name", "hp_need", "hp_amount", "hp_send")
+
+    def hp_game(self):
+        return self.world if isinstance(self, Player) else self.game
+
+    def hp_name(self):
+        return "player" if isinstance(self, Player) else self.phys_name()
+
+    def hp_need(self, what):
+        if getattr(self, "hp_most", None) is None:
+            n = self.hp_name()
+            raise self.rt.error(f"{n}:{what} needs health first. Give it a health bar, like {n}:health_bar(100).")
+
+    def hp_amount(self, amount, what, other):
+        n = self.rt.number(amount, f":{what}")
+        if n < 0:
+            raise self.rt.error(f"{self.hp_name()}:{what} needs a number of 0 or more. To {other} it, use :{other}.")
+        return n
+
+    def hp_send(self, flash=None):
+        kind = "player" if isinstance(self, Player) else "3d" if isinstance(self, Thing) else "2d"
+        label = getattr(self, "label_node", None)  # an object's bar goes over its label
+        hud_page(self.hp_game()).call("bar", "player" if kind == "player" else int(self.node),
+                                      {"kind": kind, "value": tidy(self.hp), "most": tidy(self.hp_most), "flash": flash,
+                                       "label": int(label) if label is not None else 0})
+
+    def health_bar(self, most=100):
+        m = self.rt.number(most, ":health_bar")
+        if m <= 0:
+            n = self.hp_name()
+            raise self.rt.error(f"{n}:health_bar needs the most health it can have, above 0, like {n}:health_bar(100).")
+        self.hp_most = self.hp = float(m)  # full (again)
+        self.hp_out = False
+        self.hp_send()
+        return self.native
+
+    def hurt(self, amount):
+        self.hp_need("hurt")
+        n = self.hp_amount(amount, "hurt", "heal")
+        if self.hp_out or not n:
+            return self.native
+        self.hp = max(0.0, self.hp - n)
+        self.hp_send("hurt")
+        if self.hp <= 0:
+            self.hp_out = True
+            for fn in list(getattr(self, "death_fns", ())):
+                self.hp_game().fire(fn, self.native)
+        return self.native
+
+    def heal(self, amount):
+        self.hp_need("heal")
+        n = self.hp_amount(amount, "heal", "hurt")
+        if not n or self.hp >= self.hp_most:
+            return self.native
+        self.hp = min(self.hp_most, self.hp + n)
+        self.hp_out = False
+        self.hp_send("heal")
+        return self.native
+
+    def health(self):
+        self.hp_need("health")
+        return tidy(self.hp)
+
+    def on_death(self, fn):
+        fn = self.hp_game().lib.check_fn(fn, ":on_death")
+        if getattr(self, "death_fns", None) is None:
+            self.death_fns = []
+        self.death_fns.append(fn)
+        return self.native
+
+
+class Countdown:
+    """game:countdown(60, times_up): a timer in the top right that counts down on the game's clock (so it stops while
+    the game is paused), turns red under 10 seconds and runs times_up() at 0. A game has one: making it again starts
+    it again. It's one of the game's movers while it runs."""
+    NAMES = [("add", "add"), ("stop", "stop"), ("left", "left")]
+
+    def __init__(self, game):
+        self.game, self.rt = game, game.rt
+        self.alive = True
+        self.secs = 0.0
+        self.fn = None
+        self.running = False
+        self.shown = None
+        self.native = game.rt.native("countdown", methods(self, "countdown", self.NAMES, game.rt),
+                                     lambda nested=False: f"<countdown, {self.left()} s left>")
+        self.native.tg = self
+
+    def start(self, seconds, fn):
+        self.secs, self.fn, self.running = float(seconds), fn, seconds > 0
+        self.shown = None
+        self.send()
+        self.busy()
+
+    def busy(self):
+        if self.running:
+            self.game.movers.add(self)
+        else:
+            self.game.movers.discard(self)
+
+    def send(self):
+        """The whole seconds left, to the page, when they change."""
+        shown = self.left()
+        if shown != self.shown:
+            self.shown = shown
+            hud_page(self.game).call("countdown", {"left": shown})
+
+    def tick(self, dt):
+        self.secs -= dt
+        if self.secs > 0:
+            self.send()
+            return
+        self.secs = 0.0
+        self.running = False
+        self.busy()
+        self.send()
+        if self.fn is not None:
+            self.game.fire(self.fn)
+
+    def add(self, seconds):
+        finished = self.secs <= 0 and not self.running
+        self.secs = max(0.0, self.secs + self.rt.number(seconds, ":add"))
+        if finished and self.secs > 0 and self.shown is not None:
+            self.running = True  # it had run out: more time starts it again
+        self.send()
+        self.busy()
+        return self.native
+
+    def stop(self):
+        self.running = False
+        self.busy()
+        return self.native
+
+    def left(self):
+        return math.ceil(max(0.0, self.secs) - 1e-9)
+
+
+class Arrow:
+    """world:arrow_to(chest): an arrow that points the way to something, with how far away it is: over it while it's
+    in view, at the edge of the screen when it isn't, and along the bottom when it's behind you. A world has one:
+    world:arrow_to(other) points it at something else. It can point at a spot too, like world:arrow_to(10, 0, -20)."""
+    NAMES = [("hide", "hide"), ("show", "show")]
+
+    def __init__(self, world):
+        self.world, self.rt = world, world.rt
+        self.shown = True
+        self.target = None
+        self.native = world.rt.native("arrow", methods(self, "arrow", self.NAMES, world.rt), lambda nested=False: "<arrow>")
+        self.native.tg = self
+
+    def point(self, args):
+        w = self.world
+        t = thing_of(args[0])
+        if isinstance(t, Player):
+            raise self.rt.error("world:arrow_to shows the player the way to something else, like world:arrow_to(chest).")
+        if isinstance(t, Thing):
+            if not t.alive:
+                raise self.rt.error("world:arrow_to can't point at something that was removed.")
+            if not t.on_land:
+                raise self.rt.error("world:arrow_to points at things in the world, not at something the player holds.")
+            self.target = {"id": int(t.node)}
+        else:
+            v = self.rt.plain(args[0])
+            if not isinstance(v, list) and not isinstance(v, (int, float)):
+                raise self.rt.error(f"world:arrow_to needs a thing to point at, like world:arrow_to(chest), or a spot "
+                                    f"like [10, 0, -20], not {self.rt.what(v)}.")
+            x, y, z, _ = w.where(args, (), "arrow_to")
+            self.target = {"at": [tidy(x), tidy(w.above(x, y, z)), tidy(z)]}
+        hud_page(w).player()
+        self.send()
+
+    def send(self):
+        hud_page(self.world).call("arrow", {**self.target, "shown": self.shown, "color": HUD_GOLD})
+
+    def hide(self):
+        self.shown = False
+        self.send()
+        return self.native
+
+    def show(self):
+        self.shown = True
+        self.send()
+        return self.native
+
+
+class Minimap:
+    """world:minimap(): a round map in a corner, north up: the land around the player (its colours and its water),
+    the player as an arrow, and a dot for each thing map:mark gave it (one too far away waits at the map's edge).
+    map:zoom(2) shows things twice as big. A world has one: world:minimap(240, "top left") changes it."""
+    NAMES = [("mark", "mark"), ("unmark", "unmark"), ("zoom", "zoom")]
+
+    def __init__(self, world):
+        self.world, self.rt = world, world.rt
+        self.size, self.corner, self.k = 180, "top right", 1.0
+        self.marks = {}  # node id -> colour
+        self.native = world.rt.native("minimap", methods(self, "minimap", self.NAMES, world.rt), lambda nested=False: "<minimap>")
+        self.native.tg = self
+
+    def floors(self):
+        """The world's ground and islands, for the map (the page finds a terrain by itself)."""
+        out = []
+        for t in self.world.things:
+            if isinstance(t, Thing) and t.alive and getattr(t, "floor", False):
+                if t.kind == "island":
+                    out.append({"island": tidy(t.dims[0] / 2)})
+                else:
+                    out.append({"ground": tidy(t.dims[0]), "color": getattr(t, "floor_color", None) or COLORS["grass"]})
+        return out
+
+    def send(self):
+        page = hud_page(self.world)
+        page.player()
+        page.call("minimap", {"size": self.size, "corner": self.corner, "zoom": self.k, "floors": self.floors()})
+
+    def thing(self, v, what):
+        t = thing_of(v)
+        if not isinstance(t, Thing) or not t.on_land:
+            raise self.rt.error(f"map:{what} needs a thing in the world, like map:{what}(coin), not {self.rt.what(v)}.")
+        return t
+
+    def mark(self, thing, color=HUD_GOLD):
+        t = self.thing(thing, "mark")
+        c = self.world.color(color)
+        self.marks[int(t.node)] = c
+        hud_page(self.world).call("mark", int(t.node), c)
+        return self.native
+
+    def unmark(self, thing):
+        t = self.thing(thing, "unmark")
+        if self.marks.pop(int(t.node), None) is not None:
+            hud_page(self.world).call("unmark", int(t.node))
+        return self.native
+
+    def zoom(self, k):
+        n = self.rt.number(k, ":zoom")
+        if n <= 0:
+            raise self.rt.error("map:zoom needs a number above 0: 2 shows things twice as big, 0.5 shows twice as far.")
+        self.k = clamp(n, 0.05, 50)
+        self.send()
+        return self.native
+
+
+def countdown(self, seconds, fn=None):  # game:countdown and world:countdown
+    secs = self.num(seconds, ":countdown")
+    if secs < 0:
+        raise self.rt.error(":countdown needs how many seconds it counts down from, like game:countdown(60, times_up).")
+    if fn is not None:
+        fn = self.lib.check_fn(fn, ":countdown")
+    if getattr(self, "the_countdown", None) is None:
+        self.the_countdown = Countdown(self)
+    self.the_countdown.start(secs, fn)
+    return self.the_countdown.native
+
+
+def arrow_to(self, x, y=MISSING, z=MISSING):  # world:arrow_to
+    if getattr(self, "the_arrow", None) is None:
+        self.the_arrow = Arrow(self)
+    self.the_arrow.point([x, y, z])
+    return self.the_arrow.native
+
+
+def minimap(self, size=180, corner="top right"):  # world:minimap
+    s = self.num(size, ":minimap")
+    if not 60 <= s <= 600:
+        raise self.rt.error(":minimap needs a size from 60 to 600 (how many pixels across), like world:minimap(180).")
+    where = corner_name(self.rt.text(corner))
+    if where is None:
+        raise self.rt.error(corner_problem(self.rt.text(corner)))
+    if getattr(self, "the_map", None) is None:
+        self.the_map = Minimap(self)
+    m = self.the_map
+    m.size, m.corner = tidy(s), where
+    m.send()
+    return m.native
+
+
+# The HUD's names on the kinds that have them: health on sprites, objects (cars and ragdolls too) and the player.
+Game.countdown, World3D.arrow_to, World3D.minimap = countdown, arrow_to, minimap
+Game2D.NAMES = Game2D.NAMES + [("countdown", "countdown")]
+World3D.NAMES = World3D.NAMES + [("countdown", "countdown"), ("arrow_to", "arrow_to"), ("minimap", "minimap")]
+for _cls in (Sprite, Thing, Car, Player):  # a ragdoll has an object's names
+    _cls.NAMES = _cls.NAMES + Health.NAMES
+for _cls in (Sprite, Thing, Player):
+    for _attr in [a for _, a in Health.NAMES] + list(Health.HELPERS):
+        setattr(_cls, _attr, getattr(Health, _attr))
+HUD_KINDS = (("countdown", Countdown), ("arrow", Arrow), ("minimap", Minimap))
+
+NEEDS_3D.update({"arrow_to": "The arrow needs a 3D world. Make the game with tgame.world(...) to point the way to things.",
+                 "minimap": "The minimap needs a 3D world. Make the game with tgame.world(...) for one."})
+_HEALTH_HINTS = {"damage": "hurt", "take_damage": "hurt", "harm": "hurt", "hp": "health", "get_health": "health",
+                 "life": "health", "healthbar": "health_bar", "hp_bar": "health_bar", "life_bar": "health_bar",
+                 "lifebar": "health_bar", "max_health": "health_bar", "set_health": "health_bar", "cure": "heal",
+                 "restore": "heal", "on_die": "on_death", "on_dead": "on_death", "died": "on_death",
+                 "when_dead": "on_death", "on_killed": "on_death"}
+for _kind in ("sprite", "object", "car", "ragdoll", "player"):
+    HINTS[_kind].update({k: v for k, v in _HEALTH_HINTS.items() if k not in HINTS[_kind]})
+_TIMER_HINTS = {"timer": "countdown", "count_down": "countdown", "countdown_timer": "countdown"}
+HINTS["game"].update(_TIMER_HINTS)
+HINTS["world"].update({**_TIMER_HINTS, "compass": "arrow_to", "waypoint": "arrow_to", "pointer": "arrow_to",
+                       "point_to": "arrow_to", "arrow": "arrow_to", "map": "minimap", "mini_map": "minimap",
+                       "radar": "minimap"})
+HINTS["countdown"] = {"pause": "stop", "end": "stop", "time_left": "left", "remaining": "left", "seconds": "left",
+                      "time": "left", "add_time": "add", "extend": "add", "plus": "add"}
+HINTS["arrow"] = {"remove": "hide", "visible": "show"}
+HINTS["minimap"] = {"dot": "mark", "add": "mark", "track": "mark", "pin": "mark", "remove": "unmark",
+                    "untrack": "unmark", "zoom_in": "zoom", "scale": "zoom"}
+
+GIVES["game"]["countdown"] = "countdown"
+GIVES["world"].update({"countdown": "countdown", "arrow_to": "arrow", "minimap": "minimap"})
+for _kind in ("sprite", "object", "car", "ragdoll", "player"):
+    GIVES[_kind].update({"health_bar": _kind, "hurt": _kind, "heal": _kind, "health": "$number", "on_death": _kind})
+GIVES.update({"countdown": {"left": "$number", "add": "countdown", "stop": "countdown"},
+              "arrow": {"hide": "arrow", "show": "arrow"},
+              "minimap": {"mark": "minimap", "unmark": "minimap", "zoom": "minimap"}})
+for _kind in ("game", "world"):
+    HANDLERS[_kind]["countdown"] = (1, 0, "no inputs")
+for _kind in ("sprite", "object", "car", "ragdoll", "player"):
+    HANDLERS.setdefault(_kind, {})["on_death"] = (0, 1, f"1 input (the {_kind} whose health ran out)")
+VALUES.update({("world", "minimap"): {1: "corner"}, ("minimap", "mark"): {1: "color"}})

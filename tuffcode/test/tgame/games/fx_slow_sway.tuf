@@ -1,0 +1,10 @@
+mention tgame
+
+# Models that move by themselves (a tree swaying, a person breathing) and nothing else: in slow motion they move
+# slower, but just as smoothly (the page still gives them a new pose about 60 times a second).
+world = tgame.world("Slow Sway", 900, 560)
+world:ground "grass"
+world:camera_at(0, 2, 8)
+world:look_at(0, 1.5, 0)
+world:spawn("tree", -1.5, 0, 0)
+world:spawn("person", 1.5, 0, 0)

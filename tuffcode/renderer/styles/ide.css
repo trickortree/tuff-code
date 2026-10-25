@@ -833,6 +833,9 @@ body.enter #statusbar { animation: upin .55s .3s cubic-bezier(.2,.9,.25,1) both;
 .sd-layer.en-dim { opacity: .55; }
 .sd-layer.en-group .lb { color: var(--text-dim); }
 .sd-layer.en-group .ic { background: var(--bg-active); color: var(--text-dim); }
+/* A thing that uses physics: a small badge after its name in Objects. */
+.sd-layer .en-phys { flex: none; display: inline-flex; align-items: center; gap: 3px; height: 17px; padding: 0 6px 0 4px; border-radius: 999px; background: color-mix(in srgb, var(--green) 16%, transparent); color: color-mix(in srgb, var(--green) 72%, #fff); font-size: 10.5px; font-weight: 600; line-height: 1; }
+.sd-layer .en-phys svg { width: 10px; height: 10px; }
 .en-stage { flex: 1; min-width: 0; position: relative; outline: none; overflow: hidden; background: radial-gradient(circle at 1px 1px, #2f3136 1px, transparent 0) 0 0 / 20px 20px, var(--bg-editor); }
 .en-scroll { position: absolute; inset: 0; overflow: auto; display: flex; padding: 44px 24px 40px; }
 #en-frame { margin: auto; flex: none; display: block; border: 0; border-radius: 3px; background: transparent; box-shadow: 0 24px 60px rgba(0,0,0,.5), 0 0 0 1px #393b40; }
@@ -962,3 +965,40 @@ body.enter #statusbar { animation: upin .55s .3s cubic-bezier(.2,.9,.25,1) both;
   #en-zoom, #en-templates { display: none; }
   .en .sd-bar .sd-seg button { padding: 0 7px; }
 }
+
+/* ---------- What's New ----------
+   The card: one scroll area (picture, title, notes, the end note) over a bar that stays put. A fade and "Scroll for
+   more" show until the end is reached (.at-end). */
+#whatsnew { position: fixed; inset: 0; z-index: 3500; display: grid; place-items: center; padding: 24px; background: rgba(0,0,0,.5); backdrop-filter: blur(3px); opacity: 0; transition: opacity .18s; }
+#whatsnew.in { opacity: 1; }
+#whatsnew .wn-card { position: relative; width: min(640px, 100%); max-height: min(760px, calc(100vh - 48px)); display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; background: var(--bg-panel); border: 1px solid var(--bg-active); box-shadow: 0 30px 80px rgba(0,0,0,.55); transform: translateY(8px) scale(.985); transition: transform .22s cubic-bezier(.2,.8,.2,1); }
+#whatsnew.in .wn-card { transform: none; }
+#whatsnew .wn-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scroll-behavior: smooth; }
+#whatsnew .wn-hero { padding: 14px 14px 0; }
+#whatsnew .wn-strip { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; border-radius: 12px; }
+#whatsnew .wn-strip::-webkit-scrollbar { display: none; }
+#whatsnew .wn-strip img { flex: none; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; scroll-snap-align: start; border-radius: 12px; display: block; background: var(--bg-editor); }
+#whatsnew .wn-dots { display: flex; justify-content: center; gap: 6px; padding-top: 10px; }
+#whatsnew .wn-dots button { width: 7px; height: 7px; padding: 0; border-radius: 50%; background: rgba(255,255,255,.22); transition: background .15s, width .15s; }
+#whatsnew .wn-dots button.on { width: 18px; border-radius: 4px; background: var(--accent); }
+#whatsnew .wn-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 18px 24px 4px; }
+#whatsnew .wn-head h2 { margin: 0; font-size: 21px; font-weight: 650; color: var(--text); }
+#whatsnew .wn-ver { font-size: 12px; color: var(--text-dim); padding: 2px 8px; border-radius: 999px; background: var(--bg-hover); }
+#whatsnew .wn-body { padding: 4px 24px 8px; color: var(--text-dim); font-size: 13px; line-height: 1.55; user-select: text; }
+#whatsnew .wn-body h3 { margin: 16px 0 6px; font-size: 13.5px; font-weight: 650; color: var(--text); }
+#whatsnew .wn-body ul { margin: 0; padding-left: 18px; }
+#whatsnew .wn-body li { margin: 4px 0; }
+#whatsnew .wn-body b { color: var(--text); font-weight: 600; }
+#whatsnew code { font-family: var(--font-code); font-size: 12px; padding: 1px 5px; border-radius: 5px; background: var(--bg-editor); color: var(--text); }
+#whatsnew a { color: var(--accent); text-decoration: none; }
+#whatsnew a:hover { text-decoration: underline; }
+#whatsnew .wn-end { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 18px 24px 22px; padding: 22px 20px 20px; text-align: center; border-radius: 12px; background: var(--bg-editor); border: 1px solid var(--border-soft); color: var(--text-dim); font-size: 12.5px; line-height: 1.5; }
+#whatsnew .wn-end b { color: var(--text); font-size: 13.5px; font-weight: 600; }
+#whatsnew .wn-end-mark { width: 30px; height: 4px; margin-bottom: 4px; border-radius: 4px; background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 35%, transparent)); }
+#whatsnew .wn-fade { position: sticky; bottom: 0; height: 72px; margin-top: -72px; pointer-events: none; background: linear-gradient(to bottom, color-mix(in srgb, var(--bg-panel) 0%, transparent), var(--bg-panel)); transition: opacity .2s; }
+#whatsnew .wn-foot { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 24px 16px; border-top: 1px solid var(--border-soft); background: var(--bg-panel); }
+#whatsnew .wn-more { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-dim); transition: opacity .2s; }
+#whatsnew .wn-more svg { width: 14px; height: 14px; animation: wn-nudge 1.6s ease-in-out infinite; }
+@keyframes wn-nudge { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(3px); } }
+#whatsnew .wn-card.at-end .wn-fade, #whatsnew .wn-card.at-end .wn-more { opacity: 0; }
+#whatsnew .wn-foot .btn { margin-left: auto; }

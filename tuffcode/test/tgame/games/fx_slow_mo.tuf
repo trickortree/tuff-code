@@ -1,0 +1,29 @@
+mention tgame
+
+# Slow motion: the game clock, timers, a box gliding by itself and a ball falling (physics) all slow down together.
+world = tgame.world("Slow Motion", 900, 560)
+world:ground("grass")
+world:camera_at(0, 4, 12)
+world:look_at(0, 2, 0)
+slider = world:box(-6, 0.5, 0, 1, "red")
+slider:glide(6, 0.5, 0, 8)
+ball = world:sphere(3, 40, -2, 1, "blue"):physics()
+coin = world:spawn("coin", -2, 1, 2)
+ticks = 0
+
+func tick():
+    ticks += 1
+
+world:every(0.25, tick)
+
+func slow():
+    world:slow_mo(0.3, 2)
+
+func forever():
+    world:slow_mo(0.5)
+
+func normal():
+    world:slow_mo(1)
+
+func report():
+    say "at " + world:time() + " ticks " + ticks + " slider " + slider:x() + " ball " + ball:y()

@@ -1,0 +1,20 @@
+mention tgame
+
+# game:clear() for the next level: the countdown isn't one of the program's sprites, so it keeps counting down and
+# runs times_up() at 0.
+game = tgame.window("Clock Clear", 500, 300)
+coin = game:circle(100, 100, 12, "gold")
+ends = 0
+
+func times_up():
+    ends += 1
+    say "times up " + ends
+
+clock = game:countdown(2, times_up)
+
+func next_level():
+    game:clear()
+    coin = game:circle(300, 150, 12, "gold")
+
+func report():
+    say "left " + clock:left() + " ends " + ends
