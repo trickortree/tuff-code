@@ -45,6 +45,8 @@
 
 ### Good to know
 - The first time a computer hosts, Windows may ask if TuffCode can use the network. Click **Allow**.
+- **Weights changed:** a 1 m box weighed 1 kg in 1.2.0 and weighs 50 kg now. Boxes and balls move just as before, but if your game sets \`:mass\`, use about 50 times the number.
+- A game that uses F for itself (\`world:on_key("f", ...)\`) keeps it, and gets in cars with \`car:drive()\`.
 - Games you build with Build exe can host and join too, so you can share your game and play it together.
 - Claude, Codex, Antigravity and Pumice 1 know all of it, and the checker catches mistakes like a message that isn't text.`,
     },

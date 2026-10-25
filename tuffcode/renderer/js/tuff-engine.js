@@ -1099,9 +1099,13 @@
             const n = nm('car');
             put(n, `${n} = ${G}:car(${num(X)}, 1, ${num(Z)}, "red")`);
             if (!P.player) {
+              // (A car that starts driving already has the player in it: then it starts there, not by this one.)
+              const driven = P.nodes.find((m) => m.kind === 'car' && m.props.drive && m.props.drive.args[0] !== false);
               const p = nm('player');
-              lines.push(`${p} = ${G}:player("first person")`, `${p}:move_to(${num(X - 2.5)}, 0, ${num(Z)})`);
-              say = `${cap(p)} came too: walk up to ${n} and press F to get in, and F again to get out.`;
+              lines.push(`${p} = ${G}:player("first person")`);
+              if (!driven) lines.push(`${p}:move_to(${num(X - 2.5)}, 0, ${num(Z)})`);
+              say = [driven ? `${cap(p)} came too: it starts in ${driven.var || 'the car'} (F gets out), and gets into ${n} with F.`
+                : `${cap(p)} came too: walk up to ${n} and press F to get in, and F again to get out.`, connectWaiting(pl, p)].filter(Boolean).join(' ');
             } else say = `Walk up to ${n} and press F to get in, and F again to get out.`;
             break;
           }
@@ -1191,6 +1195,16 @@
       if (path) pl.ed.replace(node.props.path.line, path);
       pl.done();
       if (path === false) ide.toast(`${cap(node.var)}'s path has a spot that comes from code, so it stays where it was. Change its spots in the code.`, 'info', 5000);
+      return node.key;
+    },
+
+    // The player's camera: switching to first person takes its clothes and hair lines out in the same step (nobody
+    // sees them, and tgame stops a first-person player's player:shirt with a message).
+    setPlayerMode(P, node, mode) {
+      const pl = plan(P);
+      setNodeArgs(pl, node, withArgs(node, { mode }));
+      if (mode !== 'third person') for (const m of LOOKS) if (node.props[m]) pl.ed.remove(node.props[m].line);
+      pl.done();
       return node.key;
     },
 
@@ -2388,16 +2402,19 @@ func coin_collect(dt):
   }
 
   // ---------------------------------------------------------------- Add
-  // The left panel is as wide as it was last time (340 px at first): drag its right edge, from 260 to 560 px.
+  // The left panel is as wide as it was last time (340 px at first): drag its right edge, from 260 to 560 px. The
+  // handle is in the panel's row, not the panel (which scrolls), so it stays where the edge is.
   const LEFT_KEY = 'tuffcode.engine.leftWidth';
   function sizeLeft(left) {
-    if (!left) return;
-    const set = (w) => left.style.setProperty('--en-left-w', `${Math.round(Math.max(260, Math.min(560, w)))}px`);
+    const main = left?.parentElement;
+    if (!main) return;
+    main.classList.add('en-main');
+    const set = (w) => main.style.setProperty('--en-left-w', `${Math.round(Math.max(260, Math.min(560, w)))}px`);
     try { const w = +localStorage.getItem(LEFT_KEY); if (w) set(w); } catch { /* no storage: the usual width */ }
     const h = document.createElement('div');
     h.className = 'en-resize';
     h.title = 'Drag to make this panel wider or narrower';
-    left.appendChild(h);
+    main.appendChild(h);
     h.onpointerdown = (e) => {
       e.preventDefault();
       h.setPointerCapture(e.pointerId);
@@ -2559,19 +2576,29 @@ func coin_collect(dt):
 
   // The picture for a tile: the engine's (3D), one drawn here (2D and the screen's), or null (its icon for now).
   function pvPic(t) {
-    if (PV.pics.has(t.id)) return PV.pics.get(t.id);
-    return pvFlat(t.id, S.parsed?.game?.mode === '3d');
+    const is3 = S.parsed?.game?.mode === '3d';
+    if (is3 && PV.pics.has(t.id)) return PV.pics.get(t.id);
+    return pvFlat(t.id, is3);
   }
 
-  // Starts making the 3D pictures if they aren't made (or being made) for this game folder and its models.
+  // Starts making the 3D pictures if they aren't made (or being made) for this game folder and its models. A 2D game
+  // forgets them (a 3D one makes them again). A run that made none is tried again the next time the tab shows.
   function pvStart(P) {
-    if (P.game?.mode !== '3d' || S.webgl === false || !S.file) return;
+    if (P.game?.mode !== '3d' || S.webgl === false || !S.file) {
+      if (P.game?.mode !== '3d') { PV.key = null; PV.pics.clear(); }
+      return;
+    }
     const key = pvKey(P);
     if (PV.key === key) return;
     PV.key = key;
     PV.pics.clear();
     const ids = tilesFor(P).flatMap(([, tiles]) => tiles.map((t) => t.id)).filter((id) => pvLines(id, 0));
-    const job = PV.job = pvMake(ids, key).catch(() => {}).finally(() => { if (PV.job === job) { PV.job = null; pvDrop(); } });
+    const job = PV.job = pvMake(ids, key).catch(() => {}).finally(() => {
+      if (PV.job !== job) return;
+      PV.job = null;
+      pvDrop();
+      if (PV.key === key && !PV.pics.size) PV.key = null;
+    });
   }
 
   async function pvMake(ids, key) {
@@ -2590,11 +2617,10 @@ func coin_collect(dt):
       if (!t || !t.dims) continue;
       const k = t.k || [1, 1, 1];
       const [w, h, dep] = [t.dims[0] * k[0], t.dims[1] * k[1], t.dims[2] * k[2]];
-      const at = PV_AT[id];
-      const size = at ? at.size : Math.max(Math.hypot(w, h, dep) * 0.85, 0.4);  // corner to corner: a box's corners show
-      const flat = h < 0.3 * Math.max(w, dep);
-      // The editor camera sees 70 degrees up and down: this far, the thing fills most of the picture.
-      shots.push({ id, cam: { tx: t.x, ty: (t.y || 0) + (at ? at.y : h / 2), tz: t.z, az: PV_AZ[id] ?? 210, el: flat ? 34 : 12, dist: Math.min(60, Math.max(1.1, size * 0.95 + 0.4)) } });
+      const tile = PV_AT[id];
+      // A model file's size is only known once it has loaded in the preview page (fit: framed then, from its box).
+      if (id.startsWith('glb:')) { shots.push({ id, fit: t.i, cam: pvCam(id, [t.x, (t.y || 0) + 0.5, t.z], [1, 1, 1]) }); continue; }
+      shots.push({ id, cam: pvCam(id, [t.x, (t.y || 0) + (tile ? tile.y : h / 2), t.z], [w, h, dep]) });
     }
     await pvShoot(d, shots, key);
     for (const [id, w] of Object.entries(PV_WORLDS)) {
@@ -2602,6 +2628,29 @@ func coin_collect(dt):
       const dw = await ide.scene(file, w.src, 'previews');
       if (dw && Array.isArray(dw.batch)) await pvShoot(dw, [{ id, cam: w.cam }], key);
     }
+  }
+
+  // The camera for a thing whose middle is at `mid` and that is [w, h, d] big: in front of it, a little to the side
+  // (the editor camera sees 70 degrees up and down: this far, the thing fills most of the picture).
+  function pvCam(id, mid, [w, h, d]) {
+    const tile = PV_AT[id];
+    const size = tile ? tile.size : Math.max(Math.hypot(w, h, d) * 0.85, 0.4);  // corner to corner: a box's corners show
+    const flat = h < 0.3 * Math.max(w, d);
+    return { tx: mid[0], ty: mid[1], tz: mid[2], az: PV_AZ[id] ?? 210, el: flat ? 34 : 12, dist: Math.min(60, Math.max(1.1, size * 0.95 + 0.4)) };
+  }
+
+  // Waits (up to 4 s) for a model file to load in the preview page, and frames the camera on its box.
+  async function pvFit(s) {
+    for (let tries = 0; tries < 20; tries++) {
+      const r = await pvAsk('box', { i: s.fit });
+      const b = r.value;
+      if (b && b.min && b.max) {
+        const size = [0, 1, 2].map((j) => b.max[j] - b.min[j]);
+        return pvCam(s.id, [0, 1, 2].map((j) => (b.min[j] + b.max[j]) / 2), size);
+      }
+      await new Promise((res) => setTimeout(res, 200));
+    }
+    return s.cam;
   }
 
   // Draws a dump in the out-of-sight preview page and takes a picture with each camera.
@@ -2617,7 +2666,7 @@ func coin_collect(dt):
     await loaded;
     for (const s of shots) {
       if (PV.key !== key) return;
-      pvPost({ tuffHost: 'camera', cam: s.cam });
+      pvPost({ tuffHost: 'camera', cam: s.fit !== undefined ? await pvFit(s) : s.cam });
       const r = await pvAsk('snapshot');
       if (PV.key !== key) return;
       if (typeof r.value === 'string' && r.value.startsWith('data:image/')) {
@@ -2654,11 +2703,11 @@ func coin_collect(dt):
   }
 
   function pvPost(m) { try { PV.frame?.contentWindow?.postMessage(m, '*'); } catch { /* gone */ } }
-  function pvAsk(what) {
+  function pvAsk(what, extra = {}) {
     return new Promise((resolve) => {
       const tag = `pv${++PV.askNo}`;
       PV.asks.set(tag, resolve);
-      pvPost({ tuffHost: 'ask', tag, what });
+      pvPost({ tuffHost: 'ask', tag, what, ...extra });
       setTimeout(() => { if (PV.asks.has(tag)) { PV.asks.delete(tag); resolve({ error: 'no reply' }); } }, 8000);
     });
   }
@@ -3202,7 +3251,8 @@ func coin_collect(dt):
       form.append(sec('Start spot', [numbers([['X', sx, (v) => mt(v, playerStart(parse(codeNow()))[1])], ['Z', sz, (v) => mt(playerStart(parse(codeNow()))[0], v)]])]));
       const mode = typeof node.args[0] === 'string' ? node.args[0] : 'first person';
       const look = [
-        fieldEl('Camera', selectEl(tbl('players', ['first person', 'third person']).map((x) => [x, cap(x)]), mode, (v) => setA({ mode: v }))),
+        // In first person nobody sees the player, so its clothes and hair lines go with the switch (one undo step).
+        fieldEl('Camera', selectEl(tbl('players', ['first person', 'third person']).map((x) => [x, cap(x)]), mode, (v) => fieldAct(key, (Q, n) => Edits.setPlayerMode(Q, n, v), true))),
         numbers([
           ['Facing', isNum(node.props.turn_to?.args[0]) ? node.props.turn_to.args[0] : 0, (v) => setP('turn_to', [v3(v)])],
           ['Walk speed', isNum(node.props.walk_speed?.args[0]) ? node.props.walk_speed.args[0] : 5, (v) => setP('walk_speed', [v3(v)]), { step: 0.5, min: 0 }],
@@ -3349,7 +3399,7 @@ func coin_collect(dt):
     const auto = { car: 1200, ragdoll: 70, player: 70 }[node.kind] ?? S.join?.byKey.get(node.key)?.things?.[0]?.physics?.auto_weight;
     const wm = node.props.weight || !node.props.mass ? 'weight' : 'mass';
     const weight = ['Weight', n0(wm), set(wm, (v) => v > 0), {
-      blank: true, step: is3 ? 5 : 0.5, min: 0.01, placeholder: isNum(auto) ? String(+num(auto)) : 'auto',
+      blank: true, step: is3 ? 5 : 0.5, min: 0, placeholder: isNum(auto) ? String(+num(auto)) : 'auto',
       title: `How heavy it is, in kg: heavy things are hard to push. Empty: what it weighs as it is${isNum(auto) ? ` (${+num(auto)} kg)` : ''}`,
     }];
     const bounce = ['Bounce', n0('bounce'), set('bounce', (v) => v >= 0 && v <= 1), { blank: true, step: 0.1, min: 0, placeholder: 'auto', title: 'How bouncy it is, from 0 (no bounce) to 1' }];
@@ -3404,23 +3454,31 @@ func coin_collect(dt):
   // npc:sleeves("short"). Left out, tgame picks (the player has a look of its own).
   const isPerson = (n) => n.kind === 'ragdoll' || (n.kind === 'spawn' && fieldOf(n, 'model') === 'person');
   const HAIR_STYLES = ['short', 'swoop', 'bob', 'ponytail', 'buns', 'curly', 'spiky'];
+  const HAIR_WORDS = { pony: 'ponytail', 'pony tail': 'ponytail', tail: 'ponytail', bun: 'buns', afro: 'curly', curls: 'curly', mop: 'curly', spikes: 'spiky', mohawk: 'spiky', quiff: 'swoop', fringe: 'bob', long: 'bob' };  // tgame's HAIR_WORDS
   const SKINS = ['pale', 'light', 'tan', 'medium', 'brown', 'dark'];
   function dressSection(node, setP) {
     const kids = [];
     const a0 = (m) => (typeof node.props[m]?.args[0] === 'string' ? node.props[m].args[0] : '');
     const color = (label, m) => fieldEl(colorLabel(label, node.props[m]?.args[0]), colorPick(a0(m), (v) => setP(m, [v])));
     // hair takes a style and a colour, in either order: the one line keeps both.
-    const hairArgs = (node.props.hair?.args || []).filter((v) => typeof v === 'string');
-    const hairStyle = hairArgs.find((v) => HAIR_STYLES.includes(v.toLowerCase())) || '';
-    const hairColor = hairArgs.find((v) => !HAIR_STYLES.includes(v.toLowerCase())) || '';
+    // (tgame's own words for styles count: "pony" is a ponytail. A hair line with something other than text in it
+    // comes from code, and stays as it is.)
+    const hairAll = node.props.hair?.args || [];
+    const hairCode = hairAll.some((v) => typeof v !== 'string');
+    const styleOf = (v) => { const w = v.trim().toLowerCase(); const s = HAIR_WORDS[w] || w; return HAIR_STYLES.includes(s) ? s : null; };
+    const hairStyle = hairCode ? '' : hairAll.map(styleOf).find(Boolean) || '';
+    const hairColor = hairCode ? '' : hairAll.find((v) => !styleOf(v)) || '';
     const setHair = (style, col) => setP('hair', style || col ? [style, col].filter(Boolean) : null);
     const unset = node.kind === 'player' ? 'As it is' : 'Random';
     const pick = (list, cur, run) => selectEl([['', unset], ...(cur && !list.includes(cur) ? [[cur, cur]] : []), ...list.map((x) => [x, cap(x)])], cur, run);
     kids.push(color('Shirt', 'shirt'));
     kids.push(color('Trousers', 'pants'));
     kids.push(fieldEl('Skin', pick(SKINS, a0('skin'), (v) => setP('skin', v ? [v] : null))));
-    kids.push(fieldEl('Hair', pick(HAIR_STYLES, hairStyle, (v) => setHair(v, hairColor))));
-    kids.push(fieldEl(colorLabel('Hair colour', hairColor || undefined), colorPick(hairColor, (v) => setHair(hairStyle, v))));
+    if (hairCode) kids.push(tip('Its hair comes from code: change it in its hair line.'));
+    else {
+      kids.push(fieldEl('Hair', pick(HAIR_STYLES, hairStyle, (v) => setHair(v, hairColor))));
+      kids.push(fieldEl(colorLabel('Hair colour', hairColor || undefined), colorPick(hairColor, (v) => setHair(hairStyle, v))));
+    }
     kids.push(color('Shoes', 'shoes'));
     const sl = a0('sleeves').toLowerCase();
     const sleeves = K.control('segment', sl === 'short' || sl === 'rolled' ? 'short' : sl === 'long' ? 'long' : null,

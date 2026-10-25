@@ -1233,6 +1233,16 @@ def t_car_enter(c):
     shot = r.shots.get("car_enter_driving.png")
     c.check(shot and color_share(shot, (53, 116, 240), 60, (0.3, 0.35, 0.7, 0.8)) > 0.02, "the camera follows the blue car while it drives", shot)
 
+    # A game that uses F itself keeps it: its own F gets in and out with car:drive (tgame's F doesn't undo it in the
+    # same frame), and car:on_enter runs for car:drive() too.
+    r = play("car_own_f", game("car_own_f.tuf"), [
+        {"at": 0.6, "key": "f"}, {"at": 0.9, "call": "report"}, {"at": 0.95, "dump": "cf_in.json"},
+        {"at": 1.2, "key": "f"}, {"at": 1.5, "call": "report"}, {"at": 1.55, "dump": "cf_out.json"}, {"at": 1.8, "close": True}])
+    clean_exit(c, r)
+    own = [line for line in r.lines if line.startswith("own in")]
+    c.check(own == ["own in true ins 1", "own in false ins 1"], "the game's own F gets in and out (and on_enter ran for car:drive())", own)
+    c.check((r.dumps.get("cf_in.json", {}).get("interact") or {}).get("driving") is True, "it's driving after the game's own F", r.dumps.get("cf_in.json", {}).get("interact"))
+
 
 def t_weight(c):
     """Things weigh what they are (1.3.0): thing:weight() gives it (and sets it), the same push sends a light box off and

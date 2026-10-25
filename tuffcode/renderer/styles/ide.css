@@ -832,8 +832,9 @@ body.enter #statusbar { animation: upin .55s .3s cubic-bezier(.2,.9,.25,1) both;
 .en-tile .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 /* Tuff Engine's left panel is wider than Design Studio's (drag its edge for more), and each Add tile is a picture of
    what it adds, its whole name under it (names wrap rather than being cut off). */
-.sd-left.en-left { width: var(--en-left-w, 340px); position: relative; }
-.en-resize { position: absolute; top: 0; right: 0; bottom: 0; width: 6px; cursor: ew-resize; z-index: 3; touch-action: none; }
+.sd-left.en-left { width: var(--en-left-w, 340px); }
+.sd-main.en-main { position: relative; }
+.en-resize { position: absolute; top: 0; bottom: 0; left: calc(var(--en-left-w, 340px) - 3px); width: 6px; cursor: ew-resize; z-index: 3; touch-action: none; }
 .en-resize:hover, .en-resize.on { background: color-mix(in srgb, var(--accent) 40%, transparent); }
 #en-add .sd-tiles { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 7px; }
 .en-tile.en-pv { gap: 6px; padding: 5px 5px 7px; align-items: stretch; }
@@ -969,7 +970,8 @@ body.enter #statusbar { animation: upin .55s .3s cubic-bezier(.2,.9,.25,1) both;
   .en-kind { display: none; }
   .sd-left:not(.layers) .en-pane { padding: 0 8px 12px; }
   .sd-left.en-left:not(.layers) { width: 64px; }
-  .sd-left:not(.layers) .en-resize { display: none; }
+  .sd-left.en-left.layers { width: 210px; }
+  .en-main .en-resize { display: none; }
   .sd-left:not(.layers) #en-add .sd-tiles { grid-template-columns: 1fr; }
   .sd-left:not(.layers) .en-tile.en-pv { padding: 4px; }
   .sd-left:not(.layers) .en-tabs { flex-direction: column; padding: 8px; }
