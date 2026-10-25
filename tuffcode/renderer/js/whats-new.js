@@ -4,7 +4,7 @@
 (() => {
   const NOTES = {
     '1.3.0': {
-      images: [],
+      images: ['1.png'],
       notes: `### Play together
 - **Games can be multiplayer now!** Everyone on the same Wi-Fi can play in one game together: one computer hosts a room, and the others join it.
 - **Host a room:** \`world:host("Tag")\` makes a room called Tag. The top of the window says it's hosting, and the computer's address.
