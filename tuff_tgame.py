@@ -1339,6 +1339,21 @@ class Effects:
 
 # ---------------------------------------------------------------- physics on sprites and objects
 
+# How heavy things are (kg) in a 3D world's physics, when the program doesn't say (thing:weight). The kit's models
+# weigh what they'd weigh as they're made (more or less with :scale, by how much more or less of it there is); the
+# shapes (box, ball, cylinder, cone, plane) and models from files weigh 50 kg a cubic metre, so a 1 m box is 50 kg.
+# The player is 70 kg (it shoves light things out of its way and can't budge heavy ones), a ragdoll 70 kg and a car
+# 1200 kg. thing:push's numbers are the speed it gives a 50 kg thing like a 1 m box (physics.js's PUSH_KG), so a
+# heavier one goes slower and a lighter one faster (and boxes and balls move just as they did before things had
+# weights), and on_hit's strength is in the same units. The player can grab (player:can_grab) things up to GRAB_KG.
+KIT_WEIGHT = {"tree": 400, "pine": 300, "rock": 300, "bush": 8, "flower": 0.3, "house": 6000, "hut": 1500, "sign": 15,
+              "crate": 25, "fence": 20, "coin": 0.05, "chest": 40, "person": 70, "key": 0.1}
+SHAPE_DENSITY = 50
+PUSH_KG = 50
+PLAYER_KG = 70
+GRAB_KG = 100
+
+
 def physics_problem(word):
     return (f"Physics can be \"dynamic\" (it falls and gets pushed), \"static\" (it never moves), \"kinematic\" (your code "
             f"moves it) or \"off\", not \"{word}\".{did_you_mean(word, PHYSICS_KINDS)}")
@@ -1431,13 +1446,36 @@ class Physical:
     def after_physics(self):
         pass
 
-    def mass(self, kg):
-        m = self.num(kg, ":mass")
+    def weight(self, kg=MISSING):
+        return self.set_weight(kg, "weight", f"{self.EXAMPLE}:weight({'50' if self.D == 3 else '2'})")
+
+    def mass(self, kg=MISSING):  # the same as weight, by its physics name
+        return self.set_weight(kg, "mass", f"{self.EXAMPLE}:mass(2)")
+
+    def set_weight(self, kg, name, example):
+        """thing:weight(kg) sets how heavy it is; thing:weight() gives it back (its own, or the one it has by
+        default: see KIT_WEIGHT)."""
+        if kg is MISSING:
+            return tidy(round(self.weight_now(), 3))
+        m = self.num(kg, f":{name}")
         if m <= 0:
-            raise self.rt.error(f"{self.phys_name()}:mass needs a number above 0, like {self.EXAMPLE}:mass(2).")
+            raise self.rt.error(f"{self.phys_name()}:{name} needs a number above 0, like {example}.")
         self.mass_ = m
         self.phys_changed()
         return self.native
+
+    def weight_now(self):
+        return self.mass_ if self.mass_ is not None else self.default_weight()
+
+    def default_weight(self):
+        """How heavy it is when the program doesn't say, in kg: in 2D, 1 kg for every 50 x 50 pixels (Rapier's own,
+        from its shape: a line is a capsule 4 pixels thick)."""
+        if self.shape == "line":
+            (ax, ay), (bx, by) = self.points
+            return max(0.01, (4 * math.hypot(bx - ax, by - ay) * self.k + 4 * math.pi) / 2500)
+        hw, hh = self.half()
+        area = math.pi * hw * hh if self.shape == "circle" else 4 * hw * hh
+        return max(0.01, area / 2500)
 
     def bounce(self, amount=MISSING):
         v = self.rt.plain(amount)
@@ -1507,6 +1545,7 @@ class Physical:
         if self.phys_kind is None:
             return None
         return {"kind": self.phys_kind, "mass": tidy(self.mass_) if self.mass_ is not None else None,
+                "auto_weight": tidy(round(self.default_weight(), 3)),
                 "bounce": tidy(self.bounce_) if self.bounce_ is not None else None,
                 "friction": tidy(self.friction_) if self.friction_ is not None else None}
 
@@ -1729,7 +1768,7 @@ class Sprite(Physical):
         ("color", "set_color"), ("layer", "set_layer"), ("flip", "flip"), ("align", "align"), ("hide", "hide"),
         ("show", "show"), ("remove", "remove"), ("set", "set"), ("get", "get"), ("value", "value"),
         ("clicked", "clicked"), ("shake", "shake"),
-        ("physics", "physics"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
+        ("physics", "physics"), ("weight", "weight"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
         ("velocity", "velocity"), ("on_hit", "on_hit"), ("sleep", "sleep"), ("wake", "wake"),
     ]
     D = 2
@@ -2531,8 +2570,10 @@ class World3D(Game):
         if low not in KIT:
             raise self.rt.error(f"tgame doesn't have a \"{n}\" to spawn. It has: {', '.join(KIT)}. "
                                 "Or spawn a .glb model from your project folder.")
-        size, body, parts, solid = kit(low)
+        look = person_look() if low == "person" else None
+        size, body, parts, solid = kit(low, look)
         t = Thing(self, low, x, y, z, size, parts, body=body)
+        t.look = look
         t.solid_ = solid
         t.heading = random.uniform(0, 360) if low in ("tree", "pine", "rock", "bush", "flower") else 0.0
         t.push_rotation()
@@ -2926,7 +2967,10 @@ class World3D(Game):
         p = self.the_player
         if p is not None:
             p.update(dt, real)
-            if self.phys is not None:
+            car = self.driving
+            if car is not None:  # in the car: the player is where the car is (player:x, a game on the network)
+                p.x, p.y, p.z, p.heading = car.x, car.y, car.z, car.heading % 360
+            elif self.phys is not None:
                 self.phys.player_sync(p)
             return
         mode = self.cam_mode
@@ -3314,11 +3358,14 @@ def animation_problem(name):
             + did_you_mean(name, ANIMATIONS))
 
 
-def kit(name):
+def kit(name, look=None):
     """A built-in model: (size, solid body, parts, solid). Parts are (type, engine props, main part?); every part
     casts and gets shadows, and colours vary a little from one model to the next. A part's "anim" says how the page
     moves the model (tuff_view_web/anim.js): a "tree", "pine", "bush" or "flower" sways in the wind, a "coin" spins
-    and bobs, and each part of a "person" says which limb it is and where it turns ([style, role, pivot])."""
+    and bobs, and each part of a "person" says which limb it is and where it turns ([style, role, pivot]). A person
+    is dressed in `look` (person_look)."""
+    if name == "person":
+        return (0.7, 1.75, 0.5), None, dressed(look or person_look()), True
     size, body, parts, solid = _kit(name)
     return size, body, [(type_, {"shadow": True, **p}, main) for type_, p, main in parts], solid
 
@@ -3448,7 +3495,7 @@ def _kit(name):
         board = shade("#c08a4d", 0.05)
         edge = _shade(board, -0.3)
         return ((1.2, 1.6, 0.2), (0.3, 1.6, 0.2), [
-            ("cylinder", {"rt": 0.055, "rb": 0.065, "h": 1.5, "y": 0.75, "z": -0.07, "seg": 8, "color": "#6b4428", "rough": 0.95}, False),
+            ("cylinder", {"rt": 0.055, "rb": 0.065, "h": 1.0, "y": 0.5, "z": -0.07, "seg": 8, "color": "#6b4428", "rough": 0.95}, False),
             ("box", {"w": 1.12, "h": 0.52, "d": 0.06, "y": 1.25, "color": board, "rough": 0.85}, True),
             ("box", {"w": 1.1, "h": 0.014, "d": 0.066, "y": 1.25, "color": edge, "rough": 0.9}, False),
             ("box", {"w": 1.2, "h": 0.07, "d": 0.09, "y": 1.525, "color": edge, "rough": 0.85}, False),
@@ -3505,8 +3552,6 @@ def _kit(name):
             ("box", {"w": 0.12, "h": 0.15, "d": 0.05, "y": 0.42, "z": 0.29, "color": "#f2c230", "emissive": "#3a2a00", "metal": 0.7,
                      "rough": 0.3}, False),
         ], True)
-    if name == "person":
-        return ((0.7, 1.75, 0.5), None, person_parts(), True)
     if name == "key":
         # An old gold key floating upright (it spins and bobs like a coin): a ring to hold, a shaft and its teeth.
         gold = {"color": "#f2c230", "emissive": "#5a4200", "metal": 0.55, "rough": 0.3}
@@ -3534,6 +3579,35 @@ SHOES = ("#3a2a22", "#26262c", "#f4f1ea", "#c8473a", "#2f6fd0")
 HAIR_STYLES = ("short", "swoop", "bob", "ponytail", "buns", "curly", "spiky")
 
 
+LOOK_KEYS = ("shirt", "skin", "hair", "pants", "style", "sleeves", "shoes")
+LOOK_METHODS = ("shirt", "pants", "skin", "hair", "shoes", "sleeves")
+SLEEVES = ("long", "rolled")
+# Words people use for a look, as tgame's own: hair styles, sleeves, and skin and hair colours (other colours are
+# the game's colour names or "#rrggbb").
+HAIR_WORDS = {"pony": "ponytail", "pony tail": "ponytail", "tail": "ponytail", "bun": "buns", "afro": "curly",
+              "curls": "curly", "mop": "curly", "spikes": "spiky", "mohawk": "spiky", "quiff": "swoop", "fringe": "bob",
+              "long": "bob"}
+SLEEVE_WORDS = {"short": "rolled", "rolled up": "rolled", "rolled-up": "rolled", "up": "rolled", "full": "long"}
+SKIN_COLORS = {"pale": "#ffd9b8", "light": "#f1c9a5", "fair": "#f1c9a5", "tan": "#e0ac7e", "medium": "#c68a5c",
+               "olive": "#c68a5c", "brown": "#8d5a3b", "dark": "#8d5a3b"}
+HAIR_COLORS = {"black": "#1c1c1c", "dark brown": "#2b2018", "brown": "#5a3a22", "blonde": "#e3c06b",
+               "blond": "#e3c06b", "ginger": "#b5482b", "auburn": "#a8692e", "red": "#b5482b", "grey": "#9a9a9e",
+               "gray": "#9a9a9e", "white": "#eeeeee"}
+
+
+def person_look(shirt=None, skin=None, hair=None, pants=None, style=None, sleeves=None, shoes=None):
+    """A person's look for person_parts: what's given, and the rest picked at random."""
+    pick = random.choice
+    return {"shirt": shirt or pick(SHIRTS), "skin": skin or pick(SKINS), "hair": hair or pick(HAIRS),
+            "pants": pants or pick(PANTS), "style": style or pick(HAIR_STYLES),
+            "sleeves": sleeves or pick(("long", "long", "rolled")), "shoes": shoes or pick(SHOES)}
+
+
+def dressed(look):
+    """A person's parts in a look (person_look), each casting a shadow, as a model's parts are."""
+    return [(type_, {"shadow": True, **p}, main) for type_, p, main in person_parts(**look)]
+
+
 def person_parts(shirt=None, skin=None, hair=None, pants=None, style=None, sleeves=None, shoes=None):
     """A chunky toy person (the kit's, the player in third person, and the ragdoll's look), facing -z like
     everything that walks forward: shoes, legs that bend at the knee, hips with a belt, a broad body with round
@@ -3543,9 +3617,8 @@ def person_parts(shirt=None, skin=None, hair=None, pants=None, style=None, sleev
     Each part tells anim.js which part it is and where it turns ([style, role, pivot, the pivot of the limb it hangs
     from]): a thigh turns at the hip and its shin at the knee (and with the thigh), an upper arm at the shoulder and
     its forearm and hand at the elbow, the head at the neck. The shirt's parts are the main ones (person:color)."""
-    pick = random.choice
-    shirt, skin, hair, pants = shirt or pick(SHIRTS), skin or pick(SKINS), hair or pick(HAIRS), pants or pick(PANTS)
-    style, sleeves, shoes = style or pick(HAIR_STYLES), sleeves or pick(("long", "long", "rolled")), shoes or pick(SHOES)
+    look = person_look(shirt, skin, hair, pants, style, sleeves, shoes)
+    shirt, skin, hair, pants, style, sleeves, shoes = (look[k] for k in LOOK_KEYS)
     sx, sy = SHOULDER
     hx, hy = HIP
     parts = []
@@ -3667,10 +3740,12 @@ class Thing(Physical):
         ("color", "set_color"), ("glow", "glow"), ("hide", "hide"), ("show", "show"), ("remove", "remove"),
         ("solid", "solid"), ("touches", "touches"), ("distance", "distance"), ("label", "label"),
         ("clicked", "clicked"), ("set", "set"), ("get", "get"),
-        ("physics", "physics"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
+        ("physics", "physics"), ("weight", "weight"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
         ("velocity", "velocity"), ("on_hit", "on_hit"), ("sleep", "sleep"), ("wake", "wake"),
         ("say", "say"), ("on_talk", "on_talk"),
         ("path", "path"),
+        ("shirt", "shirt"), ("pants", "pants"), ("skin", "skin"), ("hair", "hair"), ("shoes", "shoes"),
+        ("sleeves", "sleeves"),
     ]
 
     def __init__(self, world, kind, x, y, z, size, parts, body=None, parent=None, pick=True, camera=False):
@@ -3695,6 +3770,10 @@ class Thing(Physical):
         self.click_fns = []
         self.label_node = None
         self.label_text = ""
+        self.writing = None  # a sign's words, on its board (label)
+        self.look = None  # a person's clothes and hair (person_look): the kit's person, the player's figure
+        self.pickable = pick
+        self.glow_color = None
         self.on_land = parent is None and not camera  # held things have their own x, y, z (in the hand)
         self.phys_init()
         self.quat = None  # how physics has turned it ([x, y, z, w]), once it has
@@ -3803,7 +3882,8 @@ class Thing(Physical):
         if not self.alive or w.phys is None or not self.on_land:
             return None
         kind = self.phys_kind
-        base = {"mass": self.mass_, "bounce": self.bounce_, "friction": self.friction_, "hits": bool(self.hit_fns)}
+        base = {"mass": tidy(round(self.weight_now(), 3)), "bounce": self.bounce_, "friction": self.friction_,
+                "hits": bool(self.hit_fns)}
         if kind is None:
             if getattr(self, "floor", False):
                 half = self.dims[0] / 2
@@ -3817,6 +3897,20 @@ class Thing(Physical):
             kind = "kinematic"
         shape, size, cy = self.phys_shape(kind)
         return {**base, "kind": kind, "shape": shape, "size": size, "cy": cy}
+
+    def default_weight(self):
+        """How heavy it is when the program doesn't say (see KIT_WEIGHT), in kg."""
+        kx, ky, kz = self.k
+        if self.kind in KIT_WEIGHT:
+            return KIT_WEIGHT[self.kind] * kx * ky * kz
+        w, h, d = self.dims
+        if self.kind == "sphere":
+            volume = math.pi / 6 * (w * max(kx, ky, kz)) ** 3
+        elif self.kind in ("cylinder", "cone"):
+            volume = math.pi / 4 * (w * max(kx, kz)) ** 2 * h * ky / (3 if self.kind == "cone" else 1)
+        else:
+            volume = w * kx * max(h * ky, 0.02) * d * kz
+        return max(0.01, volume * SHAPE_DENSITY)
 
     def phys_shape(self, kind):
         """(shape, size, how high its middle is above its position): a ball for a sphere, a cylinder or a cone for
@@ -4119,6 +4213,8 @@ class Thing(Physical):
 
     def set_color(self, color):
         c = self.world.color(color)
+        if self.look is not None:  # a person's main parts are its shirt
+            self.look["shirt"] = c
         for node, main in self.parts:
             if main:
                 self.send(node, color=c)
@@ -4127,10 +4223,74 @@ class Thing(Physical):
     def glow(self, color="white"):
         name = self.rt.text(color).strip().lower()
         c = "#000000" if name in ("none", "off", "") else self.world.color(color)
+        self.glow_color = None if c == "#000000" else c
         for node, main in self.parts:
             if main:
                 self.send(node, emissive=c)
         return self.native
+
+    # ---- a person's look: the kit's person, the player's figure (player:shirt...) and a ragdoll (Ragdoll.restyle)
+    def shirt(self, color):
+        return self.dress("shirt", shirt=self.world.color(color))
+
+    def pants(self, color):
+        return self.dress("pants", pants=self.world.color(color))
+
+    def skin(self, color):
+        name = self.rt.text(color).strip().lower()
+        return self.dress("skin", skin=SKIN_COLORS.get(name) or self.world.color(color))
+
+    def shoes(self, color):
+        return self.dress("shoes", shoes=self.world.color(color))
+
+    def hair(self, a, b=MISSING):
+        """person:hair("curly"), person:hair("brown") or both, either way round: a style and a colour."""
+        change = {}
+        for v in (a, b):
+            if v is MISSING:
+                continue
+            word = self.rt.text(v).strip().lower()
+            style = HAIR_WORDS.get(word, word)
+            if style in HAIR_STYLES and "style" not in change:
+                change["style"] = style
+            elif "hair" not in change:
+                change["hair"] = HAIR_COLORS.get(word) or self.world.color(v)
+            else:
+                raise self.rt.error(f"{self.kind}:hair takes a style ({', '.join(HAIR_STYLES)}) and a colour, like "
+                                    f"{self.kind}:hair(\"curly\", \"brown\").")
+        return self.dress("hair", **change)
+
+    def sleeves(self, how):
+        word = self.rt.text(how).strip().lower()
+        word = SLEEVE_WORDS.get(word, word)
+        if word not in SLEEVES:
+            raise self.rt.error(f"Sleeves can be \"long\" or \"short\" (rolled up to the elbow), not \"{word}\".")
+        return self.dress("sleeves", sleeves=word)
+
+    def dress(self, what, **change):
+        if self.look is None:
+            raise self.rt.error(f"Only people have clothes and hair: :{what} works on a person (world:spawn(\"person\", "
+                                f"x, y, z)), a ragdoll or the player in third person, not a {self.kind}.")
+        if any(self.look.get(k) != v for k, v in change.items()):
+            self.look.update(change)
+            self.restyle()
+        return self.native
+
+    def restyle(self):
+        """Dressed again in its look: its old parts go and new ones come (anim.js looks at a model's parts again)."""
+        w = self.world
+        if not self.alive:  # (removed: the page has let its parts go)
+            return
+        for node, _ in self.parts:
+            w.view.remove(node)
+            w.by_node.pop(int(node), None)
+        self.parts = []
+        for type_, p, main in dressed(self.look):
+            if main and self.glow_color:
+                p = {**p, "emissive": self.glow_color}
+            node = w.view.obj(self.node, type_, **p, **({} if self.pickable else {"pick": False}))
+            w.by_node[int(node)] = self
+            self.parts.append((node, main))
 
     def hide(self):
         self.hidden = True
@@ -4156,7 +4316,7 @@ class Thing(Physical):
             w.view.remove(self.label_node)
         w.movers.discard(self)
         w.things.pop(self, None)
-        for node in [self.node] + [n for n, _ in self.parts]:
+        for node in [self.node] + [n for n, _ in self.parts] + ([self.writing] if self.writing is not None else []):
             w.by_node.pop(int(node), None)
         if w.phys is not None:
             w.phys.dirty.discard(self)  # its body went with its object
@@ -4211,6 +4371,16 @@ class Thing(Physical):
         t = self.rt.text(text)
         self.label_text = t
         w = self.world
+        if self.kind == "sign":  # a sign's words are written on its board (both sides), not over it
+            if not self.alive:
+                return self.native
+            if self.writing is None:
+                self.writing = w.view.obj(self.node, "writing", text=t, w=1.02, h=0.44, d=0.066, y=1.25,
+                                          color="#3a2414")
+                w.by_node[int(self.writing)] = self
+            else:
+                self.send(self.writing, text=t)
+            return self.native
         if self.label_node is None:
             if not t or not self.alive:
                 return self.native
@@ -4262,7 +4432,9 @@ class Player:
         ("turn_to", "turn_to"), ("angle", "angle"), ("walk_speed", "walk_speed"), ("jump_height", "jump_height"),
         ("jump", "jump"), ("hold", "hold"), ("looking_at", "looking_at"), ("touches", "touches"),
         ("distance", "distance"), ("hide", "hide"), ("show", "show"), ("on_hit", "on_hit"),
-        ("can_grab", "can_grab"), ("holding", "holding"),
+        ("can_grab", "can_grab"), ("holding", "holding"), ("weight", "weight"), ("in_car", "in_car"),
+        ("shirt", "shirt"), ("pants", "pants"), ("skin", "skin"), ("hair", "hair"), ("shoes", "shoes"),
+        ("sleeves", "sleeves"),
     ]
     RADIUS = 0.32
     TALL = 1.75
@@ -4292,12 +4464,15 @@ class Player:
         self.native = world.rt.native("player", methods(self, "player", self.NAMES, world.rt),
                                       lambda nested=False: f"<player at {tidy(self.x)}, {tidy(self.y)}, {tidy(self.z)}>")
         self.native.tg = self
+        self.kg = PLAYER_KG
         if mode == "third person":
-            parts = [(t, {**p, "shadow": True}, main)
-                     for t, p, main in person_parts("#3574f0", "#f1c9a5", "#5a3a22", "#2f3e5c", "short", "long", "#3a2a22")]
-            self.body = Thing(world, "player", 0, 0, 0, (0.6, self.TALL, 0.6), parts, pick=False)
+            look = person_look("#3574f0", "#f1c9a5", "#5a3a22", "#2f3e5c", "short", "long", "#3a2a22")
+            self.body = Thing(world, "player", 0, 0, 0, (0.6, self.TALL, 0.6), dressed(look), pick=False)
+            self.body.look = look
             self.body.solid_ = False
             world.things.pop(self.body, None)
+            if world.driving is not None:  # it starts in a car (car:drive() came first)
+                self.body.hide()
         hud = world.hud()
         if mode == "first person":
             world.crosshair = hud.make("circle", world.W / 2, world.H / 2, {"r": 3.5, "color": "#ffffff", "stroke": "#000000",
@@ -4309,6 +4484,9 @@ class Player:
             world.hint.hide()
         if SCENE is not None and world.crosshair is not None:
             world.crosshair.hide()
+        elif world.driving is not None and world.crosshair is not None:  # it starts in a car: back when it gets out
+            world.crosshair.hide()
+            world.car_hid = [world.crosshair]
         if world.land is not None:  # it starts standing on the land
             self.y = world.land.at(0, 0)
             if self.body is not None:
@@ -4407,6 +4585,46 @@ class Player:
         it = self.world.interact
         return it.held.native if it is not None and it.held is not None else None
 
+    def in_car(self):
+        return self.world.driving is not None
+
+    def weight(self, kg=MISSING):
+        """How heavy the player is (70 kg): the heavier, the harder it shoves physics things it walks into."""
+        if kg is MISSING:
+            return tidy(self.kg)
+        m = self.rt.number(kg, ":weight")
+        if m <= 0:
+            raise self.rt.error("player:weight needs a number above 0, like player:weight(70).")
+        self.kg = m
+        self.world.physics_on().send("player_weight", m)
+        return self.native
+
+    # ---- how the player looks in third person: its figure's (Thing.shirt...)
+    def dress_body(self, what, *args):
+        if self.body is None:
+            raise self.rt.error(f"player:{what} changes how the player looks, and in first person nobody sees it. "
+                                "Make the player with world:player(\"third person\") to see it.")
+        getattr(self.body, what)(*args)
+        return self.native
+
+    def shirt(self, color):
+        return self.dress_body("shirt", color)
+
+    def pants(self, color):
+        return self.dress_body("pants", color)
+
+    def skin(self, color):
+        return self.dress_body("skin", color)
+
+    def hair(self, a, b=MISSING):
+        return self.dress_body("hair", a, b)
+
+    def shoes(self, color):
+        return self.dress_body("shoes", color)
+
+    def sleeves(self, how):
+        return self.dress_body("sleeves", how)
+
     def touches(self, other):
         v = self.rt.plain(other)
         g = thing_of(v)
@@ -4439,7 +4657,7 @@ class Player:
 
     def show(self):
         self.hidden = False
-        if self.body is not None:
+        if self.body is not None and self.world.driving is None:  # (in a car, it shows when it gets out)
             self.body.show()
         return self.native
 
@@ -4725,7 +4943,7 @@ class Physics:
         hasn't made yet. Standing on a physics thing, it's on the ground. Not when the program has just moved the
         player (move_to, getting out of a car): that goes to the page next, and the capsule's spot is the old one."""
         done, x, y, z, grounded = rep
-        if p.teleported or done < self.first_seq or self.sent is None:
+        if p.teleported or done < self.first_seq or self.sent is None or self.game.driving is not None:
             return
         while self.moves and self.moves[0][0] <= done:
             self.moves.popleft()
@@ -4799,12 +5017,17 @@ class Car(Thing):
     """world:car: a car to drive. In the page it's Rapier's ray-cast vehicle: a body on four wheels that are rays with
     springs, so it rolls over the land, leans in corners and can roll over (car:flip puts it back on its wheels).
     car:drive gives it the keys (W or up goes, S or down brakes and then backs up, A and D or left and right steer,
-    Space brakes) and the camera, which follows it from behind. car:speed is how fast it goes, in km/h."""
+    Space brakes) and the camera, which follows it from behind. car:speed is how fast it goes, in km/h.
+
+    In a world with a player, the player gets in by walking up to it and pressing F (Interaction says "F: Get in"),
+    and F again gets out, beside the driver's door; car:drive() starts the game with the player in it. car:on_enter
+    and car:on_exit run when the player gets in and out, and car:driven() says whether it's being driven."""
     KIND = "car"
-    NAMES = [(n, "car_speed" if n == "speed" else a) for n, a in Thing.NAMES] + [
-        ("drive", "drive"), ("engine", "engine"), ("flip", "flip")]
+    NAMES = [(n, "car_speed" if n == "speed" else a) for n, a in Thing.NAMES if n not in LOOK_METHODS] + [
+        ("drive", "drive"), ("engine", "engine"), ("flip", "flip"), ("on_enter", "on_enter"), ("on_exit", "on_exit"),
+        ("driven", "is_driven")]
     EXAMPLE = "car"
-    MASS = 150
+    MASS = 1200
     WHEEL_R = 0.36
     REST = 0.35  # the springs' length
     CY = 0.79    # the body's middle above the car's position (the ground under its wheels)
@@ -4836,7 +5059,9 @@ class Car(Thing):
         self.phys_kind = "dynamic"
         self.kmh = 0.0
         self.controls = (0, 0, 0)
+        self.enter_fns, self.exit_fns = [], []
         world.physics_on().sync(self)
+        world.interaction().cars.append(self)  # the player gets in with F
 
     def can_have_physics(self, kind):
         if kind != "dynamic":
@@ -4846,8 +5071,11 @@ class Car(Thing):
         if not self.alive or self.world.phys is None:
             return None
         return {"kind": "dynamic", "shape": "car", "size": self.HALF, "cy": self.CY, "wheel_r": self.WHEEL_R,
-                "rest": self.REST, "mass": self.mass_ or self.MASS, "bounce": self.bounce_, "friction": self.friction_,
+                "rest": self.REST, "mass": self.weight_now(), "bounce": self.bounce_, "friction": self.friction_,
                 "hits": bool(self.hit_fns), "wheels": [[int(n), *xyz] for n, xyz in zip(self.wheel_nodes, self.WHEELS)]}
+
+    def default_weight(self):
+        return self.MASS
 
     def from_physics(self, b):
         """Like an object's, and the car's speed (km/h, forward)."""
@@ -4858,41 +5086,102 @@ class Car(Thing):
         return tidy(self.kmh)
 
     def drive(self, on=True):
+        """The player gets in (or the keys drive it, with no player) or out. car:on_enter and car:on_exit run when the
+        player gets in and out, however it happens (F, this, the car being removed)."""
         w = self.world
         ph = w.physics_on()
+        p = w.the_player
+        fire = None
         if self.rt.truthy(on):
-            if w.driving is not None and w.driving is not self:
+            if w.driving is self:
+                return self.native
+            if w.driving is not None:
                 w.driving.drive(False)
             w.driving = self
+            w.drove_frame = w.frames  # an F the program used for this isn't Interaction's F too
             if w.cam_mode != "player":
                 w.cam_mode = "drive"
             w.camera_dirty = False
             ph.send("chase", int(self.node))
-            p = w.the_player
             if p is not None:  # in the car: its figure and its capsule aren't left standing where it got in
                 if p.body is not None:
                     p.body.hide()
+                # In first person, what it holds and the crosshair go too (they're on the camera, behind the car).
+                w.car_hid = [s for s in (p.held if p.mode == "first person" else None, w.crosshair)
+                             if s is not None and not s.hidden]
+                for s in w.car_hid:
+                    s.hide()
                 ph.send("player_off")
+                fire = self.enter_fns
         elif w.driving is self:
             w.driving = None
-            self.controls = (0, 0, 0)
-            ph.send("drive", int(self.node), 0, 0, 0)
+            w.drove_frame = w.frames
+            self.controls = (0, 0, 1)  # parked: the brake stays on, so it doesn't roll away down a hill
+            ph.send("drive", int(self.node), 0, 0, 1)
             ph.send("chase", None)
             if w.cam_mode == "drive":
                 w.cam_mode = "fixed"
                 w.push_camera()  # the camera stays where it was, behind the car
-            p = w.the_player
             if p is not None:  # out of the car, beside its door
-                h = math.radians(self.heading)
-                p.x, p.z = self.x - math.cos(h) * 2.2, self.z - math.sin(h) * 2.2
-                p.y, p.vy = w.ground_y(p.x, p.z), 0.0
+                p.x, p.y, p.z = self.exit_spot(p)
+                p.vy = 0.0
+                p.heading = self.heading % 360  # facing the way the car faces
                 p.teleported = True  # its capsule comes back there (player_to)
                 if p.body is not None and not p.hidden:
                     p.body.show()
+                for s in getattr(w, "car_hid", None) or ():
+                    if getattr(s, "alive", True) and not p.hidden:
+                        s.show()
+                w.car_hid = []
                 p.place_camera(1)
+                fire = self.exit_fns
         if getattr(w, "hud_js", None) is not None:
             w.hud_js.player()  # the minimap and the arrow measure from the car while it's driven
+        for fn in list(fire or ()):
+            w.fire(fn, self.native)
         return self.native
+
+    def exit_spot(self, p):
+        """Where the player gets out: beside the driver's door (its left), or the other door, behind it or in front of
+        it when something solid is in the way, standing on whatever is there."""
+        solids = p.solids()
+        h = math.radians(self.heading)
+        rx, rz = math.cos(h), math.sin(h)  # the car's right, along the ground
+        fx, fz = math.sin(h), -math.cos(h)  # its front
+        spots = [(-rx * 2.2, -rz * 2.2), (rx * 2.2, rz * 2.2), (-fx * 3.4, -fz * 3.4), (fx * 3.4, fz * 3.4)]
+        for dx, dz in spots:
+            x, z = self.x + dx, self.z + dz
+            y = max(self.world.ground_y(x, z), p.floor_at(x, z, self.y + 0.4, solids))
+            if not p.blocked(x, z, y, solids):
+                return x, y, z
+        x, z = self.x + spots[0][0], self.z + spots[0][1]
+        return x, max(self.world.ground_y(x, z), self.y), z
+
+    def get_in(self):
+        """The player gets in (F next to it), with the sound of its door."""
+        w = self.world
+        if w.driving is self or not self.alive:
+            return
+        w.view.call(0, "tones", INTERACT_SOUNDS["car door"], 0.25)
+        self.drive(True)
+
+    def get_out(self):
+        w = self.world
+        if w.driving is not self:
+            return
+        w.view.call(0, "tones", INTERACT_SOUNDS["car door"], 0.25)
+        self.drive(False)
+
+    def on_enter(self, fn):
+        self.enter_fns.append(self.world.lib.check_fn(fn, ":on_enter"))
+        return self.native
+
+    def on_exit(self, fn):
+        self.exit_fns.append(self.world.lib.check_fn(fn, ":on_exit"))
+        return self.native
+
+    def is_driven(self):
+        return self.world.driving is self
 
     def engine(self, power):
         n = self.num(power, ":engine")
@@ -4940,7 +5229,8 @@ RAGDOLL_JOINTS = (
     ("left leg", "left foot", (-_HX, KNEE, 0), "hinge", (-2.0, 0)),
     ("right leg", "right foot", (_HX, KNEE, 0), "hinge", (-2.0, 0)),
 )
-RAGDOLL_MASS = sum(p[4] for p in RAGDOLL)
+RAGDOLL_MASS = sum(p[4] for p in RAGDOLL)  # its parts' own masses, which are shared out like this
+RAGDOLL_KG = 70  # how heavy it is, unless the program says (dummy:weight)
 
 
 class Ragdoll(Thing):
@@ -4952,19 +5242,10 @@ class Ragdoll(Thing):
     EXAMPLE = "dummy"
 
     def __init__(self, world, x, y, z, color):
-        # Each physics part is a group where its body is (physics moves it), holding the person's parts for that
-        # part of the body, where they are on the person.
-        look = {}
-        for type_, p, main in person_parts(world.color(color)):
-            look.setdefault(p["anim"][1], []).append((type_, {k: v for k, v in p.items() if k != "anim"}, main))
         super().__init__(world, "ragdoll", x, y, z, (0.6, 1.7, 0.3),
                          [("group", {"x": at[0], "y": at[1], "z": at[2]}, False) for _, _, _, at, _, _ in RAGDOLL])
-        for (node, _), (_, _, _, at, _, role) in zip(list(self.parts), RAGDOLL):
-            for type_, p, main in look[role]:
-                p = {**p, "x": p.get("x", 0) - at[0], "y": p.get("y", 0) - at[1], "z": p.get("z", 0) - at[2], "shadow": True}
-                child = world.view.obj(node, type_, **p)
-                world.by_node[int(child)] = self
-                self.parts.append((child, main))
+        self.look = person_look(world.color(color))
+        self.restyle()
         self.phys_kind = "dynamic"
         self.standing = self.y - self.ground() < 0.05  # on the ground: it stands until something knocks it over
         world.physics_on().sync(self)
@@ -4973,11 +5254,37 @@ class Ragdoll(Thing):
         if kind != "dynamic":
             raise self.rt.error("A ragdoll always uses physics (that's what makes it flop).")
 
+    def default_weight(self):
+        return RAGDOLL_KG * self.k[0] * self.k[1] * self.k[2]
+
+    def restyle(self):
+        """Dressed in its look: each physics part is a group where its body is (physics moves it), holding the
+        person's parts for that part of the body, where they are on the person. Dressed again, its old clothes go."""
+        w = self.world
+        if not self.alive:
+            return
+        groups = self.parts[:len(RAGDOLL)]
+        for node, _ in self.parts[len(RAGDOLL):]:
+            w.view.remove(node)
+            w.by_node.pop(int(node), None)
+        self.parts = list(groups)
+        by_role = {}
+        for type_, p, main in person_parts(**self.look):
+            by_role.setdefault(p["anim"][1], []).append((type_, {k: v for k, v in p.items() if k != "anim"}, main))
+        for (node, _), (_, _, _, at, _, role) in zip(groups, RAGDOLL):
+            for type_, p, main in by_role[role]:
+                if main and self.glow_color:
+                    p = {**p, "emissive": self.glow_color}
+                p = {**p, "x": p.get("x", 0) - at[0], "y": p.get("y", 0) - at[1], "z": p.get("z", 0) - at[2], "shadow": True}
+                child = w.view.obj(node, type_, **p)
+                w.by_node[int(child)] = self
+                self.parts.append((child, main))
+
     def phys_spec(self):
         if not self.alive or self.world.phys is None:
             return None
         names = [p[0] for p in RAGDOLL]
-        scale = (self.mass_ / RAGDOLL_MASS) if self.mass_ else 1.0
+        scale = self.weight_now() / RAGDOLL_MASS
         return {"kind": "dynamic", "shape": "ragdoll", "main": names.index("chest"), "bounce": self.bounce_,
                 "friction": self.friction_, "hits": bool(self.hit_fns), "stand": self.standing,
                 "parts": [[int(node), shape, size, list(at), round(mass * scale, 4)]
@@ -4990,6 +5297,7 @@ class Ragdoll(Thing):
 
 TALK_REACH = 3.0  # how near the player has to be to talk to someone (npc:on_talk) or to grab something
 DOOR_REACH = 2.5  # how near a door has to be for E to open or close it
+CAR_REACH = 1.8   # how near a car's side the player has to be for F to get in
 HOLD_AT = 2.2     # how far in front of the player's eyes a held thing floats
 THROW = 13.0      # how fast a thrown thing flies off (metres a second)
 # Little sounds for the page's synth (like SOUNDS): a door swinging open, banging shut, rattling when it's locked, a
@@ -5000,6 +5308,7 @@ INTERACT_SOUNDS = {
     "locked": [[220, 0, 0.06, "square", 0.45], [180, 0.08, 0.07, "square", 0.45]],
     "grab": [[440, 0, 0.07, "sine", 0.7, 760]],
     "throw": [[1100, 0, 0.2, "noise", 0.55, 250]],
+    "car door": [[160, 0, 0.09, "square", 0.5, 90], [700, 0.02, 0.05, "noise", 0.35, 200]],
 }
 
 
@@ -5025,9 +5334,11 @@ class Interaction:
     player:can_grab, and run every frame by World3D.update.
 
     E does the first of these that it can: talk to the nearest one with an on_talk within 3 m, open or close the
-    nearest door within 2.5 m, or grab the physics thing the player is looking at within 3 m (with player:can_grab).
-    A hint at the bottom says what E will do ("E: Talk"). A held thing floats in front of the player (its speed is set
-    toward that spot every frame, so it still bumps into things), a click throws it and E drops it. Walking into a key
+    nearest door within 2.5 m, or grab the physics thing the player is looking at within 3 m (with player:can_grab),
+    unless it weighs more than GRAB_KG. F gets into the nearest car within 1.8 m of its side, and gets out again.
+    A hint at the bottom says what E and F will do ("E: Talk", "F: Get in"). A held thing floats in front of the
+    player (its speed is set toward that spot every frame, so it still bumps into things), a click throws it (a heavy
+    thing not as far) and E drops it. Walking into a key
     (the kit's "key", or anything a door needs) picks it up, and walking into a door opens it, away from the player.
     Speech bubbles are drawn by the page (tuff_view_web/interact.js); this keeps them over whoever's talking."""
 
@@ -5037,6 +5348,8 @@ class Interaction:
         self.held = None
         self.talkers = {}  # thing -> its on_talk functions
         self.doors = []
+        self.cars = []     # cars the player can get into with F
+        self.out_hint_until = None  # in a car: "F: Get out" shows for a few seconds after getting in
         self.keys = {}     # things the player picked up (a dict used as an ordered set)
         self.wanted = {}   # things a door needs: walking into them picks them up, like a key
         self.bubbles = {}  # thing -> [its bubble's node, when it goes (the game's clock) or None, its words, where it is]
@@ -5092,11 +5405,25 @@ class Interaction:
         if self.note_text is not None and w.clock >= self.note_until:
             self.show_note(None)
         p = w.the_player
-        if p is None or w.driving is not None or w.closed:
+        if p is None or w.closed:
             self.show_hint(None)
             return
         if w.is_paused:
             return
+        mine = not w.input_paused
+        # F gets in and out of cars, unless the program uses F itself (world:on_key("f", ...)), or got in or out
+        # with car:drive this frame.
+        f = mine and "f" in w.just and getattr(w, "drove_frame", -1) != w.frames and not any(k == "f" for k, _ in w.key_fns)
+        if w.driving is not None:  # in a car: F gets out
+            if self.out_hint_until is None:
+                self.out_hint_until = w.clock + 4
+            if f and p.alive:
+                w.driving.get_out()
+                self.show_hint(None)
+            else:
+                self.show_hint("F: Get out" if w.clock < self.out_hint_until else None)
+            return  # (the F that got out doesn't get straight back in)
+        self.out_hint_until = None
         self.pick_up(p)
         for d in self.doors:
             if d.alive:
@@ -5104,16 +5431,23 @@ class Interaction:
         if self.held is not None:
             self.carry(p)
         do, what = self.choice(p)
+        car = self.car_near(p) if self.held is None else None
         # An E that hid a screen (a note the program closes with E) only hides it, and the click that locks the mouse
         # again (after Escape) isn't a throw.
-        mine = not w.input_paused
+        if f and car is not None and not ("e" in w.just and do is not None):
+            car.get_in()
+            self.show_hint("F: Get out")
+            return
         if mine and "e" in w.just and do is not None:
             do(what)
             do, what = self.choice(p)
         elif mine and "mouse" in w.just and self.held is not None and not w.lock_click:
             self.throw(p)
             do, what = self.choice(p)
-        self.show_hint(self.hint_for(do, what))
+        hint = self.hint_for(do, what)
+        if car is not None:
+            hint = f"{hint}     F: Get in" if hint else "F: Get in"
+        self.show_hint(hint)
 
     def follow(self, t, b):
         """A bubble stays over the one talking (and hides with it)."""
@@ -5138,8 +5472,20 @@ class Interaction:
         if self.grab_on:
             t = self.aimed_at(p)
             if t is not None:
-                return self.grab, t
+                return (self.too_heavy, t) if t.weight_now() > GRAB_KG else (self.grab, t)
         return None, None
+
+    def car_near(self, p):
+        """The nearest car the player is close enough to get into (within CAR_REACH of its side), or None."""
+        best = None
+        for car in self.cars:
+            if not car.alive or car.hidden or abs(p.y - car.y) > 2.5:
+                continue
+            lx, lz = door_local(car.heading, p.x - car.x, p.z - car.z)
+            gap = math.hypot(max(abs(lx) - car.HALF[0], 0), max(abs(lz) - car.HALF[2], 0))
+            if gap <= CAR_REACH and (best is None or gap < best[0]):
+                best = (gap, car)
+        return best[1] if best else None
 
     def hint_for(self, do, what):
         if do is None:
@@ -5150,6 +5496,8 @@ class Interaction:
             return "E: Talk"
         if do == self.use_door:
             return "E: Close" if what.want else "E: Open"
+        if do == self.too_heavy:
+            return "Too heavy to lift"
         return "E: Grab"
 
     # ---- talking
@@ -5192,6 +5540,9 @@ class Interaction:
         self.held = t
         self.world.view.call(0, "tones", INTERACT_SOUNDS["grab"], 0.2)
 
+    def too_heavy(self, t):
+        self.world.view.call(0, "tones", INTERACT_SOUNDS["locked"], 0.2)
+
     def drop(self, _=None):
         self.held = None
 
@@ -5217,7 +5568,8 @@ class Interaction:
     def throw(self, p):
         t, self.held = self.held, None
         _, f = self.eyes(p)
-        v = [f[0] * THROW, f[1] * THROW + (2.0 if p.mode == "first person" else 3.5), f[2] * THROW]
+        k = clamp(math.sqrt(PUSH_KG / max(t.weight_now(), 0.01)), 0.35, 1.0)  # a heavy thing doesn't go as far
+        v = [f[0] * THROW * k, f[1] * THROW * k + (2.0 if p.mode == "first person" else 3.5), f[2] * THROW * k]
         t.vel = v
         self.world.phys.send("velocity", int(t.node), *v)
         self.world.view.call(0, "tones", INTERACT_SOUNDS["throw"], 0.2)
@@ -5294,6 +5646,7 @@ class Interaction:
         """For the autopilot's reports."""
         return {"grab": self.grab_on, "held": self.held.kind if self.held is not None else None,
                 "bubbles": [b[2] for t, b in self.bubbles.items() if t.alive], "hint": self.hint_text,
+                "driving": self.world.driving is not None,
                 "note": self.note_text, "keys": [t.kind for t in self.keys],
                 "doors": [{"angle": round(d.angle, 1), "open": bool(d.want), "locked": self.is_locked(d)}
                           for d in self.doors if d.alive]}
@@ -5308,7 +5661,7 @@ class Door(Thing):
     door:close(). A locked one (door:lock(), or door:needs(key) until the player has picked up that key) stays shut
     and says "Locked!"."""
     KIND = "door"
-    NAMES = Thing.NAMES + [("open", "open"), ("close", "close"), ("needs", "needs"), ("lock", "lock"),
+    NAMES = [(n, a) for n, a in Thing.NAMES if n not in LOOK_METHODS] + [("open", "open"), ("close", "close"), ("needs", "needs"), ("lock", "lock"),
                            ("unlock", "unlock")]
     EXAMPLE = "door"
     WIDE, TALL, THICK = 1.0, 2.0, 0.08  # the door itself (its frame is a little bigger)
@@ -7199,8 +7552,9 @@ class Autopilot:
 # (:speed and :velocity are left out: with no inputs they give how fast it goes.)
 _SETTERS = ("move", "move_to", "glide", "forward", "turn", "turn_to", "spin", "point_at", "on_edge", "size",
             "scale", "color", "layer", "flip", "align", "hide", "show", "set", "clicked", "shake", "look_at", "fall",
-            "grow", "regrow", "swing", "glow", "solid", "label", "physics", "mass", "bounce", "friction", "push",
+            "grow", "regrow", "swing", "glow", "solid", "label", "physics", "bounce", "friction", "push",
             "on_hit", "sleep", "wake")
+_LOOKS = ("shirt", "pants", "skin", "hair", "shoes", "sleeves")  # a person's look (Thing.shirt...): give the thing back
 _OBJECT_GIVES = {"x": "$number", "y": "$number", "z": "$number", "spot": "$list", "angle": "$number",
                  "distance": "$number", "fallen": "$bool"}
 # game:panel gives a "panel" and game:screen and game:start_screen a "screen": atgui containers (tables()["ui_kinds"] has
@@ -7290,6 +7644,14 @@ for _kind in ("game", "world"):
 GIVES["world"].update({"jump_pad": "object", "boost_pad": "object"})
 GIVES["object"]["path"] = "object"
 VALUES[("object", "path")] = {2: "path"}
+# 1.3.0: getting in and out of cars, and how people look.
+GIVES["car"].update({"on_enter": "car", "on_exit": "car", "driven": "$bool"})
+GIVES["player"]["in_car"] = "$bool"
+HANDLERS["car"].update({"on_enter": (0, 1, "1 input (the car)"), "on_exit": (0, 1, "1 input (the car)")})
+for _k in ("object", "ragdoll", "player"):
+    GIVES[_k].update({m: _k for m in _LOOKS})
+    VALUES.update({(_k, "shirt"): {0: "color"}, (_k, "pants"): {0: "color"}, (_k, "shoes"): {0: "color"},
+                   (_k, "skin"): {0: "skin"}, (_k, "hair"): {0: "hair", 1: "hair"}, (_k, "sleeves"): {0: "sleeves"}})
 
 
 def check_value(kind, method, index, value, base_dir=None):
@@ -7345,6 +7707,18 @@ def check_value(kind, method, index, value, base_dir=None):
         return None if low in HOLDABLE else f"The player can hold: {', '.join(HOLDABLE)}. Not \"{value}\"."
     if what == "physics":
         return None if PHYSICS_WORDS.get(low, low) in PHYSICS_KINDS else physics_problem(low)
+    if what in ("skin", "hair"):
+        named = SKIN_COLORS if what == "skin" else HAIR_COLORS
+        if low in named or low in COLORS or (low[:1] == "#" and len(low) in (4, 7) and all(c in "0123456789abcdef" for c in low[1:])):
+            return None
+        if what == "hair" and HAIR_WORDS.get(low, low) in HAIR_STYLES:
+            return None
+        if what == "skin":
+            return f"'{value}' isn't a skin colour tgame knows. Try {', '.join(SKIN_COLORS)}, or a hex code like \"#e0ac7e\"."
+        return (f"'{value}' isn't a hair style or colour tgame knows. Styles: {', '.join(HAIR_STYLES)}. Colours: "
+                f"{', '.join(c for c in HAIR_COLORS if c not in ('blond', 'gray'))}, or a hex code.")
+    if what == "sleeves":
+        return None if SLEEVE_WORDS.get(low, low) in SLEEVES else f"Sleeves can be \"long\" or \"short\", not \"{value}\"."
     if what == "spawn":
         if low.endswith(MODEL_FILES):
             return file_problem(MODEL_FILES, "model")
@@ -8757,7 +9131,8 @@ class Net:
         now = time.monotonic()
         if now - self.sent_at < NET_SEND_EVERY:
             return
-        spot = [round(p.x, 3), round(p.y, 3), round(p.z, 3), round(p.heading, 1), 0 if p.hidden else 1]
+        hidden = p.hidden or getattr(g, "driving", None) is not None  # in a car (cars aren't shared): not walking about
+        spot = [round(p.x, 3), round(p.y, 3), round(p.z, 3), round(p.heading, 1), 0 if hidden else 1]
         if spot == self.sent and now - self.sent_at < 1.0:
             return
         self.sent, self.sent_at = spot, now
@@ -8767,9 +9142,12 @@ class Net:
         """The player's own figure (third person) wears the shirt the others see it in."""
         body = getattr(getattr(self.game, "the_player", None), "body", None)
         if body is not None and body.alive:
+            c = NET_SHIRTS[(self.me - 1) % len(NET_SHIRTS)]
+            if body.look is not None:  # it stays that colour when the program changes its look
+                body.look["shirt"] = c
             for node, main in body.parts:
                 if main:
-                    body.send(node, color=NET_SHIRTS[(self.me - 1) % len(NET_SHIRTS)])
+                    body.send(node, color=c)
 
     def place(self, pid, p):
         g = self.game

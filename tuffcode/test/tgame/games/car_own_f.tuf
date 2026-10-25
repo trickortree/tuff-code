@@ -1,0 +1,26 @@
+mention tgame
+
+# A game that uses F itself (world:on_key "f"), the way 1.2.0's guide drove cars: its F gets in and out with
+# car:drive, and tgame's own F stays out of the way. car:on_enter runs for car:drive() too.
+world = tgame.world("Own F", 900, 560)
+world:ground "grass"
+player = world:player("first person")
+player:move_to(-2.3, 0, 0)
+car = world:car(0, 0, 0, "red")
+ins = 0
+
+func entered(c):
+    ins += 1
+
+car:on_enter entered
+
+func use(key):
+    if car:driven():
+        car:drive(false)
+    else:
+        car:drive()
+
+world:on_key("f", use)
+
+func report():
+    say "own in " + player:in_car() + " ins " + ins
