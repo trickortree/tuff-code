@@ -30,6 +30,10 @@ jobs:
             arch: x64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
+    env:
+      # Nobody uses a CI Mac, so the tests' windows needn't keep out of the way (and 1.2.0's tests can't place them
+      # off screen on a Mac: tuff_view's _quiet_window).
+      TUFF_TEST_QUIET: "0"
     defaults:
       run:
         working-directory: tuffcode
