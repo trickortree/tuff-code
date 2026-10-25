@@ -793,6 +793,64 @@ while world:open():
 - **Level pieces (3D):** `world:jump_pad(x, y, z, 15)` is a glowing pad that launches the player (and physics things) up at 15 m/s. `boost = world:boost_pad(x, y, z, 20)` shoots the player forward the way it faces, and `boost:turn(90)` aims it. Any object (not a car or a ragdoll: they always use physics) moves along spots with `lift:path([[0, 2, 0], [10, 2, 0], [10, 6, 0]], 3)`: there and back at 3 m/s, or round and round with `"loop"` as a third input. The player rides it (and physics things do too), and `lift:path()` stops it.
 - **Tips:** y is the height above the land here too, and a paused game pauses all of these. Make a door, a pad, a key or a person with one top-level line so Tuff Engine can show it, and keep `:say` and `:path` lines right after the thing.
 
+#### Multiplayer
+Games on the same network (the same Wi-Fi, or cables to the same router) can play together. One game **hosts** a room, the others **join** it. In a 3D world, everyone else's player shows up in your world as a person with their name over their head, walking where they walk. Messages and shared values work in 2D and 3D.
+```tuff
+mention tgame
+
+world = tgame.world("Tag")
+world:sky "day"
+world:ground "grass"
+me = world:player("third person")
+me:move_to(random(-8, 8), 0, random(-8, 8))   # everyone starts somewhere else
+label = world:hud():text("", 480, 570, 22, "white")
+last_tag = 0
+
+menu = world:main_menu("Tag")
+menu:button("Host a game", host_game)
+menu:button("Join a game", join_game, "secondary")
+
+func host_game():
+    world:host("Tag")                         # a room the others on this network can find
+    world:share("it", world:my_name())        # the host starts as "it" (everyone sees shared values)
+    menu:hide()
+
+func join_game():
+    world:join()                              # finds a room on this network and goes in
+    menu:hide()
+
+func got(message, value, sender):             # a message from another player
+    if message == "tag" and value == world:my_name():
+        last_tag = world:time()               # just tagged: no tagging back for 2 seconds
+        world:shake(0.6)
+
+func left(name):                              # a player left: if they were "it", the host is now
+    if world:hosting() and world:shared("it", "") == name:
+        world:share("it", world:my_name())
+
+func step(dt):
+    it = world:shared("it", "")
+    label:set "It: " + it
+    if it == world:my_name() and world:time() - last_tag > 2:
+        for p in world:others():              # the other players' people
+            if me:distance(p) < 1.5:
+                last_tag = world:time()
+                world:send("tag", p:get("name"))
+                world:share("it", p:get("name"))
+
+world:on_message(got)
+world:on_leave(left)
+world:every_frame step
+```
+- **Hosting:** `game:host("Tag")` makes a room called Tag (`game:host()` names it after the game's title). `game:hosting()` is true from the next line. The first time a computer hosts, Windows may ask whether TuffCode can use the network: choose **Allow** (private networks are enough). The top of the window says "Hosting "Tag" on 192.168.1.20" for a few seconds: that's the address others can join by.
+- **Joining:** `game:join()` looks for a room on the network and goes in (one for the same game first). `game:join("Tag")` goes in the room called Tag, and `game:join("192.168.1.20")` goes straight to that computer (for networks that hide rooms, like some school Wi-Fi). Joining takes a moment: the game keeps running meanwhile ("Looking for a game to join..." shows at the top), and `game:connected()` is true once it's in. A game hosts or joins, not both: `game:leave()` leaves the room first (a host leaving closes the room for everyone).
+- **Players:** `game:players()` is a list of everyone's names, yours too, the host's first. Names are "Player 1" (the host), "Player 2" and so on, or what each game chose with `game:my_name("Sam")` (two Sams become Sam and Sam 2). `game:my_name()` gives your own. `game:on_join(fn)` runs `func fn(name):` for each other player who comes in (and, when you join, for each player already there), and `game:on_leave(fn)` runs `func fn(name):` when one goes, or when the host leaves (then for everyone).
+- **Messages:** `game:send("score", 10)` sends a message to every other player, with a value if you like (numbers, text, true/false, lists and tables, like `game:send("at", [me:x(), me:y()])`). `game:on_message(fn)` runs `func fn(message, value, sender):` for each one that arrives: the message, its value (nil if none) and the sender's name. Messages sent before the game is in a room wait until it's in; in no room at all, they go nowhere.
+- **Shared values:** `game:share("coins", 5)` sets a value every player sees, and `game:shared("coins", 0)` reads it (the second input until someone shares it). The host keeps them, so a player who joins later gets them all. Values shared before joining only fill in what the room doesn't have yet: the room's own values win.
+- **Other players (3D):** each other player's player is a person in your world, in their own shirt color (the host's blue, then red, green, orange...), with their name over its head. It walks where they walk and hides when they hide. `world:others()` is a list of them, as objects: `me:distance(p)`, `me:touches(p)`, `p:get("name")` (their name), `p:animate("wave")`. They don't block the way (`p:solid(true)` if they should), and `game:clear()` leaves them.
+- **2D:** there's no player in 2D, so nobody shows up by themselves: send where your sprite is (`game:send("at", [me:x(), me:y()])` every frame) and move a sprite for them in `on_message`.
+- **Tips:** try it with two computers on the same network: run the game in TuffCode on each, then host on one and join on the other. On one computer, run it in TuffCode and run a copy made with Build exe beside it (games built with Build exe host and join too). Tuff Engine's preview never hosts or joins.
+
 #### Games Tuff Engine can edit
 TuffCode's Tuff Engine tab (`Ctrl+Shift+G`) builds tgame games by clicking and dragging, and writes everything as normal Tuff code. It can only show and edit simple top-level lines, so when you change a game someone is building in it:
 - Make each new thing with **one top-level line and plain numbers**, like `coin = game:circle(200, 200, 14, "gold")` or `tree = game:spawn("tree", -5, 0, -10)`. Things made in a loop, a function or a chained line (`game:spawn("sign"):label "Hi"`) still work, but show as "Made by your code" and can't be dragged.

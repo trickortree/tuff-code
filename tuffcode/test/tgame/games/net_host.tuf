@@ -1,0 +1,31 @@
+mention tgame
+
+# Multiplayer, the host: hosts a room, says who joins, leaves and what they send, keeps a shared score, and walks
+# forward when the test holds W (the joining game sees its person walk there).
+world = tgame.world("Net Test", 640, 400)
+world:sky "day"
+world:ground "grass"
+me = world:player("third person")
+world:share("score", 5)
+world:host("Test Room")
+say "hosting " + text(world:hosting())
+
+func joined(name):
+    say "joined " + name
+    world:send("welcome", name)
+
+func left(name):
+    say "left " + name
+
+func got(message, value, sender):
+    say "got " + message + " " + text(value) + " from " + sender
+    if message == "hit":
+        world:share("score", world:shared("score", 0) + value)
+
+world:on_join(joined)
+world:on_leave(left)
+world:on_message(got)
+
+func show():
+    say "players " + text(world:players())
+    say "others " + len(world:others())

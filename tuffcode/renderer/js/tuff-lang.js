@@ -245,6 +245,25 @@ Object.assign(window.TUFF_METHOD_DOCS, {
   forget: ['game:forget("best")', 'tgame: forgets one save. game:forget() forgets every save this game has.'],
 });
 
+// tgame's multiplayer: games on the same network play together, the same on a 2D game and a 3D world
+// (world:others is a 3D world's).
+Object.assign(window.TUFF_METHOD_DOCS, {
+  host: ['game:host("Tag")', 'tgame: hosts a room that games on the same network (the same Wi-Fi) can join. game:host() names it after the game. game:hosting() is true from the next line.'],
+  join: ['game:join()', 'tgame: finds a room on the network and goes in. game:join("Tag") goes in the room called Tag, and game:join("192.168.1.20") straight to that computer. The game keeps running while it looks; game:connected() is true once it\'s in.'],
+  leave: ['game:leave()', 'tgame: leaves the room. A host leaving closes the room for everyone.'],
+  connected: ['game:connected()', 'tgame: true while the game is in a room (hosting one, or joined).'],
+  hosting: ['game:hosting()', 'tgame: true while this game hosts the room. Handy for things only one game should do, like starting a timer.'],
+  players: ['names = game:players()', 'tgame: a list of everyone\'s names in the room, yours too, the host\'s first.'],
+  my_name: ['game:my_name("Sam")', 'tgame: the name other players see (over your head in 3D, and as the sender of your messages). game:my_name() gives it back: "Player 1" for the host, "Player 2"... unless you chose one.'],
+  send: ['game:send("score", 10)', 'tgame: sends a message to every other player, with a value if you like (numbers, text, true/false, lists, tables). Their on_message function gets it.'],
+  on_message: ['game:on_message(got)', 'tgame: runs got(message, value, sender) for each message another player sends: the message, its value (nil if none) and their name.'],
+  on_join: ['game:on_join(hello)', 'tgame: runs hello(name) when another player comes in (and, when you join, for each player already there).'],
+  on_leave: ['game:on_leave(bye)', 'tgame: runs bye(name) when another player leaves, or for everyone when the host leaves.'],
+  share: ['game:share("coins", 5)', 'tgame: sets a value every player in the room sees. The host keeps it, so players who join later get it too.'],
+  shared: ['coins = game:shared("coins", 0)', 'tgame: a value shared with game:share, or the second input until someone shares it.'],
+  others: ['for p in world:others():', 'tgame (3D): the other players, as people in your world that walk where they walk, with their names over their heads. p:get("name") is their name; me:distance(p) and me:touches(p) work.'],
+});
+
 window.TUFF_LIBS = {
   tgui: {
     window: ['tgui.window("Title", width, height)', 'Opens a new app window. Width and height are optional.'],

@@ -1,0 +1,23 @@
+mention tgame
+
+# Multiplayer in 2D, the host (called Ana): hears where the other player's circle is, sends a list back, keeps the
+# level (the room's value wins over one shared before joining) and closes first: the other game hears it go.
+game = tgame.window("Net 2D", 480, 320)
+game:my_name("Ana")
+game:share("level", 3)
+game:host()
+friend = game:circle(-50, -50, 16, "red")
+
+func got(message, value, sender):
+    say "got " + message + " " + text(value) + " from " + sender
+    if message == "at":
+        friend:move_to(value[0], value[1])
+
+func joined(name):
+    game:send("hello", [1, 2, 3])
+
+game:on_message(got)
+game:on_join(joined)
+
+func show():
+    say "level " + text(game:shared("level")) + " lives " + text(game:shared("lives"))

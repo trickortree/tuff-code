@@ -14,15 +14,21 @@ Positions, collisions, animations, timers and the player all live here, so the p
 world the page shows. Each object keeps its own copy of what it sent, and only changes are sent, once
 per frame.
 """
+import atexit
 import base64
 import collections
+import errno
 import json
 import math
 import os
+import queue
 import random
 import re
+import selectors
+import socket
 import struct
 import sys
+import threading
 import time
 
 import tuff_atgui as atgui  # a game's menus are atgui's own widgets (GameUI, near the end)
@@ -475,6 +481,7 @@ class Game:
         self.sound_count = 0
         self.phys = None  # the game's physics (Physics), once something uses it
         self.fx = None  # its effects (Effects): slow motion, a shake, pop text, weather, the time of day
+        self.net = None  # its multiplayer (Net), once it hosts, joins or shares something
         self.base = getattr(getattr(self.rt, "interp", None), "base_dir", None) or os.getcwd()
         if SCENE is not None:
             self.autopilot = None
@@ -613,6 +620,8 @@ class Game:
         if self.closed or not self.view.is_open:
             self.closed = True
             return 0
+        if self.net is not None:  # what the other players said and did: messages, who came and went, where they are
+            self.net.frame(real)
         dt = 0.0 if self.is_paused else real
         if self.fx is not None:
             dt = self.fx.frame(dt, real)  # slow motion slows everything that goes by dt
@@ -876,6 +885,8 @@ class Game:
         self.view.set_title(self.rt.text(text))
 
     def close(self):
+        if self.net is not None:
+            self.net.stop()  # a host says goodbye to the other players first
         self.view.close()
         self.closed = True
 
@@ -6713,16 +6724,18 @@ class SavedData:
             raise self.rt.error(f"A save needs a name, like \"best\": {example}")
         return n
 
-    def keepable(self, v, inside=()):
+    def keepable(self, v, inside=(), method="save"):
         """The JSON value for a Tuff value :save can keep: numbers, text, true/false, nil, lists and tables (tap's
-        data objects), inside each other too. Anything else is a Tuff error on the :save line."""
+        data objects), inside each other too. Anything else is a Tuff error on the :save line. game:send and
+        game:share take the same values (method: which one it is, for the message)."""
         rt = self.rt
         v = rt.plain(v)
         if v is None or isinstance(v, (bool, str)):
             return v
+        verb = "keep" if method == "save" else "send" if method == "send" else "share"
         if isinstance(v, (int, float)):
             if v != v or v in (math.inf, -math.inf):
-                raise rt.error(f"{self.what('save')} can only keep ordinary numbers, not {rt.text(v)}.")
+                raise rt.error(f"{self.what(method)} can only {verb} ordinary numbers, not {rt.text(v)}.")
             return v
         table = None
         if getattr(v, "tap", None) is not None:  # a tap data object: a table of named values
@@ -6731,12 +6744,12 @@ class SavedData:
             table = d.values if d is not None else None
         if isinstance(v, (list, dict)) or table is not None:
             if any(x is v for x in inside):
-                raise rt.error(f"{self.what('save')} can't keep a list or table that holds itself.")
+                raise rt.error(f"{self.what(method)} can't {verb} a list or table that holds itself.")
             inside = (*inside, v)
             if isinstance(v, list):
-                return [self.keepable(x, inside) for x in v]
-            return {str(k): self.keepable(x, inside) for k, x in (v if table is None else table).items()}
-        raise rt.error(f"{self.what('save')} can keep {SAVE_KEEPS}, not {rt.what(v)}.")
+                return [self.keepable(x, inside, method) for x in v]
+            return {str(k): self.keepable(x, inside, method) for k, x in (v if table is None else table).items()}
+        raise rt.error(f"{self.what(method)} can {verb} {SAVE_KEEPS}, not {rt.what(v)}.")
 
     # ---- the file
     def read(self):
@@ -7170,6 +7183,8 @@ class Autopilot:
         out["effects"] = g.fx.state() if g.fx is not None else None
         if getattr(g, "interact", None) is not None:
             out["interact"] = g.interact.state()
+        if getattr(g, "net", None) is not None:
+            out["net"] = g.net.state_dump()
         if g.three_d and g.the_player is not None:
             out["on_ground"] = g.the_player.on_ground
             body = g.the_player.body  # third person: the figure the camera follows
@@ -7763,3 +7778,1174 @@ for _kind in ("game", "world"):
 for _kind in ("sprite", "object", "car", "ragdoll", "player"):
     HANDLERS.setdefault(_kind, {})["on_death"] = (0, 1, f"1 input (the {_kind} whose health ran out)")
 VALUES.update({("world", "minimap"): {1: "corner"}, ("minimap", "mark"): {1: "color"}})
+
+
+# ---------------------------------------------------------------- multiplayer: games on the same network (1.3.0)
+# game:host(name) makes a room that other games on the same network (the same Wi-Fi, or cables to the same router)
+# can find, and game:join() finds one and goes in: game:join("Tag") looks for the room called Tag, and
+# game:join("192.168.1.20") goes straight to that computer. The host's game keeps the room: every message goes
+# through it, it keeps the shared values (game:share, game:shared) and it tells everyone who comes and goes. In a 3D
+# world each player's player shows up in everyone else's world as a person with their name over their head, walking
+# where they walk (world:others() gives them to the program).
+#
+# The sockets live on a thread of their own (NetLink), which never runs Tuff. What it hears waits in a queue that
+# the game empties at each frame (Net.frame), so on_message, on_join and on_leave run between frames, like on_key.
+# Messages are lines of JSON over TCP. Finding rooms is UDP: a joining game asks "who's hosting?" across the
+# network (and on this computer), and each host answers with its room's name and port.
+
+NET_VERSION = 1
+NET_PORT = 47800  # finding rooms (UDP); a host takes the first free TCP port after it (47801...)
+# The UDP ports hosts answer on, after NET_PORT: the first free one each (a second host on the same computer can't
+# share the first: Windows would give each question to only one of them). Joining games ask on all of them.
+NET_FIND_PORTS = (0, 10, 11, 12, 13)
+NET_PORT_ENV = "TUFF_NET_PORT"  # another first port (the tests use their own, away from real games)
+NET_LOCAL_ENV = "TUFF_NET_LOCAL"  # "1": only games on this computer (quiet tests: no firewall questions)
+NET_SEND_EVERY = 0.05  # where the player is goes out 20 times a second while it moves (and each second when not)
+NET_MAX_PLAYERS = 16
+NET_LINE_MAX = 1 << 20  # a line longer than this (a megabyte) isn't a game's: the connection goes
+NET_NAME_MAX = 24
+# Shirts for the players' people, in the order they join: the host's is the blue the player's own figure has.
+NET_SHIRTS = ("#3574f0", "#e5484d", "#2fa36b", "#f2a33a", "#8e5bd8", "#14b8a6", "#ec4899", "#e2a508")
+NET_ADDRESS = re.compile(r"^\s*(localhost|\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?\s*$", re.I)
+_WOULD_BLOCK = {getattr(errno, n) for n in ("EINPROGRESS", "EWOULDBLOCK", "EALREADY") if hasattr(errno, n)} | {10035}
+# Names people guess for these (Roblox, Godot, socket libraries...), with the tgame name.
+NET_HINTS = {
+    "host_game": "host", "create_room": "host", "make_room": "host", "start_server": "host",
+    "create_server": "host", "open_room": "host", "start_host": "host", "host_room": "host", "create_game": "host",
+    "connect": "join", "join_game": "join", "join_room": "join", "find_game": "join", "find_room": "join",
+    "connect_to": "join", "disconnect": "leave", "leave_game": "leave", "leave_room": "leave",
+    "quit_game": "leave", "exit_room": "leave", "is_connected": "connected", "online": "connected",
+    "is_online": "connected", "in_room": "connected", "is_host": "hosting", "is_server": "hosting",
+    "am_host": "hosting", "is_hosting": "hosting", "player_list": "players", "get_players": "players",
+    "list_players": "players", "everyone": "players", "set_name": "my_name", "name": "my_name", "nickname": "my_name",
+    "username": "my_name", "player_name": "my_name", "set_nickname": "my_name", "broadcast": "send",
+    "emit": "send", "send_message": "send", "message": "send", "tell": "send", "rpc": "send",
+    "on_receive": "on_message", "on_received": "on_message", "on_data": "on_message", "on_msg": "on_message",
+    "received": "on_message", "on_event": "on_message", "listen": "on_message", "on_player_join": "on_join",
+    "on_player_joined": "on_join", "on_joined": "on_join", "on_connect": "on_join", "player_joined": "on_join",
+    "on_player_leave": "on_leave", "on_player_left": "on_leave", "on_left": "on_leave", "on_disconnect": "on_leave",
+    "player_left": "on_leave", "sync": "share", "set_shared": "share", "share_value": "share", "set_var": "share",
+    "get_shared": "shared", "shared_value": "shared", "get_var": "shared", "other_players": "others",
+    "remote_players": "others", "get_others": "others", "opponents": "others",
+}
+
+
+def net_base_port():
+    try:
+        port = int(os.environ.get(NET_PORT_ENV) or NET_PORT)
+    except ValueError:
+        port = NET_PORT
+    return port if 1024 <= port <= 65000 else NET_PORT
+
+
+def net_local():
+    """Whether rooms stay on this computer: TUFF_NET_LOCAL=1, or a quiet test run (TUFF_TEST_QUIET=1) that doesn't
+    say. A room on this computer only listens on 127.0.0.1, which never asks the firewall."""
+    own = os.environ.get(NET_LOCAL_ENV)
+    if own is not None:
+        return own.strip() == "1"
+    return os.environ.get("TUFF_TEST_QUIET") == "1"
+
+
+def local_ips():
+    """This computer's addresses on its networks (not 127.0.0.1), the one it reaches other computers with first."""
+    ips = []
+    try:  # no packet goes out: connecting a UDP socket only picks the way it would go
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("10.255.255.255", 1))
+            ips.append(s.getsockname()[0])
+        finally:
+            s.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ips.append(info[4][0])
+    except OSError:
+        pass
+    seen = []
+    for ip in ips:
+        if ip not in seen and not ip.startswith(("127.", "169.254.", "0.")):
+            seen.append(ip)
+    return seen
+
+
+def net_address(text):
+    """(ip, port or None) for an address written as text ("192.168.1.20", "localhost:47801"), or None for a room's name."""
+    m = NET_ADDRESS.match(text)
+    if not m:
+        return None
+    ip = "127.0.0.1" if m.group(1).lower() == "localhost" else m.group(1)
+    if any(int(n) > 255 for n in ip.split(".")):
+        return None
+    port = int(m.group(2)) if m.group(2) else None
+    return ip, (port if port is None or 0 < port < 65536 else None)
+
+
+def same_room(a, b):
+    return " ".join(str(a).lower().split()) == " ".join(str(b).lower().split())
+
+
+class _Conn:
+    """One TCP connection: what came in that isn't a whole line yet, and what's still to go out."""
+    __slots__ = ("sock", "buf", "out", "id", "events", "to", "ended", "key")
+
+    def __init__(self, sock):
+        self.sock, self.buf, self.out = sock, bytearray(), bytearray()
+        self.id = None
+        self.events = 0
+        self.to = None
+        self.ended = False
+        self.key = None  # where a joining game's connection goes: (ip, port)
+
+
+class NetLink(threading.Thread):
+    """The sockets of a game in a room, on a thread of their own: a host's (it keeps the room) or a joining game's.
+    It never runs Tuff. What it hears goes into `inbox` as events for the game's frame, and what the game says comes
+    in through say() (which wakes it).
+
+    The host is player 1. It relays every message, keeps the shared values (each change goes out to everyone in the
+    order the host saw it, back to the one who made it too) and remembers where each player last was, for players
+    who come later. A joining game asks the network for rooms, picks one (the room it was told to look for, or one
+    for the same game, or the first to answer), and goes in."""
+
+    def __init__(self, role, title, name, room=None, address=None, listener=None, shared=None):
+        super().__init__(name=f"tgame-net-{role}", daemon=True)
+        self.role, self.title, self.my_name = role, title, name
+        self.room, self.address = room, address
+        self.inbox = queue.Queue()
+        self.outbox = collections.deque()
+        self.lock = threading.Lock()
+        self.stopping = False
+        self.local = net_local()
+        self.base = net_base_port()
+        self.sel = selectors.DefaultSelector()
+        self.wake_r, self.wake_w = socket.socketpair()
+        for s in (self.wake_r, self.wake_w):
+            s.setblocking(False)
+        self.sel.register(self.wake_r, selectors.EVENT_READ, self.on_wake)
+        self.udp = None
+        self.conns = []
+        # host
+        self.listener = listener
+        self.players = {1: name}
+        self.next_id = 2
+        self.shared = dict(shared or {})
+        self.last_pos = {}
+        # joining
+        self.conn = None  # the connection to the host, once one is being made
+        self.joined = False
+        self.found, self.first_found, self.next_ask, self.asks = {}, None, 0.0, 0
+        self.bad = {}  # rooms that didn't let us in, for a few seconds
+        self.waiting = collections.deque(maxlen=200)  # messages said before the host let us in
+        self.hello_by = 0.0
+
+    # ---- the game's side (the Tuff thread)
+    def say(self, op):
+        with self.lock:
+            self.outbox.append(op)
+        self.poke()
+
+    def poke(self):
+        try:
+            self.wake_w.send(b"!")
+        except OSError:  # its buffer is full (it's waking anyway), or it's closed
+            pass
+
+    def stop(self):
+        self.stopping = True
+        self.poke()
+
+    # ---- the thread
+    def post(self, e):
+        self.inbox.put(e)
+
+    def run(self):
+        try:
+            if self.role == "host":
+                self.start_host()
+            else:
+                self.start_join()
+            while not self.stopping:
+                timeout = self.tick()
+                for key, mask in self.sel.select(timeout):
+                    key.data(mask)
+                    if self.stopping:
+                        break
+        except Exception as exc:  # anything at all: the game hears it, and the game goes on
+            self.post({"t": "error", "why": str(exc) or type(exc).__name__})
+        finally:
+            self.shut()
+
+    def tick(self):
+        """Work done on time, not when a socket says something: asking for rooms, and giving up on a slow host.
+        Gives how long the thread can wait for its sockets."""
+        if self.role == "host" or self.joined:
+            return 1.0
+        now = time.monotonic()
+        if self.conn is not None:
+            if now > (self.conn.to if self.conn.to is not None else self.hello_by):
+                self.failed("slow")  # it didn't answer, or didn't let us in
+            return 0.1
+        if now >= self.next_ask:
+            self.ask()
+            self.next_ask = now + 0.5
+        if self.first_found is not None and now - self.first_found >= 0.3:
+            self.pick()
+        return max(0.01, min(self.next_ask - now, 0.1))
+
+    def on_wake(self, mask):
+        try:
+            while self.wake_r.recv(4096):
+                pass
+        except OSError:
+            pass
+        while True:
+            with self.lock:
+                if not self.outbox:
+                    break
+                op = self.outbox.popleft()
+            if self.role == "host":
+                self.host_op(op)
+            elif self.joined:
+                self.write(self.conn, op)
+            elif op.get("t") == "msg":
+                self.waiting.append(op)  # it goes once the host lets us in (where the player is goes again by itself)
+            elif op.get("t") == "name":
+                self.my_name = op.get("name")
+
+    def shut(self):
+        """Closing down: a host tells everyone the room is closing (so their games say "The host left"), and every
+        socket closes."""
+        for c in list(self.conns):
+            try:
+                if self.role == "host" and c.id is not None:
+                    c.out += self.line({"t": "end"})
+                c.sock.setblocking(True)
+                c.sock.settimeout(0.2)
+                if c.out:
+                    c.sock.sendall(bytes(c.out))
+            except OSError:
+                pass
+            try:
+                c.sock.close()
+            except OSError:
+                pass
+        self.conns = []
+        for s in (self.listener, self.udp, self.wake_r, self.wake_w):
+            if s is not None:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+        try:
+            self.sel.close()
+        except Exception:
+            pass
+
+    # ---- lines of JSON
+    @staticmethod
+    def line(obj):
+        return (json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+
+    def add(self, sock, to=None):
+        sock.setblocking(False)
+        c = _Conn(sock)
+        c.to = to
+        self.conns.append(c)
+        if to is None:
+            self.watch(c, selectors.EVENT_READ)
+        else:  # a connection being made: it's ready to write once it's made (or failed)
+            self.watch(c, selectors.EVENT_WRITE)
+        return c
+
+    def watch(self, c, events):
+        if events == c.events:
+            return
+        if c.events:
+            self.sel.modify(c.sock, events, lambda mask, c=c: self.on_conn(c, mask))
+        else:
+            self.sel.register(c.sock, events, lambda mask, c=c: self.on_conn(c, mask))
+        c.events = events
+
+    def write(self, c, obj):
+        if c is None or c not in self.conns:
+            return
+        c.out += self.line(obj)
+        if len(c.out) > 8 * NET_LINE_MAX:  # it isn't reading what it's sent: let it go
+            self.drop(c)
+            return
+        self.flush(c)
+
+    def flush(self, c):
+        try:
+            while c.out:
+                n = c.sock.send(c.out)
+                if not n:
+                    break
+                del c.out[:n]
+        except (BlockingIOError, InterruptedError):
+            pass
+        except OSError:
+            self.drop(c)
+            return
+        if c.to is None:
+            self.watch(c, selectors.EVENT_READ | (selectors.EVENT_WRITE if c.out else 0))
+
+    def on_conn(self, c, mask):
+        if c not in self.conns:
+            return
+        if c.to is not None:  # a connection to a host being made: made, or not
+            self.connected(c)
+            return
+        if mask & selectors.EVENT_WRITE:
+            self.flush(c)
+        if mask & selectors.EVENT_READ and c in self.conns:
+            try:
+                data = c.sock.recv(65536)
+            except (BlockingIOError, InterruptedError):
+                return
+            except OSError:
+                data = b""
+            if not data:
+                self.drop(c)
+                return
+            c.buf += data
+            while c in self.conns:
+                i = c.buf.find(b"\n")
+                if i < 0:
+                    break
+                raw = bytes(c.buf[:i])
+                del c.buf[:i + 1]
+                try:
+                    m = json.loads(raw.decode("utf-8"))
+                except ValueError:
+                    continue
+                if isinstance(m, dict):
+                    if self.role == "host":
+                        self.host_line(c, m)
+                    else:
+                        self.join_line(c, m)
+            if len(c.buf) > NET_LINE_MAX:
+                self.drop(c)
+
+    def drop(self, c):
+        if c not in self.conns:
+            return
+        self.conns.remove(c)
+        try:
+            self.sel.unregister(c.sock)
+        except (KeyError, ValueError, OSError):
+            pass
+        try:
+            c.sock.close()
+        except OSError:
+            pass
+        if self.role == "host":
+            if c.id in self.players:
+                name = self.players.pop(c.id)
+                self.last_pos.pop(c.id, None)
+                out = {"t": "left", "id": c.id, "name": name}
+                self.to_all(out)
+                self.post(out)
+        elif c is self.conn:
+            self.conn = None
+            if self.joined:
+                self.joined = False
+                self.post({"t": "lost", "why": "end" if c.ended else "lost"})
+                self.stopping = True
+            else:
+                self.failed("closed", c)
+
+    # ---- the host
+    def start_host(self):
+        self.listener.setblocking(False)
+        self.port = self.listener.getsockname()[1]
+        self.sel.register(self.listener, selectors.EVENT_READ, self.on_accept)
+        for off in NET_FIND_PORTS:
+            u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                u.bind(("127.0.0.1" if self.local else "", self.base + off))
+            except OSError:  # another host on this computer has it
+                u.close()
+                continue
+            u.setblocking(False)
+            self.udp = u
+            self.sel.register(u, selectors.EVENT_READ, self.on_find)
+            break
+        # (with every port taken, games can still join by this computer's address)
+        ips = [] if self.local else local_ips()
+        self.post({"t": "hosting", "port": self.port, "ips": ips, "findable": self.udp is not None})
+
+    def on_accept(self, mask):
+        while True:
+            try:
+                sock, _ = self.listener.accept()
+            except (BlockingIOError, InterruptedError):
+                return
+            except OSError:
+                return
+            try:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except OSError:
+                pass
+            self.add(sock)
+
+    def on_find(self, mask):
+        while True:
+            try:
+                data, addr = self.udp.recvfrom(2048)
+            except (BlockingIOError, InterruptedError):
+                return
+            except ConnectionResetError:  # Windows: an answer earlier didn't arrive (the asker has gone)
+                continue
+            except OSError:
+                return
+            try:
+                m = json.loads(data.decode("utf-8"))
+            except ValueError:
+                continue
+            if isinstance(m, dict) and m.get("tuff") == "find":
+                reply = {"tuff": "room", "v": NET_VERSION, "room": self.room, "game": self.title, "port": self.port,
+                         "players": len(self.players), "host": self.players.get(1)}
+                try:
+                    self.udp.sendto(json.dumps(reply, ensure_ascii=False).encode("utf-8"), addr)
+                except OSError:
+                    pass
+
+    def to_all(self, obj, but=None):
+        for c in list(self.conns):
+            if c.id is not None and c is not but:
+                self.write(c, obj)
+
+    def unique(self, name, pid):
+        name = " ".join(str(name).split())[:NET_NAME_MAX] or f"Player {pid}"
+        taken = {n.lower() for i, n in self.players.items() if i != pid}
+        if name.lower() not in taken:
+            return name
+        n = 2
+        while f"{name} {n}".lower() in taken:
+            n += 1
+        return f"{name} {n}"
+
+    def host_line(self, c, m):
+        t = m.get("t")
+        if c.id is None:
+            if t == "hello":
+                self.welcome(c, m)
+            return
+        if t == "msg":
+            out = {"t": "msg", "from": c.id, "m": m.get("m"), "v": m.get("v")}
+            self.to_all(out, but=c)
+            self.post(out)
+        elif t == "pos":
+            out = {"t": "pos", "id": c.id, "p": m.get("p")}
+            self.last_pos[c.id] = out["p"]
+            self.to_all(out, but=c)
+            self.post(out)
+        elif t == "share" and isinstance(m.get("k"), str):
+            self.shared[m["k"]] = m.get("v")
+            out = {"t": "shared", "k": m["k"], "v": m.get("v"), "by": c.id}
+            self.to_all(out)
+            self.post(out)
+        elif t == "name":
+            self.rename(c.id, m.get("name"))
+
+    def welcome(self, c, m):
+        if len(self.players) >= NET_MAX_PLAYERS:
+            c.out += self.line({"t": "full"})
+            self.flush(c)
+            self.drop(c)
+            return
+        c.id = self.next_id
+        self.next_id += 1
+        name = self.unique(m.get("name") or f"Player {c.id}", c.id)
+        self.players[c.id] = name
+        self.write(c, {"t": "welcome", "id": c.id, "name": name, "room": self.room, "game": self.title,
+                       "players": [[i, n] for i, n in self.players.items()], "shared": self.shared,
+                       "pos": {str(i): p for i, p in self.last_pos.items()}})
+        out = {"t": "joined", "id": c.id, "name": name}
+        self.to_all(out, but=c)
+        self.post(out)
+
+    def rename(self, pid, name):
+        if pid not in self.players or not isinstance(name, str):
+            return
+        name = self.unique(name, pid)
+        self.players[pid] = name
+        out = {"t": "renamed", "id": pid, "name": name}
+        self.to_all(out)
+        self.post(out)
+
+    def host_op(self, op):
+        t = op.get("t")
+        if t == "msg":
+            self.to_all({"t": "msg", "from": 1, "m": op.get("m"), "v": op.get("v")})
+        elif t == "pos":
+            self.last_pos[1] = op.get("p")
+            self.to_all({"t": "pos", "id": 1, "p": op.get("p")})
+        elif t == "share":
+            self.shared[op["k"]] = op.get("v")
+            out = {"t": "shared", "k": op["k"], "v": op.get("v"), "by": 1}
+            self.to_all(out)
+            self.post(out)
+        elif t == "name":
+            self.rename(1, op.get("name"))
+
+    # ---- a joining game
+    def start_join(self):
+        u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        u.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        u.bind(("127.0.0.1" if self.local else "", 0))
+        u.setblocking(False)
+        self.udp = u
+        self.sel.register(u, selectors.EVENT_READ, self.on_rooms)
+        if self.address is not None:
+            ip, port = self.address
+            self.targets = [ip]
+            if port is not None:  # the whole address: straight there
+                self.connect((ip, port))
+                return
+        elif self.local:
+            self.targets = ["127.0.0.1"]
+        else:
+            nets = {ip.rsplit(".", 1)[0] + ".255" for ip in local_ips()}  # each network's own broadcast (a /24 guess)
+            self.targets = ["255.255.255.255", *sorted(nets), "127.0.0.1"]
+        self.post({"t": "looking"})
+
+    def ask(self):
+        self.asks += 1
+        ask = json.dumps({"tuff": "find", "v": NET_VERSION}).encode("utf-8")
+        for ip in self.targets:
+            for off in NET_FIND_PORTS:
+                try:
+                    self.udp.sendto(ask, (ip, self.base + off))
+                except OSError:  # that network isn't there (or a broadcast isn't allowed): the others still go
+                    pass
+        if self.address is not None and self.conn is None and (self.address[1] is not None or self.asks % 3 == 0):
+            # No answer from that computer yet: its firewall may only let the game itself in. Try the game's port.
+            self.connect((self.address[0], self.address[1] or self.base + 1))
+
+    def on_rooms(self, mask):
+        while True:
+            try:
+                data, addr = self.udp.recvfrom(4096)
+            except (BlockingIOError, InterruptedError):
+                return
+            except ConnectionResetError:
+                continue
+            except OSError:
+                return
+            try:
+                m = json.loads(data.decode("utf-8"))
+            except ValueError:
+                continue
+            if not isinstance(m, dict) or m.get("tuff") != "room" or not isinstance(m.get("port"), int):
+                continue
+            key = (addr[0], m["port"])
+            if self.bad.get(key, 0) > time.monotonic() or self.conn is not None:
+                continue
+            if self.room is not None and not same_room(m.get("room", ""), self.room):
+                continue
+            self.found[key] = m
+            if self.first_found is None:
+                self.first_found = time.monotonic()
+
+    def pick(self):
+        """The room to go in, of those that answered: one for the same game first (another game's room is still a
+        room), then the one with fewest players."""
+        rooms = sorted(self.found.items(), key=lambda kv: (not same_room(kv[1].get("game", ""), self.title),
+                                                           kv[1].get("players", 0), kv[0][0] != "127.0.0.1"))
+        self.found, self.first_found = {}, None
+        if rooms:
+            self.connect(rooms[0][0])
+
+    def connect(self, key):
+        if self.conn is not None:
+            return
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setblocking(False)  # a computer that doesn't answer mustn't hold up the thread (tick gives up on it)
+        try:
+            err = s.connect_ex(key)
+        except OSError as exc:
+            err = exc.errno or -1
+        if err not in (0, *_WOULD_BLOCK):
+            s.close()
+            self.bad[key] = time.monotonic() + 2
+            return
+        self.conn = self.add(s, to=time.monotonic() + 3)
+        self.conn.key = key
+        self.post({"t": "connecting", "to": key[0]})
+
+    def connected(self, c):
+        try:
+            err = c.sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+        except OSError as exc:
+            err = exc.errno or -1
+        if err:
+            self.failed("refused", c)
+            return
+        try:
+            c.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
+        c.to = None
+        self.hello_by = time.monotonic() + 5
+        self.watch(c, selectors.EVENT_READ)
+        self.write(c, {"t": "hello", "v": NET_VERSION, "name": self.my_name, "game": self.title})
+
+    def failed(self, why, c=None):
+        """A room that didn't let us in (it's gone, it's full, it answered too slowly): look again."""
+        c = c or self.conn
+        if c is not None:
+            if c.key is not None:
+                self.bad[c.key] = time.monotonic() + 3
+            self.conn = None
+            if c in self.conns:
+                self.drop(c)
+        self.conn = None
+        self.next_ask = 0.0
+        self.post({"t": "looking", "why": why})
+
+    def join_line(self, c, m):
+        t = m.get("t")
+        if t == "welcome" and not self.joined:
+            self.joined = True
+            self.post(m)
+            for op in self.waiting:
+                self.write(c, op)
+            self.waiting.clear()
+        elif t == "full":
+            self.post({"t": "refused", "why": "full"})
+            self.stopping = True
+        elif t == "end":
+            c.ended = True
+        elif self.joined:
+            self.post(m)
+
+
+class Net:
+    """A game's multiplayer (game:host, game:join and the rest), on the Tuff thread: who's in the room, the shared
+    values, the other players' people in a 3D world, and the functions that run when something happens. NetLink
+    does the talking. A message on the HUD says what's going on (hosting, looking, who came and went)."""
+
+    def __init__(self, game):
+        self.game, self.rt = game, game.rt
+        self.link = None
+        self.role = None  # "host" or "join", while the game is in a room or looking for one
+        self.state = "off"  # "off", "looking" (or "connecting") and "in"
+        self.me = 1
+        self.own_name = None  # what the program called its player (game:my_name)
+        self.room = None
+        self.players = {}  # player number -> name, everyone in the room, this game too
+        self.values = {}  # the shared values as this game sees them: the room's, and its own changes on their way
+        self.pending = collections.Counter()  # this game's changes the host hasn't sent back yet, by name
+        self.early = set()  # names shared before the game was in its room: they fill in what the room doesn't have
+        self.people = {}  # player number -> their person (a 3D world)
+        self.msg_fns, self.join_fns, self.leave_fns = [], [], []
+        self.sent, self.sent_at = None, 0.0
+        self.pill, self.pill_text, self.pill_until = (None, None), None, None
+        self.said = collections.deque(maxlen=12)  # what the HUD said lately (for the autopilot's reports)
+        self.address = None  # the host's address, for the pill
+        atexit.register(self.stop)
+
+    # ---- helpers
+    @property
+    def off(self):
+        return SCENE is not None or os.environ.get("TUFF_SCENE") == "1"
+
+    def what(self, method):
+        return f"{self.game.KIND}:{method}"
+
+    def name(self):
+        return self.players.get(self.me) or self.own_name or "Player 1"
+
+    def text_input(self, v, method, example, what="name"):
+        t = self.rt.plain(v)
+        if not isinstance(t, str):
+            raise self.rt.error(f"{self.what(method)} needs the {what} as text, like {example}, not {self.rt.what(t)}.")
+        return t
+
+    def title(self):
+        saves = getattr(self.game, "save_file", None)
+        return saves.title if saves is not None else self.game.view.title
+
+    def busy(self, method):
+        if self.role == "host":
+            raise self.rt.error(f"This game is hosting \"{self.room}\" already. Use {self.what('leave')}() first to "
+                                f"{'host another room' if method == 'host' else 'join another game'}.")
+        if self.role == "join":
+            raise self.rt.error(f"This game is {'in a room' if self.state == 'in' else 'looking for a room'} already. "
+                                f"Use {self.what('leave')}() first to {'host one' if method == 'host' else 'join another'}.")
+
+    def value_in(self, v, what):
+        """A value from another game as Tuff has it (a table needs tap, like a save's)."""
+        try:
+            return tuff_value(self.rt, v, what)
+        except Exception:
+            self.game.engine_error(self.rt.error(f"\"{what}\" came with a table, and tables need tap: add  mention tap  at "
+                                                 "the top."), "multiplayer")
+            return None
+
+    def fire(self, fns, *args):
+        for fn in list(fns):
+            self.game.fire(fn, *args)
+            if self.game.closed:
+                return
+
+    # ---- game:host, game:join, game:leave
+    def host(self, room=MISSING):
+        g = self.game
+        title = self.title()
+        if room is MISSING or room is None:
+            room = title
+        room = " ".join(self.text_input(room, "host", f'{self.what("host")}("{title}")', "room's name").split())
+        if not room:
+            raise self.rt.error(f"A room needs a name, like {self.what('host')}(\"{title}\").")
+        self.busy("host")
+        if self.off:
+            return None
+        listener = self.listen()
+        self.role, self.state, self.room, self.me = "host", "in", room, 1
+        self.players = {1: self.own_name or "Player 1"}
+        self.pending.clear()
+        self.early.clear()
+        self.link = NetLink("host", title, self.players[1], room=room, listener=listener, shared=self.values)
+        self.link.start()
+        self.dress_player()
+        self.say(f"Hosting \"{room}\"", None)
+        return None
+
+    def listen(self):
+        """The host's TCP socket, made here so game:hosting() is true from the line after game:host. The first free
+        port after the one rooms are found on."""
+        bind = "127.0.0.1" if net_local() else ""
+        base = net_base_port()
+        last = None
+        for port in [*range(base + 1, base + 10), 0]:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: never share a port another game has
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                else:  # elsewhere this only lets a port be used again right after a game closed
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind((bind, port))
+                s.listen(16)
+                return s
+            except OSError as exc:
+                last = exc
+                s.close()
+        raise self.rt.error(f"This computer wouldn't let the game host a room ({getattr(last, 'strerror', None) or last}).")
+
+    def join(self, where=MISSING):
+        title = self.title()
+        room = address = None
+        if where is not MISSING and where is not None:
+            text = self.text_input(where, "join", f'{self.what("join")}("192.168.1.20") or {self.what("join")}("{title}")',
+                                   "room's name or the host's address")
+            address = net_address(text)
+            if address is None:
+                room = " ".join(text.split())
+                if not room:
+                    raise self.rt.error(f"{self.what('join')}() finds any room, and {self.what('join')}(\"{title}\") the room "
+                                        "called that. Give it a name, or nothing.")
+        self.busy("join")
+        if self.off:
+            return None
+        self.role, self.state, self.room, self.address = "join", "looking", room, address
+        self.players = {}
+        self.pending.clear()
+        self.early = set(self.values)
+        self.link = NetLink("join", title, self.own_name, room=room, address=address)
+        self.link.start()
+        self.say(f"Looking for \"{room}\"..." if room else f"Looking for {address[0]}..." if address else
+                 "Looking for a game to join...", None)
+        return None
+
+    def leave(self):
+        if self.link is None and self.role is None:
+            return None
+        self.stop()
+        was = self.role
+        self.gone_all()
+        self.role, self.state, self.link = None, "off", None
+        self.say("You left the game" if was == "join" else "The room is closed", 2.5)
+        return None
+
+    def stop(self):
+        link = self.link
+        if link is not None:
+            link.stop()
+            if link.is_alive() and link is not threading.current_thread():
+                link.join(0.5)  # a host says goodbye to everyone before the window closes
+
+    def gone_all(self):
+        """Everyone else has gone (this game left, or the room closed): their people go, and on_leave runs for each."""
+        others = [(i, n) for i, n in sorted(self.players.items()) if i != self.me]
+        for pid in list(self.people):
+            self.remove_person(pid)
+        self.players = {self.me: self.name()} if self.players else {}
+        for _, n in others:
+            self.fire(self.leave_fns, n)
+
+    # ---- what the program asks
+    def connected(self):
+        return self.state == "in"
+
+    def hosting(self):
+        return self.role == "host" and self.state == "in"
+
+    def player_names(self):
+        if not self.players:
+            return [self.name()]
+        return [n for _, n in sorted(self.players.items())]
+
+    def my_name(self, name=MISSING):
+        if name is MISSING or name is None:
+            return self.name()
+        n = " ".join(self.text_input(name, "my_name", f'{self.what("my_name")}("Sam")').split())
+        if not n:
+            raise self.rt.error(f"Your name can't be empty: {self.what('my_name')}(\"Sam\")")
+        if len(n) > NET_NAME_MAX:
+            raise self.rt.error(f"Names can be up to {NET_NAME_MAX} letters long, so they fit over a player's head. "
+                                f"\"{n[:NET_NAME_MAX]}\" would fit.")
+        self.own_name = n
+        if self.link is not None:
+            self.link.say({"t": "name", "name": n})
+        if self.players:
+            self.players[self.me] = n
+        return n
+
+    def send(self, message, value=None):
+        m = self.text_input(message, "send", f'{self.what("send")}("hello") or {self.what("send")}("score", 10)', "message")
+        v = self.game.saves().keepable(value, method="send")
+        if self.link is None or self.off:
+            return None  # not in a room: there's nobody to send it to
+        self.link.say({"t": "msg", "m": m, "v": v})
+        return None
+
+    def share(self, name, value):
+        k = self.text_input(name, "share", f'{self.what("share")}("coins", 5)')
+        if not k.strip():
+            raise self.rt.error(f"A shared value needs a name, like {self.what('share')}(\"coins\", 5).")
+        v = self.game.saves().keepable(value, method="share")
+        self.values[k] = v
+        if self.link is not None and self.state == "in":
+            self.pending[k] += 1
+            self.link.say({"t": "share", "k": k, "v": v})
+        elif self.role == "join":
+            self.early.add(k)  # the room's own value wins when the game gets in (this one fills in if it has none)
+        return None
+
+    def shared(self, name, default=None):
+        k = self.text_input(name, "shared", f'coins = {self.what("shared")}("coins", 0)')
+        return self.value_in(self.values[k], k) if k in self.values else default
+
+    def on(self, fns, fn, method):
+        fns.append(self.game.lib.check_fn(fn, f":{method}"))
+        return None
+
+    def others(self):
+        return [t.native for pid, t in sorted(self.people.items()) if t.alive and pid in self.players]
+
+    # ---- every frame
+    def frame(self, real):
+        link = self.link
+        if link is not None:
+            for _ in range(2000):
+                try:
+                    e = link.inbox.get_nowait()
+                except queue.Empty:
+                    break
+                self.event(e)
+                if self.game.closed or self.link is not link:
+                    break
+        if self.link is not None and self.state == "in":
+            self.send_spot()
+        if self.people:
+            self.move_people(real)
+        if self.pill_until is not None and time.monotonic() >= self.pill_until:
+            self.say(None)
+
+    def event(self, e):
+        t = e.get("t")
+        if t == "hosting":
+            ips = e.get("ips") or []
+            self.address = ips[0] if ips else None
+            where = f" on {self.address}" if self.address else " on this computer"
+            self.say(f"Hosting \"{self.room}\"{where}", 6)
+        elif t == "looking" and self.state == "connecting":
+            self.state = "looking"
+        elif t == "connecting":
+            self.state = "connecting"
+        elif t == "welcome":
+            self.welcome(e)
+        elif t == "joined":
+            pid, name = e.get("id"), str(e.get("name"))
+            self.players[pid] = name
+            self.say(f"{name} joined", 2.5)
+            self.fire(self.join_fns, name)
+        elif t == "left":
+            pid = e.get("id")
+            name = self.players.pop(pid, None) or str(e.get("name"))
+            self.remove_person(pid)
+            self.say(f"{name} left", 2.5)
+            self.fire(self.leave_fns, name)
+        elif t == "renamed":
+            pid, name = e.get("id"), str(e.get("name"))
+            if pid in self.players:
+                self.players[pid] = name
+            if pid == self.me:
+                self.own_name = name
+            person = self.people.get(pid)
+            if person is not None and person.alive:
+                person.data["name"] = name
+                person.label(name)
+        elif t == "msg":
+            sender = self.players.get(e.get("from"), "Someone")
+            self.fire(self.msg_fns, e.get("m"), self.value_in(e.get("v"), e.get("m")), sender)
+        elif t == "pos":
+            if e.get("id") != self.me:
+                self.place(e.get("id"), e.get("p"))
+        elif t == "shared":
+            k, by = e.get("k"), e.get("by")
+            if by == self.me and self.pending[k] > 0:
+                self.pending[k] -= 1
+            if self.pending[k] <= 0:
+                self.pending.pop(k, None)
+                self.values[k] = e.get("v")
+        elif t == "lost":
+            self.state = "off"
+            self.gone_all()
+            self.role, self.link = None, None
+            self.say("The host left the game" if e.get("why") == "end" else "Lost the connection to the game", 4)
+        elif t == "refused":
+            self.role, self.state, self.link = None, "off", None
+            self.say("That game is full", 4)
+        elif t == "error":
+            self.role, self.state, self.link = None, "off", None
+            self.say("Multiplayer stopped working", 4)
+            self.game.engine_error(self.rt.error(f"Multiplayer stopped working: {e.get('why')}"), "multiplayer")
+
+    def welcome(self, e):
+        self.state, self.me, self.room = "in", e.get("id"), e.get("room")
+        self.players = {int(i): str(n) for i, n in e.get("players", [])}
+        shared = e.get("shared") or {}
+        mine = {k: self.values[k] for k in self.early if k in self.values and k not in shared}
+        self.values = {**shared, **mine}
+        self.early.clear()
+        for k, v in mine.items():  # what this game shared before it got in, that the room didn't have yet
+            self.pending[k] += 1
+            self.link.say({"t": "share", "k": k, "v": v})
+        self.sent = None  # where the player is goes out at once
+        for pid, p in (e.get("pos") or {}).items():
+            if int(pid) != self.me:
+                self.place(int(pid), p)
+        self.dress_player()
+        self.say(f"Joined \"{self.room}\"", 3)
+        for pid, name in sorted(self.players.items()):
+            if pid != self.me:
+                self.fire(self.join_fns, name)
+
+    # ---- people (a 3D world)
+    def send_spot(self):
+        g = self.game
+        p = getattr(g, "the_player", None)
+        if p is None:
+            return
+        now = time.monotonic()
+        if now - self.sent_at < NET_SEND_EVERY:
+            return
+        spot = [round(p.x, 3), round(p.y, 3), round(p.z, 3), round(p.heading, 1), 0 if p.hidden else 1]
+        if spot == self.sent and now - self.sent_at < 1.0:
+            return
+        self.sent, self.sent_at = spot, now
+        self.link.say({"t": "pos", "p": spot})
+
+    def dress_player(self):
+        """The player's own figure (third person) wears the shirt the others see it in."""
+        body = getattr(getattr(self.game, "the_player", None), "body", None)
+        if body is not None and body.alive:
+            for node, main in body.parts:
+                if main:
+                    body.send(node, color=NET_SHIRTS[(self.me - 1) % len(NET_SHIRTS)])
+
+    def place(self, pid, p):
+        g = self.game
+        if not g.three_d or not isinstance(pid, int) or not isinstance(p, list) or len(p) < 4:
+            return
+        try:
+            spot = [float(v) for v in p[:4]] + [bool(p[4]) if len(p) > 4 else True]
+        except (TypeError, ValueError):
+            return
+        person = self.people.get(pid)
+        if person is None or not person.alive:
+            person = self.people[pid] = self.make_person(pid, spot)
+        person.net_to = spot
+
+    def make_person(self, pid, spot):
+        g = self.game
+        pick = random.Random(pid * 7919 + 17).choice  # the same person on every screen
+        parts = [(t, {**p, "shadow": True}, main) for t, p, main in person_parts(
+            NET_SHIRTS[(pid - 1) % len(NET_SHIRTS)], pick(SKINS), pick(HAIRS), pick(PANTS), pick(HAIR_STYLES),
+            pick(("long", "long", "rolled")), pick(SHOES))]
+        x, y, z, heading, shown = spot
+        t = Thing(g, "person", x, y, z, (0.7, 1.75, 0.5), parts)
+        g.things.pop(t, None)  # tgame's own, like the player's figure: game:clear leaves the other players
+        t.solid_ = False  # walk through each other (touches still sees them)
+        t.heading = heading % 360
+        t.push_rotation()
+        name = self.players.get(pid, f"Player {pid}")
+        t.data["name"] = name
+        t.label(name)
+        t.net_shown = True
+        if not shown:
+            t.hide()
+            t.net_shown = False
+        return t
+
+    def remove_person(self, pid):
+        t = self.people.pop(pid, None)
+        if t is not None and t.alive:
+            t.remove()
+
+    def move_people(self, real):
+        """Each other player's person goes smoothly to where they last were (a few frames behind: they're heard 20
+        times a second), and straight there when that's far (they jumped onto a pad, or moved to a new spot)."""
+        k = 1 - math.exp(-14 * real) if real else 1.0
+        for pid, t in list(self.people.items()):
+            if not t.alive:
+                del self.people[pid]  # the program removed them: they come back with their next move
+                continue
+            x, y, z, heading, shown = t.net_to
+            if shown != t.net_shown:
+                t.net_shown = shown
+                t.show() if shown else t.hide()
+            far = math.dist((t.x, t.y, t.z), (x, y, z)) > 8
+            if (x, y, z) != (t.x, t.y, t.z):
+                if far or abs(x - t.x) + abs(y - t.y) + abs(z - t.z) < 0.002:
+                    t.x, t.y, t.z = x, y, z
+                else:
+                    t.x += (x - t.x) * k
+                    t.y += (y - t.y) * k
+                    t.z += (z - t.z) * k
+                t.push()
+            turn = ((heading - t.heading + 180) % 360) - 180
+            if turn:
+                t.heading = heading % 360 if far or abs(turn) < 0.2 else (t.heading + turn * k) % 360
+                t.push_rotation()
+
+    # ---- the message on the HUD
+    def say(self, words, seconds=3.0):
+        """A line on a dark pill at the top of the window, for `seconds` (None: until the next one). None hides it."""
+        if self.off:
+            return
+        g = self.game
+        box, text = self.pill
+        self.pill_text = words
+        self.pill_until = None if words is None or seconds is None else time.monotonic() + seconds
+        if words is None:
+            for s in (box, text):
+                if s is not None and s.alive:
+                    s.hide()
+            return
+        self.said.append(words)
+        size = 16
+        w, h = len(words) * size * 0.56 + 30, size + 16
+        if box is None or not box.alive:
+            hud = g.hud()
+            box = hud.make("rect", g.W / 2, 30, {"w": w, "h": h, "radius": h / 2, "color": "#11141a", "alpha": 0.62,
+                                                 "z": 5e5 + 1}, own=False)
+            text = hud.make("text", g.W / 2, 30, {"text": words, "size": size, "bold": True, "color": "#ffffff",
+                                                  "ax": 0.5, "ay": 0.5, "z": 5e5 + 2}, own=False)
+        else:
+            box.w = w
+            box.send(w=w, visible=True)
+            text.words = words
+            text.send(text=words, visible=True)
+            box.hidden = text.hidden = False
+        self.pill = (box, text)
+
+    def state_dump(self):
+        """For the autopilot's reports."""
+        return {"state": self.state, "role": self.role, "me": self.me, "name": self.name(), "room": self.room,
+                "players": self.player_names(), "shared": dict(self.values), "pending": dict(self.pending),
+                "message": self.pill_text, "said": list(self.said),
+                "others": [[t.data.get("name"), round(t.x, 2), round(t.y, 2), round(t.z, 2), round(t.heading, 1),
+                            not t.hidden] for _, t in sorted(self.people.items()) if t.alive]}
+
+
+class GameNet:
+    """What every game window and world gets for multiplayer (Game takes these methods, just below; world:others
+    is a 3D world's)."""
+    NAMES = [("host", "net_host"), ("join", "net_join"), ("leave", "net_leave"), ("connected", "net_connected"),
+             ("hosting", "net_hosting"), ("players", "net_players"), ("my_name", "net_my_name"), ("send", "net_send"),
+             ("on_message", "on_message"), ("on_join", "on_join"), ("on_leave", "on_leave"), ("share", "net_share"),
+             ("shared", "net_shared")]
+
+    def network(self):
+        if getattr(self, "net", None) is None:
+            self.net = Net(self)
+        return self.net
+
+    def net_host(self, name=MISSING):
+        return self.network().host(name)
+
+    def net_join(self, where=MISSING):
+        return self.network().join(where)
+
+    def net_leave(self):
+        return self.network().leave()
+
+    def net_connected(self):
+        return self.network().connected()
+
+    def net_hosting(self):
+        return self.network().hosting()
+
+    def net_players(self):
+        return self.network().player_names()
+
+    def net_my_name(self, name=MISSING):
+        return self.network().my_name(name)
+
+    def net_send(self, message, value=None):
+        return self.network().send(message, value)
+
+    def on_message(self, fn):
+        net = self.network()
+        return net.on(net.msg_fns, fn, "on_message")
+
+    def on_join(self, fn):
+        net = self.network()
+        return net.on(net.join_fns, fn, "on_join")
+
+    def on_leave(self, fn):
+        net = self.network()
+        return net.on(net.leave_fns, fn, "on_leave")
+
+    def net_share(self, name, value):
+        return self.network().share(name, value)
+
+    def net_shared(self, name, default=None):
+        return self.network().shared(name, default)
+
+    def net_others(self):
+        return self.network().others()
+
+
+for _attr in ("network", "net_others", *(attr for _, attr in GameNet.NAMES)):
+    setattr(Game, _attr, getattr(GameNet, _attr))
+Game2D.NAMES = Game2D.NAMES + GameNet.NAMES
+World3D.NAMES = World3D.NAMES + GameNet.NAMES + [("others", "net_others")]
+HINTS["game"].update({k: v for k, v in NET_HINTS.items() if v != "others" and k not in HINTS["game"]})
+HINTS["world"].update({k: v for k, v in NET_HINTS.items() if k not in HINTS["world"]})
+NEEDS_3D["others"] = ("The other players are people in a 3D world. Make the game with tgame.world(...) and give it a "
+                      "player, or in 2D use game:players() for their names and game:on_message to hear where they are.")
+for _kind in ("game", "world"):
+    GIVES[_kind].update({"connected": "$bool", "hosting": "$bool", "players": "$list", "my_name": "$text"})
+    HANDLERS[_kind].update({"on_message": (0, 3, "3 inputs (the message, the value sent with it and who sent it)"),
+                            "on_join": (0, 1, "1 input (the name of the player who joined)"),
+                            "on_leave": (0, 1, "1 input (the name of the player who left)")})
+GIVES["world"]["others"] = "$list"

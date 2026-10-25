@@ -488,4 +488,50 @@ func step(dt):
 
 game:every_frame step
 ` },
+    { id: 'tag', name: 'Tag (multiplayer, 3D)', desc: 'A tgame 3D game for several players on the same network: a main menu with Host a game (world:host) and Join a game (world:join), the other players as people in your world (world:others), who is "it" as a shared value everyone sees (world:share, world:shared), a message to the player you tag (world:send, world:on_message), and on_leave when a player goes.', code: `mention tgame
+
+world = tgame.world("Tag")
+world:sky "day"
+world:ground "grass"
+me = world:player("third person")
+me:move_to(random(-8, 8), 0, random(-8, 8))   # everyone starts somewhere else
+label = world:hud():text("", 480, 570, 22, "white")
+last_tag = 0
+
+menu = world:main_menu("Tag")
+menu:button("Host a game", host_game)
+menu:button("Join a game", join_game, "secondary")
+
+func host_game():
+    world:host("Tag")                         # a room the others on this network can find
+    world:share("it", world:my_name())        # the host starts as "it" (everyone sees shared values)
+    menu:hide()
+
+func join_game():
+    world:join()                              # finds a room on this network and goes in
+    menu:hide()
+
+func got(message, value, sender):             # a message from another player
+    if message == "tag" and value == world:my_name():
+        last_tag = world:time()               # just tagged: no tagging back for 2 seconds
+        world:shake(0.6)
+
+func left(name):                              # a player left: if they were "it", the host is now
+    if world:hosting() and world:shared("it", "") == name:
+        world:share("it", world:my_name())
+
+func step(dt):
+    it = world:shared("it", "")
+    label:set "It: " + it
+    if it == world:my_name() and world:time() - last_tag > 2:
+        for p in world:others():              # the other players' people
+            if me:distance(p) < 1.5:
+                last_tag = world:time()
+                world:send("tag", p:get("name"))
+                world:share("it", p:get("name"))
+
+world:on_message(got)
+world:on_leave(left)
+world:every_frame step
+` },
 ];

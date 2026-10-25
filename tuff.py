@@ -1828,6 +1828,27 @@ SAVE_INPUTS = {
 }
 SAVE_KEEPS = "numbers, text, true/false, lists and tables"
 SAVE_KINDS = ("$number", "$text", "$bool", "$nil", "$list", "$line", "data object")  # what :save can keep
+# tgame's multiplayer as the checker knows it (Checker.check_net): game:host, :join, :send, :share and the rest, on a
+# game or a world. For each, what it takes, for messages, an example ({o} is the game's name), the input counts that
+# fit, and what its first input is when that has to be text. :send and :share carry what :save keeps. on_message,
+# on_join and on_leave are tgame's events (its HANDLERS), checked with the rest of its events.
+NET_INPUTS = {
+    "host": ("the room's name (or nothing: the game's title)", '{o}:host("Tag")', (0, 1), "the room's name"),
+    "join": ("nothing (the first room it finds), a room's name or the host's address", '{o}:join() or {o}:join("Tag")',
+             (0, 1), "the room's name or the host's address"),
+    "leave": ("no inputs", "{o}:leave()", (0,), None),
+    "connected": ("no inputs", "if {o}:connected():", (0,), None),
+    "hosting": ("no inputs", "if {o}:hosting():", (0,), None),
+    "players": ("no inputs", "names = {o}:players()", (0,), None),
+    "others": ("no inputs", "for p in {o}:others():", (0,), None),
+    "my_name": ("your player's name (or nothing, to get it)", '{o}:my_name("Sam")', (0, 1), "the name"),
+    "send": ("a message, then a value to go with it (if you like)", '{o}:send("score", 10)', (1, 2), "the message"),
+    "share": ("a name, then its value", '{o}:share("coins", 5)', (2,), "the name"),
+    "shared": ("the name, then what to give back until someone shares it (if you like)", 'coins = {o}:shared("coins", 0)',
+               (1, 2), "the name"),
+}
+NET_NEEDS_3D = ("The other players are people in a 3D world. Make the game with tgame.world(...) and give it a player, "
+                "or in 2D use game:players() for their names and game:on_message to hear where they are.")
 # ---------------------------------------------------------------- the game kit (1.2.0)
 # tgame's game kit as the checker knows it, filled in where tgame's own tables leave it out (with_gamekit): effects
 # (slow_mo, shake, pop_text, weather, a day cycle), the HUD (health bars, a countdown, an arrow to a thing, a
@@ -2887,6 +2908,8 @@ class Checker:
             return
         if obj in ("game", "world") and self.check_saves(e, obj):  # game:save and the rest (saved game data)
             return
+        if obj in ("game", "world") and self.check_net(e, obj):  # game:host and the rest (multiplayer)
+            return
         if self.is_tgame(obj):
             self.check_tgame(e, obj, bare_fix)
             return
@@ -2966,6 +2989,40 @@ class Checker:
                 what = "a library" if k.startswith("$module:") else self.what(k)
                 self.problem(e.args[1], f"{owner}:save can keep {SAVE_KEEPS}, not {what}.")
         return True
+    def check_net(self, e, obj):
+        """game:host, :join, :send, :share and the rest (tgame's multiplayer, NET_INPUTS): how many inputs they got, a
+        name, message or address that isn't text (like game:send(score) with no message), and what :send and :share
+        can't carry: a function, a sprite, a widget... Also world:others() in a 2D game. True when it was one of
+        these: nothing else needs checking."""
+        tg = tgame_tables()
+        methods = tg["kinds"].get(obj, {}) if tg else {}
+        name, n = e.name, len(e.args)
+        owner = e.obj.name if e.obj.kind == "var" else obj
+        if name == "others" and obj == "game" and name not in methods and "share" in methods:
+            self.problem(e, tg.get("needs_3d", {}).get("others") or NET_NEEDS_3D)
+            return True
+        rule = NET_INPUTS.get(name)
+        if rule is None or name not in methods:
+            return False
+        takes, example, counts, text = rule
+        use = example.format(o=owner)
+        if n not in counts:
+            self.problem(e, f"{owner}:{name} got the wrong number of inputs ({n}). It takes {takes}, like: {use}")
+            return True
+        if n and text:
+            a, k = e.args[0], self.kind(e.args[0])
+            if a.kind == "const" and isinstance(a.value, str) and not a.value.strip():
+                self.problem(a, f"{owner}:{name} needs {text}, like {use}")
+            elif k is not None and k not in ("$text", "$line"):
+                what = "a library" if k.startswith("$module:") else self.what(k)
+                self.problem(a, f"{owner}:{name} needs {text} as text, like {use}, not {what}.")
+        if name in ("send", "share") and n == 2:
+            k = self.kind(e.args[1])
+            if k is not None and k not in SAVE_KINDS:
+                what = "a library" if k.startswith("$module:") else self.what(k)
+                self.problem(e.args[1], f"{owner}:{name} can {name} {SAVE_KEEPS}, not {what}.")
+        return True
+
     def is_tgame(self, kind):
         """Whether tgame made it: one of its kinds, or the game kit's under the names tgame gives them."""
         return kind in self.TGAME_KINDS or kind in ((tgame_tables() or {}).get("kit_kinds") or ())
