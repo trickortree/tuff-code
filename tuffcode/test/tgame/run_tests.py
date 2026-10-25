@@ -13,6 +13,7 @@ import io
 import json
 import math
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -1184,6 +1185,126 @@ def t_physics_car(c):
             (p0, p1, car))
     c.check(abs((p1[3] - p0[3] + 180) % 360 - 180) < 1,
             f"moving the mouse while driving doesn't turn the player: it gets out facing the way it did ({p0[3]} -> {p1[3]})", (p0, p1))
+
+
+def car_reports(r):
+    """The car_enter game's reports: [{"car": [x, y, z], "player": [x, y, z], "in": bool, "driven": bool, "ins": n,
+    "outs": n}, ...]."""
+    out = []
+    for line in r.lines:
+        m = re.match(r"car \[(.*?)\] player \[(.*?)\] in (\w+) driven (\w+) ins (\d+) outs (\d+)", line)
+        if m:
+            out.append({"car": [float(v) for v in m[1].split(",")], "player": [float(v) for v in m[2].split(",")],
+                        "in": m[3] == "true", "driven": m[4] == "true", "ins": int(m[5]), "outs": int(m[6])})
+    return out
+
+
+def t_car_enter(c):
+    """Getting into a car with F (1.3.0): nothing happens far from it; next to it the hint says "F: Get in" and F gets
+    in (the player's figure goes, car:on_enter runs, player:in_car() and car:driven() say so); W drives it with the
+    player in it (player:spot() goes with the car); and F gets out beside its door (car:on_exit runs, the figure's
+    back, and the car stays parked)."""
+    r = play("car_enter", game("car_enter.tuf"), [
+        {"at": 0.6, "dump": "ce_far.json"}, {"at": 0.65, "key": "f"}, {"at": 0.9, "call": "report"},
+        {"at": 1.0, "tuff": "player:move_to(-2.3, 0, 0)"}, {"at": 1.3, "dump": "ce_near.json"},
+        {"at": 1.35, "key": "f"}, {"at": 1.6, "call": "report"}, {"at": 1.65, "dump": "ce_in.json"},
+        {"at": 1.7, "hold": "w", "for": 2.0}, {"at": 3.75, "hold": "space", "for": 0.6},
+        {"at": 3.9, "call": "report"}, {"at": 3.95, "shot": "car_enter_driving.png"},
+        {"at": 4.5, "key": "f"}, {"at": 4.8, "call": "report"}, {"at": 4.85, "dump": "ce_out.json"},
+        {"at": 4.9, "shot": "car_enter_out.png"}, {"at": 6.0, "call": "report"}, {"at": 6.1, "close": True}])
+    clean_exit(c, r)
+    reps = car_reports(r)
+    far, near, inside, out = (r.dumps.get(n, {}) for n in ("ce_far.json", "ce_near.json", "ce_in.json", "ce_out.json"))
+    hint = lambda d: (d.get("interact") or {}).get("hint")
+    c.check(len(reps) == 5 and not reps[0]["in"] and reps[0]["ins"] == 0 and hint(far) is None,
+            "far from the car there's no hint, and F does nothing", (reps[:1], hint(far)))
+    c.check(hint(near) == "F: Get in", 'next to its door the hint says "F: Get in"', hint(near))
+    c.check(len(reps) > 1 and reps[1]["in"] and reps[1]["driven"] and reps[1]["ins"] == 1 and inside.get("player_shown") is False
+            and hint(inside) == "F: Get out",
+            "F gets in: player:in_car() and car:driven() are true, car:on_enter ran, the figure is hidden, and the hint says F: Get out",
+            (reps[1:2], inside.get("player_shown"), hint(inside)))
+    c.check(len(reps) > 2 and reps[2]["car"][2] < -6 and math.dist(reps[2]["car"][::2], reps[2]["player"][::2]) < 0.2,
+            "W drives it (the car's way forward), and player:spot() goes with the car", reps[2:3])
+    c.check(len(reps) > 3 and not reps[3]["in"] and not reps[3]["driven"] and reps[3]["outs"] == 1 and out.get("player_shown") is True,
+            "F again gets out: car:on_exit ran, player:in_car() is false, and the figure is back", (reps[3:4], out.get("player_shown")))
+    gap = math.dist(reps[3]["car"][::2], reps[3]["player"][::2]) if len(reps) > 3 else None
+    c.check(gap is not None and 1.5 < gap < 3.2, f"the player gets out beside the car ({gap and round(gap, 2)} m from its middle)", reps[3:4])
+    c.check(len(reps) > 4 and math.dist(reps[3]["car"], reps[4]["car"]) < 0.3, "the car stays parked where it was left", reps[3:])
+    shot = r.shots.get("car_enter_driving.png")
+    c.check(shot and color_share(shot, (53, 116, 240), 60, (0.3, 0.35, 0.7, 0.8)) > 0.02, "the camera follows the blue car while it drives", shot)
+
+
+def t_weight(c):
+    """Things weigh what they are (1.3.0): thing:weight() gives it (and sets it), the same push sends a light box off and
+    hardly moves a heavy one, and the player shoves a crate out of its way but can't move a big stone box."""
+    r = play("weight", game("weight.tuf"), [
+        {"at": 0.8, "call": "report"}, {"at": 0.85, "call": "kick"}, {"at": 2.3, "call": "report"},
+        {"at": 2.4, "hold": "w", "for": 1.4}, {"at": 4.0, "call": "report"},
+        {"at": 4.1, "call": "to_stone"}, {"at": 4.4, "hold": "w", "for": 1.4}, {"at": 6.0, "call": "report"},
+        {"at": 6.2, "close": True}])
+    clean_exit(c, r)
+    weights = said(r, "weights")
+    c.check(weights == ["weights", "6.25", "200", "25", "400", "1200", "70", "70"],
+            "a 0.5 m box weighs 6.25 kg (50 kg a cubic metre), one set to 200 is 200, a crate 25, a 2 m box 400, a car 1200, a ragdoll and the player 70",
+            weights)
+    spots = []
+    for line in r.lines:
+        m = re.match(r"light \[(.*?)\] heavy \[(.*?)\] crate \[(.*?)\] stone \[(.*?)\] player \[(.*?)\]", line)
+        if m:
+            spots.append([[float(v) for v in m[i].split(",")] for i in range(1, 6)])
+    c.check(len(spots) == 4, "four reports", r.lines[-6:])
+    if len(spots) == 4:
+        moved = lambda i, a, b: math.dist(spots[a][i], spots[b][i])
+        c.check(moved(0, 0, 1) > 3 and moved(1, 0, 1) < 0.4,
+                f"the same push sends the light box {moved(0, 0, 1):.2f} m and the 200 kg one {moved(1, 0, 1):.2f} m", spots[:2])
+        c.check(moved(2, 1, 2) > 1.5, f"walking into the crate shoves it {moved(2, 1, 2):.2f} m", (spots[1][2], spots[2][2]))
+        c.check(moved(3, 2, 3) < 0.6 and spots[3][4][2] > -1.8,
+                f"the 400 kg stone box hardly moves ({moved(3, 2, 3):.2f} m): it stops the player", (spots[2][3], spots[3][3], spots[3][4]))
+
+
+def t_sign_text(c):
+    """A sign's words are written on its board (1.3.0), on both sides, as big as fit (a long one wraps onto more
+    lines): a 'writing' in the page, no label over it (other things' labels still float), and new words redraw it."""
+    page = ("const live = [...tv.objs.values()].filter((n) => n.obj && !n.dead);"
+            "tv.emit('tg-autopilot', {message: 'writing ' + JSON.stringify(live.filter((n) => n.type === 'writing').map((n) => n.p.text))"
+            " + ' labels ' + live.filter((n) => n.type === 'label').length})")
+    r = play("sign_text", game("sign_text.tuf"), [
+        {"at": 0.7, "js": page}, {"at": 0.8, "shot": "sign_text.png"}, {"at": 0.9, "call": "change"}, {"at": 1.1, "js": page},
+        {"at": 1.2, "call": "behind"}, {"at": 1.45, "shot": "sign_text_back.png"}, {"at": 1.7, "close": True}])
+    clean_exit(c, r)
+    pages = [line[len("[autopilot] "):] for line in r.lines if line.startswith("[autopilot] writing ")]
+    c.check(len(pages) == 2 and pages[0] == 'writing ["SHOP","Welcome to Tuff Town, population 3","Open"] labels 1',
+            "each sign's words are written on its board, and only the crate's label floats", pages[:1])
+    c.check(len(pages) == 2 and pages[1].startswith('writing ["SHOP","Welcome to Tuff Town, population 3","Closed"]'),
+            "sign:label with new words writes them on the board", pages[1:])
+    for name, side in (("sign_text.png", "front"), ("sign_text_back.png", "back")):
+        shot = r.shots.get(name)
+        dark = shot and color_share(shot, (58, 36, 20), 34, (0.2, 0.25, 0.8, 0.55))
+        c.check(shot and dark > 0.01, f"the letters show on the boards from the {side} ({dark and round(dark, 3)} of it)", shot)
+
+
+def t_people_style(c):
+    """People dressed in code (1.3.0): a person, a ragdoll and the player in third person get a shirt, trousers, skin,
+    hair (a style and a colour), shoes and sleeves, and change them while the game runs; only people have clothes."""
+    r = play("people_style", game("people_style.tuf"), [
+        {"at": 0.7, "shot": "people_style.png"}, {"at": 0.8, "dump": "ps_before.json"}, {"at": 0.85, "call": "restyle"},
+        {"at": 1.2, "shot": "people_style_after.png"}, {"at": 1.25, "dump": "ps_after.json"},
+        {"at": 1.3, "tuff": 'world:box(0, 0, 9, 1, "red"):shirt("blue")'}, {"at": 1.7, "close": True}])
+    first, after = r.shots.get("people_style.png"), r.shots.get("people_style_after.png")
+    # Their shirts, behind the player, in the light they're in: red, blue, then purple and yellow.
+    left, right = (0.43, 0.42, 0.48, 0.5), (0.52, 0.42, 0.565, 0.5)
+    red, blue, purple, yellow = (150, 50, 50), (35, 75, 150), (90, 60, 155), (140, 100, 12)
+    c.check(first and color_share(first, red, 45, left, 1) > 0.012 and color_share(first, blue, 45, right, 1) > 0.012,
+            "the person wears its red shirt and the ragdoll its blue one", first)
+    c.check(after and color_share(after, purple, 45, left, 1) > 0.05 and color_share(after, red, 45, left, 1) < 0.03
+            and color_share(after, yellow, 45, right, 1) > 0.012,
+            "restyled while it runs: the person's shirt is purple now, and the ragdoll's yellow", after)
+    before_n, after_n = [len((r.dumps.get(n, {}).get("page") or {}).get("objs") or []) or r.dumps.get(n, {}).get("view_nodes")
+                         for n in ("ps_before.json", "ps_after.json")]
+    c.check(before_n and after_n and abs(before_n - after_n) < 12, f"the old clothes go when new ones come ({before_n} -> {after_n} objects)",
+            (before_n, after_n))
+    c.check(any("Only people have clothes and hair" in line for line in r.lines + r.err.splitlines()),
+            "a box's shirt says only people have clothes", r.lines[-3:])
 
 
 def t_physics_2d(c):
@@ -4021,6 +4142,7 @@ TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": 
 TESTS.update({"hud_health_3d": t_hud_health_3d, "hud_health_2d": t_hud_health_2d, "hud_arrow": t_hud_arrow,
               "hud_minimap": t_hud_minimap, "hud_checker": t_hud_checker})
 TESTS.update({"net": t_net, "net_2d": t_net_2d, "net_rooms": t_net_rooms})
+TESTS.update({"car_enter": t_car_enter, "weight": t_weight, "sign_text": t_sign_text, "people_style": t_people_style})
 
 
 def main():

@@ -193,6 +193,7 @@ function remove(id) {
       labels.delete(n);
       track(n, false);
       if (n.type === 'label' && n.obj.material.map) n.obj.material.map.dispose();
+      if (n.type === 'writing') { if (n.mat.map) n.mat.map.dispose(); n.mat.dispose(); n.geo.dispose(); }
       if (n.obj.material && !n.shared) n.obj.material.dispose();
       if (n.land || n.water) n.obj.geometry.dispose();  // their own, not shared like a box's
       if (n.skirt) { n.skirt.geometry.dispose(); n.skirt.material.dispose(); }
@@ -864,6 +865,7 @@ function makeObj(type) {
       break;
     case 'point': obj = new THREE.PointLight(0xffffff, 10, 0, 2); break;
     case 'label': return makeLabel(p);
+    case 'writing': return makeWriting(p);
     case 'model': obj = new THREE.Group(); break;
     case 'terrain': return makeLand();
     case 'water': return makeWater();
@@ -893,6 +895,78 @@ function makeLabel(p) {
 }
 
 const labelAt = { v: null };
+
+// Words written on something flat, like a sign's board: `text` (new lines with \n; long lines wrap), `w` and `h`
+// (the area it's written in, in world units), `d` (how thick the board is: the words are on both of its faces, each
+// reading the right way round from its own side), `color` (the letters'). The letters are as big as fit. Its
+// position is the board's middle.
+const WRITING_KEYS = new Set(['text', 'w', 'h', 'd', 'color']);
+
+function makeWriting(p) {
+  Object.assign(p, { text: '', w: 1, h: 0.4, d: 0.05, color: '#3a2414' });
+  const obj = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ transparent: true, alphaTest: 0.25, roughness: 0.9, metalness: 0,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  const geo = new THREE.PlaneGeometry(1, 1);
+  const front = new THREE.Mesh(geo, mat);  // reads from in front (-z, the way things face)
+  const back = new THREE.Mesh(geo, mat);   // and from behind
+  front.rotation.y = Math.PI;
+  for (const m of [front, back]) { m.receiveShadow = true; obj.add(m); }
+  const n = { obj, p, pick: true, mat, geo, faces: [front, back] };
+  drawWriting(n);
+  return n;
+}
+
+function drawWriting(n) {
+  const p = n.p;
+  const [front, back] = n.faces;
+  front.scale.set(p.w, p.h, 1);
+  back.scale.set(p.w, p.h, 1);
+  front.position.z = -p.d / 2 - 0.002;
+  back.position.z = p.d / 2 + 0.002;
+  const H = 256;
+  const W = Math.max(64, Math.round(H * p.w / Math.max(0.01, p.h)));
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const g = c.getContext('2d');
+  const font = (px) => `800 ${px}px "Segoe UI", system-ui, sans-serif`;
+  // The biggest letters that fit: the words (and \n) wrapped into lines no wider than the board, as many as fit.
+  const wrap = (px) => {
+    g.font = font(px);
+    const out = [];
+    for (const para of String(p.text ?? '').split('\n')) {
+      let line = '';
+      for (const word of para.split(/\s+/).filter(Boolean)) {
+        const next = line ? `${line} ${word}` : word;
+        if (line && g.measureText(next).width > W * 0.9) { out.push(line); line = word; } else line = next;
+      }
+      out.push(line);
+    }
+    return out;
+  };
+  let px = Math.round(H * 0.62);
+  let lines = wrap(px);
+  while (px > 12 && (lines.length * px * 1.12 > H * 0.88 || lines.some((l) => g.measureText(l).width > W * 0.92))) {
+    px -= 4;
+    lines = wrap(px);
+  }
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  const top = H / 2 - ((lines.length - 1) * px * 1.12) / 2;
+  lines.forEach((l, i) => {
+    const y = top + i * px * 1.12 + px * 0.04;
+    g.fillStyle = 'rgba(255, 240, 210, 0.28)';  // carved: a light edge under each letter
+    g.fillText(l, W / 2 + px * 0.03, y + px * 0.04);
+    g.fillStyle = p.color;
+    g.fillText(l, W / 2, y);
+  });
+  if (n.mat.map) n.mat.map.dispose();
+  n.mat.map = new THREE.CanvasTexture(c);
+  n.mat.map.colorSpace = THREE.SRGBColorSpace;
+  n.mat.map.anisotropy = 4;
+  n.mat.needsUpdate = true;
+}
 
 function sizeLabels(n) {
   if (!labels.size) return;
@@ -1517,6 +1591,7 @@ function setObj(n, props) {
   let geo = false;
   let mat = false;
   let relabel = false;
+  let rewrite = false;
   let land = false;
   let water = false;
   for (const k in props) {
@@ -1576,6 +1651,7 @@ function setObj(n, props) {
         if (k === 'color' && o.isLight) { o.color.set(v); break; }
         p[k] = v;
         if (n.type === 'label') relabel = relabel || LABEL_KEYS.has(k);
+        else if (n.type === 'writing') rewrite = rewrite || WRITING_KEYS.has(k);
         else if (GEO_KEYS.has(k)) geo = true;
         else if (MAT_KEYS.has(k)) mat = true;
     }
@@ -1583,6 +1659,7 @@ function setObj(n, props) {
   if (geo && o.isMesh) o.geometry = geometry(n.type, p);
   if (mat && o.isMesh) material(n);
   if (relabel) drawLabel(n);
+  if (rewrite) drawWriting(n);
   if (land) buildLand(n);
   if (water) buildWater(n);
   if (n.phys || 'phys' in props) physicsChanged(n, props);

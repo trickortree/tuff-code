@@ -1,0 +1,27 @@
+mention tgame
+
+# Signs with their words written on the board (both sides), not floating over them: a short one, a long one that
+# wraps onto more lines, and one whose words change.
+world = tgame.world("Sign Text", 900, 560)
+world:sky "day"
+world:ground "grass"
+shop = world:spawn("sign", -1.6, 0, -3)
+shop:label("SHOP")
+long = world:spawn("sign", 0, 0, -3)
+long:label("Welcome to Tuff Town, population 3")
+later = world:spawn("sign", 1.6, 0, -3)
+later:label("Open")
+crate = world:spawn("crate", 3.4, 0, -3)
+crate:label("Crate")
+world:camera_at(0, 1.3, 0.2)
+world:look_at(0, 1.2, -3)
+
+func change():
+    later:label("Closed")
+
+func behind():
+    world:camera_at(0, 1.3, -6.2)
+    world:look_at(0, 1.2, -3)
+
+while world:open():
+    world:frame()

@@ -1,0 +1,22 @@
+mention tgame
+
+# The player gets into a car with F (only when it's close to it), drives off, and gets out with F beside its door.
+world = tgame.world("Car Enter", 900, 560)
+world:ground "grass"
+player = world:player("third person")
+player:move_to(-7, 0, 0)
+car = world:car(0, 0, 0, "blue")
+ins = 0
+outs = 0
+
+func entered(c):
+    ins += 1
+
+func left(c):
+    outs += 1
+
+car:on_enter entered
+car:on_exit left
+
+func report():
+    say "car " + car:spot() + " player " + player:spot() + " in " + player:in_car() + " driven " + car:driven() + " ins " + ins + " outs " + outs

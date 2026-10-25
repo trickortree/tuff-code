@@ -1,0 +1,29 @@
+mention tgame
+
+# Things weigh what they are: a small box is light, a crate 25 kg, a big box heavy. The same push sends the light box
+# flying and barely moves the heavy one, and the player shoves a crate out of its way but can't budge a big stone.
+world = tgame.world("Weight", 900, 560)
+world:ground "grass"
+light = world:box(-3, 0, -6, 0.5, "orange"):physics()
+heavy = world:box(3, 0, -6, 0.5, "gray"):physics()
+heavy:weight(200)
+crate = world:spawn("crate", 0, 0, -3):physics()
+stone = world:box(6, 0, -3, 2, "gray"):physics()
+car = world:car(-12, 0, 20, "red")
+dummy = world:ragdoll(-6, 0, 20, "teal")
+player = world:player("first person")
+player:move_to(0, 0, 0)
+say "weights " + light:weight() + " " + heavy:weight() + " " + crate:weight() + " " + stone:weight() + " " + car:weight() + " " + dummy:weight() + " " + player:weight()
+
+func kick():
+    light:push(0, 0, -4)
+    heavy:push(0, 0, -4)
+
+func to_stone():
+    player:move_to(6, 0, 0)
+
+func report():
+    say "light " + light:spot() + " heavy " + heavy:spot() + " crate " + crate:spot() + " stone " + stone:spot() + " player " + player:spot()
+
+while world:open():
+    world:frame()

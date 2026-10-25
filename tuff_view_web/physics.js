@@ -17,13 +17,20 @@
 //
 // Heights Python reads for a body that tumbles (3D): x and z are its middle, y its lowest point. A car and a ragdoll
 // report their own way (see report3d).
+//
+// Weight (3D): Python gives every body its mass in kg (tuff_tgame.py's KIT_WEIGHT: a crate 25, a 1 m box 50, the
+// player 70, a car 1200). A push (and a spin) gives a thing of PUSH_KG (a 1 m box) that speed, so heavier things move
+// less (and boxes and balls, 50 kg a cubic metre, move as they did before things had weights). Hits are reported in
+// the same units: how hard, divided by PUSH_KG. In 2D a push is a plain impulse.
 
 const STEP = 1 / 60;
 const MAX_STEPS = 4;        // after a slow frame, catch up at most this many steps; the rest of the time is dropped
 const DEG = Math.PI / 180;
 const LOST = -300;          // a body that falls this far (off the island, through the world) stops being simulated,
                             // until the program puts it somewhere (revive)
-const PLAYER = { r: 0.32, half: 0.555, feet: 0.875 };  // tgame's player: a capsule 1.75 tall, its feet at y
+const PLAYER = { r: 0.32, half: 0.555, feet: 0.875, kg: 70 };  // tgame's player: a capsule 1.75 tall, its feet at y
+let PUSH_KG = 1;            // what a push of 1 is: the impulse that sends this many kg off at 1 m/s (3D: 50, 2D: 1)
+let playerKg = PLAYER.kg;   // how heavy the player is (player:weight)
 
 let R = null;               // Rapier (rapier3d.mjs or rapier2d.mjs)
 let D3 = true;              // a 3D world (tgame.world) or a 2D game (tgame.window)
@@ -48,6 +55,7 @@ let chase = null;           // 3D: the car the camera follows, and where the cam
 export async function load(helpers, opts) {
   host = helpers;
   D3 = (opts && opts.dim) !== 2;
+  PUSH_KG = D3 ? 50 : 1;
   R = await import(D3 ? './rapier/rapier3d.mjs' : './rapier/rapier2d.mjs');
   await R.init();
   const g = opts && typeof opts.gravity === 'number' ? opts.gravity : (D3 ? -9.8 : 900);
@@ -155,7 +163,7 @@ function shapeDesc(shape, size) {
 // Bounce takes the bouncier of the two things that meet, so a bouncy ball bounces on any floor.
 function collider(spec, body, rec, desc = shapeDesc(spec.shape, spec.size), mass = spec.mass) {
   if (mass > 0) desc.setMass(+mass);
-  else if (mass !== false) desc.setDensity(D3 ? 1 : 1 / 2500);  // 3D: a 1 m crate weighs 1 kg; 2D: 50 x 50 pixels weigh 1 kg
+  else if (mass !== false) desc.setDensity(D3 ? 50 : 1 / 2500);  // 3D: a 1 m box weighs 50 kg; 2D: 50 x 50 pixels weigh 1 kg
   const c = world.createCollider(desc, body);
   tune(c, spec);
   owners.set(c.handle, { id: rec.id, rec });
@@ -216,7 +224,9 @@ function landChanged(n) {
 // ---- a car: Rapier's ray-cast vehicle. A box for the body on four wheels that are rays with springs. Python's spec:
 // size (the body's half sizes), cy (its middle above the car's position), wheel_r, rest (the springs' length), mass,
 // and wheels: [id, x, y, z] (each wheel's object and where its spring is fixed, in the car's own space).
-const CAR = { stiffness: 30, compression: 4.4, relaxation: 2.3, slip: 2.2, travel: 0.3, force: 1100, top: 22, brake: 8 };
+// The springs, grip and damping work the same for any weight; the engine's force and the brakes are for a car of
+// CAR.kg (a heavier car speeds up and stops slower).
+const CAR = { stiffness: 30, compression: 4.4, relaxation: 2.3, slip: 2.2, travel: 0.3, force: 8800, top: 22, brake: 64, roll: 3.2, kg: 1200 };
 
 function makeCar(rec) {
   const { n, spec } = rec;
@@ -253,7 +263,7 @@ function makeCar(rec) {
 // A car's weight, low down under its floor, so it leans in a corner instead of rolling over.
 function carMass(c, spec) {
   const [hx, hy, hz] = spec.size;
-  const m = spec.mass > 0 ? +spec.mass : 150;
+  const m = spec.mass > 0 ? +spec.mass : CAR.kg;
   c.setMassProperties(m, { x: 0, y: -hy * 1.4, z: 0 },
     { x: m * (hy * hy + hz * hz) / 3, y: m * (hx * hx + hz * hz) / 3, z: m * (hx * hx + hy * hy) / 3 }, { x: 0, y: 0, z: 0, w: 1 });
 }
@@ -273,7 +283,7 @@ function driveCar(r) {
   } else if (throttle < 0) {
     if (speed > 1) stop = CAR.brake;   // going forwards: S brakes first, then reverses
     else engine = -force * 0.6 * Math.max(0, 1 + speed / (CAR.top * 0.4));
-  } else if (!brake) stop = 0.4;       // rolling to a stop
+  } else if (!brake) stop = CAR.roll;  // rolling to a stop
   for (let i = 0; i < r.wheels.length; i++) {
     const w = r.wheels[i];
     v.setWheelEngineForce(i, w.front ? 0 : -engine / 2);
@@ -475,14 +485,21 @@ function moving(id) {
 const OPS = {
   gravity(g) { world.gravity = D3 ? { x: 0, y: +g, z: 0 } : { x: 0, y: +g }; for (const r of recs.values()) for (const b of bodies(r)) if (b.isDynamic()) b.wakeUp(); },
   pause(on) { paused = !!on; },
-  // An impulse (a kick: mass times the change in speed). A ragdoll gets it in its chest, so it flops.
+  // An impulse (a kick: mass times the change in speed), in PUSH_KG units. A ragdoll gets it in its chest, so it flops.
   push(id, x, y, z) {
     const b = moving(id);
-    if (b && b.isDynamic()) b.applyImpulse(D3 ? { x: +x, y: +y, z: +z } : { x: +x, y: +y }, true);
+    const k = PUSH_KG;
+    if (b && b.isDynamic()) b.applyImpulse(D3 ? { x: x * k, y: y * k, z: z * k } : { x: +x, y: +y }, true);
   },
   spin(id, x, y, z) {
     const b = moving(id);
-    if (b && b.isDynamic()) b.applyTorqueImpulse(D3 ? { x: +x, y: +y, z: +z } : +x, true);
+    const k = PUSH_KG;
+    if (b && b.isDynamic()) b.applyTorqueImpulse(D3 ? { x: x * k, y: y * k, z: z * k } : +x, true);
+  },
+  // How heavy the player is: how hard it shoves the physics things it walks into.
+  player_weight(kg) {
+    playerKg = Math.max(0.01, +kg || PLAYER.kg);
+    if (player) player.kcc.setCharacterMass(playerKg);
   },
   velocity(id, x, y, z) {
     moving(id);
@@ -583,8 +600,8 @@ function makePlayer(x, y, z) {
     .setActiveEvents(R.ActiveEvents.COLLISION_EVENTS | R.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(0), body);
   owners.set(c.handle, { id: 0, rec: null });
   const kcc = world.createCharacterController(0.02);
-  kcc.setApplyImpulsesToDynamicBodies(true);
-  kcc.setCharacterMass(60);
+  kcc.setApplyImpulsesToDynamicBodies(false);  // shove() pushes, as hard as a person can
+  kcc.setCharacterMass(playerKg);
   kcc.setSlideEnabled(true);
   kcc.disableAutostep();
   kcc.disableSnapToGround();
@@ -609,19 +626,41 @@ function movePlayer() {
   p.grounded = p.kcc.computedGrounded();
   // Walking into something counts as a hit when it starts (not every step it's pushed).
   const now = new Set();
+  const pushed = new Set();
   for (let i = 0; i < p.kcc.numComputedCollisions(); i++) {
     const hit = p.kcc.computedCollision(i);
     const c = hit && hit.collider;
     if (!c) continue;
+    const b = c.parent();
+    if (b && b.isDynamic() && !pushed.has(b.handle)) { pushed.add(b.handle); shove(b, want, hit); }
     now.add(c.handle);
     if (!p.touching.has(c.handle)) {
       const b = c.parent();
       const v = b ? b.linvel() : { x: 0, y: 0, z: 0 };
-      const s = Math.hypot(p.v[0] - v.x, p.v[1] - v.y, p.v[2] - v.z) * Math.min(60, b && b.isDynamic() ? b.mass() : 60);
+      const s = Math.hypot(p.v[0] - v.x, p.v[1] - v.y, p.v[2] - v.z) * Math.min(playerKg, b && b.isDynamic() ? b.mass() : playerKg);
       started(p.collider.handle, c.handle, s);
     }
   }
   p.touching = now;
+}
+
+// The player walking into a physics thing pushes it the way it walks, as hard as a person can push (its weight
+// times SHOVE, about 600 N for 70 kg): a crate slides along in front of it, a heavy box doesn't budge (it grips the
+// ground harder than that), and a heavy ball rolls away slowly. Never faster than the player walks, and never down
+// into what it stands on.
+const SHOVE = 8.5;
+function shove(b, want, hit) {
+  const n = hit.normal1 || hit.normal2;
+  if (n && Math.abs(n.y) > 0.7) return;  // standing on it, or bumping it from below
+  const len = Math.hypot(want[0], want[2]);
+  if (len < 1e-6) return;
+  const dir = [want[0] / len, want[2] / len];
+  const speed = len / STEP;
+  const v = b.linvel();
+  const along = v.x * dir[0] + v.z * dir[1];
+  if (along >= speed) return;
+  const j = Math.min(b.mass() * (speed - along), playerKg * SHOVE * STEP);
+  b.applyImpulse({ x: dir[0] * j, y: 0, z: dir[1] * j }, true);
 }
 
 // ---------------------------------------------------------------- every frame
@@ -681,7 +720,8 @@ function pairKey(a, b) {
 }
 
 // A hit started between two colliders: it's reported after two more steps, with how hard it was (the impulses that
-// pushed them apart, in N·s, or for a player walking into something, about its speed times its mass).
+// pushed them apart, in N·s, or for a player walking into something, about its speed times its mass), in pushes
+// (divided by PUSH_KG when it's reported).
 function started(h1, h2, s) {
   const a = owners.get(h1);
   const b = owners.get(h2);
@@ -796,7 +836,7 @@ function send() {
   for (const [key, p] of pending) {
     if (++p.age < 3) continue;
     pending.delete(key);
-    hits.push([p.a, p.b, r4(p.s)]);
+    hits.push([p.a, p.b, r4(p.s / PUSH_KG)]);
   }
   if (hits.length) out.h = hits;
   if (player) out.p = [player.done,r4(player.at[0]), r4(player.at[1] - PLAYER.feet), r4(player.at[2]), player.grounded ? 1 : 0];

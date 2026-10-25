@@ -153,6 +153,14 @@ export default async (t, ctx) => {
   check(st.things === 5 && d1.behaviours.map((b) => b.type).join() === 'arrows,collect,chase,hurts', 'the preview has the five things, and Tuff Engine knows their four behaviours', { things: st.things, beh: d1.behaviours.map((b) => b.id) });
   const objs = await ev(`[...document.querySelectorAll('#en-objects .sd-layer')].map((r) => r.dataset.key)`);
   check(objs.join() === 'root,v:score_label,v:player,v:coin,v:enemy,v:ball', 'Objects lists the game, then each thing in line order', objs);
+  // 2D sprites can have physics too (1.3.0): the ball's Inspector has Physics, and the Add tab's tiles show the game's
+  // own shapes and colours.
+  await ev(`window.TuffEngine.test.select('v:ball')`);
+  check(await waitFor(`!!document.querySelector('#en-physics .pf-chip[data-v="dynamic"]')`, 4000).then(() => true, () => false), "a 2D ball's Inspector has Physics (Off, Falls, Fixed)", null);
+  await ev(`window.TuffEngine.test.select('root')`);
+  await clickSel('.en-left .en-tabs button[data-tab="add"]');
+  const pics2d = await ev(`['player', 'coin', 'enemy', 'ball', 'box', 'circle', 'text'].filter((id) => /^data:image\\/png/.test(document.querySelector('#en-add .en-tile[data-tile="' + id + '"] .en-shot.real img')?.src || ''))`);
+  check(pics2d.length === 7, "the 2D Add tab's tiles show pictures of what they add", pics2d);
   await t.shot('engine_2d_pieces.png');
   // One Ctrl+Z step per tile: undo the Ball, then redo it.
   await ev(`document.querySelector('#en-stage').focus()`);
@@ -573,7 +581,7 @@ export default async (t, ctx) => {
   // ================================================================ physics: the Inspector's Physics section, Car and Ragdoll
   // A box gets its physics in its Inspector: Off, Falls (crate:physics()) or Fixed (crate:physics("static")), then
   // Bounce typed in (crate:bounce(0.6)), each one line right after the box and one Ctrl+Z; Off takes them all out.
-  // Objects badges the things that use physics, and the 3D Add tab has Car (the arrow keys drive it) and Ragdoll.
+  // Objects badges the things that use physics, and the 3D Add tab has Car (the player gets in with F) and Ragdoll.
   // The preview doesn't simulate, so the code, the Inspector and tuff --check are checked (the scene shows the
   // physics lines once tgame's runtime has them; before that, it stops at the first one with a banner).
   const physFile = path.join(ctx.root, 'phys.tuf');
@@ -598,7 +606,12 @@ export default async (t, ctx) => {
   check(falls === `${physStart}crate:physics()\n`, 'Falls writes crate:physics() right after the box', firstDiff(falls, `${physStart}crate:physics()\n`));
   await waitFor(`document.querySelector('#en-physics .pf-chip.sel')?.dataset.v === 'dynamic'`, 4000);
   pu = await physUi();
-  check(pu?.nums === 'Mass,Bounce,Friction' && await badged() === 'v:crate', 'then it has Mass, Bounce and Friction, and Objects shows a physics badge on the crate', { pu, badged: await badged() });
+  check(pu?.nums === 'Weight,Bounce,Friction' && await badged() === 'v:crate', 'then it has Weight, Bounce and Friction, and Objects shows a physics badge on the crate', { pu, badged: await badged() });
+  await settle(25000);
+  const weightBox = () => ev(`(() => { const l = [...document.querySelectorAll('#en-inspector .en-num')].find((x) => x.querySelector('span')?.textContent === 'Weight'); const i = l && l.querySelector('input'); return i ? { value: i.value, placeholder: i.placeholder, title: i.title } : null; })()`);
+  await waitFor(`(() => { const l = [...document.querySelectorAll('#en-inspector .en-num')].find((x) => x.querySelector('span')?.textContent === 'Weight'); return l?.querySelector('input')?.placeholder === '50'; })()`, 8000);
+  const wb = await weightBox();
+  check(wb?.value === '' && wb.placeholder === '50' && /50 kg/.test(wb.title), "Weight is empty with what the 1 m box weighs as it is: 50 (kg)", wb);
   let bounceRect = null;
   for (let tries = 0; tries < 20 && !bounceRect; tries++) {
     bounceRect = await ev(`(() => { const l = [...document.querySelectorAll('#en-inspector .en-num')].find((x) => x.querySelector('span')?.textContent === 'Bounce'); const i = l && l.querySelector('input'); if (!i) return null; i.id = 'en-test-bounce'; i.scrollIntoView({ block: 'center' }); const r = i.getBoundingClientRect(); return r.width ? [r.left, r.top] : null; })()`);
@@ -610,6 +623,21 @@ export default async (t, ctx) => {
   await ev(`document.querySelector('#en-stage').focus()`);
   const bounced = await mp();
   check(bounced === `${falls}crate:bounce(0.6)\n`, 'typing 0.6 in Bounce writes crate:bounce(0.6) under it', firstDiff(bounced, `${falls}crate:bounce(0.6)\n`));
+  // Weight typed in: crate:weight(80), one more line; one Ctrl+Z takes it out.
+  await ev(`window.TuffEngine.test.select('v:crate')`);
+  let weightRect = null;
+  for (let tries = 0; tries < 20 && !weightRect; tries++) {
+    weightRect = await ev(`(() => { const l = [...document.querySelectorAll('#en-inspector .en-num')].find((x) => x.querySelector('span')?.textContent === 'Weight'); const i = l && l.querySelector('input'); if (!i) return null; i.scrollIntoView({ block: 'center' }); const r = i.getBoundingClientRect(); return r.width ? [r.left, r.top] : null; })()`);
+    if (!weightRect) await t.sleep(100);
+  }
+  await t.click(weightRect[0] + 20, weightRect[1] + 10);
+  await t.type('80', 60);
+  await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(physFile)})).getValue().includes('crate:weight(80)'))()`, 4000);
+  await ev(`document.querySelector('#en-stage').focus()`);
+  const weighed = await mp();
+  check(weighed === `${bounced}crate:weight(80)\n`, 'typing 80 in Weight writes crate:weight(80) under it', firstDiff(weighed, `${bounced}crate:weight(80)\n`));
+  await physUndo(bounced);
+  check(await mp() === bounced, 'one Ctrl+Z takes the weight out again', firstDiff(await mp(), bounced));
   await clickSel('.en-left .en-tabs button[data-tab="objects"]');
   await ev(`document.querySelector('#en-physics')?.scrollIntoView({ block: 'center' }); 1`);
   await t.shot('engine_physics_box.png');
@@ -630,7 +658,8 @@ export default async (t, ctx) => {
   check(await mp() === bounced, 'one Ctrl+Z brings them both back', firstDiff(await mp(), bounced));
   await settle(25000);
 
-  // Car and Ragdoll, in the Add tab's Physics tiles.
+  // Car and Ragdoll, in the Add tab's Physics tiles. A car the player gets into with F (1.3.0): with no player yet, the
+  // Car tile brings one, standing by its door, and nothing drives by itself when the game starts.
   await clickSel('.en-left .en-tabs button[data-tab="add"]');
   const physTiles = await ev(`(() => { const c = [...document.querySelectorAll('#en-add .sd-cat')].find((x) => x.textContent === 'Physics'); const g = c?.nextElementSibling; return g ? [...g.querySelectorAll('.en-tile')].map((b) => b.dataset.tile + ':' + b.textContent).join() : null; })()`);
   check(physTiles === 'car:Car,ragdoll:Ragdoll', "a 3D world's Add tab has Physics tiles: Car and Ragdoll", physTiles);
@@ -638,62 +667,110 @@ export default async (t, ctx) => {
   await mpNot(bounced);
   const withCar = await mp();
   const carAdded = withCar.slice(bounced.length);
-  check(withCar.startsWith(bounced) && /^car = game:car\(-?[\d.]+, 1, -?[\d.]+, "red"\)\ncar:drive\(\)\n$/.test(carAdded) && (await dbg()).sel === 'v:car',
-    'Car writes car = game:car(x, 1, z, "red") and car:drive() (there\'s no player to share the arrow keys with), and selects it', carAdded);
-  await waitFor(`!!document.querySelector('#en-inspector .pf-sec-h') && [...document.querySelectorAll('#en-inspector .pf-sec-h')].some((h) => h.textContent === 'Car')`, 4000);
-  const carUi = await ev(`(() => { const s = [...document.querySelectorAll('#en-inspector .pf-sec')].find((x) => x.querySelector('.pf-sec-h')?.textContent === 'Car'); return { secs: [...document.querySelectorAll('#en-inspector .pf-sec-h')].map((h) => h.textContent).join(), text: s?.textContent || '', engine: s?.querySelector('input[type="number"]')?.value }; })()`);
-  check(/Drive it/.test(carUi.text) && carUi.engine === '1' && !/Behaviours|Moves/.test(carUi.secs), "the car's Inspector has a Car section (Drive it, Engine 1), and no Behaviours or Moves", carUi);
+  const carM = /^car = game:car\((-?[\d.]+), 1, (-?[\d.]+), "red"\)\nplayer = game:player\("first person"\)\nplayer:move_to\((-?[\d.]+), 0, (-?[\d.]+)\)\n$/.exec(carAdded);
+  const carSay = (await toasts()).filter((x) => /press F/.test(x)).pop() || '';
+  check(withCar.startsWith(bounced) && carM && +carM[3] === +carM[1] - 2.5 && +carM[4] === +carM[2] && (await dbg()).sel === 'v:car' && /^Player came too: walk up to car and press F to get in/.test(carSay),
+    'Car writes car = game:car(x, 1, z, "red"), and a player by its door (no car:drive(): nothing drives by itself), selects the car, and says F gets in', { carAdded, carSay });
+  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-sec-h')].some((h) => h.textContent === 'Car')`, 4000);
+  await settle(25000);
+  const carUi = await ev(`(() => { const s = [...document.querySelectorAll('#en-inspector .pf-sec')].find((x) => x.querySelector('.pf-sec-h')?.textContent === 'Car'); const nums = [...(s?.querySelectorAll('.en-num') || [])].map((l) => [l.querySelector('span').textContent, l.querySelector('input').value, l.querySelector('input').placeholder]); return { secs: [...document.querySelectorAll('#en-inspector .pf-sec-h')].map((h) => h.textContent).join(), text: s?.textContent || '', nums }; })()`);
+  check(/Start in it/.test(carUi.text) && /presses F to get in/.test(carUi.text) && JSON.stringify(carUi.nums) === '[["Engine","1",""],["Weight","","1200"]]' && !/Behaviours|Moves/.test(carUi.secs),
+    "the car's Inspector has a Car section (F gets in, Start in it, Engine 1, Weight 1200 as it is), and no Behaviours or Moves", carUi);
   check((await badged()).split(',').includes('v:car'), 'Objects badges the car: it always uses physics', await badged());
   await clickSel('.en-left .en-tabs button[data-tab="add"]');
   await clickSel('.en-tile[data-tile="ragdoll"]');
   await mpNot(withCar);
   const withDummy = await mp();
   check(withDummy.startsWith(withCar) && /^dummy = game:ragdoll\(-?[\d.]+, 0, -?[\d.]+, "blue"\)\n$/.test(withDummy.slice(withCar.length)), 'Ragdoll writes dummy = game:ragdoll(x, 0, z, "blue")', withDummy.slice(withCar.length));
+  // A ragdoll dresses like a person: its Clothes and hair section writes dummy:hair("curly").
+  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-sec-h')].some((h) => h.textContent === 'Clothes and hair')`, 4000);
+  const dressUi = await ev(`(() => { const s = [...document.querySelectorAll('#en-inspector .pf-sec')].find((x) => x.querySelector('.pf-sec-h')?.textContent === 'Clothes and hair'); return [...(s?.querySelectorAll('.pf-l') || [])].map((x) => x.textContent.split(' · ')[0]).join(); })()`);
+  check(dressUi === 'Shirt,Trousers,Skin,Hair,Hair colour,Shoes,Sleeves', "the ragdoll's Inspector has Clothes and hair: shirt, trousers, skin, hair, hair colour, shoes and sleeves", dressUi);
+  await ev(`(() => { const f = [...document.querySelectorAll('#en-inspector .pf')].find((x) => x.querySelector('.pf-l')?.textContent === 'Hair'); const s = f.querySelector('select'); s.value = 'curly'; s.dispatchEvent(new Event('change')); })()`);
+  await mpNot(withDummy);
+  const curly = await mp();
+  check(curly === `${withDummy}dummy:hair("curly")\n`, 'choosing Curly writes dummy:hair("curly") under it', firstDiff(curly, `${withDummy}dummy:hair("curly")\n`));
   await settle(25000);
   await t.shot('engine_physics.png');
-  check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'phys_check.tuf'), withDummy), path.join(ctx.tmp, 'phys_check.tuf'))).trim()), 'the physics the Inspector and the tiles wrote passes tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'phys_check.tuf')));
+  check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'phys_check.tuf'), curly), path.join(ctx.tmp, 'phys_check.tuf'))).trim()), 'the physics and the look the Inspector and the tiles wrote pass tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'phys_check.tuf')));
+  await physUndo(withDummy);
   await physUndo(withCar);
-  check(await mp() === withCar, 'one Ctrl+Z takes the ragdoll away', firstDiff(await mp(), withCar));
+  check(await mp() === withCar, 'two Ctrl+Z take the hair and the ragdoll away', firstDiff(await mp(), withCar));
   // A car can be turned: its Look section has an Angle (car:turn_to, which tgame turns its body by too).
   await ev(`window.TuffEngine.test.select('v:car')`);
   await waitFor(`[...document.querySelectorAll('#en-inspector .pf-sec-h')].some((h) => h.textContent === 'Car')`, 4000);
   const carLook = await ev(`(() => { const s = [...document.querySelectorAll('#en-inspector .pf-sec')].find((x) => x.querySelector('.pf-sec-h')?.textContent === 'Look'); return [...(s?.querySelectorAll('.en-num span') || [])].map((x) => x.textContent).join(); })()`);
   check(carLook === 'Angle', "the car's Look section has an Angle, so it can face any way", carLook);
-  // The player has the arrow keys (the Car tile's rule, the other way round): Player after a car that drives takes
-  // that car's car:drive() out in the same step and says so, so at Play the player walks instead of sitting in the car.
-  await clickSel('.en-left .en-tabs button[data-tab="add"]');
-  await clickSel('.en-tile[data-tile="player"]');
-  await mpNot(withCar);
-  const withPlayer = await mp();
-  const walkSay = (await toasts()).filter((x) => /arrow keys/.test(x)).pop() || '';
-  check(withPlayer === withCar.replace('car:drive()\n', 'player = game:player("first person")\n') && walkSay === 'Player walks with the arrow keys now, so car waits. Turn on Drive it in its Inspector to drive it instead.',
-    'Player after a car that drives: car:drive() goes in the same step (the player has the arrow keys now), and it says so', { added: withPlayer.slice(bounced.length), walkSay });
-  check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'car_player.tuf'), withPlayer), path.join(ctx.tmp, 'car_player.tuf'))).trim()), 'and that world passes tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'car_player.tuf')));
-  const walked = playCode('car_player', withPlayer, [{ at: 0.6, dump: 'a.json' }, { at: 0.8, hold: 's', for: 1.2 }, { at: 2.4, dump: 'b.json' }, { at: 2.6, close: true }]);
-  if (walked) {
-    const [pa, pb] = [walked.dump('a.json')?.player, walked.dump('b.json')?.player];
-    check(walked.code === 0 && pa && pb && pb[2] > pa[2] + 2, `at Play the player walks (S held: z ${pa?.[2]} → ${pb?.[2]}), it isn't stuck in the car`, { code: walked.code, pa, pb, out: walked.out.slice(-300) });
+  // At Play the player walks up to the car, presses F to get in and drives off, and F gets out.
+  check(/^OK/.test(ctx.tuffCheck((fs.writeFileSync(path.join(ctx.tmp, 'car_player.tuf'), withCar), path.join(ctx.tmp, 'car_player.tuf'))).trim()), 'and that world passes tuff --check', ctx.tuffCheck(path.join(ctx.tmp, 'car_player.tuf')));
+  const rode = playCode('car_player', withCar, [{ at: 0.6, dump: 'a.json' }, { at: 0.8, key: 'f' }, { at: 1.1, dump: 'b.json' }, { at: 1.2, hold: 'w', for: 1.0 },
+    { at: 2.4, key: 'f' }, { at: 2.7, dump: 'c.json' }, { at: 2.9, close: true }]);
+  if (rode) {
+    const ix = (n) => rode.dump(n)?.interact || {};
+    check(rode.code === 0 && ix('a.json').hint === 'F: Get in' && ix('a.json').driving === false && ix('b.json').driving === true && ix('c.json').driving === false,
+      'at Play the player starts by the car ("F: Get in"), F gets in and F again gets out', { code: rode.code, a: ix('a.json'), b: ix('b.json'), c: ix('c.json'), out: rode.out.slice(-300) });
   }
-  await physUndo(withCar);
-  check(await mp() === withCar, 'one Ctrl+Z gives the car its car:drive() back', firstDiff(await mp(), withCar));
-  // One car has the arrow keys: a second Car waits, and Drive it on for it takes the first car's car:drive() out.
+  // Start in it: the game starts with the player in the car (car:drive()). One car at a time: Start in it on for a
+  // second car takes the first car's car:drive() out.
+  const driveOn = () => ev(`(() => { const f = [...document.querySelectorAll('#en-inspector .pf')].find((x) => x.querySelector('.pf-l')?.textContent === 'Start in it'); const s = f?.querySelector('.switch'); if (s) s.id = 'en-test-drive'; return s ? s.querySelector('input').checked : null; })()`);
+  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-l')].some((x) => x.textContent === 'Start in it')`, 4000);
+  check(await driveOn() === false, "car's Start in it is off", await driveOn());
+  await clickSel('#en-test-drive');
+  await mpNot(withCar);
+  const startIn = await mp();
+  const wantStart = withCar.replace(/(car = game:car\([^\n]*\)\n)/, '$1car:drive()\n');
+  check(startIn === wantStart, 'Start in it on writes car:drive() under the car', firstDiff(startIn, wantStart));
+  const started = playCode('car_start', startIn, [{ at: 0.6, dump: 'a.json' }, { at: 0.8, close: true }]);
+  if (started) check(started.code === 0 && started.dump('a.json')?.interact?.driving === true, 'at Play the game starts with the player in the car', { code: started.code, ix: started.dump('a.json')?.interact, out: started.out.slice(-300) });
   await clickSel('.en-left .en-tabs button[data-tab="add"]');
   await clickSel('.en-tile[data-tile="car"]');
-  await mpNot(withCar);
+  await mpNot(startIn);
   const twoCars = await mp();
-  check(/^car1 = game:car\(-?[\d.]+, 1, -?[\d.]+, "red"\)\n$/.test(twoCars.slice(withCar.length)) && (await dbg()).sel === 'v:car1', 'a second Car waits: no car1:drive() while car has the arrow keys', twoCars.slice(withCar.length));
-  const driveOn = () => ev(`(() => { const f = [...document.querySelectorAll('#en-inspector .pf')].find((x) => x.querySelector('.pf-l')?.textContent === 'Drive it'); const s = f?.querySelector('.switch'); if (s) s.id = 'en-test-drive'; return s ? s.querySelector('input').checked : null; })()`);
-  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-l')].some((x) => x.textContent === 'Drive it')`, 4000);
-  check(await driveOn() === false, "car1's Drive it is off", await driveOn());
+  check(/^car1 = game:car\(-?[\d.]+, 1, -?[\d.]+, "red"\)\n$/.test(twoCars.slice(startIn.length)) && (await dbg()).sel === 'v:car1', 'a second Car is just a car (the world has its player)', twoCars.slice(startIn.length));
+  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-l')].some((x) => x.textContent === 'Start in it')`, 4000);
+  check(await driveOn() === false, "car1's Start in it is off", await driveOn());
   await clickSel('#en-test-drive');
   await mpNot(twoCars);
   const swapped = await mp();
-  check(swapped === `${twoCars.replace('car:drive()\n', '')}car1:drive()\n`, 'Drive it on for car1 writes car1:drive() and takes car:drive() out, in one step: one car drives', firstDiff(swapped, `${twoCars.replace('car:drive()\n', '')}car1:drive()\n`));
+  check(swapped === `${twoCars.replace('car:drive()\n', '')}car1:drive()\n`, 'Start in it on for car1 writes car1:drive() and takes car:drive() out, in one step: the player starts in one car', firstDiff(swapped, `${twoCars.replace('car:drive()\n', '')}car1:drive()\n`));
   await ev(`window.TuffEngine.test.select('v:car')`);
-  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-l')].some((x) => x.textContent === 'Drive it')`, 4000);
-  check(await driveOn() === false, "and car's Inspector shows its Drive it off", await driveOn());
+  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-l')].some((x) => x.textContent === 'Start in it')`, 4000);
+  check(await driveOn() === false, "and car's Inspector shows its Start in it off", await driveOn());
   await physUndo(twoCars);
-  check(await mp() === twoCars, 'one Ctrl+Z gives car the arrow keys back', firstDiff(await mp(), twoCars));
+  check(await mp() === twoCars, 'one Ctrl+Z puts the player back in car', firstDiff(await mp(), twoCars));
+  await physUndo(startIn);
+  await physUndo(withCar);
+  // ================================================================ the Add tab: a wider panel, whole names, real pictures
+  // The left panel is 340 px (wider than Design Studio's 240) and every tile's name shows whole (they wrap, nothing
+  // is cut off with "..."). Each 3D tile gets a real picture from the game engine (a second preview page out of sight
+  // draws them, and goes when they're made), and the preview of the game being edited carries on as it was.
+  await clickSel('.en-left .en-tabs button[data-tab="add"]');
+  const panel = await ev(`(() => { const l = document.querySelector('.en-left'); const lbls = [...document.querySelectorAll('#en-add .en-tile .lbl')]; return { w: Math.round(l.getBoundingClientRect().width), handle: !!l.querySelector('.en-resize'), cut: lbls.filter((x) => x.scrollWidth > x.clientWidth + 1 || getComputedStyle(x).textOverflow === 'ellipsis').map((x) => x.textContent), n: lbls.length }; })()`);
+  check(panel.w >= 330 && panel.handle && panel.n > 25 && !panel.cut.length, `the Add panel is ${panel.w} px wide (drag its edge for more), and none of its ${panel.n} names is cut off`, panel);
+  const picsDone = await waitFor(`(() => { const d = window.TuffEngine.debug().previews; return d.made >= 25 && !d.busy; })()`, 45000).then(() => true, () => false);
+  const pics = await ev(`(() => { const tiles = [...document.querySelectorAll('#en-add .en-tile')]; const real = tiles.filter((b) => /^data:image\\/png/.test(b.querySelector('.en-shot.real img')?.src || '')).map((b) => b.dataset.tile); return { real, d: window.TuffEngine.debug().previews, frame: !!document.querySelector('#en-pvframe') }; })()`);
+  const want = ['player', 'coin', 'car', 'ragdoll', 'door', 'jump_pad', 'person', 'tree', 'rock', 'house', 'sign', 'crate', 'box', 'ball', 'cone', 'island', 'ground', 'land'];
+  check(picsDone && want.every((id) => pics.real.includes(id)) && !pics.frame, `every 3D tile gets a real picture from the engine (${pics.real.length} of them), and the out-of-sight page goes when they're made`, { missing: want.filter((id) => !pics.real.includes(id)), ...pics });
+  check((await dbg()).loadedSeq === (await dbg()).loadSeq && !(await dbg()).banner, "making the pictures doesn't stop the game's own preview", await dbg());
+  await t.shot('engine_add_pictures.png');
+  await ev(`document.querySelector('.en-left').scrollTop = 640; 1`);
+  await t.shot('engine_add_pictures_2.png');
+  await ev(`document.querySelector('.en-left').scrollTop = 1400; 1`);
+  await t.shot('engine_add_pictures_3.png');
+  await ev(`document.querySelector('.en-left').scrollTop = 0; 1`);
+  // A sign's words are written on its board: its Inspector calls the field "Sign text".
+  await clickSel('.en-tile[data-tile="sign"]');
+  await mpNot(withCar);
+  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-l')].some((x) => x.textContent === 'Sign text')`, 4000);
+  const signUi = await ev(`(() => { const f = [...document.querySelectorAll('#en-inspector .pf')].find((x) => x.querySelector('.pf-l')?.textContent === 'Sign text'); return f ? f.textContent : null; })()`);
+  check(/Written on its board/.test(signUi || ''), "a sign's Inspector has Sign text (written on its board), not a floating Label", signUi);
+  // Physics on everything: a cone has its Physics section too, and a door says why it has none.
+  await physUndo(withCar);
+  await clickSel('.en-left .en-tabs button[data-tab="add"]');
+  await clickSel('.en-tile[data-tile="cone"]');
+  await mpNot(withCar);
+  await waitFor(`!!document.querySelector('#en-physics')`, 4000);
+  check(await ev(`!!document.querySelector('#en-physics .pf-chip[data-v="dynamic"]')`), 'a cone has Physics in its Inspector (Off, Falls, Fixed): everything in the world can', null);
   await physUndo(withCar);
   const physBanner = (await dbg()).banner;
   if (physBanner) t.info(`the scene stops at the physics lines until tgame's runtime has them: ${physBanner.slice(0, 120)}`);

@@ -2153,7 +2153,7 @@
     // Tuff Engine
     openEngine,
     engineVisible: () => engine.visible,
-    scene: (file, source) => api.engine.scene(file, source),
+    scene: (file, source, tag) => api.engine.scene(file, source, tag),
     stopRun: () => api.run.stop(),
     isRunning: () => !!state.running,
     runCommand: (id) => commands[id]?.run(),

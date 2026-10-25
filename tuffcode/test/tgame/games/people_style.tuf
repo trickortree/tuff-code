@@ -1,0 +1,31 @@
+mention tgame
+
+# People dressed in code: a person, a ragdoll and the player in third person get a shirt, trousers, skin, hair,
+# shoes and sleeves, and change them while the game runs.
+world = tgame.world("People Style", 900, 560)
+world:sky "day"
+world:ground "grass"
+npc = world:spawn("person", -0.9, 0, -3)
+npc:turn_to(180)
+npc:shirt("red")
+npc:pants("black")
+npc:hair("curly", "blonde")
+npc:skin("tan")
+npc:shoes("white")
+npc:sleeves("short")
+dummy = world:ragdoll(0.9, 0, -3, "blue")
+dummy:hair("ponytail")
+dummy:pants("white")
+player = world:player("third person")
+player:move_to(0, 0, 0.5)
+player:shirt("green")
+player:hair("spiky", "ginger")
+
+func restyle():
+    npc:shirt("purple")
+    npc:hair("bob")
+    dummy:shirt("yellow")
+    player:sleeves("short")
+
+while world:open():
+    world:frame()

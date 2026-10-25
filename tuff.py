@@ -1611,7 +1611,8 @@ MOUSE_NEEDS_3D = ("Locking the mouse is for looking around in a 3D world. Make t
 # spot ([x, y, z] in 3D, [x, y] in 2D) can stand in for. A car and a ragdoll have an object's methods too.
 _THING_PHYSICS = {
     "physics": ("nothing, or the kind of physics", '{o}:physics() or {o}:physics("static")', (0, 1), 0),
-    "mass": ("how heavy it is, in kg", "{o}:mass(2)", (1,), 0),
+    "weight": ("nothing (to read it), or how heavy it is, in kg", "{o}:weight(50)", (0, 1), 0),
+    "mass": ("nothing (to read it), or how heavy it is, in kg", "{o}:mass(2)", (0, 1), 0),
     "bounce": ("how bouncy it is, from 0 to 1", "{o}:bounce(0.6)", (1,), 0),
     "friction": ("how grippy it is, from 0 up", "{o}:friction(0.4)", (1,), 0),
     "on_hit": ("the name of a function to run when something hits it", "{o}:on_hit(bumped)", (1,), 0),
@@ -1642,13 +1643,17 @@ PHYSICS_INPUTS = {
         "push": ("x and y: how hard to push it each way", "{o}:push(200, -300)", (2,), 2),
         "velocity": ("nothing (to read it), or x and y", "{o}:velocity(0, -200)", (0, 2), 2),
     },
-    "player": {"on_hit": _THING_PHYSICS["on_hit"]},
+    "player": {"on_hit": _THING_PHYSICS["on_hit"],
+               "weight": ("nothing (to read it), or how heavy the player is, in kg", "{o}:weight(70)", (0, 1), 0)},
     "car": {
         **_PHYSICS_3D,
         "drive": ("nothing, or false to stop driving it", "{o}:drive()", (0, 1), 0),
         "engine": ("how strong its engine is (1 is normal)", "{o}:engine(1.5)", (1,), 0),
         "speed": ("nothing: it gives back how fast it goes, in km/h", "say {o}:speed()", (0,), 0),
         "flip": ("nothing", "{o}:flip()", (0,), 0),
+        "on_enter": ("the name of a function to run when the player gets in", "{o}:on_enter(got_in)", (1,), 0),
+        "on_exit": ("the name of a function to run when the player gets out", "{o}:on_exit(got_out)", (1,), 0),
+        "driven": ("nothing: it gives back whether the player is in it", "if {o}:driven():", (0,), 0),
     },
     "ragdoll": _PHYSICS_3D,
 }
@@ -1658,8 +1663,8 @@ ANIMATIONS = ("walk", "idle", "wave", "none")
 PHYSICS_HIT = (0, 2, "2 inputs (the thing that hit it, and how hard)")
 _PUSHES = {"impulse": "push", "apply_impulse": "push", "add_impulse": "push", "kick": "push", "force": "push",
            "add_force": "push", "apply_force": "push", "shove": "push", "throw": "push", "launch": "push",
-           "set_velocity": "velocity", "vel": "velocity", "linear_velocity": "velocity", "weight": "mass",
-           "set_mass": "mass", "bounciness": "bounce", "restitution": "bounce", "elasticity": "bounce",
+           "set_velocity": "velocity", "vel": "velocity", "linear_velocity": "velocity", "set_weight": "weight",
+           "heaviness": "weight", "get_weight": "weight", "get_mass": "mass", "set_mass": "mass", "bounciness": "bounce", "restitution": "bounce", "elasticity": "bounce",
            "bouncy": "bounce", "set_bounce": "bounce", "grip": "friction", "set_friction": "friction",
            "rigidbody": "physics", "rigid_body": "physics", "body": "physics", "enable_physics": "physics",
            "use_physics": "physics", "add_physics": "physics", "set_physics": "physics", "collider": "physics",
@@ -1680,10 +1685,14 @@ PHYSICS_HINTS = {
     "sprite": _PUSHES,
     "car": {**_PUSHES, "accelerate": "engine", "throttle": "engine", "power": "engine", "gas": "engine", "motor": "engine",
             "horsepower": "engine", "control": "drive", "controls": "drive", "get_in": "drive", "enter": "drive",
-            "steer": "drive", "drivable": "drive", "reset": "flip", "unflip": "flip", "upright": "flip", "flip_over": "flip",
+            "get_out": "drive", "exit": "drive", "leave": "drive", "on_get_in": "on_enter", "when_entered": "on_enter",
+            "on_get_out": "on_exit", "on_leave": "on_exit", "when_left": "on_exit", "is_driven": "driven",
+            "occupied": "driven", "in_use": "driven", "has_driver": "driven", "steer": "drive", "drivable": "drive", "reset": "flip", "unflip": "flip", "upright": "flip", "flip_over": "flip",
             "kmh": "speed", "mph": "speed", "get_speed": "speed"},
     "ragdoll": _PUSHES,
-    "player": {"on_collision": "on_hit", "on_collide": "on_hit", "collision": "on_hit", "on_bump": "on_hit"},
+    "player": {"on_collision": "on_hit", "on_collide": "on_hit", "collision": "on_hit", "on_bump": "on_hit",
+               "mass": "weight", "set_weight": "weight", "is_driving": "in_car", "driving": "in_car",
+               "in_vehicle": "in_car", "is_in_car": "in_car"},
 }
 VALUE_HINTS["physics"] = {  # tgame itself takes "fixed", "on", "none"... (its physics_words, Checker.land_value)
     "frozen": "static", "wall": "static", "ground": "static", "immovable": "static", "stuck": "static", "stay": "static",
@@ -2151,6 +2160,7 @@ class Checker:
     # Physics inputs that are numbers, and the numbers that can't be right: method -> (the lowest, whether the lowest
     # itself is fine, the highest, what it needs, an example).
     PHYSICS_NUMBERS = {"mass": (0, False, None, "a number above 0", "{o}:mass(2)"),
+                       "weight": (0, False, None, "a number above 0 (kg)", "{o}:weight(50)"),
                        "bounce": (0, True, 1, "a number from 0 (no bounce) to 1 (it bounces right back up)", "{o}:bounce(0.6)"),
                        "friction": (0, True, None, "a number from 0 (slippery, like ice) up", "{o}:friction(0.4)")}
     # What tap's functions make, and what the methods of those give back (left out: it depends, like :json).

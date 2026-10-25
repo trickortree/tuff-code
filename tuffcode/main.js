@@ -442,20 +442,24 @@ ipcMain.handle('tuff:check', (_e, source) => checkSource(source));
 
 // Tuff Engine's preview: tuff.py --scene runs a tgame program's setup with no window (the editor's text, which may
 // not be saved, with the game file's folder for its pictures) and gives back what it made as JSON. A newer request
-// stops the one still running, which then resolves to { superseded: true }.
-let sceneProc = null;
-let sceneSeq = 0;
-ipcMain.handle('engine:scene', async (_e, file, source) => {
-  const stop = () => { if (sceneProc) { sceneProc.superseded = true; sceneProc.kill(); } };
+// with the same tag stops the one still running, which then resolves to { superseded: true }: 'main' is the game
+// being edited, 'previews' the Add tab's pictures (tuff-engine.js), so one never stops the other.
+const sceneProcs = new Map();  // tag -> the process running
+const sceneSeqs = new Map();   // tag -> its last request's number
+let sceneNo = 0;
+ipcMain.handle('engine:scene', async (_e, file, source, tag = 'main') => {
+  tag = tag === 'previews' ? 'previews' : 'main';
+  const stop = () => { const p = sceneProcs.get(tag); if (p) { p.superseded = true; p.kill(); } };
   stop();
-  const n = ++sceneSeq;
+  const n = ++sceneNo;
+  sceneSeqs.set(tag, n);
   const t0 = Date.now();
   const dir = path.join(app.getPath('temp'), 'tuffcode-scene');
   await fsp.mkdir(dir, { recursive: true });
   const src = path.join(dir, `scene-${process.pid}-${n}.tuf`);
   const out = path.join(dir, `scene-${process.pid}-${n}.json`);
   await fsp.writeFile(src, String(source), 'utf8');
-  if (n !== sceneSeq) { // a newer request came while this one was writing its file
+  if (n !== sceneSeqs.get(tag)) { // a newer request came while this one was writing its file
     fsp.rm(src, { force: true }).catch(() => {});
     return { superseded: true, ms: Date.now() - t0 };
   }
@@ -463,17 +467,17 @@ ipcMain.handle('engine:scene', async (_e, file, source) => {
   const { cmd, args } = tuffCommand(['--scene', String(file), src, out]);
   const result = await new Promise((resolve) => {
     const proc = spawn(cmd, args, { cwd: path.dirname(String(file)), windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
-    sceneProc = proc;
+    sceneProcs.set(tag, proc);
     let err = '';
     proc.stdout.resume();
     proc.stderr.on('data', (d) => { if (err.length < 4000) err += d; });
     proc.stdin.on('error', () => {});
     proc.stdin.end();
     const timer = setTimeout(() => { proc.timedOut = true; proc.kill(); }, 5000);
-    proc.on('error', (e) => { clearTimeout(timer); if (sceneProc === proc) sceneProc = null; resolve({ stopped: 'crashed', message: e.message }); });
+    proc.on('error', (e) => { clearTimeout(timer); if (sceneProcs.get(tag) === proc) sceneProcs.delete(tag); resolve({ stopped: 'crashed', message: e.message }); });
     proc.on('close', async () => {
       clearTimeout(timer);
-      if (sceneProc === proc) sceneProc = null;
+      if (sceneProcs.get(tag) === proc) sceneProcs.delete(tag);
       if (proc.superseded) return resolve({ superseded: true });
       if (proc.timedOut) return resolve({ stopped: 'timeout' });
       try { resolve(JSON.parse(await fsp.readFile(out, 'utf8'))); }
@@ -589,6 +593,6 @@ app.on('will-quit', () => ai.quit());
 
 app.on('window-all-closed', () => {
   if (runProc) runProc.kill();
-  if (sceneProc) sceneProc.kill();
+  for (const p of sceneProcs.values()) p.kill();
   app.quit();
 });
