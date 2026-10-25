@@ -747,11 +747,17 @@ export default async (t, ctx) => {
   await clickSel('.en-left .en-tabs button[data-tab="add"]');
   const panel = await ev(`(() => { const l = document.querySelector('.en-left'); const lbls = [...document.querySelectorAll('#en-add .en-tile .lbl')]; return { w: Math.round(l.getBoundingClientRect().width), handle: !!document.querySelector('.en-main > .en-resize'), cut: lbls.filter((x) => x.scrollWidth > x.clientWidth + 1 || getComputedStyle(x).textOverflow === 'ellipsis').map((x) => x.textContent), n: lbls.length }; })()`);
   check(panel.w >= 330 && panel.handle && panel.n > 25 && !panel.cut.length, `the Add panel is ${panel.w} px wide (drag its edge for more), and none of its ${panel.n} names is cut off`, panel);
-  const picsDone = await waitFor(`(() => { const d = window.TuffEngine.debug().previews; return d.made >= 25 && !d.busy; })()`, 45000).then(() => true, () => false);
+  // GitHub's Intel Macs have no WebGL: there the 3D tiles keep their icons, and no out-of-sight page is made.
+  const glPics = (await dbg()).webgl !== false;
+  const picsDone = glPics && await waitFor(`(() => { const d = window.TuffEngine.debug().previews; return d.made >= 25 && !d.busy; })()`, 45000).then(() => true, () => false);
   const pics = await ev(`(() => { const tiles = [...document.querySelectorAll('#en-add .en-tile')]; const real = tiles.filter((b) => /^data:image\\/png/.test(b.querySelector('.en-shot.real img')?.src || '')).map((b) => b.dataset.tile); return { real, d: window.TuffEngine.debug().previews, frame: !!document.querySelector('#en-pvframe') }; })()`);
   const want = ['player', 'coin', 'car', 'ragdoll', 'door', 'jump_pad', 'person', 'tree', 'rock', 'house', 'sign', 'crate', 'box', 'ball', 'cone', 'island', 'ground', 'land'];
-  check(picsDone && want.every((id) => pics.real.includes(id)) && !pics.frame, `every 3D tile gets a real picture from the engine (${pics.real.length} of them), and the out-of-sight page goes when they're made`, { missing: want.filter((id) => !pics.real.includes(id)), ...pics });
-  check((await dbg()).loadedSeq === (await dbg()).loadSeq && !(await dbg()).banner, "making the pictures doesn't stop the game's own preview", await dbg());
+  if (!glPics) {
+    check(!want.some((id) => pics.real.includes(id)) && pics.d.made === 0 && !pics.frame, 'with no WebGL, the 3D tiles keep their icons and no out-of-sight page is made', pics);
+  } else {
+    check(picsDone && want.every((id) => pics.real.includes(id)) && !pics.frame, `every 3D tile gets a real picture from the engine (${pics.real.length} of them), and the out-of-sight page goes when they're made`, { missing: want.filter((id) => !pics.real.includes(id)), ...pics });
+    check((await dbg()).loadedSeq === (await dbg()).loadSeq && !(await dbg()).banner, "making the pictures doesn't stop the game's own preview", await dbg());
+  }
   await t.shot('engine_add_pictures.png');
   await ev(`document.querySelector('.en-left').scrollTop = 640; 1`);
   await t.shot('engine_add_pictures_2.png');
