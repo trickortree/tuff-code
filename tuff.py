@@ -137,8 +137,8 @@ def tokenize(src):
             elif c in "+-*/%^<>=()[]{},.":
                 if c == "[":  # an index's [ ] (after a value: s[1:3]) or a list's ([a, b])
                     after_value = toks and (toks[-1].kind in ("NAME", "STR") or (toks[-1].kind == "OP" and toks[-1].value in ")]}"))
-                    if after_value and len(toks) >= 2 and toks[-1].kind == "NAME" and toks[-2].kind == "METHOD":
-                        after_value = False  # pairs:add [word:upper, 1]: after a method's name, [ starts its input, a list
+                    if after_value and len(toks) >= 2 and toks[-1].kind == "NAME" and toks[-2].kind == "METHOD" and raw[i - 1] in " \t":
+                        after_value = False  # pairs:add [word:upper, 1]: after a method's name and a space, [ starts its input
                     brackets.append("[i" if after_value else "[l")
                 elif c in "({":
                     brackets.append(c)
@@ -186,6 +186,7 @@ class Parser:
         self.given = {t.value for t, nxt in zip(toks, toks[1:]) if t.kind == "NAME" and nxt.kind == "OP" and nxt.value in ASSIGN_OPS}
         self.given |= {nxt.value for t, nxt in zip(toks, toks[1:]) if t.kind == "KW" and t.value == "for" and nxt.kind == "NAME"}
         inputs = False  # func f(catch): its inputs
+        self.funcs = {nxt.value for t, nxt in zip(toks, toks[1:]) if t.kind == "KW" and t.value == "func" and nxt.kind == "NAME"}
         for t, nxt in zip(toks, toks[1:]):
             if t.kind == "KW" and t.value == "func":
                 inputs = None
@@ -195,6 +196,7 @@ class Parser:
                 self.given.add(t.value)
             elif inputs is not False and t.kind == "OP" and t.value == ")":
                 inputs = False
+        self.values = self.given | self.funcs | BUILTIN_NAMES | OWN_NAME_BUILTINS | {"err", "pi", "all"}
 
     def block_word(self, ahead, catch=False):
         """Is the try or catch here (ahead tokens before the ':') the start of a block? try: and catch: with a
@@ -529,9 +531,10 @@ class Parser:
                 return node
 
     def part_colon(self, in_dict=False):
-        """The glued ':' that starts this [ ]'s part (s[a:b], s[:n]), or this { } entry's value ({name:age}), when
-        there's no spaced one at the bracket's own level. With several, it's the one after a number (or right
-        after the bracket), else the first that isn't a method call with brackets (s[s:find(" "):n]), else the first."""
+        """Where the glued ':' that starts this [ ]'s part (s[a:b], s[:n]) is, or this { } entry's value ({name:age}),
+        when there's no spaced one at the bracket's own level. With several: the one after a number (or right
+        after the bracket), else one followed by the program's own name or a built-in (s[s:find(" "):n],
+        email[email:find("@"):len(email) - 1]), else the first that isn't a method call with brackets, else the first."""
         depth, j, found = 0, self.i, []
         while self.toks[j].kind not in ("NEWLINE", "EOF"):
             t = self.toks[j]
@@ -551,18 +554,24 @@ class Parser:
         for j in found:
             before = self.toks[j - 1]
             if j == self.i or before.kind == "NUM" or (in_dict and before.kind == "STR"):
-                return self.toks[j]
+                return j
+        for j in found:
+            if self.toks[j + 1].kind == "NAME" and self.toks[j + 1].value in self.values:
+                return j
         for j in found:
             if not (self.toks[j + 2].kind == "OP" and self.toks[j + 2].value == "("):
-                return self.toks[j]
-        return self.toks[found[0]] if found else None
+                return j
+        return found[0] if found else None
 
     def index(self, obj, tok):
         """x[i], or a part: s[1:3], s[:3], s[2:] (both ends included, like range). A glued a:b here was a method
-        call in 1.3.6 (names[order:pop], items[p:index()]), so a part keeps that reading too, in alt: recv is the
-        a, worked out first when the program runs, and whether it's a number says which reading it is."""
-        colon = self.part_colon()
-        if colon is None:
+        call in 1.3.6 (names[order:pop], items[p:index()]). When the start is one value (names[order:pop]), the
+        part keeps that reading too, in alt: the value is worked out first either way, and when the program runs a
+        number makes it a part. A start worked out from several (items[1 + stack:pop]) is decided here: a part when
+        what follows the ':' is the program's own name or a built-in (s[i + 1:j]), else 1.3.6's method call, which
+        keeps 1.3.6's order (and what and/or skip)."""
+        j = self.part_colon()
+        if j is None:
             start = None if self.at("COLON") else self.expr()
             if not self.at("COLON"):
                 self.expect("OP", "]")
@@ -571,6 +580,7 @@ class Parser:
             end = None if self.at("OP", "]") else self.expr()
             self.expect("OP", "]")
             return N("slice", tok, obj=obj, start=start, end=end, recv=None, alt=None, mname=None)
+        colon = self.toks[j]
         back, mark = self.i, len(self.converted)
         colon.kind = "COLON"
         self.converted.append(colon)
@@ -586,8 +596,12 @@ class Parser:
             self.expect("OP", "]")
             return N("index", tok, obj=obj, index=start)
         node = N("slice", tok, obj=obj, start=start, end=end, recv=None, alt=None, mname=None)
-        if start is None or self.toks[self.toks.index(colon) - 1].kind == "NUM":
+        if start is None or self.toks[j - 1].kind == "NUM":
             return node  # s[:n], s[2:n]: nothing before the ':' can have methods
+        single = start.kind in ("var", "call", "index", "slice", "attr", "method") or (start.kind == "const" and isinstance(start.value, str))
+        after = self.toks[j + 1]
+        if not single and after.kind == "NAME" and after.value in self.values:
+            return node  # s[i + 1:j]
         done = self.i
         self.unconvert(mark)
         self.i = back
@@ -598,19 +612,15 @@ class Parser:
             ok = False
         self.i = done
         if not ok:
-            colon.kind = "COLON"
             return node
+        if not single:  # items[1 + stack:pop], x[ok and stack:pop or 0]: 1.3.6's reading
+            return N("index", tok, obj=obj, index=old)
         method = next((m for m in nodes(old) if m.kind == "method" and (m.line, m.col) == (colon.line, colon.col)), None)
-        recv, parent, field = start, node, "start"  # the a of a:b: the last value in the part's start
-        while recv.kind in ("binop", "and", "or", "neg", "not"):
-            parent, field = recv, "right" if recv.kind in ("binop", "and", "or") else "value"
-            recv = getattr(recv, field)
         if method is None:
             return node
-        held = N("held", colon)
+        held = N("held", colon, of=start)
         method.obj = held
-        setattr(parent, field, held)
-        node.recv, node.alt, node.mname = recv, old, method.name
+        node.start, node.recv, node.alt, node.mname = held, start, old, method.name
         return node
 
     def unconvert(self, mark):
@@ -637,7 +647,7 @@ class Parser:
             while not self.at("OP", "}"):
                 colon = self.part_colon(in_dict=True)  # {name:age}, {names[0]:ages[0]}
                 if colon is not None:
-                    colon.kind = "COLON"
+                    self.toks[colon].kind = "COLON"
                 keys.append(self.expr())
                 self.expect("COLON", msg='Expected a \':\' between a key and its value, like {"sam": 14}.')
                 values.append(self.expr())
@@ -2247,7 +2257,11 @@ class Interpreter:
         v = plain(a)
         self.held.append(a)
         try:
-            if v is None or isinstance(v, Err) or (isinstance(v, (int, float)) and not isinstance(v, bool)):
+            if isinstance(v, Err):
+                v.stop(f"{node_text(e.recv) or 'The value before the :'}")
+            if v is None:  # names[order:pop] with order nil: neither a position nor something with :pop
+                raise TuffError(f"{node_text(e.recv) or 'The value before the :'} is nil, so it's not a position, and it has no :{e.mname}.")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
                 first = plain(self.eval(e.start, env))
                 return "part", first, plain(self.eval(e.end, env))
             names = method_names(a)
@@ -3573,7 +3587,7 @@ class Checker:
         if k == "dict":
             return "$dict"
         if k == "held":  # the start of names[order:pop] (see Parser.index)
-            return self.held[-1] if self.held else None
+            return self.held[-1] if self.held else self.kind(e.of, seen)
         if k == "slice":  # a part of text is text, a part of a list a list
             if self.as_method(e) is not False:  # names[order:pop]: an item of names (or can't tell yet)
                 return None
@@ -4070,7 +4084,7 @@ class Checker:
         start = self.kind(e.recv)
         if start == "$number":
             return False
-        if start is not None and start not in ("$nil", "$bool"):
+        if start is not None and start != "$bool":
             return True
         root = e.end
         while root.kind in ("call", "binop", "and", "or", "method", "index", "slice", "attr"):
@@ -4894,7 +4908,8 @@ class Checker:
 
         def changed(lst, where):
             return any(x.kind == "assign" and x.target.kind == "var" and x.target.name in (s.name, lst) for x in body) or \
-                any(x.kind == "method" and x.obj.kind == "var" and x.obj.name == lst and x.name in ("add", "remove", "pop") for x in where)
+                any(x.kind == "method" and (x.obj.of if x.obj.kind == "held" else x.obj).kind == "var" and
+                    (x.obj.of if x.obj.kind == "held" else x.obj).name == lst and x.name in ("add", "remove", "pop") for x in where)
 
         if compared:
             return

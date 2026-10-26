@@ -4338,6 +4338,24 @@ try:
 catch problem:
     say problem
 say len(text(2 ^ 20000)) > 4300
+la = [1, 2]
+lb = []
+say names[(la + lb):pop]
+say la
+stacks = []
+say items[len(stacks) > 0 and stacks[0]:pop or 0]
+func refill():
+    say "refilling"
+    return [2]
+k = 1
+say items[k or refill():pop]
+say email[email:find("@"):len(email) - 1]
+say {"name":line[0:2]}
+order = nil
+try:
+    say names[order:pop]
+catch problem:
+    say problem
 '''
 TOOLBOX_FIXES_OUTPUT = ["Bob", "Bob", '[["HI", 1]]', '["trout"]', "[3, 4]", "4", "1", "hello", "hello", "llo", "hello", "1",
                         "[1, [...]]", "3", "3", "0.00", "true", "true",
@@ -4345,7 +4363,8 @@ TOOLBOX_FIXES_OUTPUT = ["Bob", "Bob", '[["HI", 1]]', '["trout"]', "[3, 4]", "4",
                         "A dictionary's keys can be text or numbers, not true/false.",
                         'back doesn\'t have the number 1, but it has "1" (text). Keys that come back from file.load are always text: use back["1"] or back[text(1)].',
                         "one", '["", "", "X"]', '{"hi": 2}', "mail.com", " Smith", "[6, 7, 8]", "8", "7", '{"Ann": 5}', "108", "[1]",
-                        "The positions in [start:end] must be whole numbers, not nil.", "true"]
+                        "The positions in [start:end] must be whole numbers, not nil.", "true",
+                        "Cat", "[1, 2]", "5", "6", "@mail.com", '{"name": "Sam"}', "order is nil, so it's not a position, and it has no :pop."]
 TOOLBOX_FIXES_CHECKS = [
     ('d = {"a": 1}\nsay d:get()', "d:get takes 1 or 2 inputs, not 0."),
     ('s = "abc"\nsay s:replace("a")', "s:replace takes 2 inputs, not 1."),
