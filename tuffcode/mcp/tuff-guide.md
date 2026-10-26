@@ -17,7 +17,14 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `f"Hi {name}"`, `.format()` | `"Hi " + name`. Numbers join on their own (`"Score: " + 5`), but put sums in brackets: `"Score: " + (score + 1)` |
 | `items.append(x)` | `items:add(x)` |
 | `s.upper()`, `s.strip()` | `s:upper()`, `s:trim()` |
-| `x in items`, `"a" in s` | `items:has(x)`, `s:has("a")` (`in` only appears in `for` loops) |
+| `x in items`, `"a" in s` | `items:has(x)`, `s:has("a")`, `ages:has("sam")` (`in` only appears in `for` loops) |
+| `d = {"a": 1}`, `d["a"]`, `d.get("a", 0)` | the same braces and `[ ]`; `d:get("a", 0)`, `d:keys()`, `d:values()`, `d:remove("a")` |
+| `s[1:3]` (end not included) | `s[1:3]` includes position 3, like `range`; `s[:3]`, `s[2:]`, `s[-2:]` |
+| `s.split(",")`, `", ".join(items)`, `s.replace(a, b)` | `s:split(",")`, `items:join(", ")`, `s:replace(a, b)` |
+| `items.sort()`, `sorted(items, key=f)` | `items:sort()`, `items:sort(f)`, `items:reverse()` |
+| `open("f.txt").read()`, `json.dump` | `file.read("f.txt")`, `file.write`, `file.lines`, `file.save("f.json", data)`, `file.load` |
+| `try:` / `except Exception as e:` | `try:` / `catch e:` (`e` is the message, as text) |
+| `f"{x:.2f}"` | `text(x, 2)` |
 | `range(3)` gives 0, 1, 2 | `range(3)` gives 1, 2, 3, and `range(1, 3)` gives 1, 2, 3: both ends are included |
 | `for i in range(len(items)):` | `for item in items:`, or `for i in range(0, len(items) - 1):` |
 | `thing.method()` | `thing:method()`, with no spaces around the `:` (only libraries use a dot: `mtgui.window(...)`) |
@@ -29,10 +36,10 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `[0] * 3` | `[0, 0, 0]` |
 | default or keyword inputs, `global` | plain inputs only; `global` isn't needed (see rule 2) |
 | `print(x, end="")` | an error: build the whole line with `+` first, or add to a shown line with `line:append(...)` |
-| `import random`, `import math` | nothing to import. Built in: `random(a, b)`, `sqrt`, `floor`, `ceil`, `round`, `abs`, `min`, `max`, `sum`, `average`, `pi`. There's no sin, cos, tan, log or exp, no `random.choice` (use `items[random(0, len(items) - 1)]`) and no shuffle |
+| `import random`, `import math`, `import time` | nothing to import. Built in: `random(a, b)` (and `random()` for a decimal), `sqrt`, `floor`, `ceil`, `round`, `abs`, `min`, `max`, `sum`, `average`, `pi`, `sin`/`cos`/`tan` (in degrees), `log`, `now()`, `today()`, `date()`, `time()`. There's no exp, no `random.choice` (use `items[random(0, len(items) - 1)]`) and no shuffle |
 | `requests.get(url)`, `json.loads(...)` | `mention tap`, then `res = tap.get(url)` and `res:json` (see "tap") |
 | `import pygame` | `mention tgame`, then `game = tgame.window("Title", 800, 600)` (see "tgame") |
-| dictionaries, classes, `try`/`except`, `lambda`, slices like `s[1:3]`, `sort()`, `split()`, `exit()` | not in Tuff (see "What Tuff can't do") |
+| classes, `lambda`, `exit()` | not in Tuff (see "What Tuff can't do") |
 
 These words are keywords and can't be names: `func return if elif else then while for in break continue and or not is true false nil say input flush import mention`.
 
@@ -162,6 +169,97 @@ both = items + ["jam"]      # join two lists (makes a new list)
 - **Make every function at the top level of the file**, not inside another function or inside `if`, `for` or `while`. Top-level functions can be used anywhere, even above where they're written. A function made inside a block or another function only exists there, and only once its line has run.
 - Inputs belong to the function. Any other name follows rule 2.
 - Functions can call themselves, but only about 100 calls deep. Use a loop for anything that could go deeper.
+
+## Dictionaries
+```tuff
+ages = {"sam": 14, "ann": 12}       # keys (text, numbers or true/false) and their values
+say ages["sam"]                     # 14 (a key that isn't there stops the program: check first)
+ages["bob"] = 15                    # adds a key, or changes it
+if ages:has("ann"):
+    say "Ann is " + ages["ann"]
+say ages:get("zed", 0)              # the value, or 0 when the key isn't there
+ages:remove("ann")
+for name in ages:                   # a loop goes through the keys
+    say name + " is " + ages[name]
+say ages:keys()                     # ["sam", "bob"]
+say ages:values()                   # [14, 15]
+say len(ages)                       # 2
+```
+- A dictionary can hold lists and other dictionaries: `scores = {"red": [3, 4], "blue": [5]}`, then `scores["red"][1]`.
+- Written over several lines inside `{ }`, it's one line of code.
+- Save one to a file with `file.save` (below), and load it back with `file.load`.
+
+## Text tools and parts
+```tuff
+s = "hello world"
+say s[0:4]                          # "hello": positions 0 to 4, both included (like range)
+say s[6:]                           # "world" (from 6 to the end); s[:4] is from the start
+say s[-5:]                          # the last 5
+say "a,b,c":split(",")              # ["a", "b", "c"]; :split() splits at spaces
+say s:replace("world", "Tuff")      # "hello Tuff"
+say ["x", "y", "z"]:join(", ")      # "x, y, z"
+say s:starts("hell")                # true (also :ends)
+say s:find("o")                     # 4, or -1 if it isn't there (lists have :find too)
+say s:count("l")                    # 3
+say "7":pad_left(3, "0")            # "007" (also :pad_right(10) to line up columns)
+say text(3.14159, 2)                # "3.14"
+```
+- Parts work on lists too: `[1, 2, 3, 4, 5][1:3]` is `[2, 3, 4]`.
+- Inside `[ ]`, `a:b` is a part. A method call with brackets still works there, like `items[p:index()]`.
+
+## Sorting
+```tuff
+nums = [5, 3, 9, 1]
+nums:sort()                         # [1, 3, 5, 9], in place
+nums:reverse()                      # [9, 5, 3, 1]
+words = ["banana", "Apple", "cherry"]
+words:sort()                        # A to Z, any case
+func by_len(w):
+    len(w)
+words:sort(by_len)                  # sorts by what by_len gives back
+```
+- `:sort` and `:reverse` change the list itself (and give it back).
+- Numbers come before text when a list has both.
+
+## Files
+```tuff
+file.write("notes.txt", "first line")   # makes the file, or replaces what's in it
+file.add("notes.txt", "another line")   # adds a line at the end
+say file.read("notes.txt")              # all of it, as text
+for line in file.lines("notes.txt"):    # its lines, as a list
+    say line
+if file.exists("notes.txt"):
+    file.delete("notes.txt")
+file.save("save.json", {"name": "Sam", "level": 3})    # any data (text, numbers, lists, dictionaries)
+data = file.load("save.json", {})       # back again; {} if there's no file yet
+```
+- `file` is built in: there's nothing to mention. Files are in the program's own folder unless the path says otherwise.
+- Tuff Engine's preview never writes files.
+
+## When something goes wrong: try and catch
+```tuff
+try:
+    data = file.read("settings.txt")
+catch problem:                      # problem (any name, or none) is what went wrong, as text
+    say "No settings yet: " + problem
+    data = ""
+```
+- Anything in `try:` that would stop the program (a missing file, a bad web request, dividing by zero...) runs `catch:` instead, and the program goes on.
+- `try` and `catch` only count at the start of a line with a `:` after them, so a variable called `catch` still works.
+
+## Date, time and maths
+```tuff
+say now()                           # "14:05:09"
+say today()                         # "2026-10-26"
+d = date()                          # a dictionary: year, month, day, weekday, hour, minute, second
+say "Happy " + d["weekday"]
+start = time()                      # seconds since the program started
+wait(1.5)
+say "That took " + text(time() - start, 1) + " s"
+say sin(90)                         # 1: sin, cos and tan take degrees
+say log(100, 10)                    # 2; log(x) is the natural log
+say random()                        # a decimal from 0 to 1; random(0.5, 2.5) a decimal in that range
+```
 
 ## Live lines and clearing (console programs)
 ```tuff
@@ -1216,11 +1314,10 @@ In a window app, check a text box before using it: `if num(bill:value()) is err:
 
 ## What Tuff can't do
 Tuff has none of these:
-- files (except pictures for `image` and `icon`), or the internet except through `tap`;
-- dictionaries, classes, sorting, or exceptions (`try`);
-- splitting, replacing or formatting text, or slices;
-- random decimals (divide a whole number instead), or sin, cos, tan, log or exp;
+- the internet except through `tap`, or files outside text and JSON (`file`);
+- classes;
+- exp, or other maths beyond sin, cos, tan, log and sqrt;
 - drawing, sound, or keyboard and mouse events in tgui and mtgui (see "How a window app runs"). atgui has key shortcuts, hover and clicks on any widget, and a game made with `tgame` has all of them;
 - `exit()`, or Python modules.
 
-There's no date or time function either. A clock widget's `:value` gives the time of day, and `wait(seconds)` pauses a console program.
+For dates and times there's `now()`, `today()`, `date()` and `time()`, and `wait(seconds)` pauses a console program.

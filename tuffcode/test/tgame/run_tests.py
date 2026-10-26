@@ -4135,7 +4135,112 @@ def t_net_rooms(c):
             "in Tuff Engine's preview (--scene), world:host does nothing (and says nothing on the HUD)", (code, err[-300:], dump.get("error")))
 
 
+TOOLBOX_PROGRAM = '''ages = {"sam": 14, "ann": 12}
+ages["bob"] = 15
+say ages
+for name in ages:
+    say name + " is " + ages[name]
+say ages:get("zed", 0)
+ages:remove("ann")
+say ages:keys()
+say len(ages)
+nested = {
+    "red": [3, 4],
+    "blue": {"x": 1}
+}
+say nested["red"][1] + nested["blue"]["x"]
+s = "hello world"
+say s[0:4] + "|" + s[6:] + "|" + s[:1] + "|" + s[-3:]
+say [1, 2, 3, 4, 5][1:3]
+say "a,b,c":split(",")
+say s:replace("world", "Tuff")
+say ["x", "y"]:join(", ")
+say s:starts("hell") and s:ends("ld")
+say s:find("o") + s:count("l")
+say "7":pad_left(3, "0") + "hi":pad_right(4) + "|"
+say text(3.14159, 2)
+nums = [5, 3, 9, 1]
+nums:sort()
+say nums
+nums:reverse()
+say nums
+func by_len(w):
+    len(w)
+words = ["ccc", "a", "bb"]
+words:sort(by_len)
+say words
+file.write("tb_notes.txt", "one\\ntwo")
+file.add("tb_notes.txt", "three")
+say file.lines("tb_notes.txt")
+file.save("tb_data.json", {"name": "Sam", "scores": [1, 2]})
+data = file.load("tb_data.json")
+say data["name"] + data["scores"][1]
+say file.load("tb_missing.json", [])
+file.delete("tb_notes.txt")
+say file.exists("tb_notes.txt")
+try:
+    say file.read("tb_nope.txt")
+catch problem:
+    say "caught " + problem:starts("Couldn't find")
+try:
+    x = 1 / 0
+catch:
+    say "caught 2"
+catch = 3
+say catch
+say sin(90) + cos(180)
+say round(log(100, 10), 6)
+r = random()
+say r >= 0 and r <= 1
+say len(today()) + len(now())
+say date():has("weekday")
+'''
+TOOLBOX_OUTPUT = ['{"sam": 14, "ann": 12, "bob": 15}', "sam is 14", "ann is 12", "bob is 15", "0", '["sam", "bob"]', "2", "5",
+                  "hello|world|he|rld", "[2, 3, 4]", '["a", "b", "c"]', "hello Tuff", "x, y", "true", "7", "007hi  |", "3.14",
+                  "[1, 3, 5, 9]", "[9, 5, 3, 1]", '["a", "bb", "ccc"]', '["one", "two", "three"]', "Sam2", "[]", "false",
+                  "caught true", "caught 2", "3", "0", "2", "true", "18", "true"]
+# The checker on 1.4.0 mistakes: (code, part of the message it gives)
+TOOLBOX_MISTAKES = [
+    ('d = {"a": 1}\nsay d:valuez()', "Did you mean :values?"),
+    ('s = "abc"\nsay s:startswith("a")', ":starts"),
+    ('items = [3, 1]\nitems:sort(1, 2)', None),
+    ('try:\n    say 1\nsay 2', "needs a catch: block"),
+    ('d = {"a": 1}\nsay d:keys(1)', "doesn't take an input"),
+    ('say file.reed("x.txt")', "file doesn't have 'reed'"),
+]
+
+
+def t_toolbox(c):
+    """1.4.0, the Toolbox Update: dictionaries, parts [a:b], text tools, sorting, files and JSON, try/catch, date/time
+    and maths, run for real, then the checker on the same program and on mistakes."""
+    folder = os.path.join(HERE, "out", "toolbox")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "toolbox.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(TOOLBOX_PROGRAM)
+    p = subprocess.run(tuff_cmd() + [path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    got = p.stdout.splitlines()
+    c.check(p.returncode == 0, "the toolbox program runs to the end", (p.stdout + p.stderr)[-600:])
+    for i, want in enumerate(TOOLBOX_OUTPUT):
+        c.check(i < len(got) and got[i] == want, f"line {i + 1}: {want}", got[i] if i < len(got) else "(missing)")
+    c.check(not os.path.exists(os.path.join(folder, "tb_notes.txt")) and os.path.exists(os.path.join(folder, "tb_data.json")),
+            "file.delete deleted the notes, and file.save left its JSON next to the program")
+    p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    c.check(p.stdout.strip() == "OK", "--check accepts all of it", (p.stdout + p.stderr)[:600])
+    for i, (code, want) in enumerate(TOOLBOX_MISTAKES):
+        bad = os.path.join(folder, f"mistake{i}.tuf")
+        with open(bad, "w", encoding="utf-8") as f:
+            f.write(code + "\n")
+        p = subprocess.run(tuff_cmd() + ["--check", bad], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        out = p.stdout + p.stderr
+        if want is None:
+            c.check(True, f"--check runs on: {code.splitlines()[-1]}")
+        else:
+            c.check(want in out, f"--check on {code.splitlines()[-1]!r} says {want!r}", out[:300])
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
+         "toolbox": t_toolbox,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
          "models": t_models, "people": t_people,
          "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "terrain": t_terrain,
