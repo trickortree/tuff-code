@@ -211,6 +211,11 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #run-output .tline.rich.art { display: inline-block; max-width: 100%; overflow-x: auto; white-space: pre; line-height: 1.08; vertical-align: top;
   text-shadow: .5px 0 currentColor, 0 .5px currentColor; } /* closes the hairline gaps between blocks at fractional character widths */
 #run-output .tline.rich.art.bar { padding: 4px 8px; }
+/* "rainbow" moves: every letter's colour turns round the colour wheel, so the rainbow flows along the line (the
+   letters only: a bar behind them keeps its colour) */
+#run-output .tline.rich.rainbow > span { display: inline-block; animation: tline-rainbow 2.4s linear infinite; }
+@keyframes tline-rainbow { to { filter: hue-rotate(-360deg); } }
+@media (prefers-reduced-motion: reduce) { #run-output .tline.rich.rainbow > span { animation: none; } }
 @keyframes lineflash { from { background: color-mix(in srgb, var(--accent) 35%, transparent); } }
 #run-input { min-width: 40%; padding: 0; border: 0; outline: 0; background: transparent; color: var(--green); font: inherit; caret-color: var(--accent); }
 

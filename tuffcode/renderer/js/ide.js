@@ -1145,7 +1145,8 @@
   // say:color, say:ascii and print:pen (1.3.2): a line's style "rich:<base64 JSON>" says how it looks. fg and bg
   // are #rrggbb (bg is a bar behind the whole line), bold/dim/italic/underline are 1, runs are [row, start, length,
   // colour] for letters in their own colour (rainbow, and the animations' frames), art is big ASCII-art letters
-  // (they don't wrap: a wide one scrolls sideways) and anim is an animation's frame (no flash).
+  // (they don't wrap: a wide one scrolls sideways), anim is an animation's frame (no flash) and rainbow keeps the
+  // rainbow's colours flowing (CSS turns their hue round, after the program has ended too).
   const COLOR = /^#[0-9a-f]{6}$/i;
   const richStyle = (arg) => {
     if (!arg || !arg.startsWith('rich:')) return null;
@@ -1155,6 +1156,7 @@
     span.classList.add('rich');
     span.classList.toggle('art', !!look.art);
     span.classList.toggle('bar', COLOR.test(look.bg || ''));
+    span.classList.toggle('rainbow', !!look.rainbow);
     span.style.color = COLOR.test(look.fg || '') ? look.fg : '';
     span.style.backgroundColor = COLOR.test(look.bg || '') ? look.bg : '';
     span.style.fontWeight = look.bold ? '700' : '';

@@ -47,6 +47,11 @@ export default async (t, ctx) => {
   check('say:color("Game over!", "red"): the line is red', by('Game over!').color === 'rgb(229, 72, 77)', by('Game over!'));
   check('A second colour is a bar behind the whole line, and bold is bold', by('LEVEL UP').bg === 'rgb(34, 163, 90)' && by('LEVEL UP').color === 'rgb(255, 255, 255)' && by('LEVEL UP').weight === '700' && by('LEVEL UP').display === 'inline-block', by('LEVEL UP'));
   check('rainbow gives each letter its own colour', by('WINNER').kids.length === 6 && new Set(by('WINNER').kids).size === 6, by('WINNER'));
+  const hue = () => ev(`getComputedStyle([...document.querySelectorAll('#run-output .tline.rainbow > span')][0]).filter`);
+  const h1 = await hue();
+  await t.sleep(400);
+  const h2 = await hue();
+  check('...and the rainbow keeps moving after the program ends (its hue turns)', /hue-rotate/.test(h1) && h1 !== h2, { h1, h2 });
   check('print:pen("cyan") colours the lines after it, and print:pen() stops it', by('this is cyan').color === 'rgb(34, 211, 238)' && by('back to normal').color === '', [by('this is cyan'), by('back to normal')]);
   await t.shot('looks.png', await below('Game over!'));
 

@@ -1131,7 +1131,8 @@ class Console:
         look, new = line.look, not line.height
         height = shown.count("\n") + 1
         if IDE:
-            data = {"fg": look.fg, "bg": look.bg, "runs": runs or None, "art": 1 if line.art else None, "anim": 1 if anim else None}
+            data = {"fg": look.fg, "bg": look.bg, "runs": runs or None, "art": 1 if line.art else None, "anim": 1 if anim else None,
+                    "rainbow": 1 if look.rainbow and not anim else None}  # TuffCode keeps a rainbow's colours moving
             data = {k: v for k, v in data.items() if v}
             data.update({s: 1 for s in look.styles})
             style = "rich:" + b64(json.dumps(data, separators=(",", ":")))
@@ -2838,6 +2839,8 @@ class Checker:
             return "$list"
         if k == "say":
             return "$line"
+        if k == "sayfn":
+            return "$builtin"
         if k == "input":
             return "$text"
         if k == "var":
@@ -2873,6 +2876,8 @@ class Checker:
                 return {"window": "game", "world": "world"}.get(e.fn.name)
             return None
         if k == "method":
+            if self.is_print(e.obj):  # say:ascii(...) and say:color(...) say a line, like say does
+                return "$line" if e.name in ("ascii", "color", "colour") else None
             obj = self.kind(e.obj, seen)
             if obj and obj.startswith("@"):
                 return self.atgui_kind(obj[1:], e)
@@ -3402,7 +3407,43 @@ class Checker:
         if gui is not None and e.name not in members and e.obj.kind == "var" and e.obj.name not in self.imports:
             self.problem(e, dot_help("not a library", e.obj, e.name))
 
+    def is_print(self, e):
+        """The built-in print (or say, in say:ascii): its :methods are print:ascii, print:color and print:pen."""
+        return e.kind == "sayfn" or (e.kind == "var" and e.name == "print" and "print" not in self.user)
+
+    def check_print_method(self, e):
+        """print:ascii, print:color and print:pen (and say:...): a method print has, the text first, and words after
+        it that say:color and the rest know (only the ones written in quotes can be checked before it runs)."""
+        who = "say" if e.obj.kind == "sayfn" else "print"
+        owner = f"{who}:{e.name}"
+        if e.name not in ("ascii", "color", "colour", "pen"):
+            self.problem(e, method_help(who.capitalize(), e.name, ["ascii", "color", "pen"]))
+            return
+        if e.name != "pen" and not e.args:
+            self.problem(e, f'{owner} needs the text first, like: {owner}("Hello")')
+            return
+        words = e.args if e.name == "pen" else e.args[1:]
+        art, pen = e.name == "ascii", e.name == "pen"
+        known = [a for a in words if a.kind == "const" and isinstance(a.value, str)]
+        for a in words:
+            if a.kind == "const" and not isinstance(a.value, str):
+                self.problem(a, f'{owner} takes words like "red", "bold" or "fade" after the text, not {self.what(self.kind(a))}.')
+                return
+        for a in known:
+            try:
+                read_look(owner, [a.value], art=art, pen=pen)
+            except TuffError as err:
+                self.problem(a, err.msg)
+                return
+        try:
+            read_look(owner, [a.value for a in known], art=art, pen=pen)  # two fonts, too many colours...
+        except TuffError as err:
+            self.problem(e, err.msg)
+
     def check_method(self, e):
+        if self.is_print(e.obj):
+            self.check_print_method(e)
+            return
         obj = self.kind(e.obj)
         name, n = e.name, len(e.args)
         owner = e.obj.name if e.obj.kind == "var" else "thing"
