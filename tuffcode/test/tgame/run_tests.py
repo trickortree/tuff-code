@@ -1209,7 +1209,7 @@ def t_car_enter(c):
         {"at": 1.0, "tuff": "player:move_to(-2.3, 0, 0)"}, {"at": 1.3, "dump": "ce_near.json"},
         {"at": 1.35, "key": "f"}, {"at": 1.6, "call": "report"}, {"at": 1.65, "dump": "ce_in.json"},
         {"at": 1.7, "hold": "w", "for": 2.0}, {"at": 3.75, "hold": "space", "for": 0.6},
-        {"at": 3.9, "call": "report"}, {"at": 3.95, "shot": "car_enter_driving.png"},
+        {"at": 3.9, "tuff": "report_next = true"}, {"at": 3.95, "shot": "car_enter_driving.png"},
         {"at": 4.5, "key": "f"}, {"at": 4.8, "call": "report"}, {"at": 4.85, "dump": "ce_out.json"},
         {"at": 4.9, "shot": "car_enter_out.png"}, {"at": 6.0, "call": "report"}, {"at": 6.1, "close": True}])
     clean_exit(c, r)
@@ -1223,6 +1223,10 @@ def t_car_enter(c):
             and hint(inside) == "F: Get out",
             "F gets in: player:in_car() and car:driven() are true, car:on_enter ran, the figure is hidden, and the hint says F: Get out",
             (reps[1:2], inside.get("player_shown"), hint(inside)))
+    # The report while it drives comes from the game's every-frame function (report_next), after tgame has put the
+    # player where the car is, so both spots are from one frame. Asked with "call", earlier in a frame, the player was
+    # where the car was a frame before: 0.13 m or more at driving speed, more after a slow frame, and now and then
+    # over the 0.2 m allowed.
     c.check(len(reps) > 2 and reps[2]["car"][2] < -6 and math.dist(reps[2]["car"][::2], reps[2]["player"][::2]) < 0.2,
             "W drives it (the car's way forward), and player:spot() goes with the car", reps[2:3])
     c.check(len(reps) > 3 and not reps[3]["in"] and not reps[3]["driven"] and reps[3]["outs"] == 1 and out.get("player_shown") is True,
