@@ -773,7 +773,8 @@ export default async (t, ctx) => {
   // A sign's words are written on its board: its Inspector calls the field "Sign text".
   await clickSel('.en-tile[data-tile="sign"]');
   await mpNot(withCar);
-  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-l')].some((x) => x.textContent === 'Sign text')`, 4000);
+  // (An Intel Mac CI runner with no WebGL took over 4 s to show it in the v1.3.5 release build: up to 15 s.)
+  await waitFor(`[...document.querySelectorAll('#en-inspector .pf-l')].some((x) => x.textContent === 'Sign text')`, 15000);
   const signUi = await ev(`(() => { const f = [...document.querySelectorAll('#en-inspector .pf')].find((x) => x.querySelector('.pf-l')?.textContent === 'Sign text'); return f ? f.textContent : null; })()`);
   check(/Written on its board/.test(signUi || ''), "a sign's Inspector has Sign text (written on its board), not a floating Label", signUi);
   // Physics on everything: a cone has its Physics section too, and a door says why it has none.
