@@ -12,9 +12,9 @@ say "run " + runs
 label = game:text("Run " + runs, 200, 150, 32, "white")
 
 func save_all():
-    pet = tap.data()
-    pet:set("hp", 7.5)
-    stats = tap.data()
+    pet = tap.data()                            # an empty dictionary, like {}
+    pet["hp"] = 7.5
+    stats = tap.data()                          # filled with :set, the way older programs do
     stats:set("level", 3)
     stats:set("name", "Ada")
     stats:set("items", ["sword", "key"])
@@ -42,7 +42,7 @@ func show_all():
     if stats is nil:
         say "stats none"
     else:
-        say "stats " + stats:get("level") + " " + stats:get("name") + " " + text(stats:get("items")) + " " + stats:get("pet"):get("hp")
+        say "stats " + stats["level"] + " " + stats:get("name") + " " + text(stats:get("items")) + " " + stats["pet"]["hp"]
     say "missing " + game:load("missing", "none") + " " + text(game:load("missing")) + " " + game:saved("missing")
 
 func forget_some():
