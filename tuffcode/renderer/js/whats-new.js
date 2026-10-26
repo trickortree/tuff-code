@@ -143,6 +143,23 @@ ${NOTES['1.3.0'].notes}`,
 - Claude, Codex, Antigravity and Pumice 1 know all of it.`,
   };
   // 1.4.0, the Toolbox Update (a beta for now: its picture comes later).
+  // 1.4.1 fixes 1.4.0 and adds looks to input and anims.
+  NOTES['1.4.1'] = {
+    images: ['../1.4.0/1.png'],
+    notes: `### Colour on more things
+- **Questions in colour:** \`name = input:color("Name? ", "green")\` asks with the question in a look: colours, rainbow, bold and the rest.
+- **Anims in colour:** look words go after an anim's usual inputs, like \`anims.loading("Pulling info...", "green")\` or \`anims.countdown(3, "Go!", "lime")\`.
+- \`print:pen\` now colours input's questions and anims too.
+
+### Fixes
+- \`:play\` on a rainbow line keeps the rainbow flowing instead of jumping back to its first colours.
+- tap's JSON comes back as dictionaries, so \`data["name"]\` and \`for key in data:\` work.
+- Build Exe packs pictures from a parent folder (\`"../"\`), and problems inside a built app show in its error box.
+- Find and Replace in Files read files saved as UTF-16.
+- Learn: Basics lesson 10's check wants the number first.
+
+Everything from 1.4.0, the Toolbox Update, is here too: dictionaries, parts, text tools, sorting, files, try/catch and more.`,
+  };
   NOTES['1.4.0'] = {
     images: ['1.png'],
     notes: `### Dictionaries
