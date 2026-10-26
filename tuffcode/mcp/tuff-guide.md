@@ -23,7 +23,7 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `s.split(",")`, `", ".join(items)`, `s.replace(a, b)` | `s:split(",")`, `items:join(", ")`, `s:replace(a, b)` |
 | `items.sort()`, `sorted(items, key=f)` | `items:sort()`, `items:sort(f)`, `items:reverse()` |
 | `open("f.txt").read()`, `json.dump` | `file.read("f.txt")`, `file.write`, `file.lines`, `file.save("f.json", data)`, `file.load` |
-| `try:` / `except Exception as e:` | `try:` / `catch e:` (`e` is the message, as text; any name but `err`) |
+| `try:` / `except Exception as e:` | `try:` / `catch e:` (`e` is the message, as text; any name that isn't Tuff's own, like `err` or `text`) |
 | `f"{x:.2f}"` | `text(x, 2)` |
 | `range(3)` gives 0, 1, 2 | `range(3)` gives 1, 2, 3, and `range(1, 3)` gives 1, 2, 3: both ends are included |
 | `for i in range(len(items)):` | `for item in items:`, or `for i in range(0, len(items) - 1):` |
@@ -44,7 +44,7 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 These words are keywords and can't be names: `func return if elif else then while for in break continue and or not is true false nil say input flush import mention`.
 
 ## Two rules that trip everyone up
-**Rule 1: a method's input without brackets takes the rest of the line.** When what follows a method's name could start a value (a name, a number, text, `-`, `[`, `not`, `true`, `false` or `nil`), that and the rest of the line are the method's input. `items:has x and ready` means `items:has(x and ready)`, and `say slider:value - 1` gives the slider an input of `-1`. Anything else ends the call: `stack:pop + 10` is normal maths. So whenever more of the line follows a method call, put its inputs in brackets, even empty ones:
+**Rule 1: a method's input without brackets takes the rest of the line.** When what follows a method's name could start a value (a name, a number, text, `-`, `[`, `{`, `not`, `true`, `false` or `nil`), that and the rest of the line are the method's input. `items:has x and ready` means `items:has(x and ready)`, and `say slider:value - 1` gives the slider an input of `-1`. Anything else ends the call: `stack:pop + 10` is normal maths. So whenever more of the line follows a method call, put its inputs in brackets, even empty ones:
 ```tuff
 items = ["eggs"]
 ready = true
@@ -112,7 +112,7 @@ say double(4)
 - **Random numbers:**
   - `random(1, 6)` gives a whole number from 1 to 6, both included. `random(10)` gives 1 to 10.
   - `random()` gives a decimal from 0 to 1, and `random(0.5)` a decimal from 0 to 0.5.
-  - With a decimal at either end, `random(a, b)` gives a decimal in between: `random(0.5, 2.5)`. With whole numbers at both ends it gives a whole number.
+  - When either end has digits after the point, `random(a, b)` gives a decimal in between: `random(0.5, 2.5)`. Otherwise it gives a whole number, even from a decimal like `12 / 2` or `1.0`: `random(1, 12 / 2)` is a whole number from 1 to 6.
 - **Typed numbers:** `input` always gives text, so `"5" + 1` is `"51"` and `"5" * 2` is `"55"`.
   - Turn it into a number first: `number("42")` is 42 and `number("4.5")` is 4.5. Spaces around the number are ignored: `number(" 5 ")` is 5. `num(...)` is a short name for `number(...)`.
   - `int(...)` gives a whole number, dropping the decimals toward zero: `int("42")` is 42, `int(3.7)` and `int("3.7")` are 3, `int(-2.9)` is -2. `str(...)` is the same as `text(...)`.
@@ -248,13 +248,13 @@ data = file.load("save.json", {})       # back again; {} if there's no file yet
 ```tuff
 try:
     data = file.read("settings.txt")
-catch problem:                      # problem (any name but err, or none) is what went wrong, as text
+catch problem:                      # problem (or no name) is what went wrong, as text
     say "No settings yet: " + problem
     data = ""
 ```
 - Anything in `try:` that would stop the program (a missing file, a bad web request, dividing by zero...) runs `catch:` instead, and the program goes on.
-- `catch err:` is an error: `err` is Tuff's own value (what `num("abc")` gives), so call it something else, like `catch problem:`.
-- `try:` and `catch:` only start a block when the `:` ends the line (or has a space after it), or in `catch problem:`. So a variable called `try` or `catch` still works: `catch = []`, then `catch:add(1)`.
+- The problem's name can't be one of Tuff's own: `catch err:` is an error (`err` is what `num("abc")` gives), and so are `catch text:`, `catch len:`, `catch time:`, `catch file:` and the other built-ins' names. Call it something else, like `catch problem:`.
+- `try:` and `catch:` start a block when the `:` ends the line or has a space after it, and so does `catch problem:`. With the `:` glued to a word, `try:say "hi"` is a one-line block too, unless the program gives `try` or `catch` a value (`catch = []`, `for catch in ...`, or a function input called `catch`): then it's a method call. So a variable called `try` or `catch` still works: `catch = []`, then `catch:add(1)`.
 
 ## Date, time and maths
 ```tuff
@@ -271,7 +271,7 @@ say random()                        # a decimal from 0 to 1; random(0.5, 2.5) a 
 ```
 - `date()` gives a new dictionary each time, so read it once and use its keys: `d["hour"]`, `d["minute"]`.
 - `tan(90)` is an error, because tan has no value there. `log` needs a number above 0.
-- `random(6)` is a whole number from 1 to 6, and `random(0.5)` a decimal from 0 to 0.5. `random(a, b)` gives a decimal when either end is a decimal, and a whole number when both are whole.
+- `random(6)` is a whole number from 1 to 6, and `random(0.5)` a decimal from 0 to 0.5. `random(a, b)` gives a decimal when either end has digits after the point, like `random(0.5, 2)`, and a whole number otherwise: `random(0, 10 / 2)` is a whole number from 0 to 5, because `10 / 2` (5) has no digits after the point.
 
 ## Live lines and clearing (console programs)
 ```tuff

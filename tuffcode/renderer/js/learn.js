@@ -826,9 +826,11 @@
       starter: '# Section 1.6, Lesson 1: Dictionaries\n# Make a dictionary of three friends and their favourite colours, then say each one in a loop.\n\n',
       solution: 'colours = {"Sam": "blue", "Ann": "green", "Bo": "red"}\nfor friend in colours:\n    say friend + " likes " + colours[friend]\n',
       check: (src) => {
-        if (!/\w+\s*=\s*\{[^}]*["'][^"']*["']\s*:/.test(src)) return 'Make a dictionary with braces, like: colours = {"Sam": "blue", "Ann": "green"}';
+        // Written out ({"Sam": "blue"}, on one line or several), or made empty and filled: colours["Sam"] = "blue".
+        const made = /\w+\s*=\s*\{[^}]*:/.test(src) || /\b(\w+)\s*=\s*\{\s*\}[\s\S]*\b\1\s*(\[[^\]\n]+\]\s*=(?!=)|:set\b)/.test(src);
+        if (!made) return 'Make a dictionary with braces, like: colours = {"Sam": "blue", "Ann": "green"}';
         if (!/^\s*for\s+\w+\s+in\s+\w+\s*:/m.test(src)) return 'Go through it with a loop: for friend in colours:';
-        return /\w+\[\w+\]/.test(src) ? true : 'Inside the loop, read each value with colours[friend]';
+        return /\w\[\s*[A-Za-z_]\w*\s*\]|:get\b/.test(src) ? true : 'Inside the loop, read each value with colours[friend]';
       },
     },
     {
@@ -841,8 +843,8 @@
       starter: '# Section 1.6, Lesson 2: Text tools\n# Split "apples,pears,plums" into a list, then say them joined with " and ".\n\nfruit = "apples,pears,plums"\n',
       solution: 'fruit = "apples,pears,plums"\nlist = fruit:split(",")\nsay list:join(" and ")\n',
       check: (src) => {
-        if (!/:split\s*\(/.test(src)) return 'Split it at the commas: fruit:split(",")';
-        return /:join\s*\(/.test(src) ? true : 'Put them back together with :join(" and ")';
+        if (!/:split\b/.test(src)) return 'Split it at the commas: fruit:split(",")';
+        return /:join\b/.test(src) ? true : 'Put them back together with :join(" and ")';
       },
     },
     {
@@ -856,7 +858,8 @@
       solution: 'numbers = [12, 7, 30, 18, 3]\nnumbers:sort()\nnumbers:reverse()\nsay "Biggest: " + numbers[0]\n',
       check: (src) => {
         if (!/:sort\b/.test(src)) return 'Sort it first: numbers:sort()';
-        return /:reverse\b/.test(src) ? true : 'Then turn it around, biggest first: numbers:reverse()';
+        // Then :reverse, or :sort with a function that puts the biggest first: numbers:sort(biggest_first).
+        return /:reverse\b|:sort[ \t]*\(?[ \t]*[A-Za-z_]/.test(src) ? true : 'Then turn it around, biggest first: numbers:reverse()';
       },
     },
     {
@@ -879,7 +882,7 @@
       title: 'When things go wrong',
       body: `<p>Some things can fail: a file that isn't there, a web page that doesn't answer. Put them in <code>try:</code>, and <code>catch:</code> runs instead of the program stopping.</p>
              <p><code>catch problem:</code> gives what went wrong as text. <code>now()</code>, <code>today()</code> and <code>time()</code> (seconds since the start) are handy in logs.</p>`,
-      example: 'try:\n    text = file.read("missing.txt")\ncatch problem:\n    say "Couldn\'t read it: " + problem\n    text = ""\nfile.add("log.txt", today() + " " + now() + " ran the program")',
+      example: 'try:\n    notes = file.read("missing.txt")\ncatch problem:\n    say "Couldn\'t read it: " + problem\n    notes = ""\nfile.add("log.txt", today() + " " + now() + " ran the program")',
       task: 'Ask for a number with <code>input</code>, and use <code>try:</code> and <code>catch:</code> so typing a word says "That isn\'t a number" instead of stopping.',
       starter: '# Section 1.6, Lesson 5: When things go wrong\n# Ask for a number. If it isn\'t one, catch the problem and say "That isn\'t a number".\n\n',
       solution: 'answer = input "A number? "\ntry:\n    say "Doubled: " + int(answer) * 2\ncatch:\n    say "That isn\'t a number"\n',

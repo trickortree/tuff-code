@@ -275,6 +275,9 @@
           if (text !== ':' && text !== '.') return;
           const model = editor.getModel();
           if (!model || model.getLanguageId() !== 'tuff') return;
+          // The ':' of catch: or catch problem: moves the line out to its try:'s indent (see tuffCatchOutdent).
+          const outdent = text === ':' && window.tuffCatchOutdent(model, editor.getPosition());
+          if (outdent) editor.executeEdits('tuff', [outdent]);
           const want = window.tuffWantsSuggest(model, editor.getPosition());
           setTimeout(() => editor.trigger('tuff', want ? 'editor.action.triggerSuggest' : 'hideSuggestWidget', {}), 0);
         });
