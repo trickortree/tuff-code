@@ -703,7 +703,7 @@ class Native:
 
     def __init__(self, kind, methods, show=None):
         self.kind, self.methods = kind, methods
-        self.show = show  # show(nested) gives the text say shows for it, like a tap data object's JSON
+        self.show = show  # show(nested) gives the text say shows for it, like a tap response's <response 200>
 
 
 class AllLines:
@@ -952,9 +952,6 @@ def make_file_members(interp):
             if isinstance(v, float) and not math.isfinite(v):
                 raise TuffError(f"file.save can't keep {to_text(v)}: JSON only has ordinary numbers.")
             return v
-        data = getattr(v, "tap", None)  # a tap data object (from :json or tap.data()): its named values
-        if isinstance(v, Native) and isinstance(getattr(data, "values", None), dict):
-            v = data.values
         if isinstance(v, (list, dict)):
             if any(v is s for s in seen):
                 raise TuffError(f"file.save can't save a {'list' if isinstance(v, list) else 'dictionary'} that holds itself.")
@@ -1711,7 +1708,7 @@ class Runtime:
         return plain(v)
 
     def what(self, v):
-        """'text', 'a number', 'a data object'... for messages."""
+        """'text', 'a number', 'a dictionary'... for messages."""
         return type_name(plain(v))
 
     def number(self, v, what="This"):
@@ -2145,16 +2142,12 @@ class Interpreter:
         else:
             key = self.eval(index, env)
         if s.op != "=":
-            value = self.binop(s.op[0], self.item(obj, key, t.obj, index), value)
+            value = self.binop(s.op[0], self.item(obj, key, t.obj), value)
         if isinstance(obj, dict):  # ages["sam"] = 15 sets (or adds) a key
             obj[dict_key(key)] = value
             return value
         if not isinstance(obj, list):
-            owner = node_text(t.obj) or "thing"
-            example = key_example(index) if index is not None else '"name"'
-            tip = f" Use :set instead, like {owner}:set({example}, value)." \
-                if isinstance(obj, Native) and "keys" in obj.methods and "set" in obj.methods else ""
-            raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.{tip}")
+            raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.")
         obj[self.list_index(obj, key)] = value
         return value
 
@@ -2193,9 +2186,7 @@ class Interpreter:
         if isinstance(items, dict):  # a dictionary: its keys
             items = list(items)
         if not isinstance(items, (list, str)):
-            owner = s.items.name if s.items.kind == "var" else "thing"
-            tip = f" Loop over its names instead: for {s.name} in {owner}:keys():" if isinstance(items, Native) and "keys" in items.methods else ""
-            raise TuffError(f"Can't loop over {type_name(items)}.{tip}")
+            raise TuffError(f"Can't loop over {type_name(items)}.")
         for item in list(items):
             env.set(s.name, item)
             try:
@@ -2281,14 +2272,14 @@ class Interpreter:
             return {dict_key(self.eval(key, env)): self.eval(value, env) for key, value in zip(e.keys, e.values)}
         if k == "index":
             obj = plain(self.eval(e.obj, env))
-            return self.item(obj, self.eval(e.index, env), e.obj, e.index)
+            return self.item(obj, self.eval(e.index, env), e.obj)
         if k == "held":  # the start of names[order:pop], already worked out (see "slice")
             return self.held[-1]
         if k == "slice":  # s[1:3]: positions 1 to 3, both included (like range); s[:3] from the start, s[2:] to the end
             obj = plain(self.eval(e.obj, env))
             which, first, last = self.part(e, env)
             if which == "key":  # names[order:pop]: 1.3.6's method call gave the position or key
-                return self.item(obj, first, e.obj, None)
+                return self.item(obj, first, e.obj)
             if not isinstance(obj, (list, str)):
                 raise TuffError(f"Only text and lists have parts like [1:3], not {type_name(obj)}.")
             size = len(obj)
@@ -2361,7 +2352,7 @@ class Interpreter:
             raise TuffError(f"The positions in [start:end] must be whole numbers, not {type_name(v)}.{tip}")
         return v + size if v < 0 else v
 
-    def item(self, obj, key, obj_node, key_node):
+    def item(self, obj, key, obj_node):
         """obj[key]: a dictionary's value, or the item at a position in a list or text."""
         if isinstance(obj, dict):
             key = dict_key(key)
@@ -2378,10 +2369,7 @@ class Interpreter:
                 raise TuffError(f"{owner} doesn't have {shown}.{tip}")
             return obj[key]
         if not isinstance(obj, (list, str)):
-            owner = node_text(obj_node) or "thing"
-            example = key_example(key_node) if key_node is not None else '"name"'
-            tip = f" Use :get instead, like {owner}:get({example})." if isinstance(obj, Native) and "keys" in obj.methods else ""
-            raise TuffError(f"Can't use [ ] on {type_name(obj)}.{tip}")
+            raise TuffError(f"Can't use [ ] on {type_name(obj)}.")
         return obj[self.list_index(obj, key)]
 
     def list_index(self, obj, index):
@@ -2587,7 +2575,7 @@ class Interpreter:
             if name in ("keys", "values"):
                 no_inputs()
                 return list(obj) if name == "keys" else list(obj.values())
-            if name == "size":  # like len(d), and like a tap data object's :size
+            if name == "size":  # like len(d), and like tap's data objects had before 1.4.1
                 no_inputs()
                 return len(obj)
             what, kind = "A dictionary", "dict"
@@ -2727,12 +2715,6 @@ def node_text(e):
     return None
 
 
-def key_example(index):
-    """What a [ ] input looks like given to :get or :set, for messages: user["name"] gives "name", user[k] gives k."""
-    text = node_text(index) if index.kind in ("const", "var") else None
-    return text if text and not text[0].isdigit() else '"name"'
-
-
 def leaves_folder(path, folder):
     """Does this file path point outside the folder ("../cat.png", or a full path somewhere else)? A relative path
     is judged on its own; a full path only when the folder is known."""
@@ -2822,8 +2804,8 @@ _TAP = None
 
 
 def tap_tables():
-    """tap's functions ("lib") and the methods of its responses and data objects ("kinds"), read from
-    the library itself without going online. None when it can't be loaded."""
+    """tap's functions ("lib") and the methods of its responses ("kinds"), read from the library itself
+    without going online. None when it can't be loaded."""
     global _TAP
     if _TAP is None:
         try:
@@ -3176,7 +3158,7 @@ SAVE_INPUTS = {
     "forget": ("the save's name, or nothing to forget every save", '{o}:forget("best")', (0, 1)),
 }
 SAVE_KEEPS = "numbers, text, true/false, lists and tables"
-SAVE_KINDS = ("$number", "$text", "$bool", "$nil", "$list", "$line", "$dict", "data object")  # what :save can keep
+SAVE_KINDS = ("$number", "$text", "$bool", "$nil", "$list", "$line", "$dict")  # what :save can keep
 # tgame's multiplayer as the checker knows it (Checker.check_net): game:host, :join, :send, :share and the rest, on a
 # game or a world. For each, what it takes, for messages, an example ({o} is the game's name), the input counts that
 # fit, and what its first input is when that has to be text. :send and :share carry what :save keeps. on_message,
@@ -3506,10 +3488,10 @@ class Checker:
                        "weight": (0, False, None, "a number above 0 (kg)", "{o}:weight(50)"),
                        "bounce": (0, True, 1, "a number from 0 (no bounce) to 1 (it bounces right back up)", "{o}:bounce(0.6)"),
                        "friction": (0, True, None, "a number from 0 (slippery, like ice) up", "{o}:friction(0.4)")}
-    # What tap's functions make, and what the methods of those give back (left out: it depends, like :json).
-    TAP_MAKES = {"get": "response", "post": "response", "put": "response", "delete": "response", "data": "data object"}
-    TAP_GIVES = {"response": {"status": "$number", "ok": "$bool", "text": "$text"},
-                 "data object": {"has": "$bool", "keys": "$list", "size": "$number", "set": "data object"}}
+    # What tap's functions make (tap.data() is an empty dictionary), and what a response's methods give back (left
+    # out: it depends, like :json, which can be a dictionary, a list, text...).
+    TAP_MAKES = {"get": "response", "post": "response", "put": "response", "delete": "response", "data": "$dict"}
+    TAP_GIVES = {"response": {"status": "$number", "ok": "$bool", "text": "$text"}}
 
     def __init__(self, program, base_dir=None):
         self.program = program
@@ -3774,15 +3756,8 @@ class Checker:
             elif s.target.kind == "index":
                 self.expr(s.target.obj, scope)
                 self.expr(s.target.index, scope)
-                obj, who = self.kind(s.target.obj), node_text(s.target.obj)
-                if obj == "$text":
+                if self.kind(s.target.obj) == "$text":
                     self.problem(s, "You can only set items in a list, not in text. Build new text with + instead.")
-                elif obj == "data object":
-                    self.problem(s, f"You can only set items in a list, not in a data object. Use :set instead, like "
-                                    f"{who or 'thing'}:set({key_example(s.target.index)}, value).")
-                elif self.kind(s.target.index) == "$text" and self.json_like(s.target.obj):
-                    self.problem(s, f"List positions must be whole numbers, not text. If {who + ' is' if who else 'it is'} a data object "
-                                    f"(from :json), use :set instead, like {who or 'thing'}:set({key_example(s.target.index)}, value).")
             if s.op == "=" and target in self.func_count and target not in self.params and target not in self.loop_vars \
                     and self.kind(s.value) not in ("$func", "$builtin"):
                 self.problem(s, f"{target} is a function, and giving it a value replaces it, so {target}() won't work afterwards. Use another name for the value.")
@@ -3810,9 +3785,6 @@ class Checker:
             self.expr(s.items, scope)
             if self.kind(s.items) == "$number":
                 self.problem(s, f"Can't loop over a number. Try: for {s.name} in range(...):")
-            elif self.kind(s.items) == "data object":
-                owner = s.items.name if s.items.kind == "var" else "thing"
-                self.problem(s, f"Can't loop over a data object. Loop over its names instead: for {s.name} in {owner}:keys():")
             self.check_range_len(s)
             self.body(s.body, scope, True, in_func)
         elif k == "return":
@@ -4137,28 +4109,6 @@ class Checker:
             if self.is_decimal(n):
                 self.problem(n, "This is a decimal (it comes from /), even if it looks whole, so it can't repeat text. Use floor(...) around the division.")
 
-    def dicts_in_data(self):
-        """Does the program put a 1.4.0 dictionary into something with :set (a data object can hold one)? Then what
-        :get gives back may be a dictionary, and [ ] works on it."""
-        if getattr(self, "_dicts_in_data", None) is None:
-            self._dicts_in_data = any(m.kind == "method" and m.name == "set" and len(m.args) == 2 and self.kind(m.args[1]) == "$dict"
-                                      for m in nodes(self.program))
-        return self._dicts_in_data
-
-    def json_like(self, e, seen=frozenset()):
-        """Could this be one of tap's data objects: one made with tap.data(), a response's :json (an object, unless
-        the server sent a list), or what :get or [ ] gave back from one of those?"""
-        if self.kind(e) == "data object":
-            return True
-        if e.kind == "method":
-            return (e.name == "json" and not e.args) or (e.name == "get" and not self.dicts_in_data() and self.json_like(e.obj, seen))
-        if e.kind == "index":
-            return self.json_like(e.obj, seen)
-        if e.kind == "var" and e.name not in seen and e.name not in self.params and e.name not in self.loop_vars:
-            sets = self.assigned.get(e.name, [])
-            return bool(sets) and all(s.op == "=" and self.json_like(s.value, seen | {e.name}) for s in sets)
-        return False
-
     def as_method(self, e):
         """For x[a:b] with a glued ':' (Parser.index): True when it's 1.3.6's method call (a is a list, text or a
         widget), False when it's a part, None when it can't be told before the program runs."""
@@ -4196,13 +4146,7 @@ class Checker:
 
     def check_index(self, e):
         idx = self.kind(e.index)
-        who = node_text(e.obj)
-        if self.kind(e.obj) == "data object":  # what the run says: [ ] doesn't work on a data object at all
-            self.problem(e, f"Can't use [ ] on a data object. Use :get instead, like {who or 'thing'}:get({key_example(e.index)}).")
-        elif idx == "$text" and self.json_like(e.obj):
-            self.problem(e, f"List positions must be whole numbers, not text. If {who + ' is' if who else 'it is'} a data object "
-                            f"(from :json), use :get instead, like {who or 'thing'}:get({key_example(e.index)}).")
-        elif idx == "$text" and self.kind(e.obj) in ("$list", "$text"):  # (a dictionary's keys are often text)
+        if idx == "$text" and self.kind(e.obj) in ("$list", "$text"):  # (a dictionary's keys are often text)
             who = self.describe(e.index)
             self.problem(e, "List positions must be whole numbers, not text." + (f" Use number({who})." if who and self.typed(e.index) else ""))
         elif self.is_decimal(e.index):
@@ -4415,7 +4359,7 @@ class Checker:
         if simple:
             kind = obj[1:]
             if name not in simple:
-                what = "Text" if kind == "text" else a_kind(kind).capitalize()
+                what = "Text" if kind == "text" else self.TYPE[obj].capitalize()  # "A dictionary", like the run says
                 tip = PY_ONLY.get(name.lower())
                 msg = method_help(what, name, simple, kind)
                 self.problem(e, msg + (f" {tip}" if tip and "instead" not in msg else ""))

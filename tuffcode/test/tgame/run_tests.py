@@ -3579,7 +3579,7 @@ SAVE_CHECK_BAD = [
 
 def t_saves(c):
     """Saved game data: game:save keeps a number, text, true/false, nil, a list and a table (with a list and a table in
-    it); after the game restarts game:load gives them back (lists as lists, tables as data objects), with defaults for
+    it); after the game restarts game:load gives them back (lists as lists, tables as dictionaries), with defaults for
     what was never saved; :saved and :forget; friendly errors; a damaged save file is set aside and the game starts
     fresh; a game with another title (a 3D world) never mixes with it; --scene never saves; and the checker."""
     folder = save_dir("main")

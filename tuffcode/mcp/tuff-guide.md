@@ -366,22 +366,21 @@ mention tap
 
 res = tap.get("https://api.github.com/users/octocat")
 if res:ok:
-    user = res:json                 # a JSON object comes back as a data object
-    say user:get("name") + " has " + user:get("public_repos") + " public repos"
+    user = res:json                 # a JSON object comes back as a dictionary
+    say user["name"] + " has " + user["public_repos"] + " public repos"
 else:
     say "Error " + res:status
 
-note = tap.data()                   # an empty data object, to send
-note:set("title", "Hello")
-note:set("tags", ["a", "b"])
+note = {"title": "Hello", "tags": ["a", "b"]}   # a dictionary is sent as JSON
 sent = tap.post("https://httpbin.org/post", note)
 say sent:status
 ```
-- **Requests:** `tap.get(url)`, `tap.post(url, body)`, `tap.put(url, body)` and `tap.delete(url)`. Text is sent as plain text, and a data object or a list as JSON. Headers go last, as a data object: `tap.get(url, headers)`.
+- **Requests:** `tap.get(url)`, `tap.post(url, body)`, `tap.put(url, body)` and `tap.delete(url)`. Text is sent as plain text, and a dictionary or a list as JSON. Headers go last, as a dictionary: `tap.get(url, {"Accept": "text/csv"})`.
 - **A response:** `res:status` (like 200 or 404), `res:ok` (true for 200 to 299), `res:text`, `res:json` and `res:header("Content-Type")` (nil if it isn't there).
 - **Errors:** a 404 or 500 doesn't stop the program, so check `res:ok`. No internet, a bad address, no answer within 15 seconds, and `res:json` on something that isn't JSON do stop it with an error.
-- **JSON:** `res:json` gives a data object for `{...}`, a list for `[...]`, or text, a number, true/false or nil.
-- **Data objects:** `user:get("name")` (not `user["name"]`; nil if it's missing), `user:has("name")`, `user:keys()` (a list of the names), `user:size()` and `user:set("name", value)`. Objects inside are data objects too, and `say user` shows it as JSON. Loop over `user:keys()`, not `user`.
+- **JSON:** `res:json` gives a dictionary for `{...}`, a list for `[...]`, or text, a number, true/false or nil.
+- **What :json gives is an ordinary dictionary** (see "Dictionaries"): `user["name"]`, `user:get("name")` (nil if it's missing), `user:has("name")`, `user:keys()`, `len(user)`, and `user["name"] = value`. Objects inside are dictionaries too: `user["address"]["city"]`. `for name in user:` goes through its names. JSON's names are always text, so a name like `"1"` is read with `user["1"]`.
+- **tap.data()** is an empty dictionary, the same as `{}`. Older programs used it with `:set` to build what they send, and they still work.
 - **Waiting:** each call waits for the answer, and a window freezes while it waits.
 
 ### atgui

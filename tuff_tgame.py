@@ -7077,7 +7077,7 @@ class SavedData:
 
     def keepable(self, v, inside=(), method="save"):
         """The JSON value for a Tuff value :save can keep: numbers, text, true/false, nil, lists and tables
-        (dictionaries, or tap's data objects), inside each other too. A dictionary's number keys are kept as text, as
+        (dictionaries), inside each other too. A dictionary's number keys are kept as text, as
         file.save keeps them (JSON's names are text). Anything else is a Tuff error on the :save line. game:send and
         game:share take the same values (method: which one it is, for the message)."""
         rt = self.rt
@@ -7089,18 +7089,13 @@ class SavedData:
             if v != v or v in (math.inf, -math.inf):
                 raise rt.error(f"{self.what(method)} can only {verb} ordinary numbers, not {rt.text(v)}.")
             return v
-        table = None
-        if getattr(v, "tap", None) is not None:  # a tap data object: a table of named values
-            import tuff_tap
-            d = tuff_tap.data_of(v)
-            table = d.values if d is not None else None
-        if isinstance(v, (list, dict)) or table is not None:
+        if isinstance(v, (list, dict)):
             if any(x is v for x in inside):
                 raise rt.error(f"{self.what(method)} can't {verb} a list or table that holds itself.")
             inside = (*inside, v)
             if isinstance(v, list):
                 return [self.keepable(x, inside, method) for x in v]
-            return {rt.text(k): self.keepable(x, inside, method) for k, x in (v if table is None else table).items()}
+            return {rt.text(k): self.keepable(x, inside, method) for k, x in v.items()}
         raise rt.error(f"{self.what(method)} can {verb} {SAVE_KEEPS}, not {rt.what(v)}.")
 
     # ---- the file
