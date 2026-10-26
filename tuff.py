@@ -124,20 +124,27 @@ def tokenize(src):
                 i = j + 1
             elif c == ":":
                 glued = i > 0 and raw[i - 1] not in " \t" and i + 1 < n and (raw[i + 1].isalpha() or raw[i + 1] == "_")
-                if glued and brackets and brackets[-1] in "[{":
-                    # Inside [ ] or { }, a:b is a slice (s[a:b]) or a dictionary's key and value ({name:age}), unless
-                    # it's a method call with brackets, like items[p:index()]. A number has no methods (s[1:end]).
+                if glued and brackets and brackets[-1] in ("[i", "{"):
+                    # In an index's [ ] the first a:b is a part (s[a:b]), and in { } a key's a:b is the key and its
+                    # value ({name:age}): right after the opening bracket (or a { }'s comma), or after a number or
+                    # text. A method call with brackets stays one (items[p:index()]), and so does anything else, like
+                    # {"k": box:value} or a list's [slider:value].
                     j = i + 1
                     while j < n and (raw[j].isalnum() or raw[j] == "_"):
                         j += 1
-                    glued = j < n and raw[j] == "(" and toks[-1].kind != "NUM"
+                    start = len(toks) >= 2 and toks[-2].kind == "OP" and toks[-2].value in ("[", "{", ",")
+                    if (start or toks[-1].kind in ("NUM", "STR")) and not (j < n and raw[j] == "("):
+                        glued = False
                 toks.append(Tok("METHOD" if glued else "COLON", ":", ln, col))
                 i += 1
             elif raw[i:i + 2] in ("==", "!=", "<=", ">=", "+=", "-=", "*=", "/="):
                 toks.append(Tok("OP", raw[i:i + 2], ln, col))
                 i += 2
             elif c in "+-*/%^<>=()[]{},.":
-                if c in "([{":
+                if c == "[":  # an index's [ ] (after a value: s[1:3]) or a list's ([a, b])
+                    after_value = toks and (toks[-1].kind in ("NAME", "STR") or (toks[-1].kind == "OP" and toks[-1].value in ")]}"))
+                    brackets.append("[i" if after_value else "[l")
+                elif c in "({":
                     brackets.append(c)
                 elif c in ")]}" and brackets:
                     brackets.pop()
