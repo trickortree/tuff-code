@@ -728,13 +728,186 @@
   ATGUI.forEach((l) => { l.section = 'atgui'; });
   TAP.forEach((l) => { l.section = 'tap'; });
   TGAME.forEach((l) => { l.section = 'tgame'; });
+  // 1.3.5: colours, big letters and animations in the Run window (say:color, say:ascii, print:pen).
+  const calls = (src, name) => [...src.matchAll(new RegExp(`(?:say|print):${name}\\s*\\(([^)\\n]*)\\)`, 'g'))].map((m) => (m[1].match(/["'][^"']*["']/g) || []).map((s) => s.slice(1, -1).toLowerCase()));
+  const COLOR_WORDS = /^(#[0-9a-f]{3}([0-9a-f]{3})?|blue|purple|pink|red|orange|yellow|green|teal|white|black|gr[ae]y|brown|gold|lime|cyan|navy|sky|sand|grass|leaf|wood|stone|water|snow|silver|dark green|dark gr[ae]y|light gr[ae]y|dark blue|light blue)$/;
+  const FONTS = ['block', 'wide', 'small', 'shadow', 'led', 'hash'];
+  const MOVES = ['fade', 'build', 'explode', 'assemble', 'type', 'glitch', 'drop', 'wave'];
+  const LOOK = [
+    {
+      id: 'look-color',
+      title: 'Colourful lines',
+      body: `<p><code>say:color("text", "red")</code> says a line in a colour. Colours have names (red, orange, gold, lime, teal, sky, blue, purple, pink...) or a code like <code>"#ff8800"</code>.</p>
+             <p>Give a second colour and it becomes a bar behind the whole line. <code>bold</code>, <code>dim</code>, <code>italic</code> and <code>underline</code> work too, in any order.</p>`,
+      example: 'say:color("Game over!", "red")\nsay:color("LEVEL UP!", "black", "lime", "bold")\nsay:color("Any colour by its code", "#ff8800")\nsay:color("Quiet and dim", "dim")',
+      task: 'Say one line in a colour, and another with a bar behind it (two colours: the letters, then the bar).',
+      starter: '# Section 1.5, Lesson 1: Colourful lines\n# Say a line in a colour, and another with a bar behind it.\n\n',
+      solution: 'say:color("Welcome back", "sky")\nsay:color("NEW HIGH SCORE", "white", "purple", "bold")\n',
+      check: (src) => {
+        const all = calls(src, 'colou?r');
+        if (!all.length) return 'Colour a line with: say:color("Hello", "gold")';
+        if (!all.some((a) => a.slice(1).some((w) => COLOR_WORDS.test(w)))) return 'Give it a colour after the text, like: say:color("Hello", "gold")';
+        return all.some((a) => a.slice(1).filter((w) => COLOR_WORDS.test(w)).length >= 2) ? true : 'Now a line with a bar: two colours, like say:color("LEVEL UP", "white", "green")';
+      },
+    },
+    {
+      id: 'look-pen',
+      title: 'Rainbow and the pen',
+      body: `<p><code>"rainbow"</code> gives every letter its own colour, and in TuffCode the colours keep flowing.</p>
+             <p><code>print:pen("lime")</code> styles every line said after it, until <code>print:pen()</code> with nothing in it stops it. Handy for a whole screen in one colour.</p>`,
+      example: 'say:color("RAINBOW TEXT!", "rainbow")\n\nprint:pen("lime")\nsay "Loading the level"\nsay "Loading the music"\nprint:pen()\nsay "Back to normal"',
+      task: 'Say a rainbow line. Then use <code>print:pen</code> to colour two lines, and <code>print:pen()</code> to go back to normal.',
+      starter: '# Section 1.5, Lesson 2: Rainbow and the pen\n# Say a rainbow line, then colour two lines with print:pen, then stop it with print:pen().\n\n',
+      solution: 'say:color("You did it!", "rainbow")\nprint:pen("gold", "bold")\nsay "Coins: 120"\nsay "Gems: 7"\nprint:pen()\nsay "Thanks for playing"\n',
+      check: (src) => {
+        if (!/["']rainbow["']/i.test(src)) return 'Make a rainbow line: say:color("Hello", "rainbow")';
+        if (!/print:pen\s*\(\s*["']/.test(src)) return 'Turn the pen on, like: print:pen("lime")';
+        return /print:pen\s*\(\s*\)/.test(src) ? true : 'Turn it off again with: print:pen()';
+      },
+    },
+    {
+      id: 'look-ascii',
+      title: 'Big letters',
+      body: `<p><code>say:ascii("HELLO")</code> draws text in big letters made of blocks. Pick a font: <code>block</code> (the usual one), <code>wide</code>, <code>small</code>, <code>shadow</code>, <code>led</code> or <code>hash</code>.</p>
+             <p>Colours, a bar and rainbow work here too. Put <code>\\n</code> in the text for two lines of big letters.</p>`,
+      example: 'say:ascii("TUFF")\nsay:ascii("WIDE", "wide", "sky")\nsay:ascii("LED SIGN", "led", "lime")\nsay:ascii("RAINBOW", "rainbow", "small")',
+      task: 'Write your name (or your project\'s) in big letters, twice, in two different fonts.',
+      starter: '# Section 1.5, Lesson 3: Big letters\n# Write a name in big letters twice, in two different fonts.\n\n',
+      solution: 'say:ascii("SAM", "shadow", "pink")\nsay:ascii("SAM", "led", "lime")\n',
+      check: (src) => {
+        const all = calls(src, 'ascii');
+        if (!all.length) return 'Draw big letters with: say:ascii("HELLO")';
+        const fonts = new Set(all.map((a) => a.slice(1).find((w) => FONTS.includes(w)) || 'block'));
+        return fonts.size >= 2 ? true : `Use two different fonts, like say:ascii("HI", "wide"). Fonts: ${FONTS.join(', ')}.`;
+      },
+    },
+    {
+      id: 'look-anim',
+      title: 'Animations',
+      body: `<p>Add an animation's name and the line plays it when it's said: <code>fade</code>, <code>build</code>, <code>explode</code>, <code>assemble</code>, <code>type</code>, <code>glitch</code>, <code>drop</code> or <code>wave</code>. The program carries on when it ends.</p>
+             <p>They work on normal lines too: <code>say:color("Loading...", "type")</code> types itself out.</p>`,
+      example: 'say:ascii("READY", "assemble", "lime")\nsay:color("Press Enter to start", "type", "dim")\nanswer = input ""\nsay:ascii("GAME OVER", "explode", "red")',
+      task: 'Make a title in big letters that plays an animation, then a normal line that types itself out.',
+      starter: '# Section 1.5, Lesson 4: Animations\n# A big title with an animation, then a line that types itself (the "type" animation).\n\n',
+      solution: 'say:ascii("SPACE RACE", "glitch", "cyan")\nsay:color("Loading the stars...", "type")\n',
+      check: (src) => {
+        const big = calls(src, 'ascii');
+        if (!big.some((a) => a.slice(1).some((w) => MOVES.includes(w)))) return `Give a big title an animation, like say:ascii("HI", "fade"). Animations: ${MOVES.join(', ')}.`;
+        return calls(src, 'colou?r').some((a) => a.slice(1).includes('type')) ? true : 'Now a normal line that types itself: say:color("Loading...", "type")';
+      },
+    },
+    {
+      id: 'look-score',
+      title: 'Project: a big scoreboard',
+      body: `<p><code>say:ascii</code> gives back the line it said. Keep it in a variable and <code>:rewrite</code> it later: it stays big and keeps its colour.</p>
+             <p>With <code>wait</code> in a loop, that's a live scoreboard, a countdown or a clock.</p>`,
+      example: 'board = say:ascii(0, "wide", "gold")\nfor n in range(1, 10):\n    wait(0.2)\n    board:rewrite(n * 10)',
+      task: 'Make a big countdown from 10 to 0 with <code>:rewrite</code> and <code>wait</code>, then say something in colour at the end.',
+      starter: '# Section 1.5, Lesson 5: Project, a big scoreboard\n# Count down from 10 to 0 in big letters with :rewrite and wait, then say something in colour.\n\n',
+      solution: 'clock = say:ascii(10, "small", "sky")\nfor n in range(1, 10):\n    wait(0.5)\n    clock:rewrite(10 - n)\nsay:color("Lift off!", "orange", "bold")\n',
+      check: (src) => {
+        if (!/\w+\s*=\s*(say|print):ascii\s*\(/.test(src)) return 'Keep the big line in a variable: clock = say:ascii(10, "small")';
+        if (!/:rewrite\s*\(/.test(src)) return 'Change it with :rewrite, like clock:rewrite(9)';
+        if (!/\bwait\s*\(/.test(src)) return 'Pause between numbers with wait(0.5)';
+        return calls(src, 'colou?r').length ? true : 'End with a coloured line: say:color("Lift off!", "orange")';
+      },
+    },
+  ];
+
+  // 1.3.5: tdraw, drawing with a pen (a turtle).
+  const TDRAW = [
+    {
+      id: 'tdraw-pen',
+      title: 'Your first drawing',
+      body: `<p><code>tdraw</code> draws with a pen (a turtle) in a window. <code>pen = tdraw.pen()</code> puts it in the middle, at 0, 0, facing right. x goes right and y goes up.</p>
+             <p><code>pen:forward(100)</code> moves it and draws a line, and <code>pen:right(90)</code> or <code>pen:left(90)</code> turns it. The window stays open until you close it.</p>`,
+      example: 'mention tdraw\n\npen = tdraw.pen()\nfor side in range(1, 4):\n    pen:forward(150)\n    pen:right(90)',
+      task: 'Draw a triangle: three lines, turning 120 degrees after each one.',
+      starter: '# Section 5, Lesson 1: Your first drawing\n# Draw a triangle: forward three times, turning 120 degrees each time.\n\nmention tdraw\n\npen = tdraw.pen()\n',
+      solution: 'mention tdraw\n\npen = tdraw.pen()\nfor side in range(1, 3):\n    pen:forward(200)\n    pen:left(120)\n',
+      check: (src) => {
+        if (!/^\s*(import|mention)\s+tdraw\b/m.test(src)) return 'Start with: mention tdraw';
+        if (!/tdraw\.pen\s*\(/.test(src)) return 'Get a pen: pen = tdraw.pen()';
+        if (!/:forward\b/.test(src)) return 'Draw a line with pen:forward(150)';
+        return /:(left|right)\s*\(?\s*120\b/.test(src) ? true : 'Turn 120 degrees at each corner: pen:left(120)';
+      },
+    },
+    {
+      id: 'tdraw-loops',
+      title: 'Loops make patterns',
+      body: `<p>Repeat a move and turn in a loop and patterns appear. If the distance grows each time, it becomes a spiral.</p>
+             <p>Big drawings take a while to animate: <code>pen:speed "instant"</code> draws without animating. <code>"slow"</code>, <code>"normal"</code> and <code>"fast"</code> show the pen moving.</p>`,
+      example: 'mention tdraw\n\npen = tdraw.pen()\npen:speed "instant"\nfor i in range(1, 100):\n    pen:forward(i * 3)\n    pen:right(91)',
+      task: 'Make a spiral: a loop where the pen goes a little further each time (use the loop\'s number in <code>:forward</code>).',
+      starter: '# Section 5, Lesson 2: Loops make patterns\n# Make a spiral: in a loop, go further each time, then turn.\n\nmention tdraw\n\npen = tdraw.pen()\n',
+      solution: 'mention tdraw\n\npen = tdraw.pen()\npen:speed "instant"\nfor i in range(1, 80):\n    pen:forward(i * 4)\n    pen:right(144)\n',
+      check: (src) => {
+        const loop = src.match(/^\s*for\s+(\w+)\s+in\b/m);
+        if (!loop) return 'Use a loop: for i in range(1, 100):';
+        return new RegExp(`:forward\\s*\\(?[^\\n]*\\b${loop[1]}\\b`).test(src) ? true : `Make each line longer with the loop's number: pen:forward(${loop[1]} * 3)`;
+      },
+    },
+    {
+      id: 'tdraw-shapes',
+      title: 'Shapes and fills',
+      body: `<p>Shapes are ready-made: <code>pen:circle(50)</code>, <code>pen:square(80)</code>, <code>pen:triangle(80)</code>, <code>pen:polygon(6, 40)</code> and <code>pen:star(100)</code>. A colour after the size fills the shape.</p>
+             <p><code>pen:jump(x, y)</code> moves the pen without drawing, so shapes can go anywhere. <code>pen:write("Hi", 24)</code> writes text.</p>`,
+      example: 'mention tdraw\n\npen = tdraw.pen()\npen:color "gold"\npen:star(120, "gold")\npen:jump(-200, -150)\npen:color "sky"\npen:circle(40, "sky")\npen:jump(100, -200)\npen:write("Shapes!", 24)',
+      task: 'Draw a house: a filled square, with a triangle on top for the roof.',
+      starter: '# Section 5, Lesson 3: Shapes and fills\n# Draw a house: a filled square with a triangle on top.\n\nmention tdraw\n\npen = tdraw.pen()\n',
+      solution: 'mention tdraw\n\npen = tdraw.pen()\npen:color "wood"\npen:square(150, "wood")\npen:jump(0, 150)\npen:color "red"\npen:triangle(150, "red")\n',
+      check: (src) => {
+        if (!/:square\s*\(/.test(src)) return 'Draw the walls: pen:square(150, "wood")';
+        if (!/:square\s*\([^)]*,\s*["']/.test(src)) return 'Fill the square: put a colour after its size, like pen:square(150, "wood")';
+        return /:(triangle|polygon)\s*\(/.test(src) ? true : 'Add a roof: jump to the top with pen:jump(0, 150), then pen:triangle(150)';
+      },
+    },
+    {
+      id: 'tdraw-color',
+      title: 'Colours and rainbow pens',
+      body: `<p><code>pen:color "pink"</code> changes the pen's colour, and <code>pen:color "rainbow"</code> changes colour as it moves. <code>pen:width(6)</code> makes thicker lines.</p>
+             <p><code>tdraw.background("navy")</code> colours the whole window.</p>`,
+      example: 'mention tdraw\n\ntdraw.background("navy")\npen = tdraw.pen()\npen:speed "instant"\npen:color "rainbow"\npen:width(4)\nfor i in range(1, 36):\n    pen:circle(120)\n    pen:right(10)',
+      task: 'Pick a background colour, then draw a rainbow pattern with a loop.',
+      starter: '# Section 5, Lesson 4: Colours and rainbow pens\n# Pick a background, then draw a rainbow pattern with a loop.\n\nmention tdraw\n\npen = tdraw.pen()\n',
+      solution: 'mention tdraw\n\ntdraw.background("black")\npen = tdraw.pen()\npen:speed "instant"\npen:color "rainbow"\nfor i in range(1, 60):\n    pen:square(i * 5)\n    pen:right(6)\n',
+      check: (src) => {
+        if (!/tdraw\.background\s*\(/.test(src)) return 'Colour the window: tdraw.background("navy")';
+        if (!/:color\s*\(?\s*["']rainbow["']/.test(src)) return 'Use a rainbow pen: pen:color "rainbow"';
+        return /^\s*(for|while)\b/m.test(src) ? true : 'Make the pattern with a loop: for i in range(1, 36):';
+      },
+    },
+    {
+      id: 'tdraw-click',
+      title: 'Drawing with clicks',
+      body: `<p><code>tdraw.on_click(clicked)</code> runs <code>clicked(x, y)</code> each time the drawing is clicked, with where it was clicked.</p>
+             <p><code>pen:go(x, y)</code> draws a line to a spot, <code>pen:jump(x, y)</code> moves without drawing and <code>pen:dot(20, "red")</code> stamps a dot.</p>`,
+      example: 'mention tdraw\n\npen = tdraw.pen()\npen:hide()\n\nfunc clicked(x, y):\n    pen:jump(x, y)\n    pen:dot(25, "gold")\n\ntdraw.on_click(clicked)',
+      task: 'Make a dot-to-dot: each click draws a line from the last click to the new one, and puts a dot there.',
+      starter: '# Section 5, Lesson 5: Drawing with clicks\n# Each click draws a line to where you clicked, and puts a dot there.\n\nmention tdraw\n\npen = tdraw.pen()\n',
+      solution: 'mention tdraw\n\npen = tdraw.pen()\npen:color "lime"\n\nfunc clicked(x, y):\n    pen:go(x, y)\n    pen:dot(14, "white")\n\ntdraw.on_click(clicked)\n',
+      check: (src) => {
+        const fn = src.match(/tdraw\.on_click\s*\(\s*(\w+)\s*\)/);
+        if (!fn) return 'Run a function on clicks: tdraw.on_click(clicked)';
+        if (!new RegExp(`^\\s*func\\s+${fn[1]}\\s*\\(\\s*\\w+\\s*,\\s*\\w+\\s*\\)`, 'm').test(src)) return `Write it with two inputs, x and y: func ${fn[1]}(x, y):`;
+        if (!/:go\s*\(/.test(src)) return 'Draw a line to the click: pen:go(x, y)';
+        return /:dot\s*\(/.test(src) ? true : 'Put a dot there too: pen:dot(14, "white")';
+      },
+    },
+  ];
+
+  LOOK.forEach((l) => { l.section = 'look'; });
+  TDRAW.forEach((l) => { l.section = 'tdraw'; });
+
   const SECTIONS = [
     { id: 'basics', title: 'Basics', lessons: BASICS, prefix: '' },
+    { id: 'look', title: 'Section 1.5 · Make it look good', optional: true, lessons: LOOK, prefix: 'look-' },
     { id: 'tgui', title: 'Section 2 · Build apps', optional: true, lessons: TGUI, prefix: 'tgui-' },
     { id: 'mtgui', title: 'Section 2.1 · Modern apps', optional: true, lessons: MTGUI, prefix: 'mtgui-' },
     { id: 'atgui', title: 'Section 2.2 · Advanced apps', optional: true, lessons: ATGUI, prefix: 'atgui-' },
     { id: 'tap', title: 'Section 3 · The internet', optional: true, lessons: TAP, prefix: 'tap-' },
     { id: 'tgame', title: 'Section 4 · Games', optional: true, lessons: TGAME, prefix: 'tgame-' },
+    { id: 'tdraw', title: 'Section 5 · Drawing', optional: true, lessons: TDRAW, prefix: 'tdraw-' },
   ];
   const LESSONS = SECTIONS.flatMap((s) => s.lessons);
 

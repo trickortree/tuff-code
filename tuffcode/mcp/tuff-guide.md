@@ -175,6 +175,34 @@ clear(2)                    # remove the last 2 lines; clear(all) is the same as
 ```
 `say` and `print(...)` both give back the line they showed, so `say print(1, 2)` shows "1 2" twice.
 
+## Colours, big letters and animations (console programs)
+```tuff
+say:color("Game over!", "red")                      # a coloured line
+say:color("LEVEL UP!", "black", "lime", "bold")     # a 2nd colour is a bar behind the whole line
+say:color("RAINBOW!", "rainbow")                    # every letter its own colour (it flows in TuffCode)
+print:pen("cyan")                                   # every line after it in this look...
+say "this is cyan"
+print:pen()                                         # ...until print:pen() with nothing in it
+say:ascii("TUFF")                                   # big letters made of blocks
+say:ascii("HI", "wide", "gold")                     # fonts: block, wide, small, shadow, led, hash
+say:ascii("GAME OVER", "red", "explode")            # plays an animation, then the program goes on
+board = say:ascii(0, "small", "gold")
+board:rewrite(42)                                   # a big line stays big (and keeps its look)
+```
+- `say:color`, `say:ascii` and `say:pen` are the same as `print:color`, `print:ascii` and `print:pen`.
+- After the text come words, in any order:
+  - **colours:** the same names as tgame (red, orange, yellow, gold, lime, green, teal, cyan, sky, blue, navy, purple, pink, white, gray, black, brown...) or `"#ff8800"`. The first is the letters', a second is the bar.
+  - **styles:** `rainbow`, `bold`, `dim`, `italic`, `underline`.
+  - **fonts** (say:ascii only): `block`, `wide`, `small`, `shadow`, `led`, `hash`.
+  - **animations:** `fade`, `build`, `explode`, `assemble`, `type`, `glitch`, `drop`, `wave`.
+- An animation plays when the line is said: about 1 to 2 seconds, and the program waits for it. `explode` leaves the line empty. Animations work on `say:color` lines too, like `say:color("Loading...", "type")`.
+- `print:pen` takes colours and styles, not fonts or animations.
+- Where it shows:
+  - **TuffCode's Run window:** all of it.
+  - **A real terminal** (and a Build exe console app): ANSI colours, and animations play. Rainbow doesn't flow there.
+  - **A file or pipe** (agents' tuff_run): plain text, and an animation shows only how it ends.
+- Unknown words are mistakes, with a "did you mean": `say:color("x", "redd")`.
+
 ## Libraries
 `import x` and `mention x` mean the same thing. Put them at the top. Library functions use a dot and always need brackets, even with no inputs: `anims.loading()`. On its own, `anims.loading` does nothing.
 - **anims** shows console animations. They stop everything else while they play, so don't use them in window apps.
@@ -186,6 +214,35 @@ clear(2)                    # remove the last 2 lines; clear(all) is the same as
 - **tap** gets and sends things on the web (HTTP), like Python's requests. See below.
 - **atgui** ("advanced tgui") makes apps that look like the Claude or Codex desktop apps: sidebars, lists, chat bubbles, dashboards, menus and pop-ups, all styled from Tuff. See below.
 - **tgame** makes games, like pygame: 2D sprites, keys, the mouse, collisions and sounds, or a 3D world with a player. See below.
+- **tdraw** draws with a pen (a turtle), like Python's turtle: lines, shapes, fills, text and rainbow pens. See below.
+
+### tdraw
+```tuff
+mention tdraw
+tdraw.background("navy")    # optional: the window's colour (also tdraw.title, tdraw.size(w, h), tdraw.clear())
+pen = tdraw.pen()           # opens the drawing window; the pen starts at 0, 0 (the middle), facing right
+pen:speed "instant"         # "slow", "normal", "fast" (the start) or "instant" (no animation), or 1-10
+pen:color "rainbow"         # a colour name, "#rrggbb", or "rainbow" (changes as it moves)
+pen:width(3)
+for i in range(1, 100):
+    pen:forward(i * 3)      # moves and draws; pen:back(n)
+    pen:right(59)           # turns, in degrees; pen:left(n). 90 if left out
+pen:jump(150, 200)          # moves without drawing; pen:go(x, y) draws to there
+pen:color("pink", "gold")   # line colour, then fill colour
+pen:star(100, "gold")       # a colour after the size fills it
+pen:circle(40)              # also pen:square(80), pen:triangle(80), pen:polygon(6, 40), pen:dot(20, "red")
+pen:write("Hello", 24)
+pen:hide()                  # hides the turtle; pen:show() brings it back
+
+func clicked(x, y):
+    pen:go(x, y)
+tdraw.on_click(clicked)     # runs clicked(x, y) on each click
+```
+- x goes right and y goes **up** (unlike tgame, where y goes down). The window is 640 by 640, so ±320 reaches the edges.
+- More pen methods: `pen:up()`, `pen:down()`, `pen:home()`, `pen:face(degrees)` (0 right, 90 up), `pen:x()`, `pen:y()`.
+- The window stays open after the program ends, until it's closed. `wait()` keeps it drawing while the program waits.
+- Several pens can draw at once: call `tdraw.pen()` again.
+- For big drawings, use `pen:speed "instant"`, or they take a while to animate.
 
 ### tap
 ```tuff

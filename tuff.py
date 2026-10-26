@@ -1,7 +1,9 @@
 """Tuff - the language behind TuffCode. Run a program with: python tuff.py file.tuf"""
 import base64
+import colorsys
 import difflib
 import inspect
+import json
 import math
 import os
 import random
@@ -341,6 +343,8 @@ class Parser:
         tok = self.peek()
         if self.at("KW", "say"):
             self.next()
+            if self.at("METHOD"):  # say:ascii("Hi"), say:color(...): print's methods, by say's name
+                return self.postfix(N("sayfn", tok))
             return N("say", tok, value=self.expr())
         if self.at("KW", "input"):
             self.next()
@@ -432,8 +436,8 @@ class Parser:
         tok = self.peek()
         raise TuffError(msg, tok.line, tok.col)
 
-    def postfix(self):
-        node = self.primary()
+    def postfix(self, node=None):
+        node = self.primary() if node is None else node
         while True:
             tok = self.peek()
             if self.at("OP", "("):
@@ -500,6 +504,7 @@ class Builtin:
 class Line:
     def __init__(self, id_, text, row):
         self.id, self.text, self.row = id_, text, row
+        self.look, self.art, self.height = None, False, text.count("\n") + 1  # look: say:color, say:ascii, print:pen
 
 
 class Module:
@@ -535,7 +540,7 @@ class Err:
 
 
 ERR = Err()
-LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame")
+LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame", "tdraw")
 # Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
@@ -656,7 +661,446 @@ def call_python(label, fn, args, takes_err=False):
         raise TuffError(f"{label} failed: {exc}")
 
 
+# ---------------------------------------------------------------- text looks (1.3.2): say:color, say:ascii, print:pen
+# A said line can have colours, styles, rainbow letters, big ASCII-art letters and an animation. In TuffCode it's a
+# say/rewrite with the style "rich:<base64 JSON>" (ide.js richLine draws it), in a terminal ANSI colours, and in a file
+# or a pipe plain text (an animation shows only how it ends there).
+TEXT_COLORS = {  # tgame's COLORS, so a name is the same colour in a game and in the Run panel
+    "blue": "#3574f0", "purple": "#8b5cf6", "pink": "#ec4899", "red": "#e5484d", "orange": "#f97316",
+    "yellow": "#e2a508", "green": "#22a35a", "teal": "#14b8a6", "white": "#ffffff", "black": "#000000",
+    "gray": "#8a8d94", "grey": "#8a8d94",
+    "brown": "#8b5a2b", "gold": "#f2c230", "lime": "#84cc16", "cyan": "#22d3ee", "navy": "#1e3a8a",
+    "sky": "#87ceeb", "sand": "#e8d39a", "grass": "#5fa83f", "leaf": "#4f9d3a", "wood": "#a0703c",
+    "stone": "#9a9a92", "water": "#2f7fc8", "snow": "#f4f7fb", "silver": "#c0c6cf",
+    "dark green": "#2f6b2f", "dark gray": "#3b3f46", "dark grey": "#3b3f46", "light gray": "#c9ccd1",
+    "light grey": "#c9ccd1", "dark blue": "#1d3f8f", "light blue": "#8ec5ff",
+}
+TEXT_STYLES = ("bold", "dim", "italic", "underline")
+ART_FONTS = ("block", "wide", "small", "shadow", "led", "hash")
+ART_EFFECTS = ("fade", "build", "explode", "assemble", "type", "glitch", "drop", "wave")
+ART_FPS = 25
+HEX_COLOR = re.compile(r"#?(?:[0-9a-f]{6}|[0-9a-f]{3})")
+# Each character's 5 rows, '#' for ink. Lowercase letters are drawn as capitals, é as E, anything else as ?.
+ART_GLYPHS = {
+    "A": ".###. #...# ##### #...# #...#", "B": "####. #...# ####. #...# ####.", "C": ".#### #.... #.... #.... .####",
+    "D": "####. #...# #...# #...# ####.", "E": "##### #.... ####. #.... #####", "F": "##### #.... ####. #.... #....",
+    "G": ".#### #.... #.### #...# .####", "H": "#...# #...# ##### #...# #...#", "I": "### .#. .#. .#. ###",
+    "J": "....# ....# ....# #...# .###.", "K": "#...# #..#. ###.. #..#. #...#", "L": "#.... #.... #.... #.... #####",
+    "M": "#...# ##.## #.#.# #...# #...#", "N": "#...# ##..# #.#.# #..## #...#", "O": ".###. #...# #...# #...# .###.",
+    "P": "####. #...# ####. #.... #....", "Q": ".###. #...# #.#.# #..#. .##.#", "R": "####. #...# ####. #..#. #...#",
+    "S": ".#### #.... .###. ....# ####.", "T": "##### ..#.. ..#.. ..#.. ..#..", "U": "#...# #...# #...# #...# .###.",
+    "V": "#...# #...# #...# .#.#. ..#..", "W": "#...# #...# #.#.# ##.## #...#", "X": "#...# .#.#. ..#.. .#.#. #...#",
+    "Y": "#...# .#.#. ..#.. ..#.. ..#..", "Z": "##### ...#. ..#.. .#... #####",
+    "0": ".###. #..## #.#.# ##..# .###.", "1": ".#. ##. .#. .#. ###", "2": ".###. #...# ..##. .#... #####",
+    "3": "####. ....# .###. ....# ####.", "4": "#...# #...# ##### ....# ....#", "5": "##### #.... ####. ....# ####.",
+    "6": ".###. #.... ####. #...# .###.", "7": "##### ....# ...#. ..#.. ..#..", "8": ".###. #...# .###. #...# .###.",
+    "9": ".###. #...# .#### ....# .###.",
+    " ": "... ... ... ... ...", "!": "# # # . #", "?": ".###. #...# ..##. ..... ..#..", ".": ". . . . #",
+    ",": ".. .. .. .# #.", ":": ". # . # .", ";": ".. .# .. .# #.", "'": "# # . . .", '"': "#.# #.# ... ... ...",
+    "-": ".... .... #### .... ....", "+": "... .#. ### .#. ...", "=": ".... #### .... #### ....",
+    "_": "..... ..... ..... ..... #####", "/": "....# ...#. ..#.. .#... #....", "\\": "#.... .#... ..#.. ...#. ....#",
+    "(": ".# #. #. #. .#", ")": "#. .# .# .# #.", "[": "## #. #. #. ##", "]": "## .# .# .# ##",
+    "<": "..# .#. #.. .#. ..#", ">": "#.. .#. ..# .#. #..", "#": ".#.#. ##### .#.#. ##### .#.#.",
+    "*": "..... #.#.# .###. #.#.# .....", "&": ".##.. #..#. .##.. #..## .##.#", "@": ".###. #.### #.#.# #.### .##..",
+    "%": "##..# ##.#. ..#.. .#.## #..##", "$": ".#### #.#.. .###. ..#.# ####.", "^": ".#. #.# ... ... ...",
+    "~": "..... .#... #.#.# ...#. .....", "|": "# # # # #", "`": "#. .# .. .. ..", "{": ".## .#. ##. .#. .##",
+    "}": "##. .#. .## .#. ##.",
+}
+ART_LED_OFF = "#464a52"  # an led sign's dark lights
+ART_HEAD = "#ffd23f"  # build's printer head
+ART_CURSOR = "#9da0a8"  # type's cursor
+ART_FIRE = ["#ffffff", "#fff3a0", "#ffd23f", "#ff9f1c", "#ff5a1f", "#d62828", "#7a1c1c"]  # explode's sparks, as they burn out
+
+
+def art_glyph(ch):
+    up = ch.upper()
+    if up not in ART_GLYPHS:
+        base = unicodedata_base(ch).upper()
+        up = base if base in ART_GLYPHS else "?"
+    return ART_GLYPHS[up].split()
+
+
+def unicodedata_base(ch):
+    import unicodedata  # only for letters with accents
+    return unicodedata.normalize("NFKD", ch)[:1]
+
+
+def art_font_rows(bits, font):
+    """One banner's 5 rows of ink bits, drawn in a font: (rows, how many characters wide one bit is, how tall it is)."""
+    width = len(bits[0])
+    if font == "hash":
+        return ["".join("#" if b else " " for b in row).rstrip() for row in bits], 1, 5
+    if font == "led":  # a sign of lights: the dark ones show too
+        return ["".join("●" if b else "·" for b in row) for row in bits], 1, 5
+    if font == "wide":
+        return ["".join("██" if b else "  " for b in row).rstrip() for row in bits], 2, 5
+    if font == "small":  # two rows of bits in each row of text, with half blocks
+        padded = bits + [[0] * width]
+        return ["".join("█" if t and b else "▀" if t else "▄" if b else " " for t, b in zip(padded[r], padded[r + 1])).rstrip()
+                for r in range(0, 6, 2)], 1, 3
+    if font == "shadow":  # wide blocks with a shadow one row down and one character right
+        ink = {(r, c * 2 + k) for r in range(5) for c in range(width) if bits[r][c] for k in (0, 1)}
+        grid = [[" "] * (width * 2 + 1) for _ in range(6)]
+        for r, c in ink:
+            if (r + 1, c + 1) not in ink:
+                grid[r + 1][c + 1] = "░"
+        for r, c in ink:
+            grid[r][c] = "█"
+        return ["".join(row).rstrip() for row in grid], 2, 6
+    return ["".join("█" if b else " " for b in row).rstrip() for row in bits], 1, 5
+
+
+def art_render(text, font):
+    """Big letters: their rows, and each letter's box (top, bottom, left, right) for the effects that go letter by
+    letter. Each line of the text is a banner of its own, one blank row below the one before."""
+    rows, boxes = [], []
+    for n, part in enumerate(text.split("\n")):
+        if n:
+            rows.append("")
+        top = len(rows)
+        bits, spans = [[] for _ in range(5)], []
+        for i, ch in enumerate(part):
+            g = art_glyph(ch)
+            start = len(bits[0]) + (1 if i else 0)
+            for r in range(5):
+                if i:
+                    bits[r].append(0)
+                bits[r].extend(1 if c == "#" else 0 for c in g[r])
+            spans.append((start, len(bits[0])))
+        if not part:
+            bits = [[] for _ in range(5)]
+        drawn, scale, height = art_font_rows(bits, font or "block") if part else ([""] * 5, 1, 5)
+        rows.extend(drawn)
+        boxes.extend((top, top + height, a * scale, b * scale + (scale - 1 if font == "shadow" else 0)) for a, b in spans)
+    return rows, boxes
+
+
+def hue_color(hue, sat=0.75, val=1.0):
+    r, g, b = colorsys.hsv_to_rgb(hue % 1.0, sat, val)
+    return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
+
+
+class Look:
+    """How a said line looks: its letters' colour (#rrggbb, or rainbow), the bar behind it, its styles, and for
+    say:ascii the font. effect is the animation it plays when it's said."""
+
+    def __init__(self, fg=None, bg=None, styles=(), rainbow=False, font=None, effect=None):
+        self.fg, self.bg, self.styles, self.rainbow = fg, bg, set(styles), rainbow
+        self.font, self.effect = font, effect
+
+    def __bool__(self):
+        return bool(self.fg or self.bg or self.styles or self.rainbow or self.effect)
+
+    def with_pen(self, pen):
+        """What print:pen set, for what this line doesn't say itself."""
+        if pen is None:
+            return self
+        own_letters = self.fg or self.rainbow
+        return Look(self.fg if own_letters else pen.fg, self.bg or pen.bg, self.styles | pen.styles,
+                    self.rainbow if own_letters else pen.rainbow, self.font, self.effect)
+
+    def letters(self, rows):
+        """The colour of each letter that isn't the line's own: rainbow across the text, and an led sign's dark lights.
+        (row, column) -> colour."""
+        colors = {}
+        if self.font == "led":
+            colors = {(r, c): ART_LED_OFF for r, row in enumerate(rows) for c, ch in enumerate(row) if ch == "·"}
+        if self.rainbow:
+            width = max((len(r) for r in rows), default=1)
+            colors.update({(r, c): hue_color(c / max(width, 8) * 0.8 + r * 0.02) for r, row in enumerate(rows)
+                           for c, ch in enumerate(row) if ch not in " ·"})
+        return colors
+
+
+def read_look(owner, words, art=False, pen=False):
+    """The words after the text (in any order): colours (a name or #rrggbb; the first is the letters', a second the
+    bar behind them), rainbow, styles, and for say:ascii a font. Animations go on say:color and say:ascii."""
+    look, colors = Look(), []
+    for w in words:
+        w = plain(w)
+        if not isinstance(w, str):
+            raise TuffError(f'{owner} takes words like "red", "bold" or "fade" after the text, not {type_name(w)}.')
+        word = " ".join(w.lower().split())
+        if word in TEXT_COLORS:
+            colors.append(TEXT_COLORS[word])
+        elif HEX_COLOR.fullmatch(word):
+            h = word.lstrip("#")
+            colors.append("#" + (h if len(h) == 6 else "".join(c * 2 for c in h)))
+        elif word == "rainbow":
+            look.rainbow = True
+        elif word in TEXT_STYLES:
+            look.styles.add(word)
+        elif word in ART_FONTS and art:
+            if look.font:
+                raise TuffError(f'{owner} takes one font, but got "{look.font}" and "{word}".')
+            look.font = word
+        elif word in ART_EFFECTS and not pen:
+            if look.effect:
+                raise TuffError(f'{owner} plays one animation, but got "{look.effect}" and "{word}".')
+            look.effect = word
+        else:
+            raise TuffError(look_help(owner, w, word, art, pen))
+    most = 1 if look.rainbow else 2
+    if len(colors) > most:
+        raise TuffError(f"{owner} takes {'one colour with rainbow (for the bar behind the letters)' if look.rainbow else 'two colours at most: the letters, then the bar behind them'}.")
+    if look.rainbow:
+        look.bg = colors[0] if colors else None
+    else:
+        look.fg, look.bg = (colors + [None, None])[:2]
+    return look
+
+
+def look_help(owner, given, word, art, pen):
+    if word in ART_FONTS:
+        return f'"{word}" is a font for big letters: use it with say:ascii("Hi", "{word}").'
+    if word in ART_EFFECTS:
+        return f'print:pen sets colours and styles. Animations like "{word}" go on say:ascii or say:color.'
+    known = list(TEXT_COLORS) + ["rainbow", *TEXT_STYLES] + (list(ART_FONTS) if art else []) + ([] if pen else list(ART_EFFECTS))
+    hint = difflib.get_close_matches(word, known, n=1, cutoff=0.6)
+    kinds = ["colours (red, gold, sky... or \"#ff8800\")", "rainbow", "styles (" + ", ".join(TEXT_STYLES) + ")"]
+    if art:
+        kinds.append("fonts (" + ", ".join(ART_FONTS) + ")")
+    if not pen:
+        kinds.append("animations (" + ", ".join(ART_EFFECTS) + ")")
+    return f'{owner} doesn\'t know "{given}".' + (f' Did you mean "{hint[0]}"?' if hint else "") + " It takes " + ", ".join(kinds[:-1]) + " and " + kinds[-1] + "."
+
+
+def look_text(text, look, art):
+    """What a line shows, as rows, and each letter's box (top, bottom, left, right) for the animations."""
+    if art:
+        rows, boxes = art_render(text, look.font)
+    else:
+        rows = text.split("\n")
+        boxes = [(r, r + 1, c, c + 1) for r, row in enumerate(rows) for c, ch in enumerate(row) if ch != " "]
+    return rows, boxes
+
+
+class ArtCanvas:
+    """A frame being drawn: a grid of characters and their colours (None: the line's own colour)."""
+
+    def __init__(self, h, w):
+        self.h, self.w = h, w
+        self.ch = [[" "] * w for _ in range(h)]
+        self.col = [[None] * w for _ in range(h)]
+
+    def put(self, r, c, ch, color=None):
+        r, c = int(round(r)), int(round(c))
+        if 0 <= r < self.h and 0 <= c < self.w:
+            self.ch[r][c], self.col[r][c] = ch, color
+
+    def frame(self):
+        return frame_of(["".join(row) for row in self.ch], self.col)
+
+
+def frame_of(rows, colors):
+    """(text, runs): rows with their ends trimmed, and a [row, start, length, colour] run for each stretch of letters in
+    a colour that isn't the line's own. colors is a grid like the rows' (or a {(row, column): colour} map)."""
+    get = (lambda r, c: colors.get((r, c))) if isinstance(colors, dict) else (lambda r, c: colors[r][c] if c < len(colors[r]) else None)
+    runs, out = [], []
+    for r, row in enumerate(rows):
+        row = row.rstrip()
+        out.append(row)
+        start = None
+        for c in range(len(row) + 1):
+            cur = get(r, c) if c < len(row) and row[c] not in " " else None
+            if start is not None and cur != get(r, start):
+                runs.append([r, start, c - start, get(r, start)])
+                start = None
+            if cur is not None and start is None:
+                start = c
+    return "\n".join(out), runs
+
+
+def art_ink(rows):
+    return [(r, c, ch) for r, row in enumerate(rows) for c, ch in enumerate(row) if ch not in " ·"]
+
+
+def art_ramp(ch):
+    """What a letter shows while it fades in, by what it becomes."""
+    return "·•" if ch == "●" else ".:+" if ch == "#" else "░" if ch in "░▒" else "░▒▓"
+
+
+def art_frames(rows, boxes, look):
+    """The animation's frames, each (text, runs). The program waits while they play (1-2 seconds)."""
+    effect, base_map = look.effect, look.letters(rows)
+    base = lambda r, c: base_map.get((r, c))
+    rnd = random.Random(7)
+    h, w = len(rows), max((len(r) for r in rows), default=0)
+    cells = art_ink(rows)
+    dim = [(r, c) for r, row in enumerate(rows) for c, ch in enumerate(row) if ch == "·"]  # an led sign's dark lights
+    frames = []
+
+    def steps(seconds):
+        return range(int(ART_FPS * seconds) + 1)
+
+    if effect == "fade":
+        start = {(r, c): rnd.uniform(0, 0.6) for r, c, _ in cells}
+        for f in steps(1.0):
+            t, cv = f / ART_FPS, ArtCanvas(h, w)
+            for r, c in dim:
+                cv.put(r, c, "·", ART_LED_OFF)
+            for r, c, ch in cells:
+                p = (t - start[r, c]) / 0.4
+                if p > 0:
+                    ramp = art_ramp(ch)
+                    cv.put(r, c, ch if p >= 1 else ramp[min(len(ramp) - 1, int(p * len(ramp)))], base(r, c))
+            frames.append(cv.frame())
+    elif effect == "build":  # a printer head lays each row, from the bottom up
+        order = [r for r in reversed(range(h)) if rows[r].strip()]
+        per = 0.9 / max(1, len(order)) + 0.06
+        for f in steps(per * len(order)):
+            t, cv = f / ART_FPS, ArtCanvas(h, w)
+            for i, r in enumerate(order):
+                done = (t - i * per) / per
+                if done <= 0:
+                    continue
+                head = int(done * w) if done < 1 else w
+                for c, ch in enumerate(rows[r]):
+                    if ch != " " and c < head:
+                        cv.put(r, c, ch, base(r, c))
+                if done < 1:
+                    cv.put(r, min(head, w - 1), "▌", ART_HEAD)
+            frames.append(cv.frame())
+    elif effect in ("explode", "assemble"):
+        pad = 3  # rows below, for the sparks to fall into
+        cy = sum(r for r, _, _ in cells) / max(1, len(cells))
+        cx = sum(c for _, c, _ in cells) / max(1, len(cells))
+        sparks = []
+        for r, c, ch in cells:
+            dx, dy = c - cx, (r - cy) * 2.2
+            d = math.hypot(dx, dy) or 1
+            speed = rnd.uniform(14, 34)
+            sparks.append((r, c, ch, dx / d * speed + rnd.uniform(-6, 6), dy / d * speed / 2.2 + rnd.uniform(-5, 2), rnd.uniform(0.55, 1.05)))
+
+        def spark(cv, s, t, color_override=None):
+            r, c, ch, vx, vy, life = s
+            age = t / life
+            looks = [ch, "▓", "*", "+", "·"]
+            cv.put(r + vy * t + 4.5 * t * t, c + vx * t, looks[min(4, int(age * 5))],
+                   color_override or ART_FIRE[min(len(ART_FIRE) - 1, int(age * len(ART_FIRE)))])
+
+        if effect == "explode":  # it holds, flashes, then bursts into sparks that fly, fall and burn out
+            for f in steps(1.6):
+                t, cv = f / ART_FPS - 0.45, ArtCanvas(h + pad, w + 10)
+                if t <= 0:
+                    for r, c, ch in cells:
+                        cv.put(r, c, ch, "#ffffff" if t > -0.12 else base(r, c))
+                else:
+                    for s in sparks:
+                        if t < s[5]:
+                            spark(cv, s, t)
+                frames.append(cv.frame())
+        else:  # an explosion played backwards: sparks fly in and become the letters
+            for f in steps(1.15):
+                t, cv = 0.9 - f / ART_FPS, ArtCanvas(h + pad, w + 10)
+                for s in sparks:
+                    if t <= 0:
+                        cv.put(s[0], s[1], s[2], base(s[0], s[1]))
+                    else:
+                        tt = t * s[5] / 0.9
+                        spark(cv, s, tt * 0.8, None if tt >= 0.06 else (base(s[0], s[1]) or "#ffffff"))
+                frames.append(cv.frame())
+    elif effect == "type":  # letter by letter, with a blinking cursor
+        order = sorted(boxes)
+        per = min(0.09, 1.4 / max(1, len(order)))
+        for f in steps(per * len(order) + 0.5):
+            t, cv = f / ART_FPS, ArtCanvas(h, w + 2)
+            shown = min(len(order), int(t / per))
+            for top, bottom, left, right in order[:shown]:
+                for r in range(top, bottom):
+                    for c in range(left, min(right, len(rows[r]))):
+                        if rows[r][c] != " ":
+                            cv.put(r, c, rows[r][c], base(r, c))
+            if shown < len(order) or int(t * 4) % 2 == 0:
+                top, bottom, _, right = order[shown - 1] if shown else (order[0][0], order[0][1], 0, -1) if order else (0, 1, 0, -1)
+                for r in range(top, bottom):
+                    cv.put(r, right + 1, "▌", ART_CURSOR)
+            frames.append(cv.frame())
+    elif effect == "glitch":  # scrambled and shaking, then it snaps clean
+        junk = "#$%&@*+=?/\\<>!01"
+        for f in steps(1.3):
+            t, cv = f / ART_FPS, ArtCanvas(h, w + 2)
+            noise = max(0.0, 1 - t / 1.05)
+            shift = {r: (rnd.choice([-1, 1, 2]) if rnd.random() < noise * 0.5 else 0) for r in range(h)}
+            for r, c, ch in cells:
+                if rnd.random() < noise * 0.25:
+                    continue
+                if rnd.random() < noise * 0.7:
+                    cv.put(r, c + shift[r], rnd.choice(junk), rnd.choice(["#22d3ee", "#ff3ea5", base(r, c) or "#ffffff"]))
+                else:
+                    cv.put(r, c + shift[r], ch, base(r, c))
+            frames.append(cv.frame())
+    elif effect == "drop":  # each letter slides down into place, one after another, and bounces
+        order = sorted(boxes, key=lambda b: (b[0], b[2]))
+        per, fall = min(0.07, 0.9 / max(1, len(order))), 0.4
+        for f in steps(per * len(order) + fall + 0.3):
+            t, cv = f / ART_FPS, ArtCanvas(h, w)
+            for i, (top, bottom, left, right) in enumerate(order):
+                lt = t - i * per
+                if lt <= 0:
+                    continue
+                height = bottom - top
+                if lt < fall:
+                    dy = -height * (1 - (lt / fall) ** 2)
+                else:
+                    bt = min(1.0, (lt - fall) / 0.25)
+                    dy = -math.sin(bt * math.pi) * 0.6 * (1 - bt)
+                for r in range(top, bottom):
+                    for c in range(left, min(right, len(rows[r]))):
+                        if rows[r][c] not in " ":
+                            cv.put(r + dy, c, rows[r][c], base(r, c))
+            frames.append(cv.frame())
+    elif effect == "wave":  # a rainbow sweeps across, then the letters settle into their own colours
+        for f in steps(1.6):
+            t, cv = f / ART_FPS, ArtCanvas(h, w)
+            for r, c in dim:
+                cv.put(r, c, "·", ART_LED_OFF)
+            for r, c, ch in cells:
+                cv.put(r, c, ch, hue_color((c * 4.0 + r * 6.0 - t * 260.0) / 360))
+            frames.append(cv.frame())
+    return frames
+
+
+# A Mac's Terminal app shows only 256 colours (24-bit codes come out wrong there): it gets the nearest of those.
+ANSI_256 = os.environ.get("TERM_PROGRAM") == "Apple_Terminal" and os.environ.get("COLORTERM", "").lower() not in ("truecolor", "24bit")
+
+
+def ansi_color(hex_color, ground=38):
+    r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
+    if not ANSI_256:
+        return f"\x1b[{ground};2;{r};{g};{b}m"
+    steps = [0, 95, 135, 175, 215, 255]  # xterm's 6 x 6 x 6 colour cube, or its 24 greys, whichever is closer
+    near = lambda v: min(range(6), key=lambda i: abs(steps[i] - v))
+    cube = (near(r), near(g), near(b))
+    grey = min(23, max(0, round(((r + g + b) / 3 - 8) / 10)))
+    dist = lambda c: (c[0] - r) ** 2 + (c[1] - g) ** 2 + (c[2] - b) ** 2
+    use_grey = dist((8 + grey * 10,) * 3) < dist(tuple(steps[i] for i in cube))
+    n = 232 + grey if use_grey else 16 + 36 * cube[0] + 6 * cube[1] + cube[2]
+    return f"\x1b[{ground};5;{n}m"
+
+
+def ansi_rows(text, runs, look):
+    """A styled line for a real terminal: ANSI colours, and a bar that reaches the edge (erase to the end of the line
+    fills it with the bar's colour)."""
+    sgr = "".join({"bold": "\x1b[1m", "dim": "\x1b[2m", "italic": "\x1b[3m", "underline": "\x1b[4m"}[s] for s in sorted(look.styles))
+    own = ansi_color(look.fg) if look.fg else "\x1b[39m"
+    head = sgr + own + (ansi_color(look.bg, 48) if look.bg else "")
+    by_row = {}
+    for r, start, n, color in runs:
+        by_row.setdefault(r, []).append((start, n, color))
+    out = []
+    for r, row in enumerate(text.split("\n")):
+        s, pos = head, 0
+        for start, n, color in sorted(by_row.get(r, [])):
+            s += row[pos:start] + ansi_color(color) + row[start:start + n] + own
+            pos = start + n
+        out.append(s + row[pos:] + ("\x1b[K" if look.bg else "") + "\x1b[0m")
+    return out
+
+
 class Console:
+    animate = True  # SceneConsole: no animations in Tuff Engine's preview
+
     def __init__(self, first_id=1):
         self.next_id = first_id
         self.rows = 0
@@ -679,8 +1123,76 @@ class Console:
         self.rows += text.count("\n") + 1
         return line
 
+    def say_look(self, text, look, art=False):
+        """say:color, say:ascii, and a line said with print:pen on: it plays its animation, then shows how it ends."""
+        line = Line(self.next_id, text, self.rows)
+        self.next_id += 1
+        line.look, line.art, line.height = look, art, 0
+        rows, boxes = look_text(text, look, art)
+        frames = art_frames(rows, boxes, look) if look.effect and self.animate and (IDE or sys.stdout.isatty()) else []
+        start = time.perf_counter()
+        for i, (shown, runs) in enumerate(frames):
+            self.show(line, shown, runs, anim=True)
+            pause = start + (i + 1) / ART_FPS - time.perf_counter()
+            if pause > 0:
+                time.sleep(pause)
+        shown, runs = ("", []) if look.effect == "explode" else frame_of(rows, look.letters(rows))
+        self.show(line, shown, runs)
+        return line
+
+    def show(self, line, shown, runs, anim=False):
+        """Puts a styled line on the screen, or changes it if it's there: the first call says it."""
+        look, new = line.look, not line.height
+        height = shown.count("\n") + 1
+        if IDE:
+            data = {"fg": look.fg, "bg": look.bg, "runs": runs or None, "art": 1 if line.art else None, "anim": 1 if anim else None,
+                    "rainbow": 1 if look.rainbow and not anim else None}  # TuffCode keeps a rainbow's colours moving
+            data = {k: v for k, v in data.items() if v}
+            data.update({s: 1 for s in look.styles})
+            style = "rich:" + b64(json.dumps(data, separators=(",", ":")))
+            self.write(f"\x1b]tuff;{'say' if new else 'rewrite'};{line.id};{b64(shown)};{style}\x07" + ("\n" if new else ""))
+        elif sys.stdout.isatty():
+            rows = ansi_rows(shown, runs, look)
+            if new:
+                self.write("\n".join(rows) + "\n")
+            else:
+                height = self.redraw(line, rows)
+        elif new:
+            self.write(shown + "\n")
+        else:
+            return
+        if new:
+            line.row = self.rows
+            self.rows += height
+        elif IDE:
+            self.rows += height - line.height
+        line.height = height
+
+    def redraw(self, line, rows):
+        """A terminal: draws a line's rows again where it is. The last thing said can grow or shrink; a line with
+        others below it keeps its height. Gives its height now."""
+        old = line.height
+        up = self.rows - line.row
+        last = line.row + old == self.rows
+        if not last:
+            rows = (rows + [""] * old)[:old]
+        out = f"\x1b[{up}A" if up > 0 else ""
+        out += "".join("\r\x1b[2K" + row + "\n" for row in rows)
+        if last:
+            if len(rows) < old:
+                out += "\x1b[J"
+            self.rows += len(rows) - old
+        elif up - old > 0:
+            out += f"\x1b[{up - old}B"
+        self.write(out + "\r")
+        return len(rows)
+
     def rewrite(self, line, text):
         line.text = text
+        if getattr(line, "look", None) is not None:  # it keeps its look (and big letters stay big)
+            rows, _ = look_text(text, line.look, line.art)
+            self.show(line, *frame_of(rows, line.look.letters(rows)))
+            return
         if IDE:
             self.write(f"\x1b]tuff;rewrite;{line.id};{b64(text)}\x07")
             return
@@ -751,6 +1263,7 @@ class Runtime:
     def __init__(self, interp):
         self.interp = interp
         self.finish_hooks = []
+        self.wait_hooks = []
 
     def text(self, v):
         return to_text(plain(v))
@@ -789,6 +1302,10 @@ class Runtime:
 
     def on_finish(self, fn):
         self.finish_hooks.append(fn)
+
+    def on_wait(self, fn):
+        """fn runs over and over while the program waits (wait(1)), so a library's window keeps drawing."""
+        self.wait_hooks.append(fn)
 
     def call(self, fn, *args):
         """Run a Tuff function from a library callback. Errors are reported, not raised."""
@@ -839,6 +1356,8 @@ class Interpreter:
         takes_err = {"number", "num", "int", "text", "str", "print"}  # they hand an err back, or show it as "err"
         for name, fn in builtins.items():
             (self.own_names if name in OWN_NAME_BUILTINS else self.globals).vars[name] = Builtin(name, fn, name in takes_err)
+        self.print_builtin = self.globals.vars["print"]  # say:ascii(...) is print's, even in a program with its own print
+        self.pen = None  # print:pen's look, for every line said after it
         self.globals.vars["all"] = ALL
         self.globals.vars["pi"] = math.pi
         self.own_names.vars["err"] = ERR
@@ -881,6 +1400,13 @@ class Interpreter:
         except ImportError:
             raise TuffError("mtgui needs Python's tkinter, which isn't installed. Reinstall Python and tick 'tcl/tk and IDLE'.")
         return tuff_tgui.make_library(self.rt, modern=True)
+
+    def lib_tdraw(self):
+        try:
+            import tuff_tdraw
+        except ImportError:
+            raise TuffError("tdraw needs Python's tkinter, which isn't installed. Reinstall Python and tick 'tcl/tk and IDLE'.")
+        return tuff_tdraw.make_library(self.rt, TEXT_COLORS)
 
     def lib_tap(self):
         try:
@@ -961,7 +1487,27 @@ class Interpreter:
 
     # builtins
     def b_print(self, *args):
-        return self.console.say(" ".join(to_text(a) for a in args))
+        return self.say_text(" ".join(to_text(a) for a in args))
+
+    def say_text(self, text):
+        """say and print: with print:pen on, the line has the pen's look."""
+        return self.console.say_look(text, Look().with_pen(self.pen)) if self.pen else self.console.say(text)
+
+    def print_method(self, said, name, args):
+        """print:ascii, print:color and print:pen (and say:ascii, say:color, say:pen: the same)."""
+        who = "say" if said else "print"
+        owner = f"{who}:{name}"
+        if name in ("ascii", "color", "colour"):
+            if not args:
+                raise TuffError(f'{owner} needs the text first, like: {owner}("Hello"{", " + chr(34) + "red" + chr(34) if name != "ascii" else ""})')
+            art = name == "ascii"
+            look = read_look(owner, args[1:], art=art).with_pen(self.pen)
+            return self.console.say_look(to_text(args[0]), look, art=art)
+        if name == "pen":
+            look = read_look(owner, args, pen=True)
+            self.pen = look if look else None
+            return None
+        raise TuffError(method_help(who.capitalize(), name, ["ascii", "color", "pen"]))
 
     def b_number(self, v, name="number"):
         # Text that isn't a number gives err (check with: if number(t) is err) instead of stopping the program.
@@ -1006,7 +1552,15 @@ class Interpreter:
 
     def b_wait(self, seconds):
         sys.stdout.flush()
-        time.sleep(max(0, float(seconds)))
+        end = time.perf_counter() + max(0, float(seconds))
+        while self.rt.wait_hooks:  # a tdraw window keeps drawing while the program waits
+            for hook in self.rt.wait_hooks:
+                hook()
+            left = end - time.perf_counter()
+            if left <= 0:
+                return
+            time.sleep(min(0.02, left))
+        time.sleep(max(0, end - time.perf_counter()))
 
     def b_range(self, a, b=None, step=1):
         if b is None:
@@ -1127,7 +1681,9 @@ class Interpreter:
         if k == "var":
             return env.get(e.name)
         if k == "say":
-            return self.console.say(to_text(self.eval(e.value, env)))
+            return self.say_text(to_text(self.eval(e.value, env)))
+        if k == "sayfn":
+            return self.print_builtin
         if k == "input":
             prompt = "" if e.prompt is None else to_text(self.eval(e.prompt, env))
             return self.console.input(prompt)
@@ -1268,6 +1824,8 @@ class Interpreter:
             if args:
                 raise TuffError(f":{name} doesn't take an input. Write :{name}() or just :{name}.")
 
+        if isinstance(obj, Builtin) and obj.name == "print":
+            return self.print_method(e.obj.kind == "sayfn", name, args)
         if isinstance(obj, Native):
             fn = obj.methods.get(name)
             if fn is None:
@@ -2083,6 +2641,15 @@ def with_gamekit(tg, lib):
                                 if hasattr(lib, f))}
 
 
+def tdraw_pen_methods():
+    """A tdraw pen's :methods, for the checker (None without tkinter)."""
+    try:
+        import tuff_tdraw
+    except ImportError:
+        return None
+    return tuff_tdraw.PEN_METHODS
+
+
 def nodes(x):
     """Every node inside a node, or inside a list of nodes."""
     if isinstance(x, N):
@@ -2315,6 +2882,8 @@ class Checker:
             return "$list"
         if k == "say":
             return "$line"
+        if k == "sayfn":
+            return "$builtin"
         if k == "input":
             return "$text"
         if k == "var":
@@ -2348,8 +2917,12 @@ class Checker:
                 return "@window" if e.fn.name == "window" else None
             if lib == "$module:tgame":
                 return {"window": "game", "world": "world"}.get(e.fn.name)
+            if lib == "$module:tdraw":
+                return "tdpen" if e.fn.name == "pen" else None
             return None
         if k == "method":
+            if self.is_print(e.obj):  # say:ascii(...) and say:color(...) say a line, like say does
+                return "$line" if e.name in ("ascii", "color", "colour") else None
             obj = self.kind(e.obj, seen)
             if obj and obj.startswith("@"):
                 return self.atgui_kind(obj[1:], e)
@@ -2539,6 +3112,13 @@ class Checker:
             if self.anims is None:
                 self.anims = {n: b.fn for n, b in self.interp.lib_anims().items()}
             return self.anims
+        if lib == "tdraw":  # its functions open nothing until they're called
+            if getattr(self, "tdraw", None) is None:
+                try:
+                    self.tdraw = {n: b.fn for n, b in self.interp.lib_tdraw().items()}
+                except TuffError:
+                    return None
+            return self.tdraw
         if lib == "tap":
             tap = tap_tables()
             return tap["lib"] if tap else None
@@ -2763,6 +3343,8 @@ class Checker:
         gui = gui_tables()
         if gui is None:
             return True
+        if name in (tdraw_pen_methods() or ()):
+            return True
         at = atgui_tables()
         if at is not None and any(name in m for m in at["kinds"].values()):
             return True
@@ -2879,7 +3461,43 @@ class Checker:
         if gui is not None and e.name not in members and e.obj.kind == "var" and e.obj.name not in self.imports:
             self.problem(e, dot_help("not a library", e.obj, e.name))
 
+    def is_print(self, e):
+        """The built-in print (or say, in say:ascii): its :methods are print:ascii, print:color and print:pen."""
+        return e.kind == "sayfn" or (e.kind == "var" and e.name == "print" and "print" not in self.user)
+
+    def check_print_method(self, e):
+        """print:ascii, print:color and print:pen (and say:...): a method print has, the text first, and words after
+        it that say:color and the rest know (only the ones written in quotes can be checked before it runs)."""
+        who = "say" if e.obj.kind == "sayfn" else "print"
+        owner = f"{who}:{e.name}"
+        if e.name not in ("ascii", "color", "colour", "pen"):
+            self.problem(e, method_help(who.capitalize(), e.name, ["ascii", "color", "pen"]))
+            return
+        if e.name != "pen" and not e.args:
+            self.problem(e, f'{owner} needs the text first, like: {owner}("Hello")')
+            return
+        words = e.args if e.name == "pen" else e.args[1:]
+        art, pen = e.name == "ascii", e.name == "pen"
+        known = [a for a in words if a.kind == "const" and isinstance(a.value, str)]
+        for a in words:
+            if a.kind == "const" and not isinstance(a.value, str):
+                self.problem(a, f'{owner} takes words like "red", "bold" or "fade" after the text, not {self.what(self.kind(a))}.')
+                return
+        for a in known:
+            try:
+                read_look(owner, [a.value], art=art, pen=pen)
+            except TuffError as err:
+                self.problem(a, err.msg)
+                return
+        try:
+            read_look(owner, [a.value for a in known], art=art, pen=pen)  # two fonts, too many colours...
+        except TuffError as err:
+            self.problem(e, err.msg)
+
     def check_method(self, e):
+        if self.is_print(e.obj):
+            self.check_print_method(e)
+            return
         obj = self.kind(e.obj)
         name, n = e.name, len(e.args)
         owner = e.obj.name if e.obj.kind == "var" else "thing"
@@ -2927,6 +3545,11 @@ class Checker:
             return
         if self.is_tgame(obj):
             self.check_tgame(e, obj, bare_fix)
+            return
+        if obj == "tdpen":  # a tdraw pen
+            names = tdraw_pen_methods()
+            if names and name not in names:
+                self.problem(e, method_help("A pen", name, names))
             return
         gui = gui_tables()
         tap = tap_tables() if obj in self.TAP_GIVES else None
@@ -3698,6 +4321,8 @@ Checker.HANDLER_POS = {**Checker.HANDLER_POS, "on_death": 0, "on_talk": 0, "coun
 # ---------------------------------------------------------------- Tuff Engine's preview (tuff.py --scene)
 class SceneConsole(Console):
     """Prints nothing and answers input() with "", so a preview never shows output or waits."""
+    animate = False
+
     def write(self, text):
         pass
 
