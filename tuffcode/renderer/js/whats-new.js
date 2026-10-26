@@ -142,6 +142,21 @@ ${NOTES['1.3.0'].notes}`,
 - The editor checks the new words as you type: \`say:color("hi", "redd")\` asks if you meant "red".
 - Claude, Codex, Antigravity and Pumice 1 know all of it.`,
   };
+  // 1.3.6 adds a few things to 1.3.5. Copies coming from before 1.3.5 only see 1.3.6's notes, so they carry 1.3.5's too.
+  NOTES['1.3.6'] = {
+    images: ['1.png'],
+    notes: `### Animate a line that's already there
+- **\`line:play("explode")\`** plays an animation on a line where it is, any time after it was said. Put \`wait(3)\` before it and it plays 3 seconds later.
+- **\`line:rewrite("GO!", "glitch", "lime")\`** changes the text with an animation, and can change its colour, style or font too.
+- \`say\` always makes a new line, so \`title:rewrite say:ascii(...)\` used to leave two lines. Now the editor points that out and says how to animate the line that's there.
+
+### Smoother rainbows
+- Every rainbow runs on one clock, so a rewritten rainbow line carries on at the same colours, and rainbow lines flow in step.
+
+If you already have 1.3.5, that's what's new. Everything else here came in 1.3.5, the Creativity Update.
+
+${NOTES['1.3.5'].notes}`,
+  };
 
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   // The little Markdown the notes use: ### headings, - bullets, **bold**, `code` and [links](https://...).
