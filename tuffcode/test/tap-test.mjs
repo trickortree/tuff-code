@@ -236,9 +236,9 @@ await stops('a bad host is a friendly error', 'res = tap.get("http://no-such-hos
 await stops('a refused connection is a friendly error', 'res = tap.get("CLOSED/x")\n', 'refused the connection', 3);
 await stops('a web address without http(s):// is a friendly error', 'res = tap.get("example.com")\n', 'tap.get needs a web address that starts with http:// or https://, not "example.com". Try "https://example.com".', 3);
 await stops('ftp:// is refused', 'res = tap.get("ftp://example.com/file")\n', 'needs a web address that starts with http:// or https://', 3);
-await stops('a number body is refused', 'res = tap.post("BASE/echo", 5)\n', 'tap.post sends text, a data object or a list, not a number.', 3);
-await stops('headers must be a data object', 'res = tap.get("BASE/text", "X-Token: 1")\n', "tap.get's headers have to be a data object", 3);
-await stops('a data object can\'t hold a function', 'func f():\n    return 1\nd = tap.data()\nd:set("f", f)\n', 'A data object can only hold text, numbers, true/false, nil, lists and data objects, not a function.', 6);
+await stops('a number body is refused', 'res = tap.post("BASE/echo", 5)\n', 'tap.post sends text, a dictionary, a list or a data object, not a number.', 3);
+await stops('headers must be a data object', 'res = tap.get("BASE/text", "X-Token: 1")\n', "tap.get's headers have to be a data object or a dictionary, like {\"Accept\": \"application/json\"}, not text.", 3);
+await stops('a data object can\'t hold a function', 'func f():\n    return 1\nd = tap.data()\nd:set("f", f)\n', 'A data object can only hold text, numbers, true/false, nil, lists, dictionaries and data objects, not a function.', 6);
 await stops('data object names are text', 'd = tap.data()\nd:set(1, "x")\n', 'data:set needs a name as text', 4);
 // [ ] on a data object: the run says to use :get (or :set), and so does --check, not "List positions must be whole numbers".
 await stopsAndCaught('user["name"] on a :json data object says to use :get', 'user = tap.get("BASE/json"):json\nsay user["name"]\n',
@@ -261,6 +261,32 @@ await caught(':set with one input', 'd = tap.data()\nd:set("a")\n', 'data object
 await caught('a method input that swallowed the maths', 'res = tap.get("BASE/text")\nsay res:status - 1\n', "res:status doesn't take an input");
 await caught('looping over a data object', 'd = tap.data()\nfor k in d:\n    say k\n', "Can't loop over a data object. Loop over its names instead: for k in d:keys():");
 await caught(':text used as a number','res = tap.get("BASE/text")\nsay res:text() - 1\n', "Can't subtract text and a number.");
+
+// ---- 1.4.0 dictionaries go anywhere a data object does (fix140)
+await works('POST and PUT a dictionary as JSON, and dictionary headers', `body = {"title": "Hi", "tags": ["a", "b"], "inner": {"ok": true}, "n": 2}
+echo = tap.post("BASE/echo", body):json
+say echo:get("type")
+say echo:get("body")
+say tap.put("BASE/echo", {1: "one", "two": nil}):json:get("body")
+h = {"X-Token": "abc123", "Accept": "application/json"}
+seen = tap.get("BASE/headers", h):json
+say seen:get("x-token")
+say seen:get("accept")
+`, ['application/json', '{"title": "Hi", "tags": ["a", "b"], "inner": {"ok": true}, "n": 2}', '{"1": "one", "two": null}', 'abc123', 'application/json']);
+
+await works('a data object holds a dictionary, and a dictionary holds a data object', `d = tap.data()
+d:set("info", {"a": 1, "b": [true, nil]})
+say d:get("info"):get("a")
+say [d]
+user = tap.get("BASE/json"):json
+mixed = {"who": user:get("address"), "n": 1}
+say tap.post("BASE/echo", mixed):json:get("body")
+`, ['1', '[{"info": {"a": 1, "b": [true, null]}}]', '{"who": {"city": "London"}, "n": 1}']);
+
+await stops('a dictionary inside a data object can\'t hold a function', 'func f():\n    return 1\nd = tap.data()\nd:set("info", {"f": f})\n',
+  'A data object can only hold text, numbers, true/false, nil, lists, dictionaries and data objects, not a function.', 6);
+await stops('a dictionary that holds itself can\'t be sent', 'd = {"a": 1}\nd["me"] = d\nres = tap.post("BASE/echo", d)\n',
+  'What you send can\'t hold itself.', 5);
 
 const t = await timeout;
 check(`a server that doesn't answer stops after 15 seconds (took ${t.seconds.toFixed(1)} s)`, t.code === 1 && t.out.includes("127.0.0.1 didn't answer within 15 seconds.") && t.seconds >= 14 && t.seconds < 30, t);

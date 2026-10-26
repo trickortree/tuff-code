@@ -4239,8 +4239,139 @@ def t_toolbox(c):
             c.check(want in out, f"--check on {code.splitlines()[-1]!r} says {want!r}", out[:300])
 
 
+# The 1.4.0 review's fixes: 1.3.6 programs that must still work, and the toolbox's edges.
+TOOLBOX_FIXES = '''names = ["Ann", "Bob", "Cat"]
+order = [2, 0, 1]
+say names[order:pop]
+stack = [0]
+say names[stack:pop + 1]
+word = "hi"
+pairs = []
+pairs:add [word:upper, 1]
+say pairs
+catch = []
+catch:add("trout")
+say catch
+try = [3]
+try:add(4)
+say try
+func wave(n):
+    sin = n * 2
+    return sin
+say wave(2)
+say sin(90)
+s = "hello world"
+n = 4
+say s[:n]
+say s[0:len(s) - 7]
+i = 1
+say s[i + 1:i + 3]
+say s[:s:find(" ") - 1]
+func make():
+    return {"a": 1}
+d = make()
+say d:size()
+loop = [1]
+loop:add(loop)
+say loop
+say log(1000, 10)
+say log(8, 2)
+say text(-0.001, 2)
+r = random(0.5)
+say r >= 0 and r <= 0.5
+w = random(1, 12 / 2)
+say w is floor(w)
+try:
+    say tan(90)
+catch problem:
+    say problem
+yes = 1 is 1
+k = {}
+try:
+    k[yes] = 1
+catch problem:
+    say problem
+file.save("tbf.json", {1: "one"})
+back = file.load("tbf.json")
+try:
+    say back[1]
+catch problem:
+    say problem
+say back["1"]
+file.delete("tbf.json")
+'''
+TOOLBOX_FIXES_OUTPUT = ["Bob", "Bob", '[["HI", 1]]', '["trout"]', "[3, 4]", "4", "1", "hello", "hello", "llo", "hello", "1",
+                        "[1, [...]]", "3", "3", "0.00", "true", "true",
+                        "tan(90) has no answer: at 90 degrees (and 270) the line is straight up.",
+                        "A dictionary's keys can be text or numbers, not true/false.",
+                        'back doesn\'t have the number 1, but it has "1" (text). Keys that come back from file.load are always text: use back["1"] or back[text(1)].',
+                        "one"]
+TOOLBOX_FIXES_CHECKS = [
+    ('d = {"a": 1}\nsay d:get()', "d:get takes 1 or 2 inputs, not 0."),
+    ('s = "abc"\nsay s:replace("a")', "s:replace takes 2 inputs, not 1."),
+    ('s = "abc"\nsay s[0:"b"]', "The positions in [start:end] must be whole numbers, not text."),
+    ('d = {[1]: 2}', "A dictionary's keys can be text or numbers, not a list."),
+    ('x = {"a": nope}', "I don't know what 'nope' is."),
+    ('s = "abc"\nsay s[0:nope]', "I don't know what 'nope' is."),
+    ('try:\n    x = 1\ncatch err:\n    say err', "err is Tuff's own value"),
+    ('time.sleep(1)', "Tuff has no time.sleep."),
+    ('d = {"a": 1}\nsay d.a', 'Read a value with [ ], like d["a"]'),
+    ('func f():\n    file = "x"\n    return file\nsay file.read("a.txt")', "OK"),
+    ('names = ["a"]\norder = [0]\nsay names[order:pop]', "OK"),
+    ('func f():\n    date = 5\n    return date\nsay date + 1', "'date' is only set inside f()"),
+    ('t = {"a": 1}\nfunc show():\n    return {"b": 2}\nt:set "c", 3', None),
+]
+
+
+def t_toolbox_fixes(c):
+    """The 1.4.0 review's fixes: a:b inside [ ] is still 1.3.6's method call when what's before it isn't a number,
+    try and catch still work as variables, sin/cos/tan stay a function's own, keys are text or numbers, and
+    TUFF_NO_WRITES / TUFF_BASE_DIR (tuff_run for AI agents) keep writes in memory and find the project's files."""
+    folder = os.path.join(HERE, "out", "toolbox_fixes")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "fixes.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(TOOLBOX_FIXES)
+    p = subprocess.run(tuff_cmd() + [path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    got = p.stdout.splitlines()
+    c.check(p.returncode == 0, "the fixes program runs to the end", (p.stdout + p.stderr)[-600:])
+    for i, want in enumerate(TOOLBOX_FIXES_OUTPUT):
+        c.check(i < len(got) and got[i] == want, f"fixes line {i + 1}: {want}", got[i] if i < len(got) else "(missing)")
+    p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    c.check(p.stdout.strip() == "OK", "--check accepts the fixes program", (p.stdout + p.stderr)[:600])
+    for i, (code, want) in enumerate(TOOLBOX_FIXES_CHECKS):
+        bad = os.path.join(folder, f"check{i}.tuf")
+        with open(bad, "w", encoding="utf-8") as f:
+            f.write(code + "\n")
+        p = subprocess.run(tuff_cmd() + ["--check", bad], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        out = p.stdout + p.stderr
+        if want is None:
+            c.check("Traceback" not in out, f"--check runs on: {code.splitlines()[-1]}", out[:300])
+        else:
+            c.check(want in out, f"--check on {code.splitlines()[-1]!r} says {want!r}", out[:300])
+    # TUFF_NO_WRITES=1: writes stay in memory for the run; TUFF_BASE_DIR: a snippet reads the project's files
+    project = os.path.join(folder, "project")
+    os.makedirs(project, exist_ok=True)
+    with open(os.path.join(project, "data.txt"), "w", encoding="utf-8") as f:
+        f.write("from the project\n")
+    for name in ("made.txt", "data.json"):
+        if os.path.exists(os.path.join(project, name)):
+            os.remove(os.path.join(project, name))
+    snippet = os.path.join(folder, "snippet.tuf")
+    with open(snippet, "w", encoding="utf-8") as f:
+        f.write('say file.read("data.txt"):trim()\nfile.write("made.txt", "hi")\nfile.add("made.txt", "there")\n'
+                'say file.lines("made.txt")\nfile.save("data.json", {"n": 1})\nsay file.load("data.json")["n"]\n'
+                'file.delete("data.txt")\nsay file.exists("data.txt")\n')
+    env = {**os.environ, "TUFF_NO_WRITES": "1", "TUFF_BASE_DIR": project}
+    p = subprocess.run(tuff_cmd() + [snippet], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+    c.check(p.stdout.splitlines() == ["from the project", '["hi", "there"]', "1", "false"],
+            "with TUFF_NO_WRITES and TUFF_BASE_DIR a snippet reads the project's file and its own writes", p.stdout + p.stderr)
+    c.check(os.path.exists(os.path.join(project, "data.txt")) and not os.path.exists(os.path.join(project, "made.txt"))
+            and not os.path.exists(os.path.join(project, "data.json")), "...and nothing on disk changed")
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
-         "toolbox": t_toolbox,
+         "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
          "models": t_models, "people": t_people,
          "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "terrain": t_terrain,

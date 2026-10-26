@@ -1,8 +1,9 @@
 """tap: get and send things on the web from Tuff, like Python's requests. Only Python's own library is used,
 so there's nothing to install.
 
-Tuff has no dictionaries, so a JSON object comes back as a "data object": user:get("name"), :has, :keys,
-:set and :size. Objects inside it are data objects too, and arrays are Tuff lists.
+A JSON object comes back as a "data object": user:get("name"), :has, :keys, :set and :size. Objects inside it
+are data objects too, and arrays are Tuff lists. What tap sends (a body, the headers, what a data object holds)
+can be a 1.4.0 dictionary as well as a data object: {"title": "Hi"} goes as the same JSON.
 """
 import http.client
 import json
@@ -156,7 +157,8 @@ class Lib:
         return v
 
     def to_json(self, v, what, inside=()):
-        """The Python value json.dumps needs for a Tuff value; what names the thing that holds it, for errors."""
+        """The Python value json.dumps needs for a Tuff value; what names the thing that holds it, for errors. A
+        dictionary is a JSON object like a data object, with its number keys as text (JSON's names are text)."""
         v = self.rt.plain(v)
         if v is None or isinstance(v, (bool, str)):
             return v
@@ -165,14 +167,15 @@ class Lib:
                 raise self.rt.error(f"{what} can't hold {self.rt.text(v)}: JSON only has ordinary numbers.")
             return v
         d = data_of(v)
-        if isinstance(v, list) or d is not None:
+        if isinstance(v, (list, dict)) or d is not None:
             if any(x is v for x in inside):
                 raise self.rt.error(f"{what} can't hold itself.")
             inside = (*inside, v)
-            if d is not None:
-                return {k: self.to_json(x, what, inside) for k, x in d.values.items()}
-            return [self.to_json(x, what, inside) for x in v]
-        raise self.rt.error(f"{what} can only hold text, numbers, true/false, nil, lists and data objects, not {self.rt.what(v)}.")
+            if isinstance(v, list):
+                return [self.to_json(x, what, inside) for x in v]
+            return {self.rt.text(k): self.to_json(x, what, inside) for k, x in (v if d is None else d.values).items()}
+        raise self.rt.error(f"{what} can only hold text, numbers, true/false, nil, lists, dictionaries and data objects, "
+                            f"not {self.rt.what(v)}.")
 
     # ---- sending a request
     def ssl_context(self):
@@ -216,9 +219,10 @@ class Lib:
         if headers is None:
             return []
         d = data_of(headers)
-        if d is None:
-            raise self.rt.error(f"{label}'s headers have to be a data object (make one with tap.data() and :set), not {self.rt.what(headers)}.")
-        return [(name, self.rt.text(value)) for name, value in d.values.items()]
+        if d is None and not isinstance(headers, dict):
+            raise self.rt.error(f"{label}'s headers have to be a data object or a dictionary, like {{\"Accept\": \"application/json\"}}, "
+                                f"not {self.rt.what(headers)}.")
+        return [(self.rt.text(name), self.rt.text(value)) for name, value in (headers if d is None else d.values).items()]
 
     def encode_body(self, label, body):
         body = self.rt.plain(body)
@@ -226,9 +230,9 @@ class Lib:
             return None, None
         if isinstance(body, str):
             return body.encode("utf-8"), "text/plain; charset=utf-8"
-        if isinstance(body, list) or data_of(body) is not None:
+        if isinstance(body, (list, dict)) or data_of(body) is not None:
             return json.dumps(self.to_json(body, "What you send"), ensure_ascii=False).encode("utf-8"), "application/json"
-        raise self.rt.error(f"{label} sends text, a data object or a list, not {self.rt.what(body)}. For a number, use text(...).")
+        raise self.rt.error(f"{label} sends text, a dictionary, a list or a data object, not {self.rt.what(body)}. For a number, use text(...).")
 
     def why(self, reason, host):
         """A friendly line for what went wrong while connecting."""

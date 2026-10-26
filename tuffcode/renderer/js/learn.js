@@ -855,8 +855,8 @@
       starter: '# Section 1.6, Lesson 3: Sorting\n# Sort five numbers from biggest to smallest, then say the biggest.\n\nnumbers = [12, 7, 30, 18, 3]\n',
       solution: 'numbers = [12, 7, 30, 18, 3]\nnumbers:sort()\nnumbers:reverse()\nsay "Biggest: " + numbers[0]\n',
       check: (src) => {
-        if (!/:sort\s*\(/.test(src)) return 'Sort it first: numbers:sort()';
-        return /:reverse\s*\(/.test(src) ? true : 'Then turn it around, biggest first: numbers:reverse()';
+        if (!/:sort\b/.test(src)) return 'Sort it first: numbers:sort()';
+        return /:reverse\b/.test(src) ? true : 'Then turn it around, biggest first: numbers:reverse()';
       },
     },
     {
@@ -871,7 +871,7 @@
       check: (src) => {
         if (!/file\.load\s*\(/.test(src)) return 'Load what you saved before: names = file.load("names.json", [])';
         if (!/file\.save\s*\(/.test(src)) return 'Save it again with file.save("names.json", names)';
-        return /:add\s*\(/.test(src) ? true : 'Add a name before saving: names:add("Sam")';
+        return /:add\b/.test(src) ? true : 'Add a name before saving: names:add("Sam")';
       },
     },
     {
