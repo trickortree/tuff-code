@@ -1549,8 +1549,10 @@ class Console:
         look, new = line.look, not line.height
         height = shown.count("\n") + 1
         if IDE:
+            # TuffCode keeps a rainbow's colours moving, on one clock: through an animation's frames too, so
+            # line:play("explode") on a rainbow line carries on at the colours it had instead of starting again
             data = {"fg": look.fg, "bg": look.bg, "runs": runs or None, "art": 1 if line.art else None, "anim": 1 if anim else None,
-                    "rainbow": 1 if look.rainbow and not anim else None}  # TuffCode keeps a rainbow's colours moving
+                    "rainbow": 1 if look.rainbow else None}
             data = {k: v for k, v in data.items() if v}
             data.update({s: 1 for s in look.styles})
             style = "rich:" + b64(json.dumps(data, separators=(",", ":")))
