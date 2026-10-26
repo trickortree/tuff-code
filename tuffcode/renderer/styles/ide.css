@@ -213,7 +213,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #run-output .tline.rich.art.bar { padding: 4px 8px; }
 /* "rainbow" moves: every letter's colour turns round the colour wheel, so the rainbow flows along the line (the
    letters only: a bar behind them keeps its colour) */
-#run-output .tline.rich.rainbow > span { display: inline-block; animation: tline-rainbow 2.4s linear infinite; }
+#run-output .tline.rich.rainbow > span { display: inline-block; animation: tline-rainbow 2.4s linear infinite; animation-delay: var(--rainbow-at, 0s); }
 @keyframes tline-rainbow { to { filter: hue-rotate(-360deg); } }
 /* With "reduce motion" on (Windows' Animation effects off, which school PCs often have) it still flows, slowly:
    it's colours changing, not things moving about. */

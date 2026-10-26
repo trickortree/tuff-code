@@ -458,7 +458,9 @@ window.TUFF_DOCS = {
   window.TUFF_DOCS.tdraw = ['mention tdraw', 'Drawing with a pen (a turtle): lines, shapes, fills, text and rainbow pens, in a window that stays open. pen = tdraw.pen(), then pen:forward(100), pen:right(90).'];
   window.TUFF_DOCS.print = ['print(a, b, ...)', 'Like `say`, but takes several values separated by commas. print:color, print:ascii and print:pen (also say:color, say:ascii, say:pen) style what it shows.'];
   const docs = window.TUFF_METHOD_DOCS;
+  window.TUFF_DOCS.rewrite = ['line:rewrite("new text", "glitch")', 'Replaces the text of a line you already said. After the text, look words (colours, rainbow, styles, a font) change its look and an animation plays on it in place.'];
   const own = {
+    play: ['line:play("explode")', 'Plays an animation on a line you already said, where it is: fade, build, explode, assemble, type, glitch, drop or wave. With wait(3) before it, it plays 3 seconds later.'],
     ascii: ['say:ascii("GAME OVER", "red", "explode")', 'Big ASCII-art letters. After the text, in any order: a font (block, wide, small, shadow, led, hash), colours (the letters\', then a bar behind them), rainbow, bold/dim/italic/underline and an animation (fade, build, explode, assemble, type, glitch, drop, wave). It gives back the line: :rewrite keeps it big.'],
     pen: ['print:pen("lime", "bold")', 'Every line said after it gets this look (colours, rainbow, styles) until print:pen().'],
     color: ['say:color("Game over!", "red")', 'A coloured line. After the text, in any order: colours (the first is the letters\', a second is a bar behind the whole line), "rainbow", bold/dim/italic/underline and an animation (fade, type, glitch...). tdraw: pen:color("red") sets the pen\'s colour ("rainbow" changes as it moves), pen:color("red", "gold") the line and the fill.'],

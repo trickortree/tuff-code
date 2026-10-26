@@ -1157,6 +1157,13 @@
     span.classList.toggle('art', !!look.art);
     span.classList.toggle('bar', COLOR.test(look.bg || ''));
     span.classList.toggle('rainbow', !!look.rainbow);
+    if (look.rainbow) {
+      // Every rainbow runs on one clock, so a rewritten rainbow line (or a second one) carries on at the same colours
+      // instead of starting again: a negative delay puts its animation where the page's clock already is.
+      const period = matchMedia('(prefers-reduced-motion: reduce)').matches ? 9000 : 2400;
+      const now = document.timeline?.currentTime ?? performance.now();
+      span.style.setProperty('--rainbow-at', `-${Math.round(now % period)}ms`);
+    }
     span.style.color = COLOR.test(look.fg || '') ? look.fg : '';
     span.style.backgroundColor = COLOR.test(look.bg || '') ? look.bg : '';
     span.style.fontWeight = look.bold ? '700' : '';

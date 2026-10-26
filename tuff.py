@@ -1128,17 +1128,39 @@ class Console:
         line = Line(self.next_id, text, self.rows)
         self.next_id += 1
         line.look, line.art, line.height = look, art, 0
-        rows, boxes = look_text(text, look, art)
-        frames = art_frames(rows, boxes, look) if look.effect and self.animate and (IDE or sys.stdout.isatty()) else []
+        self.animate_line(line, text, look.effect)
+        return line
+
+    def animate_line(self, line, text, effect):
+        """Plays effect (or nothing) on a line's text, then shows how it ends. A new line (height 0) is said by its
+        first frame; one already there changes in place."""
+        rows, boxes = look_text(text, line.look, line.art)
+        playing = Look(line.look.fg, line.look.bg, line.look.styles, line.look.rainbow, line.look.font, effect)
+        frames = art_frames(rows, boxes, playing) if effect and self.animate and (IDE or sys.stdout.isatty()) else []
         start = time.perf_counter()
         for i, (shown, runs) in enumerate(frames):
             self.show(line, shown, runs, anim=True)
             pause = start + (i + 1) / ART_FPS - time.perf_counter()
             if pause > 0:
                 time.sleep(pause)
-        shown, runs = ("", []) if look.effect == "explode" else frame_of(rows, look.letters(rows))
+        shown, runs = ("", []) if effect == "explode" else frame_of(rows, line.look.letters(rows))
         self.show(line, shown, runs)
-        return line
+
+    def play(self, line, effect):
+        """line:play("explode"): the animation on the line where it is (a plain line gets a look of its own)."""
+        if line.look is None:
+            line.look = Look()
+        self.animate_line(line, line.text, effect)
+
+    def rewrite_look(self, line, text, change):
+        """:rewrite("GO!", "glitch", "lime"): new text, colours, styles or font from the words (the rest stays as it
+        was), and the animation plays on the new text."""
+        base = line.look or Look()
+        own_letters = change.fg or change.rainbow
+        line.look = Look(change.fg if own_letters else base.fg, change.bg or base.bg, base.styles | change.styles,
+                         change.rainbow if own_letters else base.rainbow, change.font or base.font)
+        line.text = text
+        self.animate_line(line, text, change.effect)
 
     def show(self, line, shown, runs, anim=False):
         """Puts a styled line on the screen, or changes it if it's there: the first call says it."""
@@ -1834,13 +1856,22 @@ class Interpreter:
             return call_python(f"{obj.kind}:{name}", fn, args)
 
         if isinstance(obj, Line):
-            if name == "rewrite":
-                need(1)
-                self.console.rewrite(obj, to_text(args[0]))
+            if name in ("rewrite", "append"):
+                if not args:
+                    raise TuffError(f":{name} needs the new text, like :{name}(\"Done!\")")
+                text = to_text(args[0]) if name == "rewrite" else obj.text + to_text(args[0])
+                if len(args) > 1:  # :rewrite("GO!", "glitch", "lime"): a new look, and an animation it plays here
+                    self.console.rewrite_look(obj, text, read_look(f"line:{name}", args[1:], art=obj.art))
+                else:
+                    self.console.rewrite(obj, text)
                 return obj
-            if name == "append":
+            if name == "play":  # line:play("explode"): an animation on the line where it is
                 need(1)
-                self.console.rewrite(obj, obj.text + to_text(args[0]))
+                word = " ".join(to_text(args[0]).lower().split())
+                if word not in ART_EFFECTS:
+                    hint = difflib.get_close_matches(word, ART_EFFECTS, n=1, cutoff=0.6)
+                    raise TuffError(f'line:play doesn\'t know "{to_text(args[0])}".' + (f' Did you mean "{hint[0]}"?' if hint else "") + f" Animations: {', '.join(ART_EFFECTS)}.")
+                self.console.play(obj, word)
                 return obj
             if name == "clear":
                 no_inputs()
@@ -1907,8 +1938,9 @@ PY_METHODS = {
     "text": {"strip": "trim", "contains": "has", "includes": "has", "upper_case": "upper", "lower_case": "lower",
              "uppercase": "upper", "lowercase": "lower", "toupper": "upper", "tolower": "lower"},
 }
-SIMPLE_METHODS = {"text": ("upper", "lower", "trim", "has"), "list": ("add", "remove", "pop", "has"), "line": ("rewrite", "append", "clear", "text")}
-ONE_INPUT = {"has", "add", "remove", "rewrite", "append"}
+SIMPLE_METHODS = {"text": ("upper", "lower", "trim", "has"), "list": ("add", "remove", "pop", "has"), "line": ("rewrite", "append", "clear", "text", "play")}
+ONE_INPUT = {"has", "add", "remove", "play"}
+LOOK_INPUTS = {"rewrite", "append"}  # the new text, then look and animation words (1.3.6)
 
 
 def a_kind(kind):
@@ -3521,6 +3553,23 @@ class Checker:
                 tip = PY_ONLY.get(name.lower())
                 msg = method_help(what, name, simple, kind)
                 self.problem(e, msg + (f" {tip}" if tip and "instead" not in msg else ""))
+            elif kind == "line" and name in LOOK_INPUTS:
+                if not n:
+                    self.problem(e, f':{name} needs the new text, like {owner}:{name}("Done!")')
+                elif e.args[0].kind == "say" or (e.args[0].kind == "method" and self.is_print(e.args[0].obj)):
+                    self.problem(e.args[0], f"say shows a new line, so this {name}s {owner} with that line's text. To animate {owner} where it is, use {owner}:play(\"explode\") (or {owner}:{name}(\"new text\", \"glitch\")).")
+                else:
+                    for a in e.args[1:]:
+                        if a.kind == "const" and isinstance(a.value, str):
+                            try:
+                                read_look(f"line:{name}", [a.value], art=True)
+                            except TuffError as err:
+                                self.problem(a, err.msg)
+                                break
+            elif kind == "line" and name == "play" and n == 1 and e.args[0].kind == "const" and isinstance(e.args[0].value, str) \
+                    and " ".join(e.args[0].value.lower().split()) not in ART_EFFECTS:
+                hint = difflib.get_close_matches(e.args[0].value.lower(), ART_EFFECTS, n=1, cutoff=0.6)
+                self.problem(e.args[0], f'line:play doesn\'t know "{e.args[0].value}".' + (f' Did you mean "{hint[0]}"?' if hint else "") + f" Animations: {', '.join(ART_EFFECTS)}.")
             elif name in ONE_INPUT and n != 1:
                 self.problem(e, f":{name} needs 1 input.")
             elif name in self.ZERO_INPUT and e.bare:

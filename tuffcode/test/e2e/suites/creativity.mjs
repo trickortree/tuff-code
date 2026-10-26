@@ -63,6 +63,24 @@ export default async (t, ctx) => {
   check('print:pen("cyan") colours the lines after it, and print:pen() stops it', by('this is cyan').color === 'rgb(34, 211, 238)' && by('back to normal').color === '', [by('this is cyan'), by('back to normal')]);
   await t.shot('looks.png', await below('Game over!'));
 
+  // 1.3.6: rainbows share one clock (a rewrite carries on at the same colours), and :play / :rewrite animate a line
+  // where it is instead of saying a new one
+  await run('play.tuf', [
+    'one = say:color("ONE", "rainbow")',
+    'wait(1)',
+    'two = say:color("TWO", "rainbow")',
+    'title = say:ascii("BOOM", "sky")',
+    'title:play("explode")',
+    'title:rewrite("BACK", "assemble", "gold")',
+  ].join('\n') + '\n');
+  const phases = await ev(`[...document.querySelectorAll('#run-output .tline.rainbow')].map((s) => getComputedStyle(s.firstElementChild).filter)`);
+  const deg = (f) => Number((/hue-rotate\((-?[\d.]+)deg\)/.exec(f) || [])[1]);
+  const apart = Math.abs(deg(phases[0]) - deg(phases[1])) % 360;
+  check('Two rainbows said a second apart flow in step (one clock for every rainbow)', phases.length === 2 && Math.min(apart, 360 - apart) < 20, phases);
+  const played = await lines();
+  const bigs = played.filter((l) => l.cls.includes("art"));
+  check(':play and :rewrite animate the big line where it is: no new line, and it ends as BACK in gold', bigs.length === 1 && bigs[0].text.includes("█") && bigs[0].color === "rgb(242, 194, 48)", played.map((l) => l.text.slice(0, 20)));
+
   // Big letters in every font, and a score that changes
   await run('fonts.tuf', [
     'for font in ["block", "wide", "small", "shadow", "led", "hash"]:',

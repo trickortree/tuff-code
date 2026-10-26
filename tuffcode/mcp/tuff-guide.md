@@ -188,7 +188,11 @@ say:ascii("HI", "wide", "gold")                     # fonts: block, wide, small,
 say:ascii("GAME OVER", "red", "explode")            # plays an animation, then the program goes on
 board = say:ascii(0, "small", "gold")
 board:rewrite(42)                                   # a big line stays big (and keeps its look)
+board:rewrite(43, "drop", "lime")                   # new text with an animation (and a new colour) in place
+wait(3)
+board:play("explode")                               # an animation on the line where it is, any time later
 ```
+- `say` always shows a **new** line. To animate one that's already shown, use `line:play("explode")` or `line:rewrite("text", "glitch")`. `line:rewrite say:ascii(...)` says a second line, and the checker says so.
 - `say:color`, `say:ascii` and `say:pen` are the same as `print:color`, `print:ascii` and `print:pen`.
 - After the text come words, in any order:
   - **colours:** the same names as tgame (red, orange, yellow, gold, lime, green, teal, cyan, sky, blue, navy, purple, pink, white, gray, black, brown...) or `"#ff8800"`. The first is the letters', a second is the bar.
