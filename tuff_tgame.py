@@ -7123,6 +7123,8 @@ class SavedData:
         return self.values
 
     def set_aside(self):
+        if os.environ.get("TUFF_NO_WRITES") == "1":
+            return
         bad = self.path + ".bad"
         try:
             os.replace(self.path, bad)
@@ -7132,6 +7134,8 @@ class SavedData:
         self.note(f"The saved data for \"{self.title}\" was damaged, so the game starts with nothing saved.{kept}")
 
     def write(self):
+        if os.environ.get("TUFF_NO_WRITES") == "1":  # tuff_run for AI agents: saves stay in memory, like file.write's
+            return
         import tempfile
         text = json.dumps({"game": self.title, "saves": self.values}, ensure_ascii=False, indent=2) + "\n"
         tmp = None
@@ -7162,6 +7166,8 @@ class SavedData:
                     pass
 
     def remove_file(self):
+        if os.environ.get("TUFF_NO_WRITES") == "1":
+            return
         try:
             os.remove(self.path)
         except FileNotFoundError:

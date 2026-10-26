@@ -4299,13 +4299,53 @@ catch problem:
     say problem
 say back["1"]
 file.delete("tbf.json")
+board = ["", "", ""]
+moves = [0, 2]
+board[moves:pop] = "X"
+say board
+counts = {}
+word = "Hi"
+counts[word:lower] = 1
+counts[word:lower] += 1
+say counts
+email = "sam@mail.com"
+say email[email:find("@") + 1:len(email) - 1]
+line = "Sam Smith"
+n = len(line) - 1
+say line[line:find(" "):n]
+items = [5, 6, 7, 8]
+say items[items:find(6):items:find(8)]
+stack = [1, 2]
+say items[1 + stack:pop]
+name = "Bob"
+cache = {"user_bob": 7}
+say cache["user_" + name:lower]
+say {names[0]:items[0]}
+calls = 0
+func pick():
+    calls += 1
+    return "user_bob"
+cache[pick()] += 1
+say cache["user_bob"] + calls * 100
+func grab(catch):
+    catch:add(1)
+    return catch
+say grab([])
+func nothing():
+    return nil
+try:
+    say email[0:nothing()]
+catch problem:
+    say problem
+say len(text(2 ^ 20000)) > 4300
 '''
 TOOLBOX_FIXES_OUTPUT = ["Bob", "Bob", '[["HI", 1]]', '["trout"]', "[3, 4]", "4", "1", "hello", "hello", "llo", "hello", "1",
                         "[1, [...]]", "3", "3", "0.00", "true", "true",
                         "tan(90) has no answer: at 90 degrees (and 270) the line is straight up.",
                         "A dictionary's keys can be text or numbers, not true/false.",
                         'back doesn\'t have the number 1, but it has "1" (text). Keys that come back from file.load are always text: use back["1"] or back[text(1)].',
-                        "one"]
+                        "one", '["", "", "X"]', '{"hi": 2}', "mail.com", " Smith", "[6, 7, 8]", "8", "7", '{"Ann": 5}', "108", "[1]",
+                        "The positions in [start:end] must be whole numbers, not nil.", "true"]
 TOOLBOX_FIXES_CHECKS = [
     ('d = {"a": 1}\nsay d:get()', "d:get takes 1 or 2 inputs, not 0."),
     ('s = "abc"\nsay s:replace("a")', "s:replace takes 2 inputs, not 1."),
@@ -4318,8 +4358,14 @@ TOOLBOX_FIXES_CHECKS = [
     ('d = {"a": 1}\nsay d.a', 'Read a value with [ ], like d["a"]'),
     ('func f():\n    file = "x"\n    return file\nsay file.read("a.txt")', "OK"),
     ('names = ["a"]\norder = [0]\nsay names[order:pop]', "OK"),
-    ('func f():\n    date = 5\n    return date\nsay date + 1', "'date' is only set inside f()"),
+    ('func f():\n    date = 5\n    return date\nsay date()', "OK"),  # at the top, date is the built-in
     ('t = {"a": 1}\nfunc show():\n    return {"b": 2}\nt:set "c", 3', None),
+    ('s = "hello"\nfirst = "2"\nsay s[first:n]', "The positions in [start:end] must be whole numbers, not text."),
+    ('board = ["", ""]\nmoves = [1]\nboard[moves:pop] = "X"\nsay board', "OK"),
+    ('func f(log):\n    return log(1)\nlog = 5\nsay f(sqrt)', "OK"),
+    ('func f():\n    cos = 3\n    return cos\nvalues = [30, 60]\nsay [cos(30), f()]', "OK"),
+    ('mention file\nsay file.exists("x.txt")', "OK"),
+    ('try:\n    x = 1\nexcept:\n    x = 2', "Write the catch line as catch: or catch problem:"),
 ]
 
 
