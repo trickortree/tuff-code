@@ -104,6 +104,17 @@
 - Claude, Codex, Antigravity and Pumice 1 know all of it, and the checker catches mistakes.`,
     },
   };
+  // 1.3.1 is 1.3.0 with new icons. Most copies go straight from 1.2.0 to 1.3.1 and only see 1.3.1's notes, so they're
+  // the new look and then all of 1.3.0's.
+  NOTES['1.3.1'] = {
+    images: ['1.png'],
+    notes: `### A new look
+- **New icons everywhere:** buttons, tabs, files, menus, Tuff Engine and every plugin have fresh, friendly icons. They're MingCute, a free icon set by the MingCute Design team.
+
+If you already had 1.3.0, the icons are what's new. Everything else here came in 1.3.0, the Multiplayer Update.
+
+${NOTES['1.3.0'].notes}`,
+  };
 
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   // The little Markdown the notes use: ### headings, - bullets, **bold**, `code` and [links](https://...).
