@@ -147,13 +147,19 @@
       task: 'Ask for a number. If it isn\'t one, say so. If it is, say double it.',
       starter: '# Lesson 10: Checking answers\n# Ask for a number, check it with "is err", then say double it.\n\n',
       check: (src, out) => {
-        if (!/\binput\b/.test(src)) return 'Ask with input first, like: n = input "A number? "';
-        if (!/\bis\s+(not\s+)?err\b/.test(src)) return 'Check the answer with: if num(n) is err:';
+        const code = src.replace(/"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'/g, '""'); // what's in quotes is only text: say "num(n) is err" checks nothing
+        if (!/\binput\b/.test(code)) return 'Ask with input first, like: n = input "A number? "';
+        if (!/\bis\s+(not\s+)?err\b/.test(code)) return 'Check the answer with: if num(n) is err:';
         // input gives text, and text is never err: what's checked has to go through num(), number() or int() first,
-        // right there (num(n) is err) or in a variable made with one (n = num(input "?") ... n is err).
-        const madeWith = (name) => new RegExp(`^\\s*${name}\\s*=\\s*(num|number|int)\\s*\\(`, 'm').test(src);
-        const converted = [...src.matchAll(/(\b(?:num|number|int)\s*\([^\n]*\)|\b\w+)\s+is\s+(?:not\s+)?err\b/g)]
-          .some(([, what]) => /^(num|number|int)\s*\(/.test(what) || madeWith(what));
+        // right there (num(n) is err) or in a variable made with one (n = num(input "?") ... n is err). It's the
+        // variable's last value before the check that counts: n = input "?" after n = num("5") makes it text again,
+        // and n = num(n) after the check comes too late.
+        const madeWith = (name, before) => {
+          const last = [...before.matchAll(new RegExp(`^[ \\t]*${name}[ \\t]*=(?!=)[ \\t]*(.*)$`, 'gm'))].at(-1);
+          return !!last && /^(num|number|int)\s*\(/.test(last[1]);
+        };
+        const converted = [...code.matchAll(/(\b(?:num|number|int)\s*\([^\n]*\)|\b\w+)\s+is\s+(?:not\s+)?err\b/g)]
+          .some((m) => /^(num|number|int)\s*\(/.test(m[1]) || madeWith(m[1], code.slice(0, m.index)));
         if (!converted) return 'input gives text, and text is never err. Turn it into a number as you check: if num(n) is err:';
         return lines(out).length ? true : 'Say something with the answer.';
       },
