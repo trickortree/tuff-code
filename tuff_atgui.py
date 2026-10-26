@@ -1132,14 +1132,20 @@ class Lib:
             return text
         base = os.path.abspath(self.rt.interp.base_dir)
         full = os.path.abspath(text if os.path.isabs(text) else os.path.join(base, text))
-        if not os.path.isfile(full):
-            raise self.rt.error(f"Couldn't find the image '{text}'. Put the picture in your project folder (next to your .tuf file).")
+        # In the order and the words of tuff.py --check (Checker.atgui_picture). The window serves only the .tuf's
+        # folder and the folders inside it (a folder called "..art" is one of those; another drive isn't).
         if not full.lower().endswith(IMAGE_EXTS):
             raise self.rt.error(f"'{text}' isn't a picture. Use a .png, .jpg, .gif, .webp or .svg file.")
-        rel = os.path.relpath(full, base)
-        if rel.startswith(".."):
-            raise self.rt.error(f"'{text}' is outside your project folder. Put the picture in your project folder.")
-        return "assets/" + urllib.parse.quote(rel.replace(os.sep, "/"))
+        try:
+            inside = os.path.commonpath([os.path.normcase(full), os.path.normcase(base)]) == os.path.normcase(base)
+        except ValueError:  # on another drive
+            inside = False
+        if not inside:
+            raise self.rt.error(f"'{text}' is outside the folder your .tuf file is in, so atgui can't show it. "
+                                "Put the picture next to your .tuf file, or in a folder inside it.")
+        if not os.path.isfile(full):
+            raise self.rt.error(f"Couldn't find the image '{text}'. Put the picture in your project folder (next to your .tuf file).")
+        return "assets/" + urllib.parse.quote(os.path.relpath(full, base).replace(os.sep, "/"))
 
     # ---- events
     def on(self, id_, type_, fn):

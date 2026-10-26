@@ -10,6 +10,7 @@ import random
 import re
 import sys
 import tempfile
+import threading
 import time
 
 IDE = os.environ.get("TUFF_IDE") == "1"
@@ -2024,14 +2025,14 @@ class Interpreter:
     def b_wait(self, seconds):
         sys.stdout.flush()
         end = time.perf_counter() + max(0, float(seconds))
-        while self.rt.wait_hooks:  # a tdraw window keeps drawing while the program waits
-            for hook in self.rt.wait_hooks:
+        while True:
+            for hook in self.rt.wait_hooks:  # a tdraw window keeps drawing while the program waits
                 hook()
             left = end - time.perf_counter()
             if left <= 0:
                 return
-            time.sleep(min(0.02, left))
-        time.sleep(max(0, end - time.perf_counter()))
+            # short naps: Ctrl+C reaches a program on its own thread (run_deep) between them
+            time.sleep(min(0.02 if self.rt.wait_hooks else 0.1, left))
 
     def b_range(self, a, b=None, step=1):
         if b is None:
@@ -4414,6 +4415,14 @@ class Checker:
         if to_text(arg.value) not in choices:
             self.problem(arg, f"'{to_text(arg.value)}' isn't one of this dropdown's choices: {', '.join(choices)}.")
 
+    def fixed_text(self, x):
+        """The text an input always is: written there, or in a variable set to it once and never changed (pic =
+        "../cat.png", then game:image(pic)). None when the checker can't know."""
+        if x is not None and x.kind == "var" and x.name not in self.params and x.name not in self.loop_vars:
+            sets = self.assigned.get(x.name, [])
+            x = sets[0].value if len(sets) == 1 and sets[0].op == "=" else None
+        return x.value if x is not None and x.kind == "const" and isinstance(x.value, str) else None
+
     def check_saves(self, e, obj):
         """game:save, game:load, game:saved and game:forget (tgame's saved game data, SAVE_INPUTS): how many inputs
         they got, a name that isn't text (like the score written first: game:save(score, "best")), and what
@@ -4586,9 +4595,10 @@ class Checker:
         if base and os.path.abspath(base).lower().startswith(os.path.abspath(tempfile.gettempdir()).lower()):
             base = None  # a snippet in a temporary folder: its files aren't next to it
         for i, a in enumerate(e.args):
-            if a.kind == "const" and isinstance(a.value, str):
+            value = self.fixed_text(a)
+            if value is not None:
                 land = self.LAND_VALUES.get((obj, name, i))
-                msg = self.land_value(land, a.value, tg) if land else tg["check"](obj, name, i, a.value, base)
+                msg = self.land_value(land, value, tg) if land else tg["check"](obj, name, i, value, base)
                 if msg:
                     self.problem(a, msg)
         if physics and name in self.PHYSICS_NUMBERS and len(e.args) == 1:
@@ -5055,6 +5065,10 @@ class Checker:
                              " Try home, search, settings, user, chat, send, plus, check, x, star, heart, trash, edit or bell."))
         elif (name == "image" and container) or (name == "set" and kind == "image"):
             self.atgui_picture(e.args[0] if e.args else None)
+        elif (name == "avatar" and container) or (name == "set" and kind == "avatar"):  # a picture, or initials
+            text = self.fixed_text(e.args[0] if e.args else None)
+            if text is not None and text.strip().lower().endswith(at["image_exts"]):
+                self.atgui_picture(e.args[0])
         elif name == "animate":
             one_of(0, at["animations"], "There's no animation called '{}'. Try one of: " + ", ".join(at["animations"]) + ".")
         elif name == "toast":
@@ -5074,9 +5088,10 @@ class Checker:
 
     def atgui_picture(self, arg, icon=False):
         """A picture named in the program: a kind of file atgui can show, and there (when we know the folder)."""
-        if arg is None or arg.kind != "const" or not isinstance(arg.value, str):
+        path = self.fixed_text(arg)
+        if path is None:
             return
-        path = arg.value.strip()
+        path = path.strip()
         if not icon and re.match(r"^(https?:|data:)", path, re.I):
             return
         if not path.lower().endswith((".png", ".ico") if icon else atgui_tables()["image_exts"]):
@@ -5247,7 +5262,8 @@ def scene_file(game_path, source_path, out_path):
         interp = SceneInterpreter(src, os.path.dirname(os.path.abspath(game_path)))
         scene = tuff_tgame.start_scene(interp)
         error = None
-        try:
+
+        def setup():
             program = Parser(tokenize(src)).program()
             for stmt in program:
                 if stmt.kind == "func":
@@ -5255,6 +5271,9 @@ def scene_file(game_path, source_path, out_path):
             interp.run_block(program, interp.globals)
             for hook in interp.rt.finish_hooks:
                 hook()
+
+        try:
+            run_deep(setup, main=bool(TK_IMPORT.search(src)))  # as deep as a real run
         except tuff_tgame.SceneDone:
             pass
         except TuffError as err:
@@ -5358,6 +5377,98 @@ def base_folder(path):
     return os.environ.get("TUFF_BASE_DIR") or os.path.dirname(os.path.abspath(path))
 
 
+# 1.4.1: a Tuff call is 7 to 14 of Python's, and Python stops at 1000 calls deep, so a Tuff function used to stop after
+# about 100 calls of itself. A program runs on a thread of its own with a big stack and a higher limit instead: a
+# function can call itself over 10,000 times, and one that never stops still ends in under a second with "f() called
+# itself too many times." Programs with tgui, mtgui or tdraw (tkinter) keep the main thread, which a Mac's windows need,
+# and so do apps with no console (report's box is tkinter's).
+DEEP_CALLS = 150_000
+DEEP_STACKS = (512 << 20, 255 << 20, 64 << 20)  # the first one a thread can start with (Windows takes under 256 MB)
+TK_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|tdraw)\b", re.M)
+
+
+def big_stack():
+    """Makes the next thread Python starts a big-stack one, with the biggest size in DEEP_STACKS a thread can start
+    with. Gives that size, or 0 when none can (it gets the usual stack). threading.stack_size(0) once it has started."""
+    for size in DEEP_STACKS:
+        try:
+            threading.stack_size(size)
+            probe = threading.Thread(target=int)
+            probe.start()
+            probe.join()
+            return size
+        except (ValueError, RuntimeError, MemoryError):
+            pass
+    threading.stack_size(0)
+    return 0
+
+
+def go_deep(stack):
+    """Raises Python's limit on calls for a program on a thread with a stack this big (0: the usual one). From Python
+    3.12 its own calls don't use the stack, so it's DEEP_CALLS; before that each takes up to 1 KB of it."""
+    calls = DEEP_CALLS if sys.version_info >= (3, 12) else min(DEEP_CALLS, stack // 1024)
+    if calls > sys.getrecursionlimit():
+        sys.setrecursionlimit(calls)
+
+
+def on_big_stack(stack, fn, *args):
+    """What a big-stack thread runs (tuff_view.run starts the one a window program runs on)."""
+    threading.stack_size(0)  # only this thread is big: the window's own threads keep the usual stack
+    go_deep(stack)
+    return fn(*args)
+
+
+def run_deep(fn, *args, main=False):
+    """fn(*args) on a big-stack thread (main=True: here, on the main thread), giving what it gives; its errors are
+    raised again here. Ctrl+C only reaches the main thread, so it waits in short naps to let it in, then stops fn too."""
+    if main:
+        go_deep(0)
+        return fn(*args)
+    stack = big_stack()
+    done, finished = {}, threading.Event()  # not worker.is_alive(): Ctrl+C during a join can leave that saying False
+
+    def body():
+        try:
+            done["value"] = on_big_stack(stack, fn, *args)
+        except BaseException as exc:
+            done["error"] = exc
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=body, name="tuff", daemon=True)
+    try:
+        worker.start()
+    except RuntimeError:  # it couldn't start after all
+        threading.stack_size(0)
+        go_deep(0)
+        return fn(*args)
+    threading.stack_size(0)
+    try:
+        while not finished.wait(0.1):
+            pass
+    except KeyboardInterrupt:
+        switch = sys.getswitchinterval()
+        sys.setswitchinterval(0.0001)  # a busy program would slow the import below to half a second
+        try:
+            import ctypes
+            ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(worker.ident), ctypes.py_object(KeyboardInterrupt))
+        except Exception:
+            pass
+        finally:
+            sys.setswitchinterval(switch)
+        if not finished.wait(1.0):
+            # Still inside something that can't be stopped, like reading input from a pipe: Python's own ending could
+            # stop with "could not acquire lock for <stdin> at interpreter shutdown", so end the process here.
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(130)
+        raise
+    worker.join()
+    if "error" in done:
+        raise done["error"]
+    return done.get("value")
+
+
 def run_file(path):
     src = read_source(path)
     if src is None:
@@ -5388,7 +5499,10 @@ def run_program(path):
     if src is None:
         return 1
     if not VIEW_IMPORT.search(src):
-        return run_file(path)
+        try:
+            return run_deep(run_file, path, main=WINDOWED or bool(TK_IMPORT.search(src)))
+        except KeyboardInterrupt:
+            return 130
     if TGAME_IMPORT.search(src) and not WINDOWED:
         Console(first_id=0).say(TGAME_NOTICE, "notice")  # line 0: the program's own lines start at 1
     try:
@@ -5396,13 +5510,16 @@ def run_program(path):
     except ImportError:
         report(TuffError("This program needs Tuff's window engine (tuff_view.py), which isn't installed next to tuff.py."), src)
         return 1
+    stack = big_stack()  # for the thread tuff_view.run starts
     try:
-        code = tuff_view.run(run_file, path)
+        code = tuff_view.run(on_big_stack, stack, run_file, path)
     except KeyboardInterrupt:
         return 130
     except tuff_view.ViewError as err:
         report(TuffError(str(err)), src)
         return 1
+    finally:
+        threading.stack_size(0)
     return 0 if code is None else code
 
 
