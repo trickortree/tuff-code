@@ -3893,8 +3893,9 @@ class Checker:
             elif kind == "line" and name in LOOK_INPUTS:
                 if not n:
                     self.problem(e, f':{name} needs the new text, like {owner}:{name}("Done!")')
-                elif e.args[0].kind == "say" or (e.args[0].kind == "method" and self.is_print(e.args[0].obj)):
-                    self.problem(e.args[0], f"say shows a new line, so this {name}s {owner} with that line's text. To animate {owner} where it is, use {owner}:play(\"explode\") (or {owner}:{name}(\"new text\", \"glitch\")).")
+                # say:ascii(...) and say:color(...) say a line of their own (a plain say "text" as an input is just its text)
+                elif e.args[0].kind == "method" and self.is_print(e.args[0].obj) and e.args[0].name in ("ascii", "color", "colour"):
+                    self.problem(e.args[0], f"say:{e.args[0].name} shows a new line, so this {name}s {owner} with that line's text. To animate {owner} where it is, use {owner}:play(\"explode\") (or {owner}:{name}(\"new text\", \"glitch\")).")
                 else:
                     for a in e.args[1:]:
                         if a.kind == "const" and isinstance(a.value, str):
