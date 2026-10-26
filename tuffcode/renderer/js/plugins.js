@@ -260,7 +260,7 @@
     if (!body.firstChild) {
       body.innerHTML = `
         <div class="pl-tabs"><button data-t="market">Marketplace</button><button data-t="installed">Installed</button></div>
-        <label class="pl-search"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg><input id="pl-q" placeholder="Search plugins" spellcheck="false"></label>
+        <label class="pl-search">${TuffIcon('search-line')}<input id="pl-q" placeholder="Search plugins" spellcheck="false"></label>
         <div class="pl-list" id="pl-list"></div>
         <div class="pl-foot">Plugins run inside TuffCode and can read and change files in your projects. Only install ones you trust.
           <button class="pl-link" id="pl-make">Make your own plugin</button></div>`;

@@ -4,9 +4,16 @@
   "version": "1.0.0",
   "author": "trickortree",
   "description": "Make sound effects for your tgame games: coins, jumps, lasers, explosions and more. Pick a preset, move the sliders, play it, then save it as a .wav file and add it to your game with one line of code.",
-  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3.5 10.5v3M7.5 7v10M11.5 3.5v17M15.5 8v8M19.5 10.5v3\"/></svg>",
+  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-width=\"2\" d=\"M4 10v4m4-7v10m4-13v16m4-13v10m4-7v4\"/></svg>",
   "main": "panel.js",
   "style": "panel.css",
-  "panels": [{ "id": "lab", "title": "Sound Lab" }],
-  "permissions": ["files"]
+  "panels": [
+    {
+      "id": "lab",
+      "title": "Sound Lab"
+    }
+  ],
+  "permissions": [
+    "files"
+  ]
 }

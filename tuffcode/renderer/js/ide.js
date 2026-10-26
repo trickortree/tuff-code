@@ -36,17 +36,16 @@
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', words); else words();
   }
   // The .fl icons are glyphs from Windows' Segoe Fluent Icons font, which other systems don't have.
-  // There, each one is swapped for a drawn icon of the same meaning.
+  // There, each one is swapped for a MingCute icon of the same meaning.
   if (api.platform !== 'win32') {
-    const svg = (d) => `<svg class="fl-svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
     const ICONS = {
-      '': svg('<path d="M4 6l4 4 4-4"/>'), // chevron down
-      '': svg('<circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2L13.5 13.5"/>'), // search
-      '': svg('<path d="M8 2a6 6 0 100 12c1 0 1.4-.7 1.1-1.5-.4-1 .2-1.9 1.3-1.9H12a2 2 0 002-2A6 6 0 008 2z"/><circle cx="5" cy="7" r=".8"/><circle cx="7.5" cy="4.8" r=".8"/><circle cx="10.5" cy="5.6" r=".8"/>'), // palette
-      '': svg('<path d="M3 8h10"/>'),
-      '': svg('<rect x="3.5" y="3.5" width="9" height="9"/>'),
-      '': svg('<rect x="3.5" y="5.5" width="7" height="7"/><path d="M5.5 5.5V3.5h7v7h-2"/>'),
-      '': svg('<path d="M4 4l8 8M12 4l-8 8"/>'),
+      '': TuffIcon('down-line', 'fl-svg'), // chevron down
+      '': TuffIcon('search-line', 'fl-svg'), // search
+      '': TuffIcon('palette-line', 'fl-svg'), // palette
+      '': TuffIcon('minimize-line', 'fl-svg'),
+      '': TuffIcon('square-line', 'fl-svg'),
+      '': TuffIcon('restore-line', 'fl-svg'),
+      '': TuffIcon('close-line', 'fl-svg'),
     };
     const swap = (root) => {
       for (const el of root.querySelectorAll ? root.querySelectorAll('.fl') : []) {
@@ -76,11 +75,13 @@
   const LANG_NAMES = { tuff: 'Tuff', python: 'Python', javascript: 'JavaScript', typescript: 'TypeScript', json: 'JSON', markdown: 'Markdown', html: 'HTML', css: 'CSS', xml: 'XML', yaml: 'YAML', plaintext: 'Plain text', ini: 'Settings (.env / .ini)', shell: 'Shell', bat: 'Batch', powershell: 'PowerShell' };
   const langFor = (p) => LANGS[ext(p)] || 'plaintext';
 
+  // MingCute file icons, each in its type's colour (the .tuf T, Python, JavaScript, Markdown and Makefile badges are drawn here).
+  const tint = (icon, color) => icon.replace('<svg ', `<svg style="color:${color}" `);
   function fileIcon(name, isDir, open) {
     if (isDir) {
       return open
-        ? '<svg class="fi" viewBox="0 0 16 16"><path style="fill:#9aa7b0;stroke:none" d="M1.5 3.5a1 1 0 011-1h3.6l1.5 1.5h5.4a1 1 0 011 1V6H4.2a1 1 0 00-.95.68L1.5 12z"/><path style="fill:#b6c2cb;stroke:none" d="M3.6 6.5h11.3l-2 6.3a1 1 0 01-.95.7H1.6z"/></svg>'
-        : '<svg class="fi" viewBox="0 0 16 16"><path style="fill:#9aa7b0;stroke:none" d="M1.5 3.5a1 1 0 011-1h3.6l1.5 1.5h5.9a1 1 0 011 1v7.5a1 1 0 01-1 1h-11a1 1 0 01-1-1z"/></svg>';
+        ? tint(TuffIcon('folder-open-fill', 'fi'), '#9aa7b0')
+        : tint(TuffIcon('folder-fill', 'fi'), '#9aa7b0');
     }
     const n = name.toLowerCase();
     switch (n.startsWith('.env') ? 'env' : n === 'makefile' ? 'makefile' : ext(name)) {
@@ -91,29 +92,29 @@
       case 'js':
         return '<svg class="fi" viewBox="0 0 16 16"><rect x="1.5" y="1.5" width="13" height="13" rx="2" style="fill:#e8c547;stroke:none"/><path d="M7.5 6v4.5a1.5 1.5 0 01-3 0M12 6.5c-.3-.6-.9-.8-1.4-.8-.8 0-1.3.5-1.3 1.1 0 1.5 2.8.9 2.8 2.6 0 .7-.6 1.3-1.5 1.3-.7 0-1.3-.3-1.6-1" style="stroke:#222;stroke-width:1.2"/></svg>';
       case 'json':
-        return '<svg class="fi" viewBox="0 0 16 16"><path d="M5.5 2.5c-1.5 0-2 .5-2 2v1.5c0 1-.5 2-1.5 2 1 0 1.5 1 1.5 2v1.5c0 1.5.5 2 2 2M10.5 2.5c1.5 0 2 .5 2 2v1.5c0 1 .5 2 1.5 2-1 0-1.5 1-1.5 2v1.5c0 1.5-.5 2-2 2" style="stroke:#e5a64b;stroke-width:1.5"/></svg>';
+        return tint(TuffIcon('braces-line', 'fi'), '#e5a64b');
       case 'md':
         return '<svg class="fi" viewBox="0 0 16 16"><rect x="1.5" y="3.5" width="13" height="9" rx="1.5" style="stroke:#6ea8f0"/><path d="M4 10V6l2 2 2-2v4M11 6v4m-1.5-1.5L11 10l1.5-1.5" style="stroke:#6ea8f0"/></svg>';
       case 'env': case 'ini': case 'cfg': case 'conf': case 'toml': case 'yml': case 'yaml': case 'properties': case 'editorconfig':
-        return '<svg class="fi" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.3" style="stroke:#8fa1b3;stroke-width:2.4;stroke-dasharray:2.08 2.08;stroke-dashoffset:1.04;stroke-linecap:butt"/><circle cx="8" cy="8" r="2.9" style="stroke:#8fa1b3;stroke-width:2.4"/></svg>';
+        return tint(TuffIcon('settings-5-line', 'fi'), '#8fa1b3');
       case 'png': case 'jpg': case 'jpeg': case 'gif': case 'bmp': case 'ico': case 'webp': case 'svg':
-        return '<svg class="fi" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" style="stroke:#4fb39a"/><circle cx="5.5" cy="6" r="1.3" style="fill:#4fb39a;stroke:none"/><path d="M2 12.5l4-4 3 3 2-2 3.5 3.5" style="stroke:#4fb39a"/></svg>';
+        return tint(TuffIcon('pic-line', 'fi'), '#4fb39a');
       case 'makefile':
         return '<svg class="fi" viewBox="0 0 16 16"><rect x="1.5" y="1.5" width="13" height="13" rx="2" style="fill:#6d8086;stroke:none"/><path d="M4.5 11V5l3.5 4 3.5-4v6" style="stroke:#fff;stroke-width:1.5"/></svg>';
       case 'gitignore': case 'gitattributes': case 'gitmodules':
-        return '<svg class="fi" viewBox="0 0 16 16"><circle cx="5" cy="3.8" r="1.6" style="stroke:#f0643c"/><circle cx="5" cy="12.2" r="1.6" style="stroke:#f0643c"/><circle cx="11" cy="6" r="1.6" style="stroke:#f0643c"/><path d="M5 5.4v5.2M11 7.6c0 2.2-2.6 2.6-4.6 3.6" style="stroke:#f0643c"/></svg>';
+        return tint(TuffIcon('git-branch-line', 'fi'), '#f0643c');
       case 'sh': case 'bat': case 'cmd':
-        return '<svg class="fi" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="2" style="stroke:#7fb36a"/><path d="M4.5 6.5l2 1.5-2 1.5M8 10h3.5" style="stroke:#7fb36a"/></svg>';
+        return tint(TuffIcon('terminal-box-line', 'fi'), '#7fb36a');
       case 'ps1':
-        return '<svg class="fi" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="2" style="fill:#2c5a9e;stroke:none"/><path d="M4.5 6.5l2 1.5-2 1.5M8 10h3.5" style="stroke:#fff"/></svg>';
+        return tint(TuffIcon('terminal-box-fill', 'fi'), '#2c5a9e');
       case 'html': case 'htm': case 'xml':
-        return '<svg class="fi" viewBox="0 0 16 16"><path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5M9 3l-2 10" style="stroke:#e8774c"/></svg>';
+        return tint(TuffIcon('code-line', 'fi'), '#e8774c');
       case 'css':
-        return '<svg class="fi" viewBox="0 0 16 16"><path d="M6.5 2.5l-1.5 11M11 2.5l-1.5 11M3 6h10.5M2.5 10h10.5" style="stroke:#57a6e8"/></svg>';
+        return tint(TuffIcon('hashtag-line', 'fi'), '#57a6e8');
       case 'txt': case 'log':
-        return '<svg class="fi" viewBox="0 0 16 16"><path d="M4 1.5h5l3.5 3.5v9a.5.5 0 01-.5.5H4a.5.5 0 01-.5-.5V2a.5.5 0 01.5-.5z" style="stroke:#9da0a8"/><path d="M9 1.5V5h3.5M5.5 8h5M5.5 10.5h5" style="stroke:#9da0a8"/></svg>';
+        return tint(TuffIcon('document-2-line', 'fi'), '#9da0a8');
       default:
-        return '<svg class="fi" viewBox="0 0 16 16"><path d="M4 1.5h5l3.5 3.5v9a.5.5 0 01-.5.5H4a.5.5 0 01-.5-.5V2a.5.5 0 01.5-.5z" style="stroke:#9da0a8"/><path d="M9 1.5V5h3.5" style="stroke:#9da0a8"/></svg>';
+        return tint(TuffIcon('file-line', 'fi'), '#9da0a8');
     }
   }
 
@@ -328,7 +329,7 @@
     if (e.isDir) r.dataset.dir = '1';
     const open = tree.expanded.has(e.path);
     r.innerHTML =
-      `<svg class="tw ${e.isDir ? (open ? 'open' : '') : 'none'}" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg>` +
+      TuffIcon('right-line', `tw ${e.isDir ? (open ? 'open' : '') : 'none'}`) +
       fileIcon(e.name, e.isDir, open) +
       `<span class="name">${esc(e.name)}</span>` +
       (isRoot ? `<span class="hint">${esc(e.path)}</span>` : '');
@@ -684,7 +685,7 @@
   // ---------- tuff engine view ----------
   // The second centre pseudo-tab, built like the Studio's: Tuff Engine (tuff-engine.js) edits a tgame game.
   const engine = { open: false, visible: false, file: null, el: null };
-  const PAD_ICON = '<svg viewBox="0 0 20 20"><path d="M6 6.5h8a4 4 0 014 4v.6a2.9 2.9 0 01-5.1 1.9L11.6 12H8.4l-1.3 1A2.9 2.9 0 012 11.1v-.6a4 4 0 014-4z"/><path d="M6.2 8.6v3M4.7 10.1h3"/><circle cx="13" cy="9.4" r=".7"/><circle cx="14.6" cy="11" r=".7"/></svg>';
+  const PAD_ICON = TuffIcon('game-2-line');
 
   function showEngine(file) {
     hideStudio();
@@ -823,7 +824,7 @@
     if (studio.open) {
       const tab = studio.el = tabEl(studio.el, 'tab studio-tab' + (studio.visible ? ' active' : ''));
       tab.title = 'Design Studio';
-      tab.innerHTML = '<span class="fl st-ic">&#xE790;</span><span>Design Studio</span><button class="x" title="Close"><svg viewBox="0 0 10 10"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>';
+      tab.innerHTML = `<span class="fl st-ic">${TuffIcon('palette-line', 'fl-svg')}</span><span>Design Studio</span><button class="x" title="Close">${TuffIcon('close-line')}</button>`;
       tab.onmousedown = (e) => {
         if (e.button === 1) { e.preventDefault(); closeStudio(); }
         else if (e.button === 0 && !e.target.closest('.x')) showStudio();
@@ -834,7 +835,7 @@
     if (engine.open) {
       const tab = engine.el = tabEl(engine.el, 'tab engine-tab' + (engine.visible ? ' active' : ''));
       tab.title = 'Tuff Engine';
-      tab.innerHTML = `<span class="st-ic">${PAD_ICON}</span><span>Tuff Engine</span><button class="x" title="Close"><svg viewBox="0 0 10 10"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>`;
+      tab.innerHTML = `<span class="st-ic">${PAD_ICON}</span><span>Tuff Engine</span><button class="x" title="Close">${TuffIcon('close-line')}</button>`;
       tab.onmousedown = (e) => {
         if (e.button === 1) { e.preventDefault(); closeEngine(); }
         else if (e.button === 0 && !e.target.closest('.x')) showEngine();
@@ -845,7 +846,7 @@
     for (const t of state.tabs) {
       const tab = t.el = tabEl(t.el, 'tab' + (t.path === state.active && !studio.visible && !engine.visible ? ' active' : '') + (isDirty(t) ? ' dirty' : ''));
       tab.title = t.path;
-      tab.innerHTML = `${fileIcon(basename(t.path))}<span>${esc(basename(t.path))}</span><button class="x" title="Close (Ctrl+F4)"><svg viewBox="0 0 10 10"><path d="M2 2l6 6M8 2l-6 6"/></svg></button>`;
+      tab.innerHTML = `${fileIcon(basename(t.path))}<span>${esc(basename(t.path))}</span><button class="x" title="Close (Ctrl+F4)">${TuffIcon('close-line')}</button>`;
       tab.onmousedown = (e) => {
         if (e.button === 1) { e.preventDefault(); closeTab(t); }
         else if (e.button === 0 && !e.target.closest('.x')) activate(t);
@@ -1515,8 +1516,8 @@
 
   function renderBuildSteps() {
     const icons = {
-      done: '<svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg>',
-      error: '<svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>',
+      done: TuffIcon('check-fill'),
+      error: TuffIcon('close-fill'),
     };
     $('#bo-steps').innerHTML = BUILD_STEPS.map(([id]) => {
       const s = bd.steps[id];
@@ -1986,7 +1987,7 @@
       if (it.kind === 'file') {
         li.innerHTML = `${fileIcon(it.f.name)}<span>${it.nameHtml}</span><span class="sub">${esc(dirname(it.f.rel) || basename(state.root))}</span>`;
       } else {
-        li.innerHTML = `<svg class="fi" viewBox="0 0 16 16"><path d="M3 8h10M9 4l4 4-4 4"/></svg><span>${it.html}</span><span class="sub">${esc(it.c.sc || '')}</span>`;
+        li.innerHTML = `${TuffIcon('arrow-right-line', 'fi')}<span>${it.html}</span><span class="sub">${esc(it.c.sc || '')}</span>`;
       }
       li.onmousemove = () => setSel(i);
       li.onclick = () => pickSE(i);
@@ -2087,7 +2088,7 @@
   $('#win-close').onclick = commands.exit.run;
   $('#titlebar .tb-drag').ondblclick = () => api.win.toggleMaximize();
   const setMaxIcon = (max) => {
-    $('#win-max').innerHTML = `<span class="fl">${max ? '&#xE923;' : '&#xE922;'}</span>`;
+    $('#win-max').innerHTML = `<span class="fl">${max ? TuffIcon('restore-line', 'fl-svg') : TuffIcon('square-line', 'fl-svg')}</span>`;
     $('#win-max').title = max ? 'Restore Down' : 'Maximize';
   };
   api.win.onMaximized(setMaxIcon);

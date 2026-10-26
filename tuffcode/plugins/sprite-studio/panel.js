@@ -14,28 +14,29 @@ TuffPlugins.register('sprite-studio', (t) => {
   const CHECK = ['#45464c', '#3a3b40']; // the see-through checkerboard
   const CLEAR = [0, 0, 0, 0];
 
+  // The tool and button icons: MingCute, through TuffIcon.
   const ICONS = {
-    pencil: '<path d="M11 2.6l2.4 2.4-7.6 7.6-3.1.7.7-3.1z"/><path d="M9.6 4l2.4 2.4"/>',
-    eraser: '<path d="M9 2.9a1.3 1.3 0 0 1 1.8 0l2.3 2.3a1.3 1.3 0 0 1 0 1.8l-5.5 5.5H5l-2.1-2.1a1.3 1.3 0 0 1 0-1.8z"/><path d="M5.6 6.3l4.1 4.1M7.6 12.5h5.6"/>',
-    fill: '<path d="M6.6 2.6l6 6-4.7 4.7a1.3 1.3 0 0 1-1.8 0L2 9.2a1.3 1.3 0 0 1 0-1.8z"/><path d="M2.3 8.3h10"/><path d="M13.6 10.6c.7.9 1.1 1.6 1.1 2.1a1.1 1.1 0 0 1-2.2 0c0-.5.4-1.2 1.1-2.1z"/>',
-    picker: '<path d="M8.8 3.4l3.8 3.8"/><path d="M11.4 4.6l1.7-1.7a1.3 1.3 0 0 0-1.9-1.9L9.5 2.7"/><path d="M10 4.6l-6 6-.8 2.2 2.2-.8 6-6"/>',
-    line: '<path d="M4.6 11.4l6.8-6.8"/><rect x="1.8" y="10.8" width="3.4" height="3.4" rx=".6"/><rect x="10.8" y="1.8" width="3.4" height="3.4" rx=".6"/>',
-    rect: '<rect x="2.5" y="3.5" width="11" height="9" rx="1.2"/>',
-    fillrect: '<rect x="2.5" y="3.5" width="11" height="9" rx="1.2" fill="currentColor"/>',
-    mirror: '<path d="M8 1.8v12.4" stroke-dasharray="1.6 1.8"/><path d="M5.6 4.6v6.8L2.2 8z"/><path d="M10.4 4.6v6.8L13.8 8z"/>',
-    undo: '<path d="M5.5 3.5L2.5 6.5l3 3"/><path d="M2.5 6.5h6.8a3.7 3.7 0 0 1 0 7.4H7"/>',
-    redo: '<path d="M10.5 3.5l3 3-3 3"/><path d="M13.5 6.5H6.7a3.7 3.7 0 0 0 0 7.4H9"/>',
-    page: '<path d="M9 2H4.5A1.5 1.5 0 0 0 3 3.5v9A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5V6z"/><path d="M9 2v4h4"/>',
-    folder: '<path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.8l1.5 1.5h4.7A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/>',
-    plus: '<path d="M8 3v10M3 8h10"/>',
-    copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/>',
-    trash: '<path d="M2.5 4.5h11M6.5 4.5V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1.5M4 4.5l.7 8.6a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-8.6"/>',
-    left: '<path d="M10 3.5L5.5 8l4.5 4.5"/>',
-    right: '<path d="M6 3.5L10.5 8 6 12.5"/>',
-    play: '<path d="M5 3.2v9.6L12.5 8z"/>',
-    pause: '<path d="M5.5 3.5v9M10.5 3.5v9"/>',
+    pencil: TuffIcon('pencil-line'),
+    eraser: TuffIcon('eraser-line'),
+    fill: TuffIcon('paint-line'),
+    picker: TuffIcon('color-picker-line'),
+    line: TuffIcon('line-line'),
+    rect: TuffIcon('rectangle-line'),
+    fillrect: TuffIcon('rectangle-fill'),
+    mirror: TuffIcon('mirror-line'),
+    undo: TuffIcon('back-2-line'),
+    redo: TuffIcon('forward-2-line'),
+    page: TuffIcon('file-new-line'),
+    folder: TuffIcon('folder-open-line'),
+    plus: TuffIcon('add-line'),
+    copy: TuffIcon('copy-2-line'),
+    trash: TuffIcon('delete-2-line'),
+    left: TuffIcon('left-line'),
+    right: TuffIcon('right-line'),
+    play: TuffIcon('play-line'),
+    pause: TuffIcon('pause-line'),
   };
-  const icon = (n) => `<svg viewBox="0 0 16 16" aria-hidden="true">${ICONS[n]}</svg>`;
+  const icon = (n) => ICONS[n];
 
   const TOOLS = [
     { id: 'pencil', name: 'Pencil', key: 'P', hint: 'Click and drag to draw. Right-click rubs out.' },
