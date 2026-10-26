@@ -144,7 +144,7 @@ ${NOTES['1.3.0'].notes}`,
   };
   // 1.4.0, the Toolbox Update (a beta for now: its picture comes later).
   NOTES['1.4.0'] = {
-    images: [],
+    images: ['1.png'],
     notes: `### Dictionaries
 - **Keep things by name:** \`ages = {"sam": 14, "ann": 12}\`, then \`ages["sam"]\`, and \`ages["bob"] = 15\` to add one.
 - \`ages:has("sam")\`, \`ages:get("zed", 0)\`, \`ages:remove("ann")\`, \`ages:keys()\` and \`ages:values()\`. \`for name in ages:\` goes through the keys.
