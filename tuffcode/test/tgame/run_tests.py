@@ -4429,7 +4429,7 @@ def t_toolbox_fixes(c):
                 'file.delete("data.txt")\nsay file.exists("data.txt")\n')
     env = {**os.environ, "TUFF_NO_WRITES": "1", "TUFF_BASE_DIR": project}
     p = subprocess.run(tuff_cmd() + [snippet], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
-    c.check(p.stdout.splitlines() == ["from the project", '["hi", "there"]', "1", "false"],
+    c.check(p.stdout.splitlines()[:4] == ["from the project", '["hi", "there"]', "1", "false"],  # (a built runtime adds "Press Enter")
             "with TUFF_NO_WRITES and TUFF_BASE_DIR a snippet reads the project's file and its own writes", p.stdout + p.stderr)
     c.check(os.path.exists(os.path.join(project, "data.txt")) and not os.path.exists(os.path.join(project, "made.txt"))
             and not os.path.exists(os.path.join(project, "data.json")), "...and nothing on disk changed")
