@@ -9,6 +9,7 @@ These tests run **real .tuf games in real windows**. Each game plays itself with
 ```
 py -3 tuffcode/test/tgame/run_tests.py [test ...] [--runtime build/runtime/tuff-runtime/tuff-runtime.exe] [--out-dir folder]
 node tuffcode/test/tgame/build_exe_test.mjs          # Build exe for a game, then run the built app (about 30 s)
+node tuffcode/test/tgame/build_exe_pack_test.mjs     # what Build exe packs where ("../" files too) and its error box: no PyInstaller, no windows
 node tuffcode/test/e2e/run.mjs tgame                  # (in tuffcode/) the Run button and the yellow notice, in the IDE
 node tuffcode/test/e2e/run.mjs engine-host engine     # (in tuffcode/) Tuff Engine: its preview page, then the tab itself
 ```

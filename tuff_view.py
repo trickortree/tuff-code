@@ -360,6 +360,8 @@ def run(main, *args):
     if runner.view is not None and _stuck_threads(2.0):
         # pywebview answers each page call on a thread of its own. If one of them got stuck while the window
         # was closing, Python would wait for it forever on the way out, so end the process here instead.
+        if isinstance(outcome.get("error"), Exception):  # it can't be raised now: shown the way Python shows one
+            sys.excepthook(type(outcome["error"]), outcome["error"], outcome["error"].__traceback__)
         sys.stdout.flush()
         sys.stderr.flush()
         value = outcome.get("value")

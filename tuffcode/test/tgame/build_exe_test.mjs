@@ -2,12 +2,13 @@
 // stood in for), then run the built app: it has no console (--windowed), so it plays itself with tgame's autopilot
 // and the test reads the screenshot and the JSON it writes.
 //   node tuffcode/test/tgame/build_exe_test.mjs [--keep] [--only game,box,outside,plain]
-// Takes a few minutes (PyInstaller --onefile, three times). Exits 1 if a check failed.
+// Takes a few minutes (PyInstaller --onefile, four times). Exits 1 if a check failed.
 //   game     features_2d.tuf builds, runs from inside the app and draws
 //   box      on Windows: a game whose picture won't load, opened like a double-click in Explorer (no console, no
 //            pipes), shows the window's error in the app's error box (error_box.py reads it and clicks OK)
-//   outside  an mtgui app with a "../" picture stops at "Packing your program" and says why
+//   outside  an mtgui app with "../" pictures builds, and the built app finds them
 //   plain    a program without tgame builds as a small console app
+// build_exe_pack_test.mjs checks what's packed where, and the launcher's error box, with no PyInstaller or windows.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -140,23 +141,46 @@ if (only('box') && process.platform === 'win32') {
   }
 }
 
-// mtgui loads a "../" picture from the folder above, but a built app only holds its own folder, so it wouldn't find
-// it. Build exe says so at "Packing your program" instead of making an app that stops when it opens.
+// mtgui loads "../" pictures from the folder above. The app holds them laid out as they are here (in _project, with
+// the program in its own folder there), so the built app finds them: it shows all three, writes a note and closes.
+// A picture it couldn't find would stop it with tkinter's "Something went wrong" box, which error_box.py reads.
 if (only('outside')) {
   const parent = path.join(scratch, 'Pictures Above');
   const project = path.join(parent, 'app');
+  fs.mkdirSync(path.join(parent, 'art'), { recursive: true });
   fs.mkdirSync(project, { recursive: true });
   fs.copyFileSync(path.join(HERE, 'games', 'star.png'), path.join(parent, 'star.png'));
+  fs.copyFileSync(path.join(HERE, 'games', 'star.png'), path.join(parent, 'art', 'moon.png'));
   fs.copyFileSync(path.join(HERE, 'games', 'star.png'), path.join(project, 'inside.png'));
-  fs.writeFileSync(path.join(project, 'pics.tuf'), 'mention mtgui\n\napp = mtgui.window("Pictures")\napp:image("inside.png")\napp:image("../star.png")\n');
-  console.log('== Build exe: an mtgui app with a "../" picture');
+  const note = path.join(scratch, 'pictures-note.txt').replace(/\\/g, '/');
+  fs.writeFileSync(path.join(project, 'pics.tuf'), ['mention mtgui', '', 'app = mtgui.window("Pictures")', 'app:image("inside.png")',
+    'app:image("../star.png")', 'app:image("../art/" + "moon.png")', `file.write(${JSON.stringify(note)}, "all three pictures loaded")`,
+    '', 'func done():', '    app:close()', '', 'app:after(1, done)', ''].join('\n'));
+  console.log('== Build exe: an mtgui app with "../" pictures');
   const up = await buildApp(path.join(project, 'pics.tuf'), 'Outside Test');
   const pack = up.steps.filter((s) => s.id === 'pack').pop() || {};
-  if (up.message) console.log(`  the build says: ${up.message.replace(/\n/g, ' / ')}`);
-  check(!up.ok && pack.state === 'error', 'the build stops at "Packing your program"', { ok: up.ok, pack, message: up.message });
-  check(/\.\.\/star\.png/.test(up.message || '') && /outside the folder your \.tuf file is in/.test(up.message || '')
-    && /next to your \.tuf file, or in a folder inside it/.test(up.message || ''), 'and says which picture, and where it has to be', up.message);
-  check(!up.steps.some((s) => s.id === 'build'), 'before PyInstaller ever runs', up.steps.map((s) => `${s.id}:${s.state}`));
+  check(up.ok && pack.state === 'done', `it builds (${up.took} s)`, up.message || up.log.slice(-1500));
+  check(/\.\.\/star\.png/.test(pack.label || '') && /\.\.\/art\/moon\.png/.test(pack.label || ''), `with the "../" pictures: ${pack.label}`, pack.label);
+  if (up.ok && up.exe) {
+    const t1 = Date.now();
+    const app = spawn(up.exe, [], { cwd: scratch, windowsHide: false });
+    const code = await new Promise((r) => {
+      const t = setTimeout(() => r('still running'), 40000);
+      app.on('exit', (c) => { clearTimeout(t); r(c); });
+    });
+    let box = {};
+    if (code !== 0 && process.platform === 'win32') {
+      const watcher = spawnSync(PY[0], [...PY.slice(1), path.join(HERE, 'error_box.py'), up.exe, '5'], { encoding: 'utf8', timeout: 20000, windowsHide: true });
+      try { box = JSON.parse(watcher.stdout.trim().split('\n').pop()); } catch {}
+      if (box.text) console.log(`  the box says: ${box.text.replace(/\n/g, ' / ')}`);
+      const q = (s) => `'${s.replace(/'/g, "''")}'`;
+      spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+        `Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq ${q(up.exe)} } | Invoke-CimMethod -MethodName Terminate | Out-Null`], { windowsHide: true });
+    }
+    check(code === 0, `the built app opened and closed by itself (exit ${code}, ${((Date.now() - t1) / 1000).toFixed(1)} s)`, box.text || code);
+    check(fs.existsSync(note) && fs.readFileSync(note, 'utf8') === 'all three pictures loaded',
+      'it found inside.png, ../star.png and ../art/moon.png inside the app', box.text || null);
+  }
 }
 
 // A program without a game window doesn't carry the window engine: same size as before, and a console.
