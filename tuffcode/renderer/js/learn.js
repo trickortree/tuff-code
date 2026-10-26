@@ -882,7 +882,7 @@
       example: 'try:\n    text = file.read("missing.txt")\ncatch problem:\n    say "Couldn\'t read it: " + problem\n    text = ""\nfile.add("log.txt", today() + " " + now() + " ran the program")',
       task: 'Ask for a number with <code>input</code>, and use <code>try:</code> and <code>catch:</code> so typing a word says "That isn\'t a number" instead of stopping.',
       starter: '# Section 1.6, Lesson 5: When things go wrong\n# Ask for a number. If it isn\'t one, catch the problem and say "That isn\'t a number".\n\n',
-      solution: 'answer = input "A number? "\ntry:\n    n = int(answer) * 2\n    if n is err:\n        say "That isn\'t a number"\n    else:\n        say "Doubled: " + n\ncatch:\n    say "That isn\'t a number"\n',
+      solution: 'answer = input "A number? "\ntry:\n    say "Doubled: " + int(answer) * 2\ncatch:\n    say "That isn\'t a number"\n',
       check: (src) => {
         if (!/^\s*try\s*:/m.test(src)) return 'Start a try: block around the part that can fail';
         return /^\s*catch\b[^\n]*:/m.test(src) ? true : 'Add a catch: block right after it, saying "That isn\'t a number"';
