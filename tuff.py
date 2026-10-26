@@ -3516,6 +3516,7 @@ class Checker:
         self.makes_window = self.makes_game = False
         self.handlers_seen = set()
         self.statement_call = None  # a call on a line of its own: its answer isn't used
+        self.trying = 0  # inside how many try: blocks (a wrong key there may be on purpose: catch gets its message)
         self.base_dir = base_dir
 
     # ---- what the program makes, and where
@@ -3757,8 +3758,9 @@ class Checker:
             elif s.target.kind == "index":
                 self.expr(s.target.obj, scope)
                 self.expr(s.target.index, scope)
-                if self.kind(s.target.obj) == "$text":
-                    self.problem(s, "You can only set items in a list, not in text. Build new text with + instead.")
+                self.check_store(s, s.target.obj, s.target.index)
+            elif s.target.kind == "slice":  # board[moves:pop] = "X": like the read form, then stored into
+                self.check_slice(s.target, scope, store=s)
             if s.op == "=" and target in self.func_count and target not in self.params and target not in self.loop_vars \
                     and self.kind(s.value) not in ("$func", "$builtin"):
                 self.problem(s, f"{target} is a function, and giving it a value replaces it, so {target}() won't work afterwards. Use another name for the value.")
@@ -3780,7 +3782,9 @@ class Checker:
             self.check_condition(s.cond)
             self.body(s.body, scope, True, in_func)
         elif k == "try":
+            self.trying += 1
             self.body(s.body, scope, in_loop, in_func)
+            self.trying -= 1
             self.body(s.handler, scope, in_loop, in_func)
         elif k == "for":
             self.expr(s.items, scope)
@@ -3837,32 +3841,9 @@ class Checker:
             for x in e.keys + e.values:
                 self.expr(x, scope)
             for key in e.keys:
-                kk = self.kind(key)
-                if kk in ("$list", "$dict", "$bool", "$nil"):
-                    self.problem(key, f"A dictionary's keys can be text or numbers, not {self.TYPE[kk]}.")
+                self.check_key(key)
         elif k == "slice":
-            self.expr(e.obj, scope)
-            if e.alt is None:
-                self.expr(e.start, scope)
-                self.expr(e.end, scope)
-                self.check_part(e)
-                return
-            self.expr(e.recv, scope)
-            method, recv = self.as_method(e), self.kind(e.recv)
-            self.held.append(recv)
-            try:
-                simple = SIMPLE_METHODS.get(recv[1:]) if method and recv.startswith("$") else None
-                if simple is not None and e.mname not in simple:  # word[first:last] with first some text
-                    self.problem(e, f"The positions in [start:end] must be whole numbers, not {self.TYPE.get(recv, 'that')}.")
-                elif method:  # names[order:pop], as in 1.3.6: a method of what's before the ':'
-                    self.expr(e.alt, scope)
-                elif method is False:
-                    self.expr(e.start, scope)
-                    self.expr(e.end, scope)
-                    self.check_part(e)
-                # (None: can't tell before it runs which one it is, so nothing more is certain)
-            finally:
-                self.held.pop()
+            self.check_slice(e, scope)
         elif k == "call":
             if e.fn.kind == "var":
                 self.use(e.fn, scope, func=True)
@@ -3994,11 +3975,41 @@ class Checker:
             if line:
                 self.problem(s, f"'err' is built in (number() and num() give it for text that isn't a number), and giving it a value replaces it everywhere, so the is err check on line {line} won't work. Use another name, like my_err.")
 
+        def replaces_by_loop(s):
+            """s, a for loop at the top, gives each item in turn to a built-in's name (file, time, log...), so from then
+            on that name is the item, everywhere: file.read and time() fail inside the loop (when it has items), and
+            after it too when it certainly has some. Only when nothing else gives the name a value and no item is a
+            function or a library."""
+            name, b = s.name, self.builtins.get(s.name)
+            if not isinstance(b, Builtin) and not (name == "file" and isinstance(b, Module)):
+                return
+            if name in self.assigned or sum(1 for x in nodes(self.program) if x.kind in ("for", "func", "try", "import") and x.name == name) != 1:
+                return
+            kinds, some = self.loop_items(s.items)
+            if some is False or kinds is None or any(k is None or k in ("$func", "$builtin") or k.startswith(("$libfn:", "$module:")) for k in kinds):
+                return
+            if name == "file":
+                used = [x for x in nodes(self.program) if x.kind == "attr" and x.obj.kind == "var" and x.obj.name == "file"
+                        and "file" not in inputs.get(owner.get(id(x)), ())]
+            else:
+                used = calls.get(name, [])
+            inside = {id(x) for x in nodes(s.body)}
+            line = later(used, s.line) if some else min((x.line for x in used if id(x) in inside and id(x) not in owner), default=None)
+            if line is None:
+                return
+            if name == "file":
+                member = next(x.name for x in used if x.line == line)
+                self.problem(s, f"'file' is the built-in file library, and this loop gives it each item in turn, which replaces it everywhere, so file.{member} on line {line} won't work. Use another name for the loop's variable, like my_file.")
+            else:
+                self.problem(s, f"'{name}' is a built-in function, and this loop gives it each item in turn, which replaces it everywhere, so {name}() on line {line} won't work. Use another name for the loop's variable, like my_{name}.")
+
         for s in self.program:
             if s.kind == "assign" and s.op == "=" and s.target.kind == "var" and isinstance(self.builtins.get(s.target.name), Builtin):
                 replaces(s, s.target.name, s.line)
             elif s.kind == "assign" and s.op == "=" and s.target.kind == "var" and s.target.name == "err":
                 replaces_err(s)
+            elif s.kind == "for":
+                replaces_by_loop(s)
             # f() at the top runs f, and f setting a built-in's name (not one of its inputs) replaces it for everyone
             # (except the OWN_NAME_BUILTINS: there it's f's own variable)
             if s.kind == "expr" and s.expr.kind == "call" and s.expr.fn.kind == "var" and self.only_func(s.expr.fn.name):
@@ -4011,6 +4022,37 @@ class Checker:
                 if s.name in made:
                     self.problem(s, f"There are two functions called {s.name}. This one replaces the one on line {made[s.name]}. Give them different names.")
                 made[s.name] = s.line
+
+    def loop_items(self, e, seen=frozenset()):
+        """What a for loop over e gives its variable: the kinds of the items (None when that can't be told), and
+        whether there are some (True or False, or None when that can't be told)."""
+        if e.kind == "list":
+            return {self.kind(x) for x in e.items}, bool(e.items)
+        if e.kind == "dict":  # its keys
+            return {self.kind(x) for x in e.keys}, bool(e.keys)
+        if e.kind == "const" and isinstance(e.value, str):
+            return {"$text"}, e.value != ""
+        if e.kind == "call" and e.fn.kind == "var" and e.fn.name == "range" and "range" not in self.user:
+            ends = [a.value for a in e.args if a.kind == "const" and isinstance(a.value, (int, float)) and not isinstance(a.value, bool)]
+            some = None
+            if len(ends) == len(e.args) and 1 <= len(ends) <= 3 and all(isinstance(x, int) or math.isfinite(x) for x in ends):  # like b_range, without the list
+                a, b, step = [int(x) for x in ([1] + ends + [1] if len(ends) == 1 else ends + [1] * (3 - len(ends)))]
+                some = step != 0 and bool(range(a, b + (1 if step > 0 else -1), step))
+            return {"$number"}, some
+        if e.kind == "call" and e.fn.kind == "attr" and e.fn.name == "lines" and e.fn.obj.kind == "var" and e.fn.obj.name == "file" \
+                and "file" not in self.assigned and isinstance(self.builtins.get("file"), Module):
+            return {"$text"}, None  # file.lines, worked out before the loop starts
+        if self.kind(e) == "$text":  # its letters
+            return {"$text"}, None
+        if e.kind == "var" and e.name not in seen and e.name not in self.params and e.name not in self.loop_vars:
+            sets = self.assigned.get(e.name, [])
+            added = any((x.kind == "method" and x.name in ("add", "set") and x.obj.kind == "var" and x.obj.name == e.name)
+                        or (x.kind == "assign" and x.target.kind != "var" and x.target.obj.kind == "var" and x.target.obj.name == e.name)
+                        for x in nodes(self.program))
+            found = [self.loop_items(t.value, seen | {e.name})[0] for t in sets if t.op == "="]
+            if sets and not added and len(found) == len(sets) and None not in found:
+                return set().union(*found), None
+        return None, None
 
     def check_one_terrain(self):
         """A world has one terrain, so a second world:terrain for the same world at the top of the program fails
@@ -4128,6 +4170,61 @@ class Checker:
             not self.method_exists(root.name)
         return False if known and start is None else None
 
+    def check_slice(self, e, scope, store=None):
+        """x[a:b], read, or stored into (store: the line, like board[moves:pop] = "X"). With a glued ':' it's a
+        part or 1.3.6's method call (as_method); when that can't be told yet, only what both get wrong is certain."""
+        self.expr(e.obj, scope)
+        if e.alt is None:
+            self.expr(e.start, scope)
+            self.expr(e.end, scope)
+            self.check_part(e)
+            return
+        self.expr(e.recv, scope)
+        method, recv = self.as_method(e), self.kind(e.recv)
+        as_part = lambda: self.check_part(e) if store is None else None
+        as_item = lambda: self.check_index(e, e.alt) if store is None else self.check_store(store, e.obj, e.alt)
+        self.held.append(recv)
+        try:
+            simple = SIMPLE_METHODS.get(recv[1:]) if method and recv.startswith("$") else None
+            if simple is not None and e.mname not in simple:  # word[first:last] with first some text
+                self.problem(e, f"The positions in [start:end] must be whole numbers, not {self.TYPE.get(recv, 'that')}.")
+            elif method:  # names[order:pop], as in 1.3.6: a method of what's before the ':' gives the position or key
+                self.expr(e.alt, scope)
+                as_item()
+            elif method is False:
+                self.expr(e.end, scope)
+                if store is not None:
+                    self.problem(store, "A part like [1:3] can't be changed with =. Make the new text or list with + instead.")
+                as_part()
+            else:
+                self.both(lambda: (self.expr(e.end, scope), as_part()), lambda: (self.expr(e.alt, scope), as_item()))
+        finally:
+            self.held.pop()
+
+    def both(self, *readings):
+        """Checks each way something can be read when it runs (x[a:b] with a glued ':') and keeps only the problems
+        all of them have: those go wrong whichever way it's read."""
+        start, found = len(self.problems), []
+        for read in readings:
+            read()
+            found.append(self.problems[start:])
+            del self.problems[start:]
+        self.problems += [p for p in found[0] if all(p in f for f in found[1:])]
+
+    def check_store(self, s, target, index):
+        """target[index] = value (s is the line): only lists and dictionaries have items that can be set."""
+        obj = self.kind(target)
+        if obj == "$text":
+            self.problem(s, "You can only set items in a list, not in text. Build new text with + instead.")
+        elif obj == "$dict":
+            self.check_key(index)
+
+    def check_key(self, key):
+        """A dictionary's key is text or a number (dict_key), in { }, d[key] and d:get, :set, :has and :remove."""
+        kk = self.kind(key)
+        if kk in ("$list", "$dict", "$bool", "$nil") and not self.trying:
+            self.problem(key, f"A dictionary's keys can be text or numbers, not {self.TYPE[kk]}.")
+
     def check_part(self, e):
         """s[a:b]: the positions are whole numbers, and only text and lists have parts."""
         obj = self.kind(e.obj)
@@ -4145,20 +4242,24 @@ class Checker:
                 self.problem(end, "This is a decimal (it comes from /), even if it looks whole, so it can't be a position. Use floor(...) around the division.")
                 return
 
-    def check_index(self, e):
-        idx = self.kind(e.index)
+    def check_index(self, e, index=None):
+        """x[i], or 1.3.6's names[order:pop], where the method call gives i (index)."""
+        index = e.index if index is None else index
+        idx = self.kind(index)
         if idx == "$text" and self.kind(e.obj) in ("$list", "$text"):  # (a dictionary's keys are often text)
-            who = self.describe(e.index)
-            self.problem(e, "List positions must be whole numbers, not text." + (f" Use number({who})." if who and self.typed(e.index) else ""))
-        elif self.is_decimal(e.index):
-            self.problem(e.index, "This is a decimal (it comes from /), even if it looks whole, so it can't be a position. Use floor(...) around the division.")
-        elif e.index.kind == "call" and e.index.fn.kind == "var" and e.index.fn.name == "random" and "random" not in self.user and e.obj.kind == "var":
-            args = e.index.args
+            who = self.describe(index)
+            self.problem(e, "List positions must be whole numbers, not text." + (f" Use number({who})." if who and self.typed(index) else ""))
+        elif self.kind(e.obj) == "$dict":  # (where a decimal is a fine key)
+            self.check_key(index)
+        elif self.is_decimal(index):
+            self.problem(index, "This is a decimal (it comes from /), even if it looks whole, so it can't be a position. Use floor(...) around the division.")
+        elif index.kind == "call" and index.fn.kind == "var" and index.fn.name == "random" and "random" not in self.user and e.obj.kind == "var":
+            args = index.args
             ends_at_len = args and args[-1].kind == "call" and args[-1].fn.kind == "var" and args[-1].fn.name == "len" and len(args[-1].args) == 1 and \
                 args[-1].args[0].kind == "var" and args[-1].args[0].name == e.obj.name
             if ends_at_len:
                 lst = e.obj.name
-                self.problem(e.index, f"random(...len({lst})) can give len({lst}), which is past the last position (positions go from 0 to len({lst}) - 1). Use {lst}[random(0, len({lst}) - 1)].")
+                self.problem(index, f"random(...len({lst})) can give len({lst}), which is past the last position (positions go from 0 to len({lst}) - 1). Use {lst}[random(0, len({lst}) - 1)].")
 
     def method_exists(self, name):
         gui = gui_tables()
@@ -4343,7 +4444,8 @@ class Checker:
             return
         obj = self.kind(e.obj)
         name, n = e.name, len(e.args)
-        owner = e.obj.name if e.obj.kind == "var" else "thing"
+        start = e.obj.of if e.obj.kind == "held" else e.obj  # names[q:pop x]: q
+        owner = start.name if start.kind == "var" else "thing"
         if obj is None:
             if not self.method_exists(name):
                 tip = PY_ONLY.get(name.lower())
@@ -4395,6 +4497,8 @@ class Checker:
                     self.problem(e, f"{owner}:pop doesn't take a position: it always takes the last item. To take another item, read it with {owner}[...] and then :remove it.")
                 else:
                     self.problem(e, f"{owner}:{name} doesn't take an input. Write {owner}:{name}()")
+            elif kind == "dict" and name in ("get", "set", "has", "remove"):
+                self.check_key(e.args[0])
             return
         if obj.startswith("$module:"):
             lib = obj[8:]

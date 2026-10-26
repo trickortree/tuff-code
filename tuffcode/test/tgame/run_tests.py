@@ -4389,6 +4389,34 @@ TOOLBOX_FIXES_CHECKS = [
     ('func f():\n    cos = 3\n    return cos\nvalues = [30, 60]\nsay [cos(30), f()]', "OK"),
     ('mention file\nsay file.exists("x.txt")', "OK"),
     ('try:\n    x = 1\nexcept:\n    x = 2', "Write the catch line as catch: or catch problem:"),
+    # 1.4.1: board[moves:pop] = "X" is checked like the read form
+    ('board = ["", ""]\nboard[nope:pop] = "X"', "I don't know what 'nope' is."),
+    ('word = "ab"\nmoves = [1]\nword[moves:pop] = "X"', "You can only set items in a list, not in text."),
+    ('board = ["", ""]\ni = 0\nj = 1\nboard[i:j] = "X"', "A part like [1:3] can't be changed with =."),
+    # ... when it can't be told yet whether it's a part or 1.3.6's method call: what's wrong either way
+    ('func f(order):\n    names = ["a"]\n    say names[order:pop + nope]\nf([0])', "I don't know what 'nope' is."),
+    ('func f(order):\n    names = ["a", "b"]\n    say names[order:pop + 1]\nf([0])', "OK"),
+    # ... 1.3.6's reading gets [ ]'s own checks, and a bare input there is named after its list again
+    ('names = ["a", "b"]\nwords = ["x", "y"]\nsay names[words:join]', "List positions must be whole numbers, not text."),
+    ('names = ["a", "b"]\nq = [1]\nsay names[q:pop -1]', "q:pop doesn't take an input, so what comes after it was read as one. Write q:pop() instead."),
+    ('names = ["a", "b"]\nq = [1]\nnames[q:pop -1] = "c"', "q:pop doesn't take an input, so what comes after it was read as one. Write q:pop() instead."),
+    # a for loop at the top named after a built-in replaces it
+    ('for file in ["a.txt", "b.txt"]:\n    say file\nsay file.read("c.txt")', "replaces it everywhere, so file.read on line 3 won't work"),
+    ('for file in file.lines("list.txt"):\n    say file.read(file)', "so file.read on line 2 won't work"),
+    ('for time in [1, 2]:\n    say time\nsay time()', "so time() on line 3 won't work"),
+    ('for log in range(3):\n    say log\nsay log(100)', "so log() on line 3 won't work"),
+    ('for date in ["a"]:\n    say date()', "so date() on line 2 won't work"),
+    ('for date in []:\n    say date()\nsay date()', "OK"),
+    ('for log in [print]:\n    log("x")', "OK"),
+    # dictionary keys outside { }: d[key] = v, d[key], :get, :set, :has and :remove
+    ('d = {"a": 1}\nd[true] = 2', "A dictionary's keys can be text or numbers, not true/false."),
+    ('d = {"a": 1}\nsay d[nil]', "A dictionary's keys can be text or numbers, not nil."),
+    ('d = {"a": 1}\nsay d:get(nil)', "A dictionary's keys can be text or numbers, not nil."),
+    ('d = {"a": 1}\nd:set([1], 2)', "A dictionary's keys can be text or numbers, not a list."),
+    ('d = {"a": 1}\nsay d:has(1 is 1)', "A dictionary's keys can be text or numbers, not true/false."),
+    ('d = {"a": 1}\nd:remove(false)', "A dictionary's keys can be text or numbers, not true/false."),
+    ('d = {0.5: "half"}\nsay d[1 / 2]', "OK"),
+    ('d = {}\ntry:\n    d[true] = 1\ncatch problem:\n    say problem', "OK"),
 ]
 
 
