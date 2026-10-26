@@ -5,8 +5,13 @@ export const meta = { title: 'plugin icons' };
 
 const CHAT = 'm10 18.814l.186-.982'; // in MingCute's chat-3-ai-line
 const SCISSORS = 'M16.984 2.283a2 2 0 0 1 .492'; // the start of MingCute's scissors-line
-// The old ones: sparkles, </>, the hand-drawn chat bubble and scissors blade.
-const OLD = ['M11 3.5l1.9 4.8', 'M8 7l-5 5 5 5M16 7', 'M3 7.5A3.5 3.5 0 0 1 6.5 4h11', 'M8.6 15.6L21 5.5'];
+// Every built-in plugin's icon, by the start of its first path (the Marketplace card of a plugin that isn't installed
+// draws it from plugins/registry.json, an installed one from its plugin.json).
+const ICON = { 'tuff-agents': CHAT, snippets: SCISSORS, 'api-explorer': 'M8 4H7a2 2 0 0 0-2 2v3.99a2',
+  'sprite-studio': 'm13.707 7.257l-.689-.724', 'sound-lab': 'M4 10v4m4-7v10m4-13v16m4-13v' };
+// The old ones: sparkles, </>, the hand-drawn chat bubble, scissors blade, braces, pencil and pixels, and sound bars.
+const OLD = ['M11 3.5l1.9 4.8', 'M8 7l-5 5 5 5M16 7', 'M3 7.5A3.5 3.5 0 0 1 6.5 4h11', 'M8.6 15.6L21 5.5',
+  'M8 3.5c-1.7 0-2.5.8-2.5 2.5v', 'M15.6 4.4a2 2 0 0 1 2.8 0l1.', 'M3.5 10.5v3M7.5 7v10M11.5 3.'];
 
 export default async (t) => {
   const check = t.check;
@@ -15,9 +20,16 @@ export default async (t) => {
   // The SVG inside a mask url, decoded, for every element matching sel
   const masksOf = (sel) => ev(`[...document.querySelectorAll(${JSON.stringify(sel)})].map(el => decodeURIComponent(getComputedStyle(el).webkitMaskImage || ''))`);
 
-  // Marketplace: install both plugins (a fresh profile has none)
+  // Marketplace: a fresh profile has no plugins, so every card draws its icon from registry.json, and those are
+  // the new icons too.
   await ev(`(() => { window.TuffIDE.showSideView('plugins', true); return 1; })()`);
-  await t.waitFor(`document.querySelectorAll('.pl-card').length >= 2`);
+  await t.waitFor(`document.querySelectorAll('.pl-card').length >= ${Object.keys(ICON).length}`);
+  const before = await ev(`Object.fromEntries([...document.querySelectorAll('.pl-card')].map(c => [c.dataset.id, decodeURIComponent(getComputedStyle(c.querySelector('.pl-ic .pi')).webkitMaskImage || '')]))`);
+  for (const [id, d] of Object.entries(ICON)) {
+    check(`Marketplace, not installed: ${id} draws its new icon`, (before[id] || '').includes(d) && !OLD.some((o) => before[id].includes(o)), (before[id] || 'no card').slice(60, 160));
+  }
+
+  // Install two of them
   for (const id of ['tuff-agents', 'snippets']) {
     await ev(`document.querySelector('.pl-card[data-id="${id}"] [data-a="install"]')?.click(); 1`);
     await t.sleep(1500);

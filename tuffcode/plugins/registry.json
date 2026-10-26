@@ -7,7 +7,7 @@
       "version": "1.0.0",
       "author": "trickortree",
       "description": "An AI helper in a sidebar on the right, a bit like GitHub Copilot. Ask Claude Code, Codex or Antigravity about your code, or let them make changes. They get Tuff's docs and can check and run your programs through TuffCode's MCP tools.",
-      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 7.5A3.5 3.5 0 0 1 6.5 4h11A3.5 3.5 0 0 1 21 7.5v6a3.5 3.5 0 0 1-3.5 3.5H12l-4.5 3.5V17h-1A3.5 3.5 0 0 1 3 13.5z\"/><path fill=\"#000\" stroke-width=\"1.2\" d=\"M12 7.2l.85 2.45 2.45.85-2.45.85L12 13.8l-.85-2.45-2.45-.85 2.45-.85z\"/></svg>",
+      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path fill=\"#000\" d=\"m10 18.814l.186-.982zM7 20H6a1 1 0 0 0 1 1zm-.5-2.563l-.542.84zm6.408-12.395a1 1 0 0 0 .184-1.992L13 4.046zm9.07 7.037a1 1 0 0 0-1.995-.158l.997.079zM20 2l.946-.323a1 1 0 0 0-1.892 0zm3 3l.323.946a1 1 0 0 0 0-1.892zm-3 3l-.946.323a1 1 0 0 0 1.892 0zm-3-3l-.323-.946a1 1 0 0 0 0 1.892zm2.87-2.622l-.946-.323zm0 5.244l.947-.323zm.26 0l-.947-.323zM3 11.5h1C4 8.073 7.403 5 12 5V3C6.656 3 2 6.643 2 11.5zm9 7.5v-1a10 10 0 0 1-1.814-.168l-.186.982l-.186.983q1.06.201 2.186.203zm-2-.186l.186-.982c-.578-.11-1.02.209-1.168.316c-.099.07-.204.155-.28.216c-.087.068-.166.13-.252.19C8.18 18.771 7.751 19 7 19v2c1.25 0 2.071-.411 2.639-.81c.133-.095.249-.186.34-.258c.101-.08.156-.125.206-.16c.148-.107-.043.087-.37.025zm-3.5-1.377l.542-.84C5.142 15.371 4 13.513 4 11.5H2c0 2.819 1.6 5.259 3.958 6.778zM7 20h1c0-.111.045-.82.003-1.38a4 4 0 0 0-.195-1.002c-.119-.334-.34-.746-.766-1.022l-.542.841l-.542.84c-.086-.055-.073-.1-.034.01q.058.158.085.485C6.046 19.258 6 19.612 6 20zm5-16v1q.46 0 .908.042L13 4.046l.092-.996Q12.552 3 12 3zm8.98 8l-.997-.079C19.727 15.17 16.402 18 12 18v2c5.136 0 9.616-3.351 9.977-7.921zM20 2l-.946.323l.129.378l.946-.323l.947-.323l-.13-.378zm2.622 2.87l-.323.947l.378.13L23 5l.323-.946l-.378-.13zM23 5l-.323-.946l-.378.129l.323.946l.323.946l.378-.129zm-2.87 2.622l-.947-.323l-.13.378L20 8l.946.323l.13-.378zM20 8l.946-.323l-.129-.378l-.946.323l-.947.323l.13.378zm-2.622-2.87l.323-.947l-.378-.13L17 5l-.323.946l.378.13zM17 5l.323.946l.378-.129l-.323-.946l-.323-.946l-.378.129zm2.87-2.622l.947.323l.13-.378L20 2l-.946-.323l-.13.378zm-2.492 2.493l.323.946a5 5 0 0 0 3.116-3.116l-.946-.323l-.947-.323a3 3 0 0 1-1.869 1.87zm2.493 2.75l.946-.322a5 5 0 0 0-3.116-3.116l-.323.946l-.323.946a3 3 0 0 1 1.87 1.87zm2.75-2.492l-.322-.946a5 5 0 0 0-3.116 3.116l.946.323l.947.323a3 3 0 0 1 1.869-1.87zM20.13 2.38l-.946.322A5 5 0 0 0 22.3 5.818l.323-.946l.323-.946a3 3 0 0 1-1.87-1.87z\"/></svg>",
       "builtin": true,
       "tags": [
         "AI",
@@ -21,7 +21,7 @@
       "version": "1.0.0",
       "author": "trickortree",
       "description": "Ready-made bits of Tuff you can drop into your code: loops, functions, live lines, app windows, buttons, timers and more. Save your own from any selection too.",
-      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"6.5\" cy=\"6.5\" r=\"2.7\"/><circle cx=\"6.5\" cy=\"17.5\" r=\"2.7\"/><path d=\"M8.6 15.6L21 5.5M8.6 8.4l3.4 2.8M14.1 12.9L21 18.5\"/></svg>",
+      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path fill=\"#000\" d=\"M16.984 2.283a2 2 0 0 1 .492 2.785l-4.256 6.077l1.705 2.435a4 4 0 1 1-1.415 1.465l-1.511-2.157l-1.51 2.157a4 4 0 1 1-1.415-1.465l1.704-2.436l-4.254-6.076a2 2 0 0 1 .492-2.785l4.983 7.118zM7 15.001a2 2 0 1 0 0 4a2 2 0 0 0 0-4m10 0a2 2 0 1 0 0 4a2 2 0 0 0 0-4\"/></svg>",
       "builtin": true,
       "tags": [
         "code",
@@ -36,7 +36,7 @@
       "version": "1.0.0",
       "author": "trickortree",
       "description": "Try a web API and see what comes back. Click any value in the answer to get the Tuff code that reaches it with tap, or a whole program that runs. Comes with examples to try, and keeps your last 20 requests.",
-      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 3.5c-1.7 0-2.5.8-2.5 2.5v3c0 1.4-.8 2.3-2 3 1.2.7 2 1.6 2 3v3c0 1.7.8 2.5 2.5 2.5M16 3.5c1.7 0 2.5.8 2.5 2.5v3c0 1.4.8 2.3 2 3-1.2.7-2 1.6-2 3v3c0 1.7-.8 2.5-2.5 2.5M9.5 12h5M12.5 10l2 2-2 2\"/></svg>",
+      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-width=\"2\" d=\"M8 4H7a2 2 0 0 0-2 2v3.99a2 2 0 0 1-2 2M3 12c1.1.005 2 .9 2 2v4a2 2 0 0 0 2 2h1m8 0h1a2 2 0 0 0 2-2v-4c0-1.1.9-1.995 2-2m-5-8h1a2 2 0 0 1 2 2v3.99a2 2 0 0 0 2 2\"/></svg>",
       "builtin": true,
       "tags": [
         "web",
@@ -51,7 +51,7 @@
       "version": "1.0.0",
       "author": "trickortree",
       "description": "Draw pixel-art sprites and icons for your games and apps. Animate them with frames, save them as PNG pictures in your project, and get the Tuff code that shows them in tgame, mtgui or atgui.",
-      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M15.6 4.4a2 2 0 0 1 2.8 0l1.2 1.2a2 2 0 0 1 0 2.8L10.5 17.5 6 18.5l1-4.5z\"/><path d=\"M13.8 6.2l4 4\"/><path fill=\"#000\" stroke=\"none\" d=\"M2.5 19.5h3v3h-3zM2.5 14h3v3h-3z\"/></svg>",
+      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path fill=\"#000\" d=\"m13.707 7.257l-.689-.724zm7.242-3.828l-.323-.946zm.121.122l.947.323zm-3.827 7.242l-.725-.69zM6.238 19.676l.285-.958zm-.82-5.447l.981.196zm-.196 1.514l-.98-.196zm-1.53 2.284l.65.76zm-.236.192l-.618-.786a1 1 0 0 0-.023 1.554zM13.707 7.257l.69.725c.93-.884 2.387-1.707 3.795-2.364a33 33 0 0 1 3.08-1.242l-.323-.947l-.323-.946a35 35 0 0 0-3.278 1.322c-1.455.679-3.156 1.612-4.33 2.728zm7.363-3.706l-.946-.323a33 33 0 0 1-1.242 3.08c-.657 1.408-1.48 2.866-2.364 3.796l.725.689l.724.689c1.116-1.174 2.05-2.875 2.728-4.33a35 35 0 0 0 1.322-3.278zm-10.297 7.844l.876.482c.729-1.323 1.742-2.94 2.747-3.895l-.689-.725l-.689-.724c-1.246 1.184-2.383 3.04-3.12 4.38zm6.47-.602l-.725-.69c-.956 1.006-2.572 2.019-3.895 2.748l.482.876l.483.876c1.34-.738 3.195-1.875 4.38-3.121zm3.706-7.364l.323.947a.906.906 0 0 1-1.148-1.148l.947.323l.946.323a1.094 1.094 0 0 0-1.391-1.39zm-9.01 14.789l-.707-.707c-1.618 1.617-3.324 1.618-4.709 1.207l-.285.958l-.285.959c1.89.561 4.424.559 6.693-1.71zm0-5.657l-.707.707a3 3 0 0 1 0 4.243l.707.707l.707.707a5 5 0 0 0 0-7.071zm-5.656 0l.707.707a3 3 0 0 1 4.242 0l.707-.707l.707-.707a5 5 0 0 0-7.07 0zm-.865 1.668l.981.196c.085-.423.238-.805.59-1.157l-.707-.707l-.707-.707c-.707.708-1 1.49-1.137 2.18zm-1.727 3.798l.65.76c.57-.487 1.582-1.453 1.861-2.848l-.98-.196l-.98-.196c-.139.689-.682 1.276-1.2 1.72zm-.235.192l.618.787q.132-.104.267-.219l-.65-.76l-.65-.76a6 6 0 0 1-.203.166zm2.782 1.457l.285-.958c-.896-.267-1.76-.71-2.426-1.266l-.641.767l-.641.768c.902.754 2.018 1.315 3.138 1.648zm6.408-10.65l-.205.978h-.002l-.003-.001h-.004L12.429 10l.006.002l.06.018c.062.02.16.055.284.112c.248.116.588.32.93.66l.706-.707l.707-.707a5.3 5.3 0 0 0-1.494-1.056a4.4 4.4 0 0 0-.688-.256l-.073-.018l-.008-.001h-.004l-.001-.001c-.001 0-.002 0-.207.978m1.768 1.06l-.707.707c.34.34.544.681.66.929a2.4 2.4 0 0 1 .131.346v-.004l-.001-.003v-.002l.978-.205c.979-.205.978-.206.978-.206v-.006l-.002-.008l-.018-.073a4.4 4.4 0 0 0-.255-.688a5.3 5.3 0 0 0-1.057-1.494zm-9.192 5.657l.98.196c.062-.309.09-.613.114-.858c.025-.262.045-.464.083-.656l-.98-.196l-.981-.196c-.062.309-.09.613-.113.858a7 7 0 0 1-.084.656z\"/></svg>",
       "builtin": true,
       "tags": [
         "pixel art",
@@ -66,7 +66,7 @@
       "version": "1.0.0",
       "author": "trickortree",
       "description": "Make sound effects for your tgame games: coins, jumps, lasers, explosions and more. Pick a preset, move the sliders, play it, then save it as a .wav file and add it to your game with one line of code.",
-      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#000\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3.5 10.5v3M7.5 7v10M11.5 3.5v17M15.5 8v8M19.5 10.5v3\"/></svg>",
+      "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path fill=\"none\" stroke=\"#000\" stroke-linecap=\"round\" stroke-width=\"2\" d=\"M4 10v4m4-7v10m4-13v16m4-13v10m4-7v4\"/></svg>",
       "builtin": true,
       "tags": [
         "games",

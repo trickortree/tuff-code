@@ -97,6 +97,13 @@ export default async (t, ctx) => {
   const cm = await opts('model');
   check('Claude: real model names from Claude Code (Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5)', JSON.stringify(cm) === JSON.stringify(['=Default', 'fable=Fable 5.1', 'opus=Opus 5.5', 'sonnet=Sonnet 5.5', 'haiku=Haiku 5.5']), cm);
   check('Each model has a short description', await ev(`(() => { ${dd('model')}.querySelector('.ta-dd-btn').click(); const subs = [...${dd('model')}.querySelectorAll('.ta-dd-opt small')].map(x => x.textContent); document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); return subs.length === 5 && subs.every(Boolean); })()`), null);
+  // The icons paint in their own colour (what a shape is drawn in, not the svg's stroke or fill)
+  const colours = await ev(`(() => { const d = ${dd('model')}; d.querySelector('.ta-dd-btn').click();
+    const probe = (v) => { const s = document.createElement('span'); s.style.color = v; d.appendChild(s); const c = getComputedStyle(s).color; s.remove(); return c; };
+    const paint = (sel, prop) => { const p = d.querySelector(sel + ' path'); return p ? getComputedStyle(p)[prop] : 'no shape'; };
+    const r = { tick: paint('.ta-dd-opt.on .ta-dd-tick', 'stroke'), accent: probe('var(--accent)'), chev: paint('.ta-dd-chev', 'stroke'), muted: probe('var(--text-muted)'), sparkle: paint('.ta-dd-opt .ta-dd-ic', 'fill'), text: probe('var(--text)') };
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); return r; })()`);
+  check('The dropdowns keep their colours: the chosen tick in the accent, the chevron muted, the model sparkle tinted', colours.tick === colours.accent && colours.chev === colours.muted && colours.sparkle !== colours.text && colours.sparkle !== 'no shape', colours);
   const ce = await opts('effort');
   check('Claude: thinking levels from Claude Code', JSON.stringify(ce) === JSON.stringify(['=Default', 'low=Low', 'medium=Medium', 'high=High', 'xhigh=Extra high', 'max=Max']), ce);
 
