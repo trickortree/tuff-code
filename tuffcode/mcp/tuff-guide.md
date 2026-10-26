@@ -578,6 +578,48 @@ while game:open():
 - **Without a player:** `game:camera_at(x, y, z)` with `game:look_at(thing)`, or `game:follow(thing)` (behind it), or `game:orbit(thing)` (drag to turn around it).
 - **Testing a game:** add `game:after(2, selftest)`, call your functions in `func selftest():`, `say` what you find, and end it with `game:close()`.
 
+#### Animated pictures (sprite sheets)
+A sprite sheet is one picture with every frame of a character in it, in a grid. Cut it into frames, name some of them as animations, and play them: the game window steps through the frames by itself.
+```tuff
+mention tgame
+
+game = tgame.window("Hero", 600, 400)
+hero = game:image("hero_sheet.png", 300, 200, 64)   # one frame will be 64 wide
+hero:frames(4, 2)                                   # 4 across, 2 down: frames 1 to 8
+hero:animation("walk", [1, 2, 3, 4], 10)            # a name, its frames, how many a second
+hero:animation("jump", [5, 6, 7, 8], 12)
+jumping = false
+
+func landed(who, name):                             # "jump" has shown its last frame
+    jumping = false
+
+hero:on_done(landed)
+
+while game:open():
+    dt = game:frame()
+    moving = false
+    if game:held("left"):
+        hero:move(-200 * dt, 0)
+        moving = true
+    if game:held("right"):
+        hero:move(200 * dt, 0)
+        moving = true
+    if game:pressed("space") and not jumping:
+        jumping = true
+        hero:play("jump", false)                    # once: it stays on frame 8, then landed runs
+    if not jumping:
+        if moving:
+            hero:play("walk")                       # already playing: it carries on
+        else:
+            hero:frame(1)                           # standing still
+```
+- **Frames:** `hero:frames(4)` cuts a picture into 4 frames side by side, and `hero:frames(4, 2)` into 4 across and 2 down. Every frame is the same size. They're numbered from 1, left to right, then the next row down. After `:frames` the sprite is one frame big: as wide as the width `game:image` was given (or one frame's own size without one), and `:touches` uses that size.
+- **One frame:** `hero:frame(3)` shows frame 3 and stops any animation. `hero:frame()` gives the frame it shows now.
+- **Animations:** `hero:animation("walk", [1, 2, 3, 4], 10)` names frames in the order they show, and how many show a second (10 if you leave it out). Any frames work, in any order: `[1, 2, 3, 2]`, or `range(5, 8)`. Make the animations after `:frames`.
+- **Playing:** `hero:play("walk")` plays again and again. Playing the animation that's already playing carries on, so it can go in every frame of a loop. `hero:play("jump", false)` plays once and stays on its last frame, then `hero:on_done(landed)` runs `landed(sprite, name)` (a function can leave out the inputs it doesn't need: `func landed():` works too). `hero:stop()` stops on the frame it shows.
+- Animations go by the game's time: they hold still while the game is paused and slow down in `game:slow_mo`. Pictures on the HUD (`hud:image`) animate the same way, in a 2D game or a 3D world. 3D worlds have no flat pictures in the world itself, so sprite sheets are for 2D games and HUDs.
+- **Sprite Studio** (in TuffCode's sidebar) draws the frames and saves them with a sprite sheet, and its "Use in code" writes these lines for you.
+
 #### Menus, buttons and screens in games
 Real buttons, text boxes and menus go on a **panel** (pinned to a place on the game) or a **screen** (a layer over the whole game, for a title screen, a shop, a pause menu or game over). They work in 2D and 3D, and they're atgui's own widgets, so they look and work exactly as in the atgui section.
 ```tuff

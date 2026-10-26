@@ -280,6 +280,8 @@ export default async (t, ctx) => {
   check('Delete takes it away, and the arrow moves frame 2 to the front', JSON.stringify(await frames()) === '[true,false]', await frames());
   await typeInto('[data-f="fps"]', '12');
   await t.key('Tab');
+  // (1.5.0) a game plays its frames from a sprite sheet, so for a tgame file the sheet is saved without ticking the box
+  check('For a game, the save line lists the sheet before the box is ticked', /, and the sheet hero_sheet\.png\.$/.test(await ev(`${q('.ss-where')}.textContent`)), await ev(`${q('.ss-where')}.textContent`));
   await clickEl('[data-f="sheet"]');
   check('The save line lists the numbered frames and the sheet', /^Saves sprites\/hero_1\.png to hero_2\.png \(16 x 16 pixels each\), and the sheet hero_sheet\.png\.$/.test(await ev(`${q('.ss-where')}.textContent`)), await ev(`${q('.ss-where')}.textContent`));
   await save();
@@ -303,11 +305,12 @@ export default async (t, ctx) => {
   }
   check('The preview plays the animation (the pixel comes and goes)', seen.has(0) && seen.has(255), [...seen]);
 
-  // 10. the animation's code: a list of pictures and a timer, 12 a second; "Try in a new file"
-  await waitFor(`/hero_pics/.test(${q('.ss-pre')}.textContent)`);
+  // 10. the animation's code: a game cuts the sprite sheet into frames and plays them (1.5.0), an app steps through a
+  // list of pictures with a timer, 12 a second; "Try in a new file"
+  await waitFor(`/hero:frames/.test(${q('.ss-pre')}.textContent)`);
   const anim = await pre();
-  check('Animated tgame code steps through hero_1.png and hero_2.png 12 times a second',
-    anim.includes('hero_pics = ["sprites/hero_1.png", "sprites/hero_2.png"]') && anim.includes('hero = game:image("sprites/hero_1.png", 320, 240, 16)') && anim.includes('game:every(1 / 12, next_hero_pic)') && anim.includes('    hero:set hero_pics[hero_at]'), anim);
+  check('Animated tgame code cuts hero_sheet.png into its 2 frames and plays them 12 a second',
+    anim === 'hero = game:image("sprites/hero_sheet.png", 320, 240, 16)\nhero:frames(2)\nhero:animation("hero", [1, 2], 12)\nhero:play("hero")', anim);
   out = tuffOk('use_anim.tuf', `${MAIN}${anim}\n\nwhile game:open():\n    game:frame()\n`);
   check('The animation code passes tuff --check in a small game', /OK/.test(out), out);
   for (const lib of ['mtgui', 'atgui']) {
@@ -329,7 +332,7 @@ export default async (t, ctx) => {
   const block = [48, 49, 50, 51].every((x) => [20, 21, 22, 23].every((y) => big.at(x, y) === TEAL));
   check('Scale up 4x saves 64 x 64, each pixel a 4 x 4 block', big.w === 64 && big.h === 64 && block && big.at(47, 20) === 'clear' && big.at(52, 20) === 'clear' && big.texts.includes('Sprite Studio\0scale=4'), { w: big.w, h: big.h, block, edge: big.at(47, 20) });
   out = await pre();
-  check('The code uses the saved size (64 wide)', out.includes('game:image("sprites/hero_1.png", 320, 240, 64)'), out);
+  check('The code uses the saved size (64 wide)', out.includes('game:image("sprites/hero_sheet.png", 320, 240, 64)'), out);
 
   // 12. New, then open the 4x frames again: back to the real 16 x 16 pixels, both frames
   await clickEl('[data-a="new"]');
@@ -523,10 +526,15 @@ export default async (t, ctx) => {
   await save();
   const smile = exists('sprites/smiley_1.png') && png('sprites/smiley_1.png'), blink = exists('sprites/smiley_2.png') && png('sprites/smiley_2.png');
   check('The smiley saves as two 64 x 64 frames: eyes open, then shut', smile && blink && smile.w === 64 && smile.at(20, 24) === '#1b1b24' && smile.at(40, 24) === '#1b1b24' && blink.at(20, 24) === YELLOW && blink.at(20, 28) === '#1b1b24', smile && blink && [smile.at(20, 24), blink.at(20, 24), blink.at(20, 28)]);
-  await waitFor(`/smiley_pics/.test(${q('.ss-pre')}.textContent)`);
+  await waitFor(`/smiley:frames/.test(${q('.ss-pre')}.textContent)`);
+  const smileGame = await pre();
+  out = tuffOk('use_smiley_game.tuf', `${MAIN}${smileGame}\n\nwhile game:open():\n    game:frame()\n`);
+  check('The smiley\'s game code plays its sprite sheet, and passes tuff --check', exists('sprites/smiley_sheet.png') && smileGame.includes('smiley:animation("smiley", [1, 2], 12)') && /OK/.test(out), { smileGame, out });
+  await clickEl('[data-lib="mtgui"]');
   const smileCode = await pre();
-  out = tuffOk('use_smiley.tuf', `${MAIN}${smileCode}\n\nwhile game:open():\n    game:frame()\n`);
+  out = tuffOk('use_smiley.tuf', `mention mtgui\n\napp = mtgui.window("Test")\n${smileCode}\n`);
   check('A longer list of pictures goes one per line, and still passes tuff --check', smileCode.startsWith('smiley_pics = [\n    "sprites/smiley_1.png",\n    "sprites/smiley_2.png"\n]\n') && /OK/.test(out), { smileCode, out });
+  await clickEl('[data-lib="tgame"]');
   const rightbar = () => ev(`(() => { const r = document.querySelector('#rightbar').getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; })()`);
   const clean = async () => { await ev(`document.querySelectorAll('.toast').forEach((x) => x.remove()); 1`); await t.sleep(150); };
   await ev(`${SS}.scrollTop = 0; 1`);
