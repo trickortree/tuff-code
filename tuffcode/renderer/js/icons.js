@@ -1,6 +1,7 @@
-// TuffCode's interface icons: MingCute (https://www.mingcute.com, Apache-2.0, by the MingCute Design team). Made by
-// scripts/make-icons.cjs from the @iconify-json/mingcute package: only the 149 icons TuffCode uses. Don't edit it
-// by hand: use an icon (TuffIcon('name') or data-icon="name"), then run the script.
+// TuffCode's interface icons: MingCute (https://www.mingcute.com, Apache-2.0, by the MingCute Design team; the license
+// is in renderer/licenses/MingCute-LICENSE.txt). Made by scripts/make-icons.cjs from the @iconify-json/mingcute package:
+// only the 149 icons TuffCode uses. Don't edit it by hand: use an icon (TuffIcon('name') or data-icon="name"),
+// then run the script.
 //   TuffIcon('search-line')            an <svg> (24 x 24, drawn in currentColor; the CSS sizes it)
 //   TuffIcon('search-line', 'my-class') with a class
 //   <svg data-icon="search-line"></svg> in index.html: filled in when this file loads (its other attributes stay)
