@@ -152,11 +152,14 @@ ${NOTES['1.3.0'].notes}`,
 - \`print:pen\` now colours input's questions and anims too.
 
 ### Fixes
+- **Deep functions:** a function can call itself over 10,000 times now (it used to stop at about 100).
+- atgui: \`app:closed\` always runs when the window is closed with its X, so an app can save on the way out.
 - \`:play\` on a rainbow line keeps the rainbow flowing instead of jumping back to its first colours.
 - tap's JSON comes back as dictionaries, so \`data["name"]\` and \`for key in data:\` work.
 - Build Exe packs pictures from a parent folder (\`"../"\`), and problems inside a built app show in its error box.
 - Find and Replace in Files read files saved as UTF-16.
 - Learn: Basics lesson 10's check wants the number first.
+- \`--check\` catches more: pictures outside a game's or app's folder (\`"../"\`), which its window can't show, and a few slips with parts and dictionary keys.
 
 Everything from 1.4.0, the Toolbox Update, is here too: dictionaries, parts, text tools, sorting, files, try/catch and more.`,
   };
