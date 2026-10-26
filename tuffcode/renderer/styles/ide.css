@@ -1020,6 +1020,7 @@ body.enter #statusbar { animation: upin .55s .3s cubic-bezier(.2,.9,.25,1) both;
 #whatsnew .wn-body h3 { margin: 16px 0 6px; font-size: 13.5px; font-weight: 650; color: var(--text); }
 #whatsnew .wn-body ul { margin: 0; padding-left: 18px; }
 #whatsnew .wn-body li { margin: 4px 0; }
+#whatsnew .wn-body p { margin: 10px 0; }
 #whatsnew .wn-body b { color: var(--text); font-weight: 600; }
 #whatsnew code { font-family: var(--font-code); font-size: 12px; padding: 1px 5px; border-radius: 5px; background: var(--bg-editor); color: var(--text); }
 #whatsnew a { color: var(--accent); text-decoration: none; }
