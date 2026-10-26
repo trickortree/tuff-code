@@ -19,8 +19,9 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // The files a program can use: the ones next to it, and everything in a folder its code names in a
 // path (like "sprites/hero.png", or "sounds/" + name) or on its own ("sprites"), where Sprite Studio
-// and Sound Lab save. Gives paths relative to the program's folder, with / between folders.
-async function programFiles(dir, src, wanted) {
+// and Sound Lab save. With all, every file in the folder and the folders inside it. Gives paths relative
+// to the folder, with / between folders.
+async function programFiles(dir, src, wanted, all = false) {
   const found = [];
   const walk = async (folder, rel, all) => {
     for (const entry of await fsp.readdir(folder, { withFileTypes: true })) {
@@ -33,25 +34,62 @@ async function programFiles(dir, src, wanted) {
       }
     }
   };
-  await walk(dir, '', false);
+  await walk(dir, '', all);
   return found;
 }
-// Files the code names outside the program's folder ("../cat.png", "../sprites/"), which mtgui and tgui can load.
-// They're never packed: the built app holds only its own folder, where they'd be missing.
+const upPath = (rel) => rel === '..' || rel.startsWith(`..${path.sep}`);
+const insideOf = (folder, p) => { const rel = path.relative(folder, p); return !upPath(rel) && !path.isAbsolute(rel); };
+// What the code names outside the program's folder ("../cat.png", "../sprites/", or "../" + name), which mtgui
+// and tgui can load. Each is { full, kind }: a 'file', a 'folder' (all of it is packed) or a folder the program's
+// folder is in, 'above' (only the files right in it, as with the program's own folder).
 function outsideFiles(dir, src, wanted) {
-  const found = new Set();
+  const found = new Map();
   for (const m of src.matchAll(/"([^"\n]*)"|'([^'\n]*)'/g)) {
     const name = (m[1] ?? m[2]).trim();
     if (!/^(\.\/)?\.\.[\\/]/.test(name)) continue;
+    // A bare "../" is a folder above only when a name is added to it ("../" + name): not in say "go up with ../"
+    if (/^(\.\/)?(\.\.[\\/])+$/.test(name) && src.slice(m.index + m[0].length).trimStart()[0] !== '+') continue;
     const full = path.resolve(dir, name);
-    const up = (rel) => rel === '..' || rel.startsWith(`..${path.sep}`);
-    const back = path.relative(full, dir);
-    if (!up(path.relative(dir, full)) || (back && !up(back))) continue; // inside the folder after all, or a folder it's in
+    if (insideOf(dir, full) || found.has(full)) continue; // inside the folder after all
     let st = null;
     try { st = fs.statSync(full); } catch {}
-    if (st && (st.isDirectory() || (st.isFile() && wanted(path.extname(full).toLowerCase())))) found.add(name);
+    if (st?.isDirectory()) found.set(full, { full, kind: insideOf(full, dir) ? 'above' : 'folder' });
+    else if (st?.isFile() && wanted(path.extname(full).toLowerCase())) found.set(full, { full, kind: 'file' });
   }
-  return [...found];
+  return [...found.values()];
+}
+// Where everything goes inside the app. Normally the program sits at its top, next to its files. When the code
+// uses files from outside its folder ("../star.png"), the app keeps them in _project, in the folders they're in
+// (from the one that holds them all), with the program in its own folder there, so "../star.png" finds them as
+// it does here. _project keeps them away from PyInstaller's own files. Gives the program's folder in the app
+// ('.', or like '_project/app') and the files: { full, to (its folder in the app), shown (like "../star.png") }.
+async function packList(dir, src, wanted) {
+  const outside = outsideFiles(dir, src, wanted);
+  let top = dir;
+  for (const o of outside) {
+    const holder = o.kind === 'file' ? path.dirname(o.full) : o.full;
+    while (!insideOf(top, holder) && path.dirname(top) !== top) top = path.dirname(top);
+  }
+  const posix = (p) => p.split(path.sep).filter(Boolean).join('/');
+  const at = outside.length ? path.posix.join('_project', posix(path.relative(top, dir))) : '.';
+  const files = new Map();
+  const add = (full, inApp) => {
+    if (!files.has(full)) files.set(full, { full, to: path.posix.dirname(inApp), shown: posix(path.relative(dir, full)) });
+  };
+  for (const rel of await programFiles(dir, src, wanted)) add(path.join(dir, rel), path.posix.join(at, rel));
+  for (const o of outside) {
+    const inApp = path.posix.join('_project', posix(path.relative(top, o.full)));
+    if (o.kind === 'file') {
+      add(o.full, inApp);
+    } else if (o.kind === 'folder') {
+      for (const rel of await programFiles(o.full, src, wanted, true)) add(path.join(o.full, rel), path.posix.join(inApp, rel));
+    } else {
+      for (const e of await fsp.readdir(o.full, { withFileTypes: true })) {
+        if (e.isFile() && wanted(path.extname(e.name).toLowerCase())) add(path.join(o.full, e.name), path.posix.join(inApp, e.name));
+      }
+    }
+  }
+  return { at, files: [...files.values()] };
 }
 const PY = process.platform === 'win32' ? { cmd: 'py', args: ['-3'] } : { cmd: 'python3', args: [] };
 // What the build makes: an .exe on Windows, an app elsewhere.
@@ -240,15 +278,8 @@ async function build(opts, emit) {
 
   step('pack', 'running', 'Packing your program');
   const wantedFile = (ext) => ASSET_EXTS.has(ext) || (viewLibs.length > 0 && VIEW_ASSET_EXTS.has(ext));
-  // tgame and atgui can't use those files at all (--check says so); an mtgui or tgui app can, but not once it's built.
-  const outside = outsideFiles(path.dirname(program), programSrc, wantedFile);
-  if (outside.length) {
-    const names = outside.slice(0, 3).join(', ') + (outside.length > 3 ? '…' : '');
-    return fail('pack', 'Packing your program', `Your code uses ${names}, from outside the folder your .tuf file is in. A built app `
-      + 'only takes the files next to your .tuf file, or in a folder inside it, so it couldn\'t find '
-      + `${outside.length > 1 ? 'them' : 'it'}.\nMove ${outside.length > 1 ? 'them' : 'it'} there, change the code to match `
-      + '(like "star.png" instead of "../star.png"), then build again.');
-  }
+  // "../" files too, which an mtgui or tgui app can use (tgame and atgui can't, and --check says so).
+  const pack = await packList(path.dirname(program), programSrc, wantedFile);
   const work = path.join(app.getPath('temp'), 'tuffcode-build', `${name.replace(/\s/g, '_')}-${Date.now()}`);
   await fsp.mkdir(work, { recursive: true });
   for (const f of RUNTIME_FILES) await fsp.copyFile(path.join(RUNTIME_DIR, f), path.join(work, f));
@@ -261,10 +292,11 @@ async function build(opts, emit) {
   const programCopy = path.join(work, 'program.tuf');
   await fsp.copyFile(program, programCopy);
   const launcher = path.join(work, 'tuff_app.py');
+  const programInApp = [...pack.at.split('/').filter((p) => p !== '.'), 'program.tuf'].map((p) => JSON.stringify(p)).join(', ');
   // The app's windows use the same icon as the app file: the launcher tells the window library
   // where the packed PNG copy is (Tk shows PNGs; its .ico reader can't read modern .ico files).
   await fsp.writeFile(launcher, [
-    'import os, sys',
+    'import os, sys, threading, traceback',
     'base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))',
     'icon = os.path.join(base, "_tuffcode", "app_icon.png")',
     'if os.path.isfile(icon):',
@@ -292,14 +324,53 @@ async function build(opts, emit) {
       '        text += f"\\n  {err.line} | {lines[err.line - 1]}"',
       '    if text not in _shown:  # the same error again (a key pressed over and over) is shown once',
       '        _shown.add(text)',
+      '        tuff.SHOWING_BOX.set()  # a window\'s close time limit waits while it\'s up',
       '        try:',
       '            _box(text)',
       '        except Exception:',
       '            pass',
+      '        finally:',
+      '            tuff.SHOWING_BOX.clear()',
       'tuff.report = report',
     ]),
-    'sys.argv = [sys.argv[0], os.path.join(base, "program.tuf")]',
-    'sys.exit(tuff.main())',
+    // A problem inside Tuff itself (its window engine, or a bug in it) isn't a Tuff error: Python would only print it
+    // on stderr, which an app with no console doesn't have, so it goes to the same box, once.
+    '_problems = set()',
+    'def _problem(exc, where):',
+    '    tb = traceback.extract_tb(exc.__traceback__)',
+    '    at = f" ({os.path.basename(tb[-1].filename)}, line {tb[-1].lineno})" if tb else ""',
+    '    text = f"Tuff itself had a problem ({where}): {type(exc).__name__}{\': \' if str(exc) else \'\'}{exc}{at}"',
+    '    if text not in _problems:',
+    '        _problems.add(text)',
+    '        try:',
+    '            tuff.report(tuff.TuffError(text), "")',
+    '        except Exception:',
+    '            pass',
+    '_thread_hook = threading.excepthook',
+    'def _thread_problem(args):  # in another thread (the window engine has a few)',
+    '    _thread_hook(args)',
+    '    if isinstance(args.exc_value, Exception):',
+    '        _problem(args.exc_value, "in the background")',
+    'threading.excepthook = _thread_problem',
+    '_hook = sys.excepthook',
+    'def _uncaught(kind, exc, tb):  # tuff_view shows one this way when it has to end the app at once',
+    '    _hook(kind, exc, tb)',
+    '    if isinstance(exc, Exception):',
+    '        _problem(exc, "running the program")',
+    'sys.excepthook = _uncaught',
+    `sys.argv = [sys.argv[0], os.path.join(base, ${programInApp})]`,
+    'try:',
+    '    code = tuff.main()',
+    'except Exception as exc:',
+    '    traceback.print_exc()',
+    '    _problem(exc, "running the program")',
+    '    code = 1',
+    '    if getattr(sys, "frozen", False) and not tuff.WINDOWED and not tuff.IDE:  # or a console app\'s window closes at once',
+    '        try:',
+    '            input("\\nPress Enter to close...")',
+    '        except Exception:',
+    '            pass',
+    'sys.exit(code)',
     '',
   ].join('\n'));
 
@@ -321,12 +392,12 @@ async function build(opts, emit) {
 
   const sep = process.platform === 'win32' ? ';' : ':';
   // The icon goes in a folder of its own inside the app, so no project file can clash with it.
-  const addData = [`${programCopy}${sep}.`];
+  const addData = [`${programCopy}${sep}${pack.at}`];
   if (fs.existsSync(iconPng)) addData.push(`${iconPng}${sep}_tuffcode`);
   if (viewLibs.length) addData.push(`${path.join(work, 'tuff_view_web')}${sep}tuff_view_web`);
   // Each file keeps its folder inside the app, so "sprites/hero.png" works there as it does here.
-  const assets = await programFiles(path.dirname(program), programSrc, wantedFile);
-  for (const rel of assets) addData.push(`${path.join(path.dirname(program), rel)}${sep}${path.posix.dirname(rel)}`);
+  const assets = pack.files.map((f) => f.shown);
+  for (const f of pack.files) addData.push(`${f.full}${sep}${f.to}`);
   // On a Mac the app's icon has to be .icns; macOS's own sips tool makes one from the PNG.
   let macIcon = null;
   if (process.platform === 'darwin') {

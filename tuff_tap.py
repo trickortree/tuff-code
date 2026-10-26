@@ -1,9 +1,10 @@
 """tap: get and send things on the web from Tuff, like Python's requests. Only Python's own library is used,
 so there's nothing to install.
 
-A JSON object comes back as a "data object": user:get("name"), :has, :keys, :set and :size. Objects inside it
-are data objects too, and arrays are Tuff lists. What tap sends (a body, the headers, what a data object holds)
-can be a 1.4.0 dictionary as well as a data object: {"title": "Hi"} goes as the same JSON.
+A JSON object comes back as a 1.4.0 dictionary: user["name"], or user:get("name") with :has, :keys, :set and
+:size, as tap's data objects had them before 1.4.1 (so programs written for those still work). Objects inside
+it are dictionaries too, and arrays are Tuff lists. tap.data() is an empty dictionary, the same as {}. A body
+goes as plain text, or as JSON when it's a dictionary or a list ({"title": "Hi"}), and headers are a dictionary.
 """
 import http.client
 import json
@@ -21,7 +22,6 @@ except ImportError:  # a Python built without OpenSSL: http:// still works
 
 TIMEOUT = 15  # seconds to wait for a server, for connecting and for each read
 AGENT = "TuffCode-tap/1.0"
-DATA = "data object"
 URL_SAFE = "!#$%&'()*+,/:;=?@[]~"  # left alone when spaces and other letters in a web address are %-escaped
 MAC_CERTS = "/etc/ssl/cert.pem"  # macOS's own list of certificates, used when certifi isn't there
 KEPT_ON_REDIRECT = {"user-agent", "accept", "accept-language"}  # headers that still go along to another site
@@ -49,49 +49,6 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
                 if name.lower() not in KEPT_ON_REDIRECT:
                     del new.headers[name]
         return new
-
-
-def data_of(v):
-    """The Data behind a data object, or None for anything else."""
-    d = getattr(v, "tap", None)
-    return d if isinstance(d, Data) else None
-
-
-class Data:
-    """A JSON object: named values. Read one with :get, change one with :set."""
-
-    def __init__(self, lib, values):
-        self.lib, self.values = lib, values
-
-    def key(self, name, method):
-        name = self.lib.rt.plain(name)
-        if not isinstance(name, str):
-            raise self.lib.rt.error(f"data:{method} needs a name as text, like \"name\", not {self.lib.rt.what(name)}.")
-        return name
-
-    def get(self, name):
-        return self.values.get(self.key(name, "get"))
-
-    def has(self, name):
-        return self.key(name, "has") in self.values
-
-    def keys(self):
-        return list(self.values)
-
-    def set(self, name, value):
-        name = self.key(name, "set")
-        self.lib.to_json(value, "A data object")  # a value JSON can't hold is reported on this line, not later
-        self.values[name] = self.lib.rt.plain(value)
-        return self.native
-
-    def size(self):
-        return len(self.values)
-
-    def show(self, nested=False):
-        return json.dumps(self.lib.to_json(self.native, "A data object"), ensure_ascii=False, indent=None if nested else 2)
-
-    def methods(self):
-        return {"get": self.get, "has": self.has, "keys": self.keys, "set": self.set, "size": self.size}
 
 
 class Response:
@@ -127,7 +84,7 @@ class Response:
         except ValueError as exc:
             where = f" ({exc.msg}, line {exc.lineno}, column {exc.colno})" if isinstance(exc, json.JSONDecodeError) else ""
             raise self.lib.rt.error(f"The response isn't JSON{where}. Use :text to see what came back.")
-        return self.lib.from_json(value)
+        return value  # JSON's objects, arrays and null are already Tuff's dictionaries, lists and nil
 
     def header(self, name):
         values = self.headers.get_all(self.lib.rt.text(name)) if self.headers is not None else None
@@ -143,22 +100,9 @@ class Lib:
         self.context = None
 
     # ---- Tuff values and JSON
-    def data(self, values=None):
-        d = Data(self, {} if values is None else values)
-        d.native = self.rt.native(DATA, d.methods(), d.show)
-        d.native.tap = d
-        return d.native
-
-    def from_json(self, v):
-        if isinstance(v, dict):
-            return self.data({str(k): self.from_json(x) for k, x in v.items()})
-        if isinstance(v, list):
-            return [self.from_json(x) for x in v]
-        return v
-
     def to_json(self, v, what, inside=()):
         """The Python value json.dumps needs for a Tuff value; what names the thing that holds it, for errors. A
-        dictionary is a JSON object like a data object, with its number keys as text (JSON's names are text)."""
+        dictionary is a JSON object, with its number keys as text (JSON's names are text)."""
         v = self.rt.plain(v)
         if v is None or isinstance(v, (bool, str)):
             return v
@@ -166,16 +110,18 @@ class Lib:
             if v != v or v in (float("inf"), float("-inf")):
                 raise self.rt.error(f"{what} can't hold {self.rt.text(v)}: JSON only has ordinary numbers.")
             return v
-        d = data_of(v)
-        if isinstance(v, (list, dict)) or d is not None:
+        if isinstance(v, (list, dict)):
             if any(x is v for x in inside):
                 raise self.rt.error(f"{what} can't hold itself.")
             inside = (*inside, v)
             if isinstance(v, list):
                 return [self.to_json(x, what, inside) for x in v]
-            return {self.rt.text(k): self.to_json(x, what, inside) for k, x in (v if d is None else d.values).items()}
-        raise self.rt.error(f"{what} can only hold text, numbers, true/false, nil, lists, dictionaries and data objects, "
-                            f"not {self.rt.what(v)}.")
+            keys = [self.rt.text(k) for k in v]
+            if len(set(keys)) < len(keys):  # {1: "a", "1": "b"} would quietly lose one
+                same = next(k for k in keys if keys.count(k) > 1)
+                raise self.rt.error(f"{what} can't have both {same} and \"{same}\" as keys: in JSON every key is text, so they'd be one.")
+            return {k: self.to_json(x, what, inside) for k, x in zip(keys, v.values())}
+        raise self.rt.error(f"{what} can only hold text, numbers, true/false, nil, lists and dictionaries, not {self.rt.what(v)}.")
 
     # ---- sending a request
     def ssl_context(self):
@@ -218,11 +164,10 @@ class Lib:
         headers = self.rt.plain(headers)
         if headers is None:
             return []
-        d = data_of(headers)
-        if d is None and not isinstance(headers, dict):
-            raise self.rt.error(f"{label}'s headers have to be a data object or a dictionary, like {{\"Accept\": \"application/json\"}}, "
+        if not isinstance(headers, dict):
+            raise self.rt.error(f"{label}'s headers have to be a dictionary, like {{\"Accept\": \"application/json\"}}, "
                                 f"not {self.rt.what(headers)}.")
-        return [(self.rt.text(name), self.rt.text(value)) for name, value in (headers if d is None else d.values).items()]
+        return [(self.rt.text(name), self.rt.text(value)) for name, value in headers.items()]
 
     def encode_body(self, label, body):
         body = self.rt.plain(body)
@@ -230,9 +175,9 @@ class Lib:
             return None, None
         if isinstance(body, str):
             return body.encode("utf-8"), "text/plain; charset=utf-8"
-        if isinstance(body, (list, dict)) or data_of(body) is not None:
+        if isinstance(body, (list, dict)):
             return json.dumps(self.to_json(body, "What you send"), ensure_ascii=False).encode("utf-8"), "application/json"
-        raise self.rt.error(f"{label} sends text, a dictionary, a list or a data object, not {self.rt.what(body)}. For a number, use text(...).")
+        raise self.rt.error(f"{label} sends text, a dictionary or a list, not {self.rt.what(body)}. For a number, use text(...).")
 
     def why(self, reason, host):
         """A friendly line for what went wrong while connecting."""
@@ -298,18 +243,19 @@ class Lib:
     def delete(self, url, headers=None):
         return self.request("DELETE", url, headers)
 
-    def new_data(self):
-        return self.data()
+    def data(self):  # an empty dictionary, the same as {}: older programs made what they send with it
+        return {}
 
 
 def make_library(rt):
     lib = Lib(rt)
-    fns = {"get": lib.get, "post": lib.post, "put": lib.put, "delete": lib.delete, "data": lib.new_data}
+    fns = {"get": lib.get, "post": lib.post, "put": lib.put, "delete": lib.delete, "data": lib.data}
     return {name: rt.builtin(f"tap.{name}", fn) for name, fn in fns.items()}
 
 
 def tables():
-    """For tuff.py --check, without going online: tap's functions, and the methods of what it makes."""
+    """For tuff.py --check, without going online: tap's functions, and the methods of the responses it makes
+    (tap.data() and :json give dictionaries and lists, which the checker knows already)."""
 
     class FakeRt:
         def builtin(self, name, fn):
@@ -317,4 +263,4 @@ def tables():
 
     lib = Lib(FakeRt())
     return {"lib": make_library(FakeRt()),
-            "kinds": {"response": Response(lib, 200, None, b"").methods(), DATA: Data(lib, {}).methods()}}
+            "kinds": {"response": Response(lib, 200, None, b"").methods()}}

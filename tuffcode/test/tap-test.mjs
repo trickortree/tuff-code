@@ -96,12 +96,6 @@ async function caught(name, code, message) {
   const chk = await tuff(code, true);
   check(`--check catches ${name}`, chk.code === 1 && chk.out.includes(message), chk);
 }
-// The run stops with this message on this line, and --check catches it first, saying checkMessage.
-async function stopsAndCaught(name, code, message, line, checkMessage = message) {
-  const [run, chk] = await Promise.all([tuff(code), tuff(code, true)]);
-  check(name, run.code === 1 && run.out.includes(message) && run.out.includes(`Tuff error on line ${line}:`), run);
-  check(`${name}: --check says so first`, chk.code === 1 && chk.out.includes(checkMessage) && chk.out.includes(`Tuff error on line ${line}:`), chk);
-}
 
 // The timeout takes 15 seconds, so it runs while the other checks do.
 const timeout = tuff('res = tap.get("BASE/slow")\nsay "not reached"\n');
@@ -116,7 +110,7 @@ say res:header("X-Missing")
 say res
 `, ['200', 'true', 'hello tap', 'text/plain; charset=utf-8', 'a, b', 'nil', '<response 200>']);
 
-await works('GET JSON: data objects, nested objects, lists, true/false/nil', `user = tap.get("BASE/json"):json
+await works('GET JSON: dictionaries (with the old data object methods), nested objects, lists, true/false/nil', `user = tap.get("BASE/json"):json
 say user:get("name")
 say user:get("age") + 1
 say user:get("langs")[0]
@@ -133,7 +127,31 @@ for lang in user:get("langs"):
 say user:get("address")
 say [user:get("address")]
 `, ['Ada', '37', 'tuff', 'London', 'false', 'nil', 'nil', 'true', 'false', '["name", "age", "langs", "address", "admin", "boss"]', '6', 'tuff', 'python',
-  '{', '  "city": "London"', '}', '[{"city": "London"}]']);
+  '{"city": "London"}', '[{"city": "London"}]']);
+
+await works('1.4.1: :json and tap.data() are dictionaries: [ ], [ ] =, for, len, and :set chains', `user = tap.get("BASE/json"):json
+say user["name"]
+say user["address"]["city"]
+say user["langs"][1]
+user["age"] += 1
+say user["age"]
+user["name"] = "Ada Lovelace"
+say user:get("name")
+say len(user)
+for k in user:
+    if k is "admin":
+        say k + " " + user[k]
+say user["boss"]
+d = tap.data()
+say d
+say d:set("title", "Hi"):set("n", 2)
+d["tags"] = ["a"]
+say len(d)
+say d is {"title": "Hi", "n": 2, "tags": ["a"]}
+echo = tap.post("BASE/echo", d):json
+say echo["body"]
+`, ['Ada', 'London', 'python', '37', 'Ada Lovelace', '6', 'admin false', 'nil', '{}', '{"title": "Hi", "n": 2}', '3', 'true',
+  '{"title": "Hi", "n": 2, "tags": ["a"]}']);
 
 await works(':json of an array and of a number', `items = tap.get("BASE/array"):json
 say len(items)
@@ -145,7 +163,7 @@ say len(t)
 say t[1] is "é" and t[-1] is "✓"
 `, ['3', 'two', '3', '43', '7', 'true']);
 
-await works('POST a data object as JSON', `body = tap.data()
+await works('POST what tap.data() and :set made, as JSON', `body = tap.data()
 body:set("title", "Hi")
 body:set("tags", ["a", "b"])
 inner = tap.data()
@@ -236,33 +254,32 @@ await stops('a bad host is a friendly error', 'res = tap.get("http://no-such-hos
 await stops('a refused connection is a friendly error', 'res = tap.get("CLOSED/x")\n', 'refused the connection', 3);
 await stops('a web address without http(s):// is a friendly error', 'res = tap.get("example.com")\n', 'tap.get needs a web address that starts with http:// or https://, not "example.com". Try "https://example.com".', 3);
 await stops('ftp:// is refused', 'res = tap.get("ftp://example.com/file")\n', 'needs a web address that starts with http:// or https://', 3);
-await stops('a number body is refused', 'res = tap.post("BASE/echo", 5)\n', 'tap.post sends text, a dictionary, a list or a data object, not a number.', 3);
-await stops('headers must be a data object', 'res = tap.get("BASE/text", "X-Token: 1")\n', "tap.get's headers have to be a data object or a dictionary, like {\"Accept\": \"application/json\"}, not text.", 3);
-await stops('a data object can\'t hold a function', 'func f():\n    return 1\nd = tap.data()\nd:set("f", f)\n', 'A data object can only hold text, numbers, true/false, nil, lists, dictionaries and data objects, not a function.', 6);
-await stops('data object names are text', 'd = tap.data()\nd:set(1, "x")\n', 'data:set needs a name as text', 4);
-// [ ] on a data object: the run says to use :get (or :set), and so does --check, not "List positions must be whole numbers".
-await stopsAndCaught('user["name"] on a :json data object says to use :get', 'user = tap.get("BASE/json"):json\nsay user["name"]\n',
-  'Can\'t use [ ] on a data object. Use :get instead, like user:get("name").', 4,
-  'List positions must be whole numbers, not text. If user is a data object (from :json), use :get instead, like user:get("name").');
-await stopsAndCaught('d["name"] on tap.data() says to use :get', 'd = tap.data()\nd:set("name", "Ada")\nsay d["name"]\n',
-  'Can\'t use [ ] on a data object. Use :get instead, like d:get("name").', 5);
-await stopsAndCaught('a nested object\'s ["city"] says which :get', 'user = tap.get("BASE/json"):json\nsay user:get("address")["city"]\n',
-  'Use :get instead, like user:get("address"):get("city").', 4, 'use :get instead, like user:get("address"):get("city").');
-await stopsAndCaught('d["name"] = ... on a data object says to use :set', 'd = tap.data()\nd["name"] = "Ada"\n',
-  'You can only set items in a list, not in a data object. Use :set instead, like d:set("name", value).', 4);
+await stops('a number body is refused', 'res = tap.post("BASE/echo", 5)\n', 'tap.post sends text, a dictionary or a list, not a number.', 3);
+await stops('headers must be a dictionary', 'res = tap.get("BASE/text", "X-Token: 1")\n', "tap.get's headers have to be a dictionary, like {\"Accept\": \"application/json\"}, not text.", 3);
+await stops('what tap.data() holds can\'t be a function when it\'s sent', 'func f():\n    return 1\nd = tap.data()\nd:set("f", f)\nres = tap.post("BASE/echo", d)\n',
+  'What you send can only hold text, numbers, true/false, nil, lists and dictionaries, not a function.', 7);
+await stops('a number key and the same key as text can\'t both be sent', 'd = tap.data()\nd:set(1, "a")\nd["1"] = "b"\nres = tap.post("BASE/echo", d)\n',
+  'What you send can\'t have both 1 and "1" as keys: in JSON every key is text, so they\'d be one.', 6);
+// 1.4.0 said "Can't use [ ] on a data object" here, and --check said "List positions must be whole numbers". Now they work.
+await works('user["name"] on :json, a nested ["city"], and d["name"] = ... on tap.data() work, and --check agrees',
+  'user = tap.get("BASE/json"):json\nsay user["name"]\nsay user:get("address")["city"]\nd = tap.data()\nd["name"] = "Ada"\nsay d["name"]\n',
+  ['Ada', 'London', 'Ada']);
+await stops('a name that isn\'t there, read with [ ], says how to check first', 'user = tap.get("BASE/json"):json\nsay user["nope"]\n',
+  'user doesn\'t have "nope". Check first with user:has("nope"), or use user:get("nope", default).', 4);
 
 await caught('a response method typo', 'res = tap.get("BASE/text")\nsay res:stauts\n', "A response doesn't have :stauts. Did you mean :status?");
-await caught('a data object method typo', 'd = tap.data()\nsay d:gett("x")\n', "A data object doesn't have :gett. Did you mean :get?");
+await caught('a method typo on tap.data()', 'd = tap.data()\nsay d:gett("x")\n', "A dictionary doesn't have :gett. Did you mean :get?");
+await caught('d.name on tap.data()', 'd = tap.data()\nsay d.name\n', 'Only libraries use \'.\', and this is a dictionary. Read a value with [ ], like d["name"]');
 await caught('a missing tap function', 'tap.fetch("BASE/text")\n', "tap doesn't have 'fetch'. It has: get, post, put, delete, data.");
 await caught('tap.get with no address', 'res = tap.get()\n', 'tap.get() got the wrong number of inputs (0).');
 await caught('tap.post with no body', 'res = tap.post("BASE/echo")\n', 'tap.post() got the wrong number of inputs (1).');
 await caught(':header with no name', 'res = tap.get("BASE/text")\nsay res:header()\n', 'response:header got the wrong number of inputs (0).');
-await caught(':set with one input', 'd = tap.data()\nd:set("a")\n', 'data object:set got the wrong number of inputs (1).');
+await caught(':set with one input', 'd = tap.data()\nd:set("a")\n', 'd:set takes 2 inputs, not 1.');
 await caught('a method input that swallowed the maths', 'res = tap.get("BASE/text")\nsay res:status - 1\n', "res:status doesn't take an input");
-await caught('looping over a data object', 'd = tap.data()\nfor k in d:\n    say k\n', "Can't loop over a data object. Loop over its names instead: for k in d:keys():");
+await caught('a part of tap.data()', 'd = tap.data()\nsay d[0:2]\n', 'Only text and lists have parts like [1:3], not a dictionary.');
 await caught(':text used as a number','res = tap.get("BASE/text")\nsay res:text() - 1\n', "Can't subtract text and a number.");
 
-// ---- 1.4.0 dictionaries go anywhere a data object does (fix140)
+// ---- 1.4.0 dictionaries go anywhere tap takes JSON (fix140)
 await works('POST and PUT a dictionary as JSON, and dictionary headers', `body = {"title": "Hi", "tags": ["a", "b"], "inner": {"ok": true}, "n": 2}
 echo = tap.post("BASE/echo", body):json
 say echo:get("type")
@@ -274,17 +291,17 @@ say seen:get("x-token")
 say seen:get("accept")
 `, ['application/json', '{"title": "Hi", "tags": ["a", "b"], "inner": {"ok": true}, "n": 2}', '{"1": "one", "two": null}', 'abc123', 'application/json']);
 
-await works('a data object holds a dictionary, and a dictionary holds a data object', `d = tap.data()
+await works('tap.data() holds a dictionary, and a dictionary holds what :json gave', `d = tap.data()
 d:set("info", {"a": 1, "b": [true, nil]})
 say d:get("info"):get("a")
 say [d]
 user = tap.get("BASE/json"):json
 mixed = {"who": user:get("address"), "n": 1}
 say tap.post("BASE/echo", mixed):json:get("body")
-`, ['1', '[{"info": {"a": 1, "b": [true, null]}}]', '{"who": {"city": "London"}, "n": 1}']);
+`, ['1', '[{"info": {"a": 1, "b": [true, nil]}}]', '{"who": {"city": "London"}, "n": 1}']);
 
-await stops('a dictionary inside a data object can\'t hold a function', 'func f():\n    return 1\nd = tap.data()\nd:set("info", {"f": f})\n',
-  'A data object can only hold text, numbers, true/false, nil, lists, dictionaries and data objects, not a function.', 6);
+await stops('a dictionary inside what\'s sent can\'t hold a function', 'func f():\n    return 1\nd = tap.data()\nd:set("info", {"f": f})\nres = tap.put("BASE/echo", d)\n',
+  'What you send can only hold text, numbers, true/false, nil, lists and dictionaries, not a function.', 7);
 await stops('a dictionary that holds itself can\'t be sent', 'd = {"a": 1}\nd["me"] = d\nres = tap.post("BASE/echo", d)\n',
   'What you send can\'t hold itself.', 5);
 

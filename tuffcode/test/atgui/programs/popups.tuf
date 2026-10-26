@@ -15,7 +15,12 @@ say nope
 app:alert "All done"
 say "after alert"
 say ticks > 2
+app:closed bye
 app:close
 
 func tick():
     ticks += 1
+
+# The window closed with app:close in the top-level code, after the popups opened it: app:closed still runs.
+func bye():
+    say "closed"

@@ -10,6 +10,7 @@ import random
 import re
 import sys
 import tempfile
+import threading
 import time
 
 IDE = os.environ.get("TUFF_IDE") == "1"
@@ -409,13 +410,29 @@ class Parser:
             return N("say", tok, value=self.expr())
         if self.at("KW", "input"):
             self.next()
+            if self.at("METHOD"):  # input:color("Name? ", "green"): the question in a look, like say:color (1.4.1)
+                self.next()
+                name_tok = self.peek()
+                name = self.member_name('Expected a method name after "input:", like input:color("Name? ", "green").')
+                if name not in ("color", "colour"):
+                    tip = " For big letters, say them first with say:ascii(...), then ask with input." if name == "ascii" else ""
+                    raise TuffError(f'input has one method, :color, like input:color("Name? ", "green"), not :{name}.{tip}',
+                                    name_tok.line, name_tok.col)
+                if not self.at("OP", "("):
+                    raise TuffError('Put input:color\'s question and look in brackets, like input:color("Name? ", "green").',
+                                    name_tok.line, name_tok.col)
+                self.next()
+                args = self.call_args(")")
+                if not args:
+                    raise TuffError('input:color needs the question first, like input:color("Name? ", "green").', name_tok.line, name_tok.col)
+                return N("input", tok, prompt=args[0], looks=args[1:])
             if self.at("OP", "("):
                 self.next()
                 prompt = None if self.at("OP", ")") else self.expr()
                 self.expect("OP", ")")
             else:
                 prompt = self.expr() if self.starts_expr() else None
-            return N("input", tok, prompt=prompt)
+            return N("input", tok, prompt=prompt, looks=None)
         return self.or_expr()
 
     def or_expr(self):
@@ -687,7 +704,7 @@ class Native:
 
     def __init__(self, kind, methods, show=None):
         self.kind, self.methods = kind, methods
-        self.show = show  # show(nested) gives the text say shows for it, like a tap data object's JSON
+        self.show = show  # show(nested) gives the text say shows for it, like a tap response's <response 200>
 
 
 class AllLines:
@@ -936,9 +953,6 @@ def make_file_members(interp):
             if isinstance(v, float) and not math.isfinite(v):
                 raise TuffError(f"file.save can't keep {to_text(v)}: JSON only has ordinary numbers.")
             return v
-        data = getattr(v, "tap", None)  # a tap data object (from :json or tap.data()): its named values
-        if isinstance(v, Native) and isinstance(getattr(data, "values", None), dict):
-            v = data.values
         if isinstance(v, (list, dict)):
             if any(v is s for s in seen):
                 raise TuffError(f"file.save can't save a {'list' if isinstance(v, list) else 'dictionary'} that holds itself.")
@@ -1236,7 +1250,7 @@ def look_help(owner, given, word, art, pen):
     if word in ART_FONTS:
         return f'"{word}" is a font for big letters: use it with say:ascii("Hi", "{word}").'
     if word in ART_EFFECTS:
-        return f'print:pen sets colours and styles. Animations like "{word}" go on say:ascii or say:color.'
+        return f'{owner} sets colours and styles. Animations like "{word}" go on say:ascii or say:color.'
     known = list(TEXT_COLORS) + ["rainbow", *TEXT_STYLES] + (list(ART_FONTS) if art else []) + ([] if pen else list(ART_EFFECTS))
     hint = difflib.get_close_matches(word, known, n=1, cutoff=0.6)
     kinds = ["colours (red, gold, sky... or \"#ff8800\")", "rainbow", "styles (" + ", ".join(TEXT_STYLES) + ")"]
@@ -1549,8 +1563,10 @@ class Console:
         look, new = line.look, not line.height
         height = shown.count("\n") + 1
         if IDE:
+            # TuffCode keeps a rainbow's colours moving, on one clock: through an animation's frames too, so
+            # line:play("explode") on a rainbow line carries on at the colours it had instead of starting again
             data = {"fg": look.fg, "bg": look.bg, "runs": runs or None, "art": 1 if line.art else None, "anim": 1 if anim else None,
-                    "rainbow": 1 if look.rainbow and not anim else None}  # TuffCode keeps a rainbow's colours moving
+                    "rainbow": 1 if look.rainbow else None}
             data = {k: v for k, v in data.items() if v}
             data.update({s: 1 for s in look.styles})
             style = "rich:" + b64(json.dumps(data, separators=(",", ":")))
@@ -1604,6 +1620,20 @@ class Console:
         if up > 0:
             self.write(f"\x1b[{up}A\r\x1b[2K{text}\x1b[{up}B\r")
 
+    def ask(self, prompt, look):
+        """input:color's question (and input's with print:pen on): in its look, on the line the answer is typed on."""
+        rows, _ = look_text(prompt, look, False)
+        runs = frame_of(rows, look.letters(rows))[1]
+        if IDE:
+            data = {"fg": look.fg, "bg": look.bg, "runs": runs or None, "rainbow": 1 if look.rainbow else None}
+            data = {k: v for k, v in data.items() if v}
+            data.update({s: 1 for s in look.styles})
+            self.write(f"\x1b]tuff;prompt;{b64(prompt)};rich:{b64(json.dumps(data, separators=(',', ':')))}\x07")
+        elif sys.stdout.isatty():  # (no bar to the window's edge: the answer is typed after it)
+            self.write("\n".join(row.replace("\x1b[K", "") for row in ansi_rows(prompt, runs, look)))
+        else:
+            self.write(prompt)
+
     def clear(self, count=None):
         if IDE:
             self.write(f"\x1b]tuff;clear;{'all' if count is None else count}\x07")
@@ -1613,8 +1643,11 @@ class Console:
             self.write("\x1b[1A\x1b[2K" * min(count, self.rows) + "\r")
         self.rows = 0 if count is None else max(0, self.rows - count)
 
-    def input(self, prompt):
-        self.write(prompt)
+    def input(self, prompt, look=None):
+        if look and prompt:
+            self.ask(prompt, look)
+        else:
+            self.write(prompt)
         data = sys.stdin.readline()
         if data == "":
             raise TuffError("The program asked for an answer, but there was no more input to read.")
@@ -1676,7 +1709,7 @@ class Runtime:
         return plain(v)
 
     def what(self, v):
-        """'text', 'a number', 'a data object'... for messages."""
+        """'text', 'a number', 'a dictionary'... for messages."""
         return type_name(plain(v))
 
     def number(self, v, what="This"):
@@ -1770,6 +1803,7 @@ class Interpreter:
         }
         self.started = time.perf_counter()
         self.held = []  # the starts of the names[order:pop] being worked out (see eval "slice")
+        self.depth = 0  # Tuff functions running inside each other (see MAX_DEPTH)
         if os.environ.get("TUFF_NO_WRITES") == "1":  # tuff_run for AI agents: file writes stay in memory
             self.writes = False
         takes_err = {"number", "num", "int", "text", "str", "print"}  # they hand an err back, or show it as "err"
@@ -1893,9 +1927,33 @@ class Interpreter:
         con = self.console
         spin = "/-\\|"
 
-        def loading(text="Loading", seconds=2):
+        def looked(name, inputs, texts, most):
+            """anims' usual inputs, then look words after them, like say:color's (1.4.1):
+            anims.loading("Pulling info...", "green"). A word where a number goes is a look word too; texts are the
+            places that take text. With print:pen on, the pen's look is the starting point."""
+            usual, words = [], []
+            for i, a in enumerate(inputs):
+                if words or (isinstance(plain(a), str) and i not in texts):
+                    words.append(a)
+                else:
+                    usual.append(a)
+            if len(usual) > most:
+                raise TuffError(f"anims.{name} takes {most} inputs before its look words, not {len(usual)}.")
+            look = read_look(f"anims.{name}", words, pen=True) if words else None  # (an anim is an animation already)
+            if look is not None or self.pen:
+                look = (look or Look()).with_pen(self.pen)
+            return usual, look
+
+        def start(text, look):
+            return con.say_look(text, look) if look else con.say(text)
+
+        def loading(*inputs):
+            usual, look = looked("loading", inputs, {0}, 2)
+            return loading_(*usual, look=look)
+
+        def loading_(text="Loading", seconds=2, look=None):
             text = to_text(text)
-            line = con.say(f"/ {text}")
+            line = start(f"/ {text}", look)
             frames = max(1, round(float(seconds) / 0.1))
             for i in range(frames):
                 con.rewrite(line, f"{spin[i % 4]} {text}{'.' * (i // 3 % 4)}")
@@ -1903,10 +1961,14 @@ class Interpreter:
             con.rewrite(line, f"✓ {text}... done")
             return line
 
-        def bar(text="Working", seconds=2, width=20):
+        def bar(*inputs):
+            usual, look = looked("bar", inputs, {0}, 3)
+            return bar_(*usual, look=look)
+
+        def bar_(text="Working", seconds=2, width=20, look=None):
             text = to_text(text)
             width = max(5, int(width))
-            line = con.say("")
+            line = start("", look)
             steps = max(1, round(float(seconds) / 0.05))
             for i in range(steps + 1):
                 filled = round(width * i / steps)
@@ -1915,17 +1977,25 @@ class Interpreter:
                     time.sleep(0.05)
             return line
 
-        def type_(text, speed=0.04):
+        def type_(*inputs):
+            usual, look = looked("type", inputs, {0}, 2)
+            return type__(*usual, look=look)
+
+        def type__(text, speed=0.04, look=None):
             text = to_text(text)
-            line = con.say("")
+            line = start("", look)
             for i in range(1, len(text) + 1):
                 con.rewrite(line, text[:i])
                 time.sleep(max(0, float(speed)))
             return line
 
-        def countdown(start=3, then="Go!"):
-            n = int(plain(start))
-            line = con.say(str(n))
+        def countdown(*inputs):
+            usual, look = looked("countdown", inputs, {1}, 2)
+            return countdown_(*usual, look=look)
+
+        def countdown_(begin=3, then="Go!", look=None):
+            n = int(plain(begin))
+            line = start(str(n), look)
             for i in range(n - 1, 0, -1):
                 time.sleep(1)
                 con.rewrite(line, str(i))
@@ -2022,14 +2092,14 @@ class Interpreter:
     def b_wait(self, seconds):
         sys.stdout.flush()
         end = time.perf_counter() + max(0, float(seconds))
-        while self.rt.wait_hooks:  # a tdraw window keeps drawing while the program waits
-            for hook in self.rt.wait_hooks:
+        while True:
+            for hook in self.rt.wait_hooks:  # a tdraw window keeps drawing while the program waits
                 hook()
             left = end - time.perf_counter()
             if left <= 0:
                 return
-            time.sleep(min(0.02, left))
-        time.sleep(max(0, end - time.perf_counter()))
+            # short naps: Ctrl+C reaches a program on its own thread (run_deep) between them
+            time.sleep(min(0.02 if self.rt.wait_hooks else 0.1, left))
 
     def b_range(self, a, b=None, step=1):
         if b is None:
@@ -2074,16 +2144,12 @@ class Interpreter:
         else:
             key = self.eval(index, env)
         if s.op != "=":
-            value = self.binop(s.op[0], self.item(obj, key, t.obj, index), value)
+            value = self.binop(s.op[0], self.item(obj, key, t.obj), value)
         if isinstance(obj, dict):  # ages["sam"] = 15 sets (or adds) a key
             obj[dict_key(key)] = value
             return value
         if not isinstance(obj, list):
-            owner = node_text(t.obj) or "thing"
-            example = key_example(index) if index is not None else '"name"'
-            tip = f" Use :set instead, like {owner}:set({example}, value)." \
-                if isinstance(obj, Native) and "keys" in obj.methods and "set" in obj.methods else ""
-            raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.{tip}")
+            raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.")
         obj[self.list_index(obj, key)] = value
         return value
 
@@ -2122,9 +2188,7 @@ class Interpreter:
         if isinstance(items, dict):  # a dictionary: its keys
             items = list(items)
         if not isinstance(items, (list, str)):
-            owner = s.items.name if s.items.kind == "var" else "thing"
-            tip = f" Loop over its names instead: for {s.name} in {owner}:keys():" if isinstance(items, Native) and "keys" in items.methods else ""
-            raise TuffError(f"Can't loop over {type_name(items)}.{tip}")
+            raise TuffError(f"Can't loop over {type_name(items)}.")
         for item in list(items):
             env.set(s.name, item)
             try:
@@ -2183,7 +2247,12 @@ class Interpreter:
             return self.print_builtin
         if k == "input":
             prompt = "" if e.prompt is None else to_text(self.eval(e.prompt, env))
-            return self.console.input(prompt)
+            look = None
+            if getattr(e, "looks", None) is not None:  # input:color("Name? ", "green")
+                look = read_look("input:color", [self.eval(a, env) for a in e.looks], pen=True)  # (no animations)
+            if look is not None or self.pen:  # with print:pen on, the question has the pen's look too
+                look = (look or Look()).with_pen(self.pen)
+            return self.console.input(prompt, look)
         if k == "binop":
             return self.binop(e.op, self.eval(e.left, env), self.eval(e.right, env))
         if k == "and":
@@ -2205,14 +2274,14 @@ class Interpreter:
             return {dict_key(self.eval(key, env)): self.eval(value, env) for key, value in zip(e.keys, e.values)}
         if k == "index":
             obj = plain(self.eval(e.obj, env))
-            return self.item(obj, self.eval(e.index, env), e.obj, e.index)
+            return self.item(obj, self.eval(e.index, env), e.obj)
         if k == "held":  # the start of names[order:pop], already worked out (see "slice")
             return self.held[-1]
         if k == "slice":  # s[1:3]: positions 1 to 3, both included (like range); s[:3] from the start, s[2:] to the end
             obj = plain(self.eval(e.obj, env))
             which, first, last = self.part(e, env)
             if which == "key":  # names[order:pop]: 1.3.6's method call gave the position or key
-                return self.item(obj, first, e.obj, None)
+                return self.item(obj, first, e.obj)
             if not isinstance(obj, (list, str)):
                 raise TuffError(f"Only text and lists have parts like [1:3], not {type_name(obj)}.")
             size = len(obj)
@@ -2285,7 +2354,7 @@ class Interpreter:
             raise TuffError(f"The positions in [start:end] must be whole numbers, not {type_name(v)}.{tip}")
         return v + size if v < 0 else v
 
-    def item(self, obj, key, obj_node, key_node):
+    def item(self, obj, key, obj_node):
         """obj[key]: a dictionary's value, or the item at a position in a list or text."""
         if isinstance(obj, dict):
             key = dict_key(key)
@@ -2297,15 +2366,12 @@ class Interpreter:
                     named = node_text(obj_node)
                     use = f"{named}[\"{as_text}\"] or {named}[text({shown})]" if named else f"[\"{as_text}\"] or [text({shown})]"
                     raise TuffError(f"{owner} doesn't have the number {shown}, but it has \"{as_text}\" (text). Keys that "
-                                    f"come back from file.load are always text: use {use}.")
+                                    f"come back from file.load or a web page's JSON are always text: use {use}.")
                 tip = f" Check first with {owner}:has({shown}), or use {owner}:get({shown}, default)." if node_text(obj_node) else ""
                 raise TuffError(f"{owner} doesn't have {shown}.{tip}")
             return obj[key]
         if not isinstance(obj, (list, str)):
-            owner = node_text(obj_node) or "thing"
-            example = key_example(key_node) if key_node is not None else '"name"'
-            tip = f" Use :get instead, like {owner}:get({example})." if isinstance(obj, Native) and "keys" in obj.methods else ""
-            raise TuffError(f"Can't use [ ] on {type_name(obj)}.{tip}")
+            raise TuffError(f"Can't use [ ] on {type_name(obj)}.")
         return obj[self.list_index(obj, key)]
 
     def list_index(self, obj, index):
@@ -2386,12 +2452,19 @@ class Interpreter:
                 raise TuffError(f"{fn.name}() needs {want} input{'s' if want != 1 else ''}, but got {len(args)}.")
             local = Env(fn.env)
             local.vars.update(zip(fn.params, args))
+            if self.depth >= MAX_DEPTH:  # (deep enough for real work; a runaway stops here before it eats the memory)
+                raise TuffError(f"{fn.name}() called itself too many times.")
+            self.depth += 1
             try:
                 return self.run_block(fn.body, local)
             except ReturnSignal as r:
                 return r.value
             except RecursionError:
                 raise TuffError(f"{fn.name}() called itself too many times.")
+            except MemoryError:
+                raise TuffError(f"The program ran out of memory inside {fn.name}(). Is something growing without end?")
+            finally:
+                self.depth -= 1
         raise TuffError(f"{to_text(fn, True)} isn't a function, so it can't be called with ( ).")
 
     def method(self, e, env):
@@ -2511,7 +2584,7 @@ class Interpreter:
             if name in ("keys", "values"):
                 no_inputs()
                 return list(obj) if name == "keys" else list(obj.values())
-            if name == "size":  # like len(d), and like a tap data object's :size
+            if name == "size":  # like len(d), and like tap's data objects had before 1.4.1
                 no_inputs()
                 return len(obj)
             what, kind = "A dictionary", "dict"
@@ -2651,12 +2724,6 @@ def node_text(e):
     return None
 
 
-def key_example(index):
-    """What a [ ] input looks like given to :get or :set, for messages: user["name"] gives "name", user[k] gives k."""
-    text = node_text(index) if index.kind in ("const", "var") else None
-    return text if text and not text[0].isdigit() else '"name"'
-
-
 def leaves_folder(path, folder):
     """Does this file path point outside the folder ("../cat.png", or a full path somewhere else)? A relative path
     is judged on its own; a full path only when the folder is known."""
@@ -2746,8 +2813,8 @@ _TAP = None
 
 
 def tap_tables():
-    """tap's functions ("lib") and the methods of its responses and data objects ("kinds"), read from
-    the library itself without going online. None when it can't be loaded."""
+    """tap's functions ("lib") and the methods of its responses ("kinds"), read from the library itself
+    without going online. None when it can't be loaded."""
     global _TAP
     if _TAP is None:
         try:
@@ -3100,7 +3167,7 @@ SAVE_INPUTS = {
     "forget": ("the save's name, or nothing to forget every save", '{o}:forget("best")', (0, 1)),
 }
 SAVE_KEEPS = "numbers, text, true/false, lists and tables"
-SAVE_KINDS = ("$number", "$text", "$bool", "$nil", "$list", "$line", "$dict", "data object")  # what :save can keep
+SAVE_KINDS = ("$number", "$text", "$bool", "$nil", "$list", "$line", "$dict")  # what :save can keep
 # tgame's multiplayer as the checker knows it (Checker.check_net): game:host, :join, :send, :share and the rest, on a
 # game or a world. For each, what it takes, for messages, an example ({o} is the game's name), the input counts that
 # fit, and what its first input is when that has to be text. :send and :share carry what :save keeps. on_message,
@@ -3430,10 +3497,10 @@ class Checker:
                        "weight": (0, False, None, "a number above 0 (kg)", "{o}:weight(50)"),
                        "bounce": (0, True, 1, "a number from 0 (no bounce) to 1 (it bounces right back up)", "{o}:bounce(0.6)"),
                        "friction": (0, True, None, "a number from 0 (slippery, like ice) up", "{o}:friction(0.4)")}
-    # What tap's functions make, and what the methods of those give back (left out: it depends, like :json).
-    TAP_MAKES = {"get": "response", "post": "response", "put": "response", "delete": "response", "data": "data object"}
-    TAP_GIVES = {"response": {"status": "$number", "ok": "$bool", "text": "$text"},
-                 "data object": {"has": "$bool", "keys": "$list", "size": "$number", "set": "data object"}}
+    # What tap's functions make (tap.data() is an empty dictionary), and what a response's methods give back (left
+    # out: it depends, like :json, which can be a dictionary, a list, text...).
+    TAP_MAKES = {"get": "response", "post": "response", "put": "response", "delete": "response", "data": "$dict"}
+    TAP_GIVES = {"response": {"status": "$number", "ok": "$bool", "text": "$text"}}
 
     def __init__(self, program, base_dir=None):
         self.program = program
@@ -3457,6 +3524,7 @@ class Checker:
         self.makes_window = self.makes_game = False
         self.handlers_seen = set()
         self.statement_call = None  # a call on a line of its own: its answer isn't used
+        self.trying = 0  # inside how many try: blocks (a wrong key there may be on purpose: catch gets its message)
         self.base_dir = base_dir
 
     # ---- what the program makes, and where
@@ -3698,15 +3766,9 @@ class Checker:
             elif s.target.kind == "index":
                 self.expr(s.target.obj, scope)
                 self.expr(s.target.index, scope)
-                obj, who = self.kind(s.target.obj), node_text(s.target.obj)
-                if obj == "$text":
-                    self.problem(s, "You can only set items in a list, not in text. Build new text with + instead.")
-                elif obj == "data object":
-                    self.problem(s, f"You can only set items in a list, not in a data object. Use :set instead, like "
-                                    f"{who or 'thing'}:set({key_example(s.target.index)}, value).")
-                elif self.kind(s.target.index) == "$text" and self.json_like(s.target.obj):
-                    self.problem(s, f"List positions must be whole numbers, not text. If {who + ' is' if who else 'it is'} a data object "
-                                    f"(from :json), use :set instead, like {who or 'thing'}:set({key_example(s.target.index)}, value).")
+                self.check_store(s, s.target.obj, s.target.index)
+            elif s.target.kind == "slice":  # board[moves:pop] = "X": like the read form, then stored into
+                self.check_slice(s.target, scope, store=s)
             if s.op == "=" and target in self.func_count and target not in self.params and target not in self.loop_vars \
                     and self.kind(s.value) not in ("$func", "$builtin"):
                 self.problem(s, f"{target} is a function, and giving it a value replaces it, so {target}() won't work afterwards. Use another name for the value.")
@@ -3728,15 +3790,14 @@ class Checker:
             self.check_condition(s.cond)
             self.body(s.body, scope, True, in_func)
         elif k == "try":
+            self.trying += 1
             self.body(s.body, scope, in_loop, in_func)
+            self.trying -= 1
             self.body(s.handler, scope, in_loop, in_func)
         elif k == "for":
             self.expr(s.items, scope)
             if self.kind(s.items) == "$number":
                 self.problem(s, f"Can't loop over a number. Try: for {s.name} in range(...):")
-            elif self.kind(s.items) == "data object":
-                owner = s.items.name if s.items.kind == "var" else "thing"
-                self.problem(s, f"Can't loop over a data object. Loop over its names instead: for {s.name} in {owner}:keys():")
             self.check_range_len(s)
             self.body(s.body, scope, True, in_func)
         elif k == "return":
@@ -3759,6 +3820,13 @@ class Checker:
             self.expr(e.prompt, scope)
             if e.prompt is not None and (e.prompt.kind in ("and", "or") or (e.prompt.kind == "binop" and e.prompt.op in self.COMPARE)):
                 self.problem(e, "input took everything after it as its question, so it asks the wrong thing. Store the answer first: answer = input \"...\", then compare answer.")
+            for a in getattr(e, "looks", None) or []:  # input:color("Name? ", "green"): the words written in quotes
+                self.expr(a, scope)
+                if a.kind == "const" and isinstance(a.value, str):
+                    try:
+                        read_look("input:color", [a.value], pen=True)
+                    except TuffError as err:
+                        self.problem(a, err.msg)
         elif k in ("binop", "and", "or"):
             self.expr(e.left, scope)
             self.expr(e.right, scope)
@@ -3781,32 +3849,9 @@ class Checker:
             for x in e.keys + e.values:
                 self.expr(x, scope)
             for key in e.keys:
-                kk = self.kind(key)
-                if kk in ("$list", "$dict", "$bool", "$nil"):
-                    self.problem(key, f"A dictionary's keys can be text or numbers, not {self.TYPE[kk]}.")
+                self.check_key(key)
         elif k == "slice":
-            self.expr(e.obj, scope)
-            if e.alt is None:
-                self.expr(e.start, scope)
-                self.expr(e.end, scope)
-                self.check_part(e)
-                return
-            self.expr(e.recv, scope)
-            method, recv = self.as_method(e), self.kind(e.recv)
-            self.held.append(recv)
-            try:
-                simple = SIMPLE_METHODS.get(recv[1:]) if method and recv.startswith("$") else None
-                if simple is not None and e.mname not in simple:  # word[first:last] with first some text
-                    self.problem(e, f"The positions in [start:end] must be whole numbers, not {self.TYPE.get(recv, 'that')}.")
-                elif method:  # names[order:pop], as in 1.3.6: a method of what's before the ':'
-                    self.expr(e.alt, scope)
-                elif method is False:
-                    self.expr(e.start, scope)
-                    self.expr(e.end, scope)
-                    self.check_part(e)
-                # (None: can't tell before it runs which one it is, so nothing more is certain)
-            finally:
-                self.held.pop()
+            self.check_slice(e, scope)
         elif k == "call":
             if e.fn.kind == "var":
                 self.use(e.fn, scope, func=True)
@@ -3938,11 +3983,41 @@ class Checker:
             if line:
                 self.problem(s, f"'err' is built in (number() and num() give it for text that isn't a number), and giving it a value replaces it everywhere, so the is err check on line {line} won't work. Use another name, like my_err.")
 
+        def replaces_by_loop(s):
+            """s, a for loop at the top, gives each item in turn to a built-in's name (file, time, log...), so from then
+            on that name is the item, everywhere: file.read and time() fail inside the loop (when it has items), and
+            after it too when it certainly has some. Only when nothing else gives the name a value and no item is a
+            function or a library."""
+            name, b = s.name, self.builtins.get(s.name)
+            if not isinstance(b, Builtin) and not (name == "file" and isinstance(b, Module)):
+                return
+            if name in self.assigned or sum(1 for x in nodes(self.program) if x.kind in ("for", "func", "try", "import") and x.name == name) != 1:
+                return
+            kinds, some = self.loop_items(s.items)
+            if some is False or kinds is None or any(k is None or k in ("$func", "$builtin") or k.startswith(("$libfn:", "$module:")) for k in kinds):
+                return
+            if name == "file":
+                used = [x for x in nodes(self.program) if x.kind == "attr" and x.obj.kind == "var" and x.obj.name == "file"
+                        and "file" not in inputs.get(owner.get(id(x)), ())]
+            else:
+                used = calls.get(name, [])
+            inside = {id(x) for x in nodes(s.body)}
+            line = later(used, s.line) if some else min((x.line for x in used if id(x) in inside and id(x) not in owner), default=None)
+            if line is None:
+                return
+            if name == "file":
+                member = next(x.name for x in used if x.line == line)
+                self.problem(s, f"'file' is the built-in file library, and this loop gives it each item in turn, which replaces it everywhere, so file.{member} on line {line} won't work. Use another name for the loop's variable, like my_file.")
+            else:
+                self.problem(s, f"'{name}' is a built-in function, and this loop gives it each item in turn, which replaces it everywhere, so {name}() on line {line} won't work. Use another name for the loop's variable, like my_{name}.")
+
         for s in self.program:
             if s.kind == "assign" and s.op == "=" and s.target.kind == "var" and isinstance(self.builtins.get(s.target.name), Builtin):
                 replaces(s, s.target.name, s.line)
             elif s.kind == "assign" and s.op == "=" and s.target.kind == "var" and s.target.name == "err":
                 replaces_err(s)
+            elif s.kind == "for":
+                replaces_by_loop(s)
             # f() at the top runs f, and f setting a built-in's name (not one of its inputs) replaces it for everyone
             # (except the OWN_NAME_BUILTINS: there it's f's own variable)
             if s.kind == "expr" and s.expr.kind == "call" and s.expr.fn.kind == "var" and self.only_func(s.expr.fn.name):
@@ -3955,6 +4030,37 @@ class Checker:
                 if s.name in made:
                     self.problem(s, f"There are two functions called {s.name}. This one replaces the one on line {made[s.name]}. Give them different names.")
                 made[s.name] = s.line
+
+    def loop_items(self, e, seen=frozenset()):
+        """What a for loop over e gives its variable: the kinds of the items (None when that can't be told), and
+        whether there are some (True or False, or None when that can't be told)."""
+        if e.kind == "list":
+            return {self.kind(x) for x in e.items}, bool(e.items)
+        if e.kind == "dict":  # its keys
+            return {self.kind(x) for x in e.keys}, bool(e.keys)
+        if e.kind == "const" and isinstance(e.value, str):
+            return {"$text"}, e.value != ""
+        if e.kind == "call" and e.fn.kind == "var" and e.fn.name == "range" and "range" not in self.user:
+            ends = [a.value for a in e.args if a.kind == "const" and isinstance(a.value, (int, float)) and not isinstance(a.value, bool)]
+            some = None
+            if len(ends) == len(e.args) and 1 <= len(ends) <= 3 and all(isinstance(x, int) or math.isfinite(x) for x in ends):  # like b_range, without the list
+                a, b, step = [int(x) for x in ([1] + ends + [1] if len(ends) == 1 else ends + [1] * (3 - len(ends)))]
+                some = step != 0 and bool(range(a, b + (1 if step > 0 else -1), step))
+            return {"$number"}, some
+        if e.kind == "call" and e.fn.kind == "attr" and e.fn.name == "lines" and e.fn.obj.kind == "var" and e.fn.obj.name == "file" \
+                and "file" not in self.assigned and isinstance(self.builtins.get("file"), Module):
+            return {"$text"}, None  # file.lines, worked out before the loop starts
+        if self.kind(e) == "$text":  # its letters
+            return {"$text"}, None
+        if e.kind == "var" and e.name not in seen and e.name not in self.params and e.name not in self.loop_vars:
+            sets = self.assigned.get(e.name, [])
+            added = any((x.kind == "method" and x.name in ("add", "set") and x.obj.kind == "var" and x.obj.name == e.name)
+                        or (x.kind == "assign" and x.target.kind != "var" and x.target.obj.kind == "var" and x.target.obj.name == e.name)
+                        for x in nodes(self.program))
+            found = [self.loop_items(t.value, seen | {e.name})[0] for t in sets if t.op == "="]
+            if sets and not added and len(found) == len(sets) and None not in found:
+                return set().union(*found), None
+        return None, None
 
     def check_one_terrain(self):
         """A world has one terrain, so a second world:terrain for the same world at the top of the program fails
@@ -4054,28 +4160,6 @@ class Checker:
             if self.is_decimal(n):
                 self.problem(n, "This is a decimal (it comes from /), even if it looks whole, so it can't repeat text. Use floor(...) around the division.")
 
-    def dicts_in_data(self):
-        """Does the program put a 1.4.0 dictionary into something with :set (a data object can hold one)? Then what
-        :get gives back may be a dictionary, and [ ] works on it."""
-        if getattr(self, "_dicts_in_data", None) is None:
-            self._dicts_in_data = any(m.kind == "method" and m.name == "set" and len(m.args) == 2 and self.kind(m.args[1]) == "$dict"
-                                      for m in nodes(self.program))
-        return self._dicts_in_data
-
-    def json_like(self, e, seen=frozenset()):
-        """Could this be one of tap's data objects: one made with tap.data(), a response's :json (an object, unless
-        the server sent a list), or what :get or [ ] gave back from one of those?"""
-        if self.kind(e) == "data object":
-            return True
-        if e.kind == "method":
-            return (e.name == "json" and not e.args) or (e.name == "get" and not self.dicts_in_data() and self.json_like(e.obj, seen))
-        if e.kind == "index":
-            return self.json_like(e.obj, seen)
-        if e.kind == "var" and e.name not in seen and e.name not in self.params and e.name not in self.loop_vars:
-            sets = self.assigned.get(e.name, [])
-            return bool(sets) and all(s.op == "=" and self.json_like(s.value, seen | {e.name}) for s in sets)
-        return False
-
     def as_method(self, e):
         """For x[a:b] with a glued ':' (Parser.index): True when it's 1.3.6's method call (a is a list, text or a
         widget), False when it's a part, None when it can't be told before the program runs."""
@@ -4094,6 +4178,61 @@ class Checker:
             not self.method_exists(root.name)
         return False if known and start is None else None
 
+    def check_slice(self, e, scope, store=None):
+        """x[a:b], read, or stored into (store: the line, like board[moves:pop] = "X"). With a glued ':' it's a
+        part or 1.3.6's method call (as_method); when that can't be told yet, only what both get wrong is certain."""
+        self.expr(e.obj, scope)
+        if e.alt is None:
+            self.expr(e.start, scope)
+            self.expr(e.end, scope)
+            self.check_part(e)
+            return
+        self.expr(e.recv, scope)
+        method, recv = self.as_method(e), self.kind(e.recv)
+        as_part = lambda: self.check_part(e) if store is None else None
+        as_item = lambda: self.check_index(e, e.alt) if store is None else self.check_store(store, e.obj, e.alt)
+        self.held.append(recv)
+        try:
+            simple = SIMPLE_METHODS.get(recv[1:]) if method and recv.startswith("$") else None
+            if simple is not None and e.mname not in simple:  # word[first:last] with first some text
+                self.problem(e, f"The positions in [start:end] must be whole numbers, not {self.TYPE.get(recv, 'that')}.")
+            elif method:  # names[order:pop], as in 1.3.6: a method of what's before the ':' gives the position or key
+                self.expr(e.alt, scope)
+                as_item()
+            elif method is False:
+                self.expr(e.end, scope)
+                if store is not None:
+                    self.problem(store, "A part like [1:3] can't be changed with =. Make the new text or list with + instead.")
+                as_part()
+            else:
+                self.both(lambda: (self.expr(e.end, scope), as_part()), lambda: (self.expr(e.alt, scope), as_item()))
+        finally:
+            self.held.pop()
+
+    def both(self, *readings):
+        """Checks each way something can be read when it runs (x[a:b] with a glued ':') and keeps only the problems
+        all of them have: those go wrong whichever way it's read."""
+        start, found = len(self.problems), []
+        for read in readings:
+            read()
+            found.append(self.problems[start:])
+            del self.problems[start:]
+        self.problems += [p for p in found[0] if all(p in f for f in found[1:])]
+
+    def check_store(self, s, target, index):
+        """target[index] = value (s is the line): only lists and dictionaries have items that can be set."""
+        obj = self.kind(target)
+        if obj == "$text":
+            self.problem(s, "You can only set items in a list, not in text. Build new text with + instead.")
+        elif obj == "$dict":
+            self.check_key(index)
+
+    def check_key(self, key):
+        """A dictionary's key is text or a number (dict_key), in { }, d[key] and d:get, :set, :has and :remove."""
+        kk = self.kind(key)
+        if kk in ("$list", "$dict", "$bool", "$nil") and not self.trying:
+            self.problem(key, f"A dictionary's keys can be text or numbers, not {self.TYPE[kk]}.")
+
     def check_part(self, e):
         """s[a:b]: the positions are whole numbers, and only text and lists have parts."""
         obj = self.kind(e.obj)
@@ -4111,26 +4250,24 @@ class Checker:
                 self.problem(end, "This is a decimal (it comes from /), even if it looks whole, so it can't be a position. Use floor(...) around the division.")
                 return
 
-    def check_index(self, e):
-        idx = self.kind(e.index)
-        who = node_text(e.obj)
-        if self.kind(e.obj) == "data object":  # what the run says: [ ] doesn't work on a data object at all
-            self.problem(e, f"Can't use [ ] on a data object. Use :get instead, like {who or 'thing'}:get({key_example(e.index)}).")
-        elif idx == "$text" and self.json_like(e.obj):
-            self.problem(e, f"List positions must be whole numbers, not text. If {who + ' is' if who else 'it is'} a data object "
-                            f"(from :json), use :get instead, like {who or 'thing'}:get({key_example(e.index)}).")
-        elif idx == "$text" and self.kind(e.obj) in ("$list", "$text"):  # (a dictionary's keys are often text)
-            who = self.describe(e.index)
-            self.problem(e, "List positions must be whole numbers, not text." + (f" Use number({who})." if who and self.typed(e.index) else ""))
-        elif self.is_decimal(e.index):
-            self.problem(e.index, "This is a decimal (it comes from /), even if it looks whole, so it can't be a position. Use floor(...) around the division.")
-        elif e.index.kind == "call" and e.index.fn.kind == "var" and e.index.fn.name == "random" and "random" not in self.user and e.obj.kind == "var":
-            args = e.index.args
+    def check_index(self, e, index=None):
+        """x[i], or 1.3.6's names[order:pop], where the method call gives i (index)."""
+        index = e.index if index is None else index
+        idx = self.kind(index)
+        if idx == "$text" and self.kind(e.obj) in ("$list", "$text"):  # (a dictionary's keys are often text)
+            who = self.describe(index)
+            self.problem(e, "List positions must be whole numbers, not text." + (f" Use number({who})." if who and self.typed(index) else ""))
+        elif self.kind(e.obj) == "$dict":  # (where a decimal is a fine key)
+            self.check_key(index)
+        elif self.is_decimal(index):
+            self.problem(index, "This is a decimal (it comes from /), even if it looks whole, so it can't be a position. Use floor(...) around the division.")
+        elif index.kind == "call" and index.fn.kind == "var" and index.fn.name == "random" and "random" not in self.user and e.obj.kind == "var":
+            args = index.args
             ends_at_len = args and args[-1].kind == "call" and args[-1].fn.kind == "var" and args[-1].fn.name == "len" and len(args[-1].args) == 1 and \
                 args[-1].args[0].kind == "var" and args[-1].args[0].name == e.obj.name
             if ends_at_len:
                 lst = e.obj.name
-                self.problem(e.index, f"random(...len({lst})) can give len({lst}), which is past the last position (positions go from 0 to len({lst}) - 1). Use {lst}[random(0, len({lst}) - 1)].")
+                self.problem(index, f"random(...len({lst})) can give len({lst}), which is past the last position (positions go from 0 to len({lst}) - 1). Use {lst}[random(0, len({lst}) - 1)].")
 
     def method_exists(self, name):
         gui = gui_tables()
@@ -4146,6 +4283,20 @@ class Checker:
         return name in SIMPLE_METHODS["text"] or name in SIMPLE_METHODS["list"] or name in SIMPLE_METHODS["line"] or name in SIMPLE_METHODS["dict"] or \
             any(name in m for m in gui["kinds"].values()) or (tap is None or any(name in m for m in tap["kinds"].values())) or \
             (tg is None or any(name in m for m in tg["kinds"].values()))
+
+    ANIMS_TEXTS = {"countdown": {1}}  # where each anims function takes text (others: the first input); see lib_anims
+
+    def check_anims_looks(self, e):
+        """anims.loading("Pulling info...", "green"): a word where text doesn't go is a look word (1.4.1)."""
+        name, texts, looks = e.fn.name, self.ANIMS_TEXTS.get(e.fn.name, {0}), False
+        for i, a in enumerate(e.args):
+            looks = looks or (a.kind == "const" and isinstance(a.value, str) and i not in texts)
+            if looks and a.kind == "const" and isinstance(a.value, str):
+                try:
+                    read_look(f"anims.{name}", [a.value], pen=True)
+                except TuffError as err:
+                    self.problem(a, err.msg)
+                    return
 
     def check_call(self, e, scope):
         fn, n = e.fn, len(e.args)
@@ -4182,6 +4333,8 @@ class Checker:
                 members = self.lib_members(lib[8:]) or {}
                 if fn.name in members and not accepts(members[fn.name], n):
                     self.problem(e, f"{lib[8:]}.{fn.name}() got the wrong number of inputs ({n}).")
+                elif lib == "$module:anims" and fn.name in members:
+                    self.check_anims_looks(e)
 
     def check_number_input(self, a, name):
         """number(), num() and int() give err for text that isn't a number, but anything else that isn't text or a
@@ -4299,7 +4452,8 @@ class Checker:
             return
         obj = self.kind(e.obj)
         name, n = e.name, len(e.args)
-        owner = e.obj.name if e.obj.kind == "var" else "thing"
+        start = e.obj.of if e.obj.kind == "held" else e.obj  # names[q:pop x]: q
+        owner = start.name if start.kind == "var" else "thing"
         if obj is None:
             if not self.method_exists(name):
                 tip = PY_ONLY.get(name.lower())
@@ -4316,7 +4470,7 @@ class Checker:
         if simple:
             kind = obj[1:]
             if name not in simple:
-                what = "Text" if kind == "text" else a_kind(kind).capitalize()
+                what = "Text" if kind == "text" else self.TYPE[obj].capitalize()  # "A dictionary", like the run says
                 tip = PY_ONLY.get(name.lower())
                 msg = method_help(what, name, simple, kind)
                 self.problem(e, msg + (f" {tip}" if tip and "instead" not in msg else ""))
@@ -4351,6 +4505,8 @@ class Checker:
                     self.problem(e, f"{owner}:pop doesn't take a position: it always takes the last item. To take another item, read it with {owner}[...] and then :remove it.")
                 else:
                     self.problem(e, f"{owner}:{name} doesn't take an input. Write {owner}:{name}()")
+            elif kind == "dict" and name in ("get", "set", "has", "remove"):
+                self.check_key(e.args[0])
             return
         if obj.startswith("$module:"):
             lib = obj[8:]
@@ -4411,6 +4567,14 @@ class Checker:
         choices = [to_text(x.value) for x in made.args[0].items]
         if to_text(arg.value) not in choices:
             self.problem(arg, f"'{to_text(arg.value)}' isn't one of this dropdown's choices: {', '.join(choices)}.")
+
+    def fixed_text(self, x):
+        """The text an input always is: written there, or in a variable set to it once and never changed (pic =
+        "../cat.png", then game:image(pic)). None when the checker can't know."""
+        if x is not None and x.kind == "var" and x.name not in self.params and x.name not in self.loop_vars:
+            sets = self.assigned.get(x.name, [])
+            x = sets[0].value if len(sets) == 1 and sets[0].op == "=" else None
+        return x.value if x is not None and x.kind == "const" and isinstance(x.value, str) else None
 
     def check_saves(self, e, obj):
         """game:save, game:load, game:saved and game:forget (tgame's saved game data, SAVE_INPUTS): how many inputs
@@ -4584,9 +4748,10 @@ class Checker:
         if base and os.path.abspath(base).lower().startswith(os.path.abspath(tempfile.gettempdir()).lower()):
             base = None  # a snippet in a temporary folder: its files aren't next to it
         for i, a in enumerate(e.args):
-            if a.kind == "const" and isinstance(a.value, str):
+            value = self.fixed_text(a)
+            if value is not None:
                 land = self.LAND_VALUES.get((obj, name, i))
-                msg = self.land_value(land, a.value, tg) if land else tg["check"](obj, name, i, a.value, base)
+                msg = self.land_value(land, value, tg) if land else tg["check"](obj, name, i, value, base)
                 if msg:
                     self.problem(a, msg)
         if physics and name in self.PHYSICS_NUMBERS and len(e.args) == 1:
@@ -5053,6 +5218,10 @@ class Checker:
                              " Try home, search, settings, user, chat, send, plus, check, x, star, heart, trash, edit or bell."))
         elif (name == "image" and container) or (name == "set" and kind == "image"):
             self.atgui_picture(e.args[0] if e.args else None)
+        elif (name == "avatar" and container) or (name == "set" and kind == "avatar"):  # a picture, or initials
+            text = self.fixed_text(e.args[0] if e.args else None)
+            if text is not None and text.strip().lower().endswith(at["image_exts"]):
+                self.atgui_picture(e.args[0])
         elif name == "animate":
             one_of(0, at["animations"], "There's no animation called '{}'. Try one of: " + ", ".join(at["animations"]) + ".")
         elif name == "toast":
@@ -5072,9 +5241,10 @@ class Checker:
 
     def atgui_picture(self, arg, icon=False):
         """A picture named in the program: a kind of file atgui can show, and there (when we know the folder)."""
-        if arg is None or arg.kind != "const" or not isinstance(arg.value, str):
+        path = self.fixed_text(arg)
+        if path is None:
             return
-        path = arg.value.strip()
+        path = path.strip()
         if not icon and re.match(r"^(https?:|data:)", path, re.I):
             return
         if not path.lower().endswith((".png", ".ico") if icon else atgui_tables()["image_exts"]):
@@ -5148,7 +5318,7 @@ class SceneConsole(Console):
     def write(self, text):
         pass
 
-    def input(self, prompt):
+    def input(self, prompt, look=None):
         return ""
 
 
@@ -5245,7 +5415,8 @@ def scene_file(game_path, source_path, out_path):
         interp = SceneInterpreter(src, os.path.dirname(os.path.abspath(game_path)))
         scene = tuff_tgame.start_scene(interp)
         error = None
-        try:
+
+        def setup():
             program = Parser(tokenize(src)).program()
             for stmt in program:
                 if stmt.kind == "func":
@@ -5253,6 +5424,9 @@ def scene_file(game_path, source_path, out_path):
             interp.run_block(program, interp.globals)
             for hook in interp.rt.finish_hooks:
                 hook()
+
+        try:
+            run_deep(setup, main=bool(TK_IMPORT.search(src)))  # as deep as a real run
         except tuff_tgame.SceneDone:
             pass
         except TuffError as err:
@@ -5295,14 +5469,20 @@ def report(err, src):
     sys.stderr.write("\n".join(out) + "\n")
     sys.stderr.flush()
     if WINDOWED:
+        SHOWING_BOX.set()
         try:
             from tkinter import messagebox
             messagebox.showerror("Something went wrong", "\n".join(out[:2]))
         except Exception:
             pass
+        finally:
+            SHOWING_BOX.clear()
 
 
 WINDOWED = False
+# An error box is up (a built app's): while it is, a window's close time limit (tuff_view's CLOSE_LIMIT) waits for it,
+# so an error in app:closed stays on the screen until it's read.
+SHOWING_BOX = threading.Event()
 
 
 def setup_streams():
@@ -5356,6 +5536,104 @@ def base_folder(path):
     return os.environ.get("TUFF_BASE_DIR") or os.path.dirname(os.path.abspath(path))
 
 
+# 1.4.1: a Tuff call is 7 to 14 of Python's, and Python stops at 1000 calls deep, so a Tuff function used to stop after
+# about 100 calls of itself. A program runs on a thread of its own with a big stack and a higher limit instead: a
+# function can call itself over 10,000 times, and one that never stops still ends in under a second with "f() called
+# itself too many times." Programs with tgui, mtgui or tdraw (tkinter) keep the main thread, which a Mac's windows need,
+# and so do apps with no console (report's box is tkinter's).
+MAX_DEPTH = 10_050  # Tuff calls inside each other (depth(10000) and a little more): 7 to 14 Python calls each
+DEEP_CALLS = 200_000
+DEEP_STACKS = (512 << 20, 255 << 20, 64 << 20)  # the first one a thread can start with (Windows takes under 256 MB)
+# From Python 3.12 (what TuffCode's runtime is built with) Python's own calls don't use the stack, so the usual thread
+# goes as deep: the program's thread gets the usual stack, not a big one that Windows would set aside in full for every run.
+STACK_FREE = sys.version_info >= (3, 12)
+TK_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|tdraw)\b", re.M)
+
+
+def big_stack():
+    """Makes the next thread Python starts a big-stack one, with the biggest size in DEEP_STACKS a thread can start
+    with. Gives that size, or 0 when none can (it gets the usual stack). threading.stack_size(0) once it has started."""
+    if STACK_FREE:
+        return 0
+    for size in DEEP_STACKS:
+        try:
+            threading.stack_size(size)
+            probe = threading.Thread(target=int)
+            probe.start()
+            probe.join()
+            return size
+        except (ValueError, RuntimeError, MemoryError):
+            pass
+    threading.stack_size(0)
+    return 0
+
+
+def go_deep(stack):
+    """Raises Python's limit on calls for a program on a thread with a stack this big (0: the usual one). From Python
+    3.12 its own calls don't use the stack, so it's DEEP_CALLS; before that each takes up to 1 KB of it."""
+    calls = DEEP_CALLS if sys.version_info >= (3, 12) else min(DEEP_CALLS, stack // 1024)
+    if calls > sys.getrecursionlimit():
+        sys.setrecursionlimit(calls)
+
+
+def on_big_stack(stack, fn, *args):
+    """What a big-stack thread runs (tuff_view.run starts the one a window program runs on)."""
+    threading.stack_size(0)  # only this thread is big: the window's own threads keep the usual stack
+    go_deep(stack)
+    return fn(*args)
+
+
+def run_deep(fn, *args, main=False):
+    """fn(*args) on a big-stack thread (main=True: here, on the main thread), giving what it gives; its errors are
+    raised again here. Ctrl+C only reaches the main thread, so it waits in short naps to let it in, then stops fn too."""
+    if main:
+        go_deep(0)
+        return fn(*args)
+    stack = big_stack()
+    done, finished = {}, threading.Event()  # not worker.is_alive(): Ctrl+C during a join can leave that saying False
+
+    def body():
+        try:
+            done["value"] = on_big_stack(stack, fn, *args)
+        except BaseException as exc:
+            done["error"] = exc
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=body, name="tuff", daemon=True)
+    try:
+        worker.start()
+    except RuntimeError:  # it couldn't start after all
+        threading.stack_size(0)
+        go_deep(0)
+        return fn(*args)
+    threading.stack_size(0)
+    try:
+        while not finished.wait(0.1):
+            pass
+    except KeyboardInterrupt:
+        switch = sys.getswitchinterval()
+        sys.setswitchinterval(0.0001)  # a busy program would slow the import below to half a second
+        try:
+            import ctypes
+            ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(worker.ident), ctypes.py_object(KeyboardInterrupt))
+        except Exception:
+            pass
+        finally:
+            sys.setswitchinterval(switch)
+        if not finished.wait(1.0):
+            # Still inside something that can't be stopped, like reading input from a pipe: Python's own ending could
+            # stop with "could not acquire lock for <stdin> at interpreter shutdown", so end the process here.
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(130)
+        raise
+    worker.join()
+    if "error" in done:
+        raise done["error"]
+    return done.get("value")
+
+
 def run_file(path):
     src = read_source(path)
     if src is None:
@@ -5376,6 +5654,9 @@ def run_file(path):
         word = {"ReturnSignal": "return", "BreakSignal": "break", "ContinueSignal": "continue"}[type(sig).__name__]
         report(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}.", sig.line, sig.col), src)
         return 1
+    except MemoryError:  # (1.4.1) a list or text growing without end, outside any function
+        report(TuffError("The program ran out of memory. Is a list or some text growing without end?"), src)
+        return 1
     except KeyboardInterrupt:
         return 130
     return 0
@@ -5386,7 +5667,10 @@ def run_program(path):
     if src is None:
         return 1
     if not VIEW_IMPORT.search(src):
-        return run_file(path)
+        try:
+            return run_deep(run_file, path, main=WINDOWED or bool(TK_IMPORT.search(src)))
+        except KeyboardInterrupt:
+            return 130
     if TGAME_IMPORT.search(src) and not WINDOWED:
         Console(first_id=0).say(TGAME_NOTICE, "notice")  # line 0: the program's own lines start at 1
     try:
@@ -5394,13 +5678,16 @@ def run_program(path):
     except ImportError:
         report(TuffError("This program needs Tuff's window engine (tuff_view.py), which isn't installed next to tuff.py."), src)
         return 1
+    stack = big_stack()  # for the thread tuff_view.run starts
     try:
-        code = tuff_view.run(run_file, path)
+        code = tuff_view.run(on_big_stack, stack, run_file, path)
     except KeyboardInterrupt:
         return 130
     except tuff_view.ViewError as err:
         report(TuffError(str(err)), src)
         return 1
+    finally:
+        threading.stack_size(0)
     return 0 if code is None else code
 
 

@@ -1,7 +1,8 @@
 // .tuf files that aren't plain UTF-8: UTF-16 with a byte order mark (Notepad's "Unicode", what Windows
 // PowerShell's > and Out-File write), UTF-8 with a BOM, and Windows-1252 ("ANSI", older Notepad). They open
 // with the right text, opening one never rewrites it, a change saves as plain UTF-8 (which the Tuff runtime
-// reads), and a save that leaves the text as it was leaves the file alone.
+// reads), and a save that leaves the text as it was leaves the file alone. Find and Replace in Files read them
+// the same way.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -90,4 +91,13 @@ export default async (t, ctx) => {
   check('A UTF-16 file changed on disk while open reloads with the right text', reloaded, lf(await t.code()));
   await t.sleep(2000);
   check('...and isn\'t rewritten by TuffCode after the reload', bytes(le).equals(utf16le(NEW)), [...bytes(le).subarray(0, 6)]);
+
+  // 6) Find in Files reads a UTF-16 file that isn't open the way the editor does, and Replace in Files saves it as UTF-8
+  const find16 = file('find16.tuf');
+  fs.writeFileSync(find16, utf16le('say "café ünï"\r\nsay "two"\r\n'));
+  const found = await ev(`window.tuff.fs.search(${JSON.stringify(ctx.root)}, 'café', '').then((r) => r.results.find((g) => g.rel.endsWith('find16.tuf')) || null)`);
+  check('Find in Files finds text in a UTF-16 file that isn\'t open, on the right line and column', found?.matches?.[0]?.line === 1 && found.matches[0].col === 6, found);
+  const replaced = await ev(`window.tuff.fs.replaceInFile(${JSON.stringify(find16)}, 'café', '', 'coffee', false)`);
+  const after16 = bytes(find16);
+  check('...and Replace in Files changes it and saves it as UTF-8, every character kept', replaced === true && after16[0] !== 0xff && after16.toString('utf8') === 'say "coffee ünï"\r\nsay "two"\r\n', { replaced, text: after16.toString('utf8') });
 };

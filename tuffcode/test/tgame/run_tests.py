@@ -1209,7 +1209,7 @@ def t_car_enter(c):
         {"at": 1.0, "tuff": "player:move_to(-2.3, 0, 0)"}, {"at": 1.3, "dump": "ce_near.json"},
         {"at": 1.35, "key": "f"}, {"at": 1.6, "call": "report"}, {"at": 1.65, "dump": "ce_in.json"},
         {"at": 1.7, "hold": "w", "for": 2.0}, {"at": 3.75, "hold": "space", "for": 0.6},
-        {"at": 3.9, "call": "report"}, {"at": 3.95, "shot": "car_enter_driving.png"},
+        {"at": 3.9, "tuff": "report_next = true"}, {"at": 3.95, "shot": "car_enter_driving.png"},
         {"at": 4.5, "key": "f"}, {"at": 4.8, "call": "report"}, {"at": 4.85, "dump": "ce_out.json"},
         {"at": 4.9, "shot": "car_enter_out.png"}, {"at": 6.0, "call": "report"}, {"at": 6.1, "close": True}])
     clean_exit(c, r)
@@ -1223,6 +1223,10 @@ def t_car_enter(c):
             and hint(inside) == "F: Get out",
             "F gets in: player:in_car() and car:driven() are true, car:on_enter ran, the figure is hidden, and the hint says F: Get out",
             (reps[1:2], inside.get("player_shown"), hint(inside)))
+    # The report while it drives comes from the game's every-frame function (report_next), after tgame has put the
+    # player where the car is, so both spots are from one frame. Asked with "call", earlier in a frame, the player was
+    # where the car was a frame before: 0.13 m or more at driving speed, more after a slow frame, and now and then
+    # over the 0.2 m allowed.
     c.check(len(reps) > 2 and reps[2]["car"][2] < -6 and math.dist(reps[2]["car"][::2], reps[2]["player"][::2]) < 0.2,
             "W drives it (the car's way forward), and player:spot() goes with the car", reps[2:3])
     c.check(len(reps) > 3 and not reps[3]["in"] and not reps[3]["driven"] and reps[3]["outs"] == 1 and out.get("player_shown") is True,
@@ -3579,7 +3583,7 @@ SAVE_CHECK_BAD = [
 
 def t_saves(c):
     """Saved game data: game:save keeps a number, text, true/false, nil, a list and a table (with a list and a table in
-    it); after the game restarts game:load gives them back (lists as lists, tables as data objects), with defaults for
+    it); after the game restarts game:load gives them back (lists as lists, tables as dictionaries), with defaults for
     what was never saved; :saved and :forget; friendly errors; a damaged save file is set aside and the game starts
     fresh; a game with another title (a 3D world) never mixes with it; --scene never saves; and the checker."""
     folder = save_dir("main")
@@ -4361,7 +4365,7 @@ TOOLBOX_FIXES_OUTPUT = ["Bob", "Bob", '[["HI", 1]]', '["trout"]', "[3, 4]", "4",
                         "[1, [...]]", "3", "3", "0.00", "true", "true",
                         "tan(90) has no answer: at 90 degrees (and 270) the line is straight up.",
                         "A dictionary's keys can be text or numbers, not true/false.",
-                        'back doesn\'t have the number 1, but it has "1" (text). Keys that come back from file.load are always text: use back["1"] or back[text(1)].',
+                        'back doesn\'t have the number 1, but it has "1" (text). Keys that come back from file.load or a web page\'s JSON are always text: use back["1"] or back[text(1)].',
                         "one", '["", "", "X"]', '{"hi": 2}', "mail.com", " Smith", "[6, 7, 8]", "8", "7", '{"Ann": 5}', "108", "[1]",
                         "The positions in [start:end] must be whole numbers, not nil.", "true",
                         "Cat", "[1, 2]", "5", "6", "@mail.com", '{"name": "Sam"}', "order is nil, so it's not a position, and it has no :pop."]
@@ -4385,6 +4389,34 @@ TOOLBOX_FIXES_CHECKS = [
     ('func f():\n    cos = 3\n    return cos\nvalues = [30, 60]\nsay [cos(30), f()]', "OK"),
     ('mention file\nsay file.exists("x.txt")', "OK"),
     ('try:\n    x = 1\nexcept:\n    x = 2', "Write the catch line as catch: or catch problem:"),
+    # 1.4.1: board[moves:pop] = "X" is checked like the read form
+    ('board = ["", ""]\nboard[nope:pop] = "X"', "I don't know what 'nope' is."),
+    ('word = "ab"\nmoves = [1]\nword[moves:pop] = "X"', "You can only set items in a list, not in text."),
+    ('board = ["", ""]\ni = 0\nj = 1\nboard[i:j] = "X"', "A part like [1:3] can't be changed with =."),
+    # ... when it can't be told yet whether it's a part or 1.3.6's method call: what's wrong either way
+    ('func f(order):\n    names = ["a"]\n    say names[order:pop + nope]\nf([0])', "I don't know what 'nope' is."),
+    ('func f(order):\n    names = ["a", "b"]\n    say names[order:pop + 1]\nf([0])', "OK"),
+    # ... 1.3.6's reading gets [ ]'s own checks, and a bare input there is named after its list again
+    ('names = ["a", "b"]\nwords = ["x", "y"]\nsay names[words:join]', "List positions must be whole numbers, not text."),
+    ('names = ["a", "b"]\nq = [1]\nsay names[q:pop -1]', "q:pop doesn't take an input, so what comes after it was read as one. Write q:pop() instead."),
+    ('names = ["a", "b"]\nq = [1]\nnames[q:pop -1] = "c"', "q:pop doesn't take an input, so what comes after it was read as one. Write q:pop() instead."),
+    # a for loop at the top named after a built-in replaces it
+    ('for file in ["a.txt", "b.txt"]:\n    say file\nsay file.read("c.txt")', "replaces it everywhere, so file.read on line 3 won't work"),
+    ('for file in file.lines("list.txt"):\n    say file.read(file)', "so file.read on line 2 won't work"),
+    ('for time in [1, 2]:\n    say time\nsay time()', "so time() on line 3 won't work"),
+    ('for log in range(3):\n    say log\nsay log(100)', "so log() on line 3 won't work"),
+    ('for date in ["a"]:\n    say date()', "so date() on line 2 won't work"),
+    ('for date in []:\n    say date()\nsay date()', "OK"),
+    ('for log in [print]:\n    log("x")', "OK"),
+    # dictionary keys outside { }: d[key] = v, d[key], :get, :set, :has and :remove
+    ('d = {"a": 1}\nd[true] = 2', "A dictionary's keys can be text or numbers, not true/false."),
+    ('d = {"a": 1}\nsay d[nil]', "A dictionary's keys can be text or numbers, not nil."),
+    ('d = {"a": 1}\nsay d:get(nil)', "A dictionary's keys can be text or numbers, not nil."),
+    ('d = {"a": 1}\nd:set([1], 2)', "A dictionary's keys can be text or numbers, not a list."),
+    ('d = {"a": 1}\nsay d:has(1 is 1)', "A dictionary's keys can be text or numbers, not true/false."),
+    ('d = {"a": 1}\nd:remove(false)', "A dictionary's keys can be text or numbers, not true/false."),
+    ('d = {0.5: "half"}\nsay d[1 / 2]', "OK"),
+    ('d = {}\ntry:\n    d[true] = 1\ncatch problem:\n    say problem', "OK"),
 ]
 
 
@@ -4429,14 +4461,320 @@ def t_toolbox_fixes(c):
                 'file.delete("data.txt")\nsay file.exists("data.txt")\n')
     env = {**os.environ, "TUFF_NO_WRITES": "1", "TUFF_BASE_DIR": project}
     p = subprocess.run(tuff_cmd() + [snippet], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
-    c.check(p.stdout.splitlines() == ["from the project", '["hi", "there"]', "1", "false"],
+    c.check(p.stdout.splitlines()[:4] == ["from the project", '["hi", "there"]', "1", "false"],  # (a built runtime adds "Press Enter")
             "with TUFF_NO_WRITES and TUFF_BASE_DIR a snippet reads the project's file and its own writes", p.stdout + p.stderr)
     c.check(os.path.exists(os.path.join(project, "data.txt")) and not os.path.exists(os.path.join(project, "made.txt"))
             and not os.path.exists(os.path.join(project, "data.json")), "...and nothing on disk changed")
 
 
+LOOKS_PROGRAM = '''mention anims
+name = input:color("Name? ", "green")
+say "Hi " + name
+anims.loading("Pulling info...", 0.2, "sky")
+anims.countdown(1, "Go!", "lime", "bold")
+print:pen("cyan")
+again = input "Again? "
+anims.loading("With the pen", 0.1)
+'''
+LOOKS_CHECKS = [
+    ('x = input:color("Hi? ", "gren")', 'input:color doesn\'t know "gren". Did you mean "green"?'),
+    ('x = input:color("Hi? ", "explode")', 'input:color sets colours and styles. Animations like "explode" go on say:ascii or say:color.'),
+    ('x = input:ascii("Hi")', "input has one method, :color"),
+    ('x = input:color "Hi"', "Put input:color's question and look in brackets"),
+    ('mention anims\nanims.loading("Hi", "gren")', 'anims.loading doesn\'t know "gren". Did you mean "green"?'),
+    ('mention anims\nanims.loading("Hi", "fade")', 'anims.loading sets colours and styles.'),
+    ('mention anims\nanims.countdown(3, "Go!", "lime")\nx = input:color("Name? ", "green", "bold")', "OK"),
+]
+
+
+def t_looks(c):
+    """1.4.1: input:color's question and anims' lines take looks (colours, rainbow, styles), and print:pen colours
+    them too. What TuffCode's Run panel is sent (TUFF_IDE=1), read without opening anything."""
+    import base64
+    import re
+    folder = os.path.join(HERE, "out", "looks")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "looks.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(LOOKS_PROGRAM)
+    p = subprocess.run(tuff_cmd() + [path], input="Sam\nyes\n", capture_output=True, text=True, encoding="utf-8", timeout=60,
+                       env={**os.environ, "TUFF_IDE": "1"})
+    c.check(p.returncode == 0, "the looks program runs to the end", (p.stdout + p.stderr)[-500:])
+    sent = []
+    for kind, args in re.findall(r"\x1b\]tuff;(\w+);([^\x07]*)\x07", p.stdout):
+        parts = args.split(";")
+        text = base64.b64decode(parts[0 if kind == "prompt" else 1]).decode("utf-8")
+        style = parts[1 if kind == "prompt" else 2] if len(parts) > (1 if kind == "prompt" else 2) else ""
+        sent.append((kind, text, json.loads(base64.b64decode(style[5:])) if style.startswith("rich:") else {}))
+    prompts = [s for s in sent if s[0] == "prompt"]
+    c.check(prompts and prompts[0][1] == "Name? " and prompts[0][2].get("fg") == "#22a35a",
+            'input:color("Name? ", "green") sends its question in green, on the answer\'s line', prompts[:1])
+    loading = [s for s in sent if s[0] == "say" and "Pulling info" in s[1]]
+    c.check(loading and loading[0][2].get("fg") == "#87ceeb", 'anims.loading("Pulling info...", 0.2, "sky") is sky blue', loading[:1])
+    count = [s for s in sent if s[0] == "say" and s[1] == "1"]
+    c.check(count and count[0][2].get("fg") == "#84cc16" and count[0][2].get("bold") == 1, "anims.countdown takes lime and bold after its inputs", count[:1])
+    c.check(len(prompts) > 1 and prompts[1][1] == "Again? " and prompts[1][2].get("fg") == "#22d3ee",
+            "with print:pen on, a plain input's question has the pen's look", prompts[1:2])
+    pen = [s for s in sent if s[0] == "say" and "With the pen" in s[1]]
+    c.check(pen and pen[0][2].get("fg") == "#22d3ee", "with print:pen on, anims' lines have the pen's look", pen[:1])
+    plain_run = subprocess.run(tuff_cmd() + [path], input="Sam\nyes\n", capture_output=True, text=True, encoding="utf-8", timeout=60)
+    c.check(plain_run.stdout.startswith("Name? Hi Sam"), "in a pipe the question is plain text", plain_run.stdout[:80])
+    for i, (code, want) in enumerate(LOOKS_CHECKS):
+        bad = os.path.join(folder, f"check{i}.tuf")
+        with open(bad, "w", encoding="utf-8") as f:
+            f.write(code + "\n")
+        out = subprocess.run(tuff_cmd() + ["--check", bad], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(want in out.stdout + out.stderr, f"--check on {code.splitlines()[-1]!r} says {want!r}", (out.stdout + out.stderr)[:300])
+
+
+# 1.4.1: a Tuff function can call itself thousands of times. A Tuff call is 7 to 14 of Python's, whose limit is 1000,
+# so one used to stop after about 100 calls of itself ("called itself too many times"). tuff.py runs a program on a
+# thread with a big stack and a higher limit now (run_deep).
+DEEP_PROGRAM = '''func depth(n):
+    if n == 0:
+        return 0
+    return 1 + depth(n - 1)
+say depth(5000)
+say depth(10000)
+func walk(n, seen):
+    for i in [n]:
+        if i > 0:
+            seen:add(i)
+            walk(i - 1, seen)
+    return seen
+say len(walk(6000, []))
+func is_even(n):
+    if n == 0:
+        return true
+    return is_odd(n - 1)
+func is_odd(n):
+    if n == 0:
+        return false
+    return is_even(n - 1)
+say is_even(7000)
+name = input "Name? "
+say "Hi " + name:trim()
+'''
+DEEP_RUNAWAY = '''func forever(n):
+    return forever(n + 1)
+try:
+    forever(1)
+catch problem:
+    say "caught: " + problem
+say "still going"
+forever(1)
+say "never shown"
+'''
+DEEP_SCENE = '''mention tgame
+func depth(n):
+    if n == 0:
+        return 0
+    return 1 + depth(n - 1)
+game = tgame.window("Deep", 300, 200)
+label = game:text("deep " + depth(5000), 150, 100)
+'''
+# Ctrl+C, as Python's signal handler gives it to the main thread (_thread.interrupt_main), 1.5 s into the run.
+CTRL_C = ("import sys, threading, _thread\nsys.path.insert(0, sys.argv[1])\nimport tuff\n"
+          "threading.Timer(1.5, _thread.interrupt_main).start()\nsys.exit(tuff.run_program(sys.argv[2]))\n")
+
+
+def t_recursion(c):
+    """Console only, no window: a function calls itself 5000 and 10000 times (in a loop and through two functions
+    too) and input still works; one that never stops gives the same friendly message as before, which try/catch
+    catches; --check, the --scene preview, and Ctrl+C (130, also in the middle of a wait or an input)."""
+    folder = os.path.join(HERE, "out", "recursion")
+    os.makedirs(folder, exist_ok=True)
+
+    def write(name, code):
+        path = os.path.join(folder, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code)
+        return path
+
+    deep, runaway = write("deep.tuf", DEEP_PROGRAM), write("runaway.tuf", DEEP_RUNAWAY)
+    t0 = time.perf_counter()
+    p = subprocess.run(tuff_cmd() + [deep], input="Sam\n", capture_output=True, text=True, encoding="utf-8", timeout=120)
+    got = [line for line in p.stdout.splitlines() if line.strip() and line.strip() != "Press Enter to close..."]
+    c.check(p.returncode == 0 and "Tuff error" not in p.stderr, f"the deep program runs to the end ({time.perf_counter() - t0:.1f} s)",
+            (p.stdout + p.stderr)[-600:])
+    c.check(got[:4] == ["5000", "10000", "6000", "true"], "depth(5000), depth(10000), 6000 deep in a loop, 7000 through two functions", got[:4])
+    c.check(got[-1:] == ["Name? Hi Sam"], "input works on the program's thread", got[-1:])
+    t0 = time.perf_counter()
+    p = subprocess.run(tuff_cmd() + [runaway], capture_output=True, text=True, encoding="utf-8", timeout=120, stdin=subprocess.DEVNULL)
+    secs = time.perf_counter() - t0
+    c.check(p.stdout.splitlines()[:2] == ["caught: forever() called itself too many times.", "still going"],
+            "try/catch catches a function that never stops", p.stdout[:300])
+    c.check(p.returncode == 1 and "Tuff error on line 2: forever() called itself too many times." in p.stderr
+            and "Traceback" not in p.stderr and "never shown" not in p.stdout,
+            "without try it stops the program with the friendly message on its line (exit code 1)", (p.returncode, p.stderr[-600:]))
+    c.check(secs < 20, f"...twice, in {secs:.1f} s")
+    for path in (deep, runaway):
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(p.stdout.strip() == "OK", f"--check accepts {os.path.basename(path)}", (p.stdout + p.stderr)[:400])
+    code, out, err, d, secs = scene(write("deep_scene.tuf", DEEP_SCENE))
+    c.check(code == 0 and d.get("error") is None and d.get("stopped") == "end" and "deep 5000" in json.dumps(d.get("batch")),
+            f"the --scene preview runs a setup that calls a function 5000 deep ({secs:.1f} s)", (d.get("error"), d.get("stopped"), err[-300:]))
+    d = scene(write("runaway_scene.tuf", 'mention tgame\ngame = tgame.window("R")\nfunc forever(n):\n    return forever(n + 1)\nforever(1)\n'))[3]
+    e = d.get("error") or {}
+    c.check(e.get("line") == 4 and e.get("message") == "forever() called itself too many times.",
+            "...and says a function that never stops called itself too many times, on its line", e)
+    if RUNTIME:
+        c.check(True, "a built runtime can't be given a pretend Ctrl+C: skipped those")
+        return
+    for name, code_text in (("busy.tuf", 'n = 0\nwhile true:\n    n += 1\n    if n % 100000 == 0:\n        say n\n'),
+                            ("nap.tuf", 'say "napping"\nwait(30)\nsay "awake"\n')):
+        t0 = time.perf_counter()
+        p = subprocess.run([sys.executable, "-c", CTRL_C, REPO, write(name, code_text)], capture_output=True, text=True,
+                           encoding="utf-8", timeout=60, stdin=subprocess.DEVNULL)
+        secs = time.perf_counter() - t0
+        c.check(p.returncode == 130 and secs < 10 and "awake" not in p.stdout and "Traceback" not in p.stderr and "Fatal" not in p.stderr,
+                f"Ctrl+C stops {name} with exit code 130 ({secs:.1f} s)", (p.returncode, p.stderr[-400:]))
+    # Waiting for input that never comes (its stdin stays open): the program's thread can't be stopped, so the process ends.
+    ask = write("ask.tuf", 'say "asking"\nname = input "Name? "\nsay "never " + name\n')
+    with open(os.path.join(folder, "ask.out"), "w+", encoding="utf-8") as out, open(os.path.join(folder, "ask.err"), "w+", encoding="utf-8") as err:
+        t0 = time.perf_counter()
+        proc = subprocess.Popen([sys.executable, "-c", CTRL_C, REPO, ask], stdin=subprocess.PIPE, stdout=out, stderr=err)
+        try:
+            code = proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            code = "timeout"
+        secs = time.perf_counter() - t0
+        proc.stdin.close()
+        out.seek(0)
+        err.seek(0)
+        said, problems = out.read(), err.read()
+    c.check(code == 130 and "asking" in said and "never" not in said and "Fatal" not in problems and "Traceback" not in problems,
+            f"Ctrl+C stops a program waiting for input with exit code 130 ({secs:.1f} s)", (code, said[-200:], problems[-400:]))
+
+
+DEEP_GAME = '''mention tgame
+func depth(n):
+    if n == 0:
+        return 0
+    return 1 + depth(n - 1)
+game = tgame.window("Deep", 300, 200)
+say "setup " + depth(5000)
+func later():
+    say "later " + depth(5000)
+    game:close()
+game:after(0.5, later)
+'''
+
+
+DEEP_DRAW = '''mention tdraw
+func depth(n):
+    if n == 0:
+        return 0
+    return 1 + depth(n - 1)
+pen = tdraw.pen()
+pen:speed "instant"
+func tree(size, level):
+    if level > 0:
+        pen:forward(size)
+        pen:left(30)
+        tree(size * 0.7, level - 1)
+        pen:right(60)
+        tree(size * 0.7, level - 1)
+        pen:left(30)
+        pen:back(size)
+tree(80, 6)
+say "deep " + depth(3000)
+'''
+
+
+def t_recursion_window(c):
+    """Opens windows. A game (its program runs on tuff_view's thread): the setup and a game:after function both call a
+    function 5000 deep. A tdraw drawing (tkinter keeps the main thread): a recursive tree, and 3000 deep there too
+    (on Python 3.12 and newer, where the main thread can go that deep)."""
+    folder = os.path.join(HERE, "out", "recursion")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "deep_game.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(DEEP_GAME)
+    r = play("recursion_window", path, [{"at": 4, "close": True}])
+    c.check(r.code == 0 and "Tuff error" not in r.err, f"the deep game runs and closes ({r.seconds:.1f} s)", (r.code, r.err[-400:]))
+    c.check("setup 5000" in r.lines and "later 5000" in r.lines, "its setup and its game:after function both went 5000 deep", r.lines)
+    path = os.path.join(folder, "deep_draw.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(DEEP_DRAW)
+    env = {**os.environ, "TUFF_TDRAW_CLOSE_AFTER": "0.5", "PYTHONIOENCODING": "utf-8"}
+    env.pop("TUFF_IDE", None)
+    p = subprocess.run(tuff_cmd() + [path], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+                       env=env, stdin=subprocess.DEVNULL)
+    c.check(p.returncode == 0 and "Tuff error" not in p.stderr and "Traceback" not in p.stderr,
+            "the tdraw drawing draws its recursive tree and closes", (p.returncode, (p.stdout + p.stderr)[-400:]))
+    if RUNTIME or sys.version_info >= (3, 12):
+        c.check("deep 3000" in p.stdout, "...and its function went 3000 deep on the main thread", p.stdout[-300:])
+
+
+# Pictures in the folder above the program ("../") stay refused for tgame and atgui: their window serves only the .tuf's
+# folder and the folders inside it, and a built app takes only those (build.js). --check says so in the run's words.
+UP_TGAME = 'mention tgame\ngame = tgame.window("x")\npic = "../art/star.png"\nstar = game:image(pic, 1, 2)\n'
+UP_ATGUI = 'mention atgui\napp = atgui.window("x")\npic = "../art/star.png"\nlogo = app:image(pic, 100)\n'
+UP_TGAME_SAYS = "The picture '../art/star.png' has to be next to your .tuf file, or in a folder inside it."
+UP_ATGUI_SAYS = ("'../art/star.png' is outside the folder your .tuf file is in, so atgui can't show it. "
+                 "Put the picture next to your .tuf file, or in a folder inside it.")
+UP_CHECKS = [  # (code, what --check says, or "OK")
+    (UP_TGAME, UP_TGAME_SAYS),
+    ('mention tgame\ngame = tgame.window("x")\ntune = "../art/blip.wav"\ngame:sound tune\n', "The sound '../art/blip.wav' has to be next to"),
+    (UP_ATGUI, UP_ATGUI_SAYS),
+    ('mention atgui\napp = atgui.window("x")\nme = app:avatar("../art/star.png")\n', UP_ATGUI_SAYS),
+    ('mention atgui\napp = atgui.window("x")\nme = app:avatar("Sam Smith")\nme:set "../art/star.png"\n', UP_ATGUI_SAYS),
+    ('mention atgui\napp = atgui.window("x")\nme = app:avatar("Sam Smith", "blue")\nme:set "SS"\n', "OK"),
+    ('mention atgui\napp = atgui.window("x")\nme = app:avatar("star.png")\n', "OK"),
+    ('mention tgame\ngame = tgame.window("x")\nstar = game:image("..art/star.png", 1, 2)\n', "OK"),  # a folder inside called "..art"
+    ('mention atgui\napp = atgui.window("x")\npic = "..art/star.png"\nlogo = app:image(pic, 100)\n', "OK"),
+    ('mention atgui\napp = atgui.window("x")\npic = "../art/star.png"\npic = "star.png"\nlogo = app:image(pic, 100)\n', "OK"),  # set twice: unknown
+    ('mention tgame\ngame = tgame.window("x")\nfunc show(pic):\n    return game:image(pic, 1, 2)\nshow("star.png")\n', "OK"),
+]
+
+
+def t_pictures_up(c):
+    """Console only, no window: a picture in the folder above (../) is refused when the program runs (tgame through
+    --scene, atgui's image_url) and by --check in the same words, also when a variable set once holds the path and for
+    an atgui avatar; a folder inside whose name starts with two dots is fine both ways."""
+    root = os.path.join(HERE, "out", "pictures_up")  # never in the temp folder: there the checker leaves file names alone
+    folder = os.path.join(root, "game")
+    for sub in ("art", os.path.join("game", "..art")):
+        os.makedirs(os.path.join(root, sub), exist_ok=True)
+    for where in (os.path.join(root, "art"), os.path.join(folder, "..art"), folder):
+        with open(os.path.join(GAMES, "star.png"), "rb") as f, open(os.path.join(where, "star.png"), "wb") as g:
+            g.write(f.read())
+    for i, (code, want) in enumerate(UP_CHECKS):
+        path = os.path.join(folder, f"up{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code)
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        out = (p.stdout + p.stderr).strip()
+        lines = " / ".join(code.strip().splitlines()[2:])  # after the mention and the window
+        if want == "OK":
+            c.check(out == "OK", f"--check accepts: {lines}", out[:400])
+        else:
+            c.check(p.returncode == 1 and want in out, f"--check on {lines!r} says {want[:40]!r}...", out[:400])
+    # The run: tgame through Tuff Engine's preview (its Recorder refuses the same files as the window)...
+    d = scene(os.path.join(folder, "up0.tuf"))[3]
+    e = d.get("error") or {}
+    c.check(e.get("line") == 4 and e.get("message") == UP_TGAME_SAYS, "running it, tgame says the same on the same line", e)
+    d = scene(os.path.join(folder, "up7.tuf"))[3]
+    c.check(d.get("error") is None and d.get("stopped") == "end", 'running it, tgame shows "..art/star.png"', d.get("error"))
+    # ...and atgui's image_url, which every atgui picture goes through (no window needed).
+    import tuff
+    import tuff_atgui
+    lib = tuff_atgui.Lib(tuff.Interpreter("", folder).rt)
+    up_full = os.path.join(root, "art", "star.png")
+    for path, want, label in (("../art/star.png", UP_ATGUI_SAYS, "../art/star.png"),
+                              (up_full, UP_ATGUI_SAYS.replace("../art/star.png", up_full), "the full path of ../art/star.png"),
+                              ("..art/star.png", "assets/..art/star.png", "..art/star.png"), ("star.png", "assets/star.png", "star.png")):
+        try:
+            got = lib.image_url(path)
+        except tuff.TuffError as err:
+            got = err.msg
+        c.check(got == want, f"running it, atgui's image_url gives {want[:44]!r}... for {label}", got)
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
-         "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes,
+         "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
          "models": t_models, "people": t_people,
          "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "terrain": t_terrain,
@@ -4454,6 +4792,7 @@ TESTS.update({"hud_health_3d": t_hud_health_3d, "hud_health_2d": t_hud_health_2d
               "hud_minimap": t_hud_minimap, "hud_checker": t_hud_checker})
 TESTS.update({"net": t_net, "net_2d": t_net_2d, "net_rooms": t_net_rooms})
 TESTS.update({"car_enter": t_car_enter, "weight": t_weight, "sign_text": t_sign_text, "people_style": t_people_style})
+TESTS.update({"recursion": t_recursion, "recursion_window": t_recursion_window, "pictures_up": t_pictures_up})  # 1.4.1
 
 
 def main():

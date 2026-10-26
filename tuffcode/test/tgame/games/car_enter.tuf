@@ -20,3 +20,15 @@ car:on_exit left
 
 func report():
     say "car " + car:spot() + " player " + player:spot() + " in " + player:in_car() + " driven " + car:driven() + " ins " + ins + " outs " + outs
+
+# While the car drives, the test asks for its report with report_next = true, so it's said here: later in the frame,
+# once tgame has put the player where the car is, so both spots are from that frame. (The test's "call" runs earlier
+# in a frame, when the car has moved on and the player is still where the car was a frame before.)
+report_next = false
+
+func each_frame(dt):
+    if report_next:
+        report_next = false
+        report()
+
+world:every_frame each_frame

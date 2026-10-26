@@ -169,7 +169,7 @@ both = items + ["jam"]      # join two lists (makes a new list)
 - `return` only works inside a function.
 - **Make every function at the top level of the file**, not inside another function or inside `if`, `for` or `while`. Top-level functions can be used anywhere, even above where they're written. A function made inside a block or another function only exists there, and only once its line has run.
 - Inputs belong to the function. Any other name follows rule 2.
-- Functions can call themselves, but only about 100 calls deep. Use a loop for anything that could go deeper.
+- Functions can call themselves up to about 10,000 calls deep (1.4.1; it was about 100). One that never stops ends with "f() called itself too many times.", which try/catch can catch.
 
 ## Dictionaries
 ```tuff
@@ -310,7 +310,9 @@ board:play("explode")                               # an animation on the line w
   - **fonts** (say:ascii only): `block`, `wide`, `small`, `shadow`, `led`, `hash`.
   - **animations:** `fade`, `build`, `explode`, `assemble`, `type`, `glitch`, `drop`, `wave`.
 - An animation plays when the line is said: about 1 to 2 seconds, and the program waits for it. `explode` leaves the line empty. Animations work on `say:color` lines too, like `say:color("Loading...", "type")`.
-- `print:pen` takes colours and styles, not fonts or animations.
+- `print:pen` takes colours and styles, not fonts or animations. It colours everything said after it: `say`, `print`, `input`'s questions and anims' lines.
+- **A question in a look (1.4.1):** `name = input:color("Name? ", "green")` asks like `input`, with the question in colours, rainbow or styles (not animations: say the question with `say:color(..., "type")` first for that). It gives back what was typed.
+- **Anims in a look (1.4.1):** look words go after an anim's usual inputs: `anims.loading("Pulling info...", "green")`, `anims.bar("Saving", 2, 20, "rainbow")`, `anims.countdown(3, "Go!", "lime", "bold")`.
 - Where it shows:
   - **TuffCode's Run window:** all of it.
   - **A real terminal** (and a Build exe console app): ANSI colours, and animations play. Rainbow doesn't flow there.
@@ -364,22 +366,21 @@ mention tap
 
 res = tap.get("https://api.github.com/users/octocat")
 if res:ok:
-    user = res:json                 # a JSON object comes back as a data object
-    say user:get("name") + " has " + user:get("public_repos") + " public repos"
+    user = res:json                 # a JSON object comes back as a dictionary
+    say user["name"] + " has " + user["public_repos"] + " public repos"
 else:
     say "Error " + res:status
 
-note = tap.data()                   # an empty data object, to send
-note:set("title", "Hello")
-note:set("tags", ["a", "b"])
+note = {"title": "Hello", "tags": ["a", "b"]}   # a dictionary is sent as JSON
 sent = tap.post("https://httpbin.org/post", note)
 say sent:status
 ```
-- **Requests:** `tap.get(url)`, `tap.post(url, body)`, `tap.put(url, body)` and `tap.delete(url)`. Text is sent as plain text, and a data object or a list as JSON. Headers go last, as a data object: `tap.get(url, headers)`.
+- **Requests:** `tap.get(url)`, `tap.post(url, body)`, `tap.put(url, body)` and `tap.delete(url)`. Text is sent as plain text, and a dictionary or a list as JSON. Headers go last, as a dictionary: `tap.get(url, {"Accept": "text/csv"})`.
 - **A response:** `res:status` (like 200 or 404), `res:ok` (true for 200 to 299), `res:text`, `res:json` and `res:header("Content-Type")` (nil if it isn't there).
 - **Errors:** a 404 or 500 doesn't stop the program, so check `res:ok`. No internet, a bad address, no answer within 15 seconds, and `res:json` on something that isn't JSON do stop it with an error.
-- **JSON:** `res:json` gives a data object for `{...}`, a list for `[...]`, or text, a number, true/false or nil.
-- **Data objects:** `user:get("name")` (not `user["name"]`; nil if it's missing), `user:has("name")`, `user:keys()` (a list of the names), `user:size()` and `user:set("name", value)`. Objects inside are data objects too, and `say user` shows it as JSON. Loop over `user:keys()`, not `user`.
+- **JSON:** `res:json` gives a dictionary for `{...}`, a list for `[...]`, or text, a number, true/false or nil.
+- **What :json gives is an ordinary dictionary** (see "Dictionaries"): `user["name"]`, `user:get("name")` (nil if it's missing), `user:has("name")`, `user:keys()`, `len(user)`, and `user["name"] = value`. Objects inside are dictionaries too: `user["address"]["city"]`. `for name in user:` goes through its names. JSON's names are always text, so a name like `"1"` is read with `user["1"]`.
+- **tap.data()** is an empty dictionary, the same as `{}`. Older programs used it with `:set` to build what they send, and they still work.
 - **Waiting:** each call waits for the answer, and a window freezes while it waits.
 
 ### atgui

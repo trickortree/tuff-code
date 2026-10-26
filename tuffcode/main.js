@@ -341,7 +341,8 @@ ipcMain.handle('fs:search', async (_e, root, source, flags) => {
     let text;
     try {
       if ((await fsp.stat(f.path)).size > 1_000_000) continue;
-      text = await fsp.readFile(f.path, 'utf8');
+      // As the editor reads it: UTF-16 and Windows-1252 files are searched too, and a BOM doesn't move the columns.
+      text = decodeText(await fsp.readFile(f.path));
     } catch { continue; }
     if (text.includes('\u0000')) continue;
     const matches = [];
@@ -359,8 +360,10 @@ ipcMain.handle('fs:search', async (_e, root, source, flags) => {
   }
   return { results, total, truncated: false };
 });
+// Replace in a file that isn't open: it's read the way the editor reads it and saved as plain UTF-8, like a save
+// from the editor, so a UTF-16 file gets its replacements too and the "é" in a Windows-1252 file doesn't turn into "�".
 ipcMain.handle('fs:replaceInFile', async (_e, file, source, flags, replacement, isRegex) => {
-  const text = await fsp.readFile(file, 'utf8');
+  const text = decodeText(await fsp.readFile(file));
   const next = text.replace(new RegExp(source, flags.includes('g') ? flags : `${flags}g`), isRegex ? replacement : () => replacement);
   if (next !== text) await fsp.writeFile(file, next, 'utf8');
   return next !== text;

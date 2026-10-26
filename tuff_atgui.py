@@ -1132,14 +1132,20 @@ class Lib:
             return text
         base = os.path.abspath(self.rt.interp.base_dir)
         full = os.path.abspath(text if os.path.isabs(text) else os.path.join(base, text))
-        if not os.path.isfile(full):
-            raise self.rt.error(f"Couldn't find the image '{text}'. Put the picture in your project folder (next to your .tuf file).")
+        # In the order and the words of tuff.py --check (Checker.atgui_picture). The window serves only the .tuf's
+        # folder and the folders inside it (a folder called "..art" is one of those; another drive isn't).
         if not full.lower().endswith(IMAGE_EXTS):
             raise self.rt.error(f"'{text}' isn't a picture. Use a .png, .jpg, .gif, .webp or .svg file.")
-        rel = os.path.relpath(full, base)
-        if rel.startswith(".."):
-            raise self.rt.error(f"'{text}' is outside your project folder. Put the picture in your project folder.")
-        return "assets/" + urllib.parse.quote(rel.replace(os.sep, "/"))
+        try:
+            inside = os.path.commonpath([os.path.normcase(full), os.path.normcase(base)]) == os.path.normcase(base)
+        except ValueError:  # on another drive
+            inside = False
+        if not inside:
+            raise self.rt.error(f"'{text}' is outside the folder your .tuf file is in, so atgui can't show it. "
+                                "Put the picture next to your .tuf file, or in a folder inside it.")
+        if not os.path.isfile(full):
+            raise self.rt.error(f"Couldn't find the image '{text}'. Put the picture in your project folder (next to your .tuf file).")
+        return "assets/" + urllib.parse.quote(os.path.relpath(full, base).replace(os.sep, "/"))
 
     # ---- events
     def on(self, id_, type_, fn):
@@ -1185,6 +1191,28 @@ class Lib:
                 raise
             self.report(self.error_type("'break' and 'continue' can only be used inside a loop.", getattr(exc, "line", None), getattr(exc, "col", None)))
         return False
+
+    def fire_by(self, fn, seconds, why):
+        """fire(fn), for a function that has to finish within `seconds`: each Tuff statement it starts after then raises
+        the error `why`, which stops it (reported once, with its line). For app:closed's function, which runs once the
+        window has gone, so one that's stuck can't keep the program running where nobody can see it."""
+        interp = self.rt.interp
+        own = vars(interp).get("run")  # (normally none: the interpreter's own run runs each statement)
+        run = interp.run
+        deadline = time.monotonic() + seconds
+
+        def timed(s, env):
+            if time.monotonic() > deadline:
+                raise self.error_type(why, s.line, s.col)
+            return run(s, env)
+        interp.run = timed
+        try:
+            return self.fire(fn)
+        finally:
+            if own is None:
+                del interp.run
+            else:
+                interp.run = own
 
     def report(self, err):
         key = (err.line, err.col, err.msg)
@@ -1262,9 +1290,11 @@ class Lib:
 
     def mainloop(self):
         app = self.app
-        if app is None or app.closed:
+        if app is None or (app.closed and self.view is None):  # (closed before it ever opened)
             return
         app.open_window()
+        # Closed already (a popup opened it, then app:close in the top-level code), loop() only runs app:closed's
+        # function and comes back.
         self.view.loop()
 
 
@@ -3038,6 +3068,7 @@ class App(Container):
         self.frameless = False
         self.closed = False
         self.close_fn = None
+        self.in_closed = False  # app:closed's function is running (the window has gone: see dialog)
         self.keys = {}
         self.maximized = False
         self.titlebar_widget = None
@@ -3069,9 +3100,12 @@ class App(Container):
                 pass
         else:
             self.style_titlebar_soon(light)
+        # app:closed's function goes to View() itself, so even a window closed the instant it appears (before View()
+        # is back) waits for it: Cmd+Q on a Mac, or logging off Windows, can end the program as soon as it's gone.
         view = tuff_view.View(self.title_text, self.width, self.height, icon=self.icon_path, frameless=self.frameless,
                               background=(LIGHT if light else DARK)["bg"], assets=lib.rt.interp.base_dir,
-                              on_error=lib.view_error, min_size=(min(self.width, 340), min(self.height, 220)))
+                              on_error=lib.view_error, on_close=self.window_closed,
+                              min_size=(min(self.width, 340), min(self.height, 220)))
         lib.view = view
         for t in ROUTED:
             view.on(t, lib.route)
@@ -3079,7 +3113,6 @@ class App(Container):
         view.on("at-link", self.link)
         view.on("at-context", self.context)
         view.on("at-resize", lambda e: view.resize(e.get("w"), e.get("h")))
-        view.on("close", self.window_closed)
         if self.frameless:
             self.scene.ops.append(("call", self.id, "atGrips", ()))
         self.scene.attach(view)
@@ -3134,8 +3167,18 @@ class App(Container):
 
     def window_closed(self, e):
         self.closed = True
-        if self.close_fn is not None:
-            self.lib.fire(self.close_fn)
+        if self.close_fn is None:
+            return
+        import tuff_view
+        limit = tuff_view.CLOSE_LIMIT
+        name = getattr(self.close_fn, "name", None)
+        who = f"{name}(), your app:closed function," if name else "Your app:closed function"
+        why = f"{who} was still running {limit:g} seconds after the window closed, so it was stopped. Look for a loop that never ends."
+        self.in_closed = True
+        try:
+            self.lib.fire_by(self.close_fn, limit, why)
+        finally:
+            self.in_closed = False
 
     # ---- the window's own methods
     def methods(self):
@@ -3301,6 +3344,10 @@ class App(Container):
 
     # ---- popups that wait for an answer
     def dialog(self, message, buttons, field=False):
+        if self.in_closed:
+            # In app:closed's function the window has gone and nobody can answer: it's as if the popup was dismissed
+            # (alert goes on, confirm is false, ask is ""), so the rest of the function, like saving, still runs.
+            return buttons[-1][1]
         dlg = Modal(self, "")
         Label(dlg, "text", self.lib.text(message))
         box = Input(dlg, "") if field else None
