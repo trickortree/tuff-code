@@ -14,7 +14,7 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `x // 2` | `floor(x / 2)` (or `int(x / 2)`, which drops the decimals toward zero) |
 | `x++`, `x %= 3` | `x += 1`, `x = x % 3` (only `+= -= *= /=` exist) |
 | `str(x)`, `int(s)`, `float(s)` | `str(x)` and `text(x)` both work; `number(s)` or `num(s)` (a decimal only if the text has a "."); `int(s)` for a whole number. There's no `float`. |
-| `f"Hi {name}"`, `.format()` | `"Hi " + name`. Numbers join on their own (`"Score: " + 5`), but put sums in brackets: `"Score: " + (score + 1)` |
+| `f"Hi {name}"` | the same: `f"Hi {name}, you have {score + 1}"` (see "Text templates"), or join with `+`: `"Hi " + name`. Numbers join on their own (`"Score: " + 5`), but put sums in brackets: `"Score: " + (score + 1)` |
 | `items.append(x)` | `items:add(x)` |
 | `s.upper()`, `s.strip()` | `s:upper()`, `s:trim()` |
 | `x in items`, `"a" in s` | `items:has(x)`, `s:has("a")`, `ages:has("sam")` (`in` only appears in `for` loops) |
@@ -24,7 +24,7 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `items.sort()`, `sorted(items, key=f)` | `items:sort()`, `items:sort(f)`, `items:reverse()` |
 | `open("f.txt").read()`, `json.dump` | `file.read("f.txt")`, `file.write`, `file.lines`, `file.save("f.json", data)`, `file.load` |
 | `try:` / `except Exception as e:` | `try:` / `catch e:` (`e` is the message, as text; any name that isn't Tuff's own, like `err` or `text`) |
-| `f"{x:.2f}"` | `text(x, 2)` |
+| `f"{x:.2f}"`, `f"{n:03}"`, `.format()` | formats by example: `f"{x:0.00}"`, `f"{n:000}"`, `f"{price:money}"`, `f"{name:10}"` (see "Text templates"); `text(x, 2)` also works |
 | `range(3)` gives 0, 1, 2 | `range(3)` gives 1, 2, 3, and `range(1, 3)` gives 1, 2, 3: both ends are included |
 | `for i in range(len(items)):` | `for item in items:`, or `for i in range(0, len(items) - 1):` |
 | `thing.method()` | `thing:method()`, with no spaces around the `:` (only libraries use a dot: `mtgui.window(...)`) |
@@ -122,7 +122,7 @@ say double(4)
 
 ## Text
 - **Joining:** join with `+`: `"Hi " + name + "!"`. Anything joined with text becomes text: numbers, true/false, nil and even lists.
-  - `+` works left to right, so `"Total: " + a + b` gives "Total: 23". Put the maths in brackets: `"Total: " + (a + b)`.
+  - `+` works left to right, so `"Total: " + a + b` gives "Total: 23". Put the maths in brackets: `"Total: " + (a + b)`, or use a text template, which needs none: `f"Total: {a + b}"`.
 - **Repeating and letters:**
   - `"ha" * 3` is `"hahaha"`. The number must be whole, and 0 or less gives `""`.
   - Use `len(t)`, `t[0]`, and `t[-1]` for the last letter. `t[0:2]` is the first three letters (see "Text tools and parts").
@@ -134,6 +134,31 @@ say double(4)
   - Single quotes work too: `'it\'s'`.
   - A backslash before any other letter stays as it is, but `\n` and `\t` still mean a new line and a tab, so write file paths with forward slashes: `"pics/cat.png"`.
 - **More tools:** `t:split(",")`, `t:replace("a", "b")`, `items:join(", ")`, parts like `t[1:3]`, `t:starts`, `t:find`, `t:count`, `t:pad_left` and `text(x, 2)` (a number with 2 decimals) are in "Text tools and parts".
+
+## Text templates
+```tuff
+name = "Sam"
+score = 9
+say f"{name} has {score + 1} points"    # Sam has 10 points
+price = 6.375
+say f"Total: {price * 2:money}"         # Total: $12.75
+say f"{2.675:0.00} {7:000} {1 / 3:0.0}" # 2.68 007 0.3
+say f"[{name:6}] [{score:4}]"           # [Sam   ] [   9]
+say f"[{name:>6}] [{score:<4}]"         # [   Sam] [9   ]
+say f"{name:upper()} likes {{braces}}"  # SAM likes {braces}
+ages = {"sam": 14}
+say f'{ages["sam"]}, {ages:get("ann", 0)}, { {"a": 1}["a"] }'   # 14, 0, 1
+```
+- **What goes in the { }:** any value or sum. It's worked out when the line runs and shown the way `say` shows it (`[1, 2]`, `true`, `nil`), so there's no `+` and no brackets to get wrong. The rest is ordinary text: `\n`, `\t` and `\"` work, and so do single quotes: `f'...'`.
+- **Formats** go after a `:` at the end of the { }, written by example:
+  - `0.00` rounds to 2 decimals (`0.0` to one, `0` to a whole number), and `000` shows at least 3 digits (7 is `007`; `000.0` does both). They round halves up, the way people do: 2.675 is 2.68 and 2.5 is 3 (`round` would give 2).
+  - `money` is dollars and cents with commas: 1234.5 is `$1,234.50`, and -1.5 is `-$1.50`.
+  - a width like `12` pads to 12 letters, with text on the left and numbers on the right, so columns line up. `>12` and `<12` choose the side. A longer value isn't cut.
+  - `0.00`, `000` and `money` only work on numbers. Turn typed text into a number first: `{num(answer):0.00}`.
+- **Format or method:** the format starts at the last `:` that isn't inside brackets or quotes, and only when what follows it is a format. So `{price:money}` and `{x:0.00}` are formats, and `{name:upper()}` and `{d:get("k")}` are method calls.
+- **Inside the { }:** quotes can be the template's own (`f"{d:get("k")}"`). A dictionary needs a space after the template's brace, because `{{` shows a brace: `{ {"a": 1}["a"] }`.
+- **Braces:** `{{` and `}}` show `{` and `}`.
+- A template is one line, like any text, and a `#` can't go in its { }. A mistake inside the braces points at its place in the text: `f"{nmae}"` says "I don't know what 'nmae' is. Did you mean 'name'?", and a `{` without its `}` says so.
 
 ## Lists
 ```tuff
@@ -1252,7 +1277,7 @@ func one_decimal(x):
         return text(od_n) + ".0"
     return text(od_n)
 
-# Money: 6.375 -> "$6.38", 18 -> "$18.00", -1.5 -> "-$1.50"
+# Money: 6.375 -> "$6.38", 18 -> "$18.00", -1.5 -> "-$1.50" (f"{x:money}" does it too, with commas)
 func as_money(x):
     mo_cents = floor(round(abs(x) * 100, 6) + 0.5)
     mo_rest = mo_cents % 100
@@ -1311,6 +1336,7 @@ In a window app, check a text box before using it: `if num(bill:value()) is err:
     - the `range(len(...))` off-by-one;
     - `:pop(0)`;
     - text mixed with numbers, like typed answers used as numbers or `"Total: " + a + b`;
+    - a template's number format on text, like `f"{name:0.00}"`;
     - chained comparisons;
     - `or "y"` in a condition;
     - lines whose answer is thrown away.
@@ -1335,7 +1361,7 @@ Tuff has none of these:
 - tuples or sets (use lists and dictionaries);
 - default or keyword inputs;
 - exp, or other maths beyond sin, cos, tan, log and sqrt;
-- formatting beyond `text(x, 2)` and `:pad_left` / `:pad_right`;
+- formats beyond a template's (`0.00`, `000`, `money` and a width), `text(x, 2)` and `:pad_left` / `:pad_right`;
 - drawing, sound, or keyboard and mouse events in tgui and mtgui (see "How a window app runs"). atgui has key shortcuts, hover and clicks on any widget, and a game made with `tgame` has all of them;
 - `exit()`, or Python modules.
 
