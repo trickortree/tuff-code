@@ -64,6 +64,9 @@ Don't cover the windows while the tests run: a covered page stops drawing.
 | `editor` | `tuff-lang.js`: tgame's functions, docs for all 134 method names, completions that only offer tgame's own methods in files using tgame, and the 2D and 3D snippets (which pass `--check` and run) |
 | `guide` | Every example in the guide's tgame section passes `--check` and runs, and wherever `pop_text` is taught (the guide, the hover docs, the examples, What's New, these games) its size is in pixels |
 | `perf` | Frame rates: 200 sprites moved by Tuff code, 200 moving by `:speed`, 300 objects with a first-person walk, 300 boxes moved by Tuff code; the 300 kit objects (swaying trees and bushes) are drawn about as often as the world changes (at most ~80 times a second), not at a fast display's full rate |
+| `recursion` | No window. 1.4.1: a function calls itself 5000 and 10000 times (in a loop and through two functions too) on `tuff.py`'s big-stack thread, and `input` still works there; one that never stops gives "called itself too many times" (which `try`/`catch` catches) in under a second; `--check`; the `--scene` preview goes as deep; Ctrl+C gives exit code 130 in a busy loop, a `wait` and an `input` |
+| `recursion_window` | Opens windows. A game's setup and its `game:after` function call a function 5000 deep (on `tuff_view`'s thread); a tdraw drawing (tkinter keeps the main thread) draws a recursive tree and goes 3000 deep |
+| `pictures_up` | No window. A picture in the folder above (`../`) stays refused for tgame and atgui, and `--check` says so in the run's words, also through a variable set once and for an atgui avatar; a folder inside called `..art` works both ways |
 
 ## Measured on this PC
 
