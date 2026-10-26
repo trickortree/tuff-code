@@ -286,20 +286,23 @@ TuffPlugins.register('sound-lab', (t) => {
     try { return fix(JSON.parse(text.slice(at + MARK.length, end < 0 ? undefined : end))); } catch { return null; }
   }
 
-  // ---------------------------------------------------------------- icons (simple line icons, 16 x 16)
-  const ic = (d, cls = 'sl-ic') => `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true"><path d="${d}"/></svg>`;
+  // ---------------------------------------------------------------- icons
+  // The buttons' icons: MingCute, through TuffIcon.
   const ICON = {
-    play: ic('M5 3.2v9.6L12.6 8z'),
-    again: ic('M13 8a5 5 0 1 1-1.46-3.54M13 2.6v3h-3'),
-    nudge: ic('M1.5 9.5c1.6 0 1.6-3 3.25-3s1.6 3 3.25 3 1.6-3 3.25-3 1.6 3 3.25 3'),
-    save: ic('M8 2.5v7.6M4.8 7.1 8 10.2l3.2-3.1M3 13.2h10'),
-    chevron: ic('M6 4l4 4-4 4', 'sl-ic sl-chev'),
-    code: ic('M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5'),
-    copy: ic('M5.5 5.5h7v7h-7zM3.5 10.5v-7h7'),
-    game: ic('M4.5 5.5h7a3 3 0 0 1 0 6h-7a3 3 0 0 1 0-6zM5.5 7.4v2.2M4.4 8.5h2.2M10.4 8.2v.1M11.8 9v.1'),
-    edit: ic('M10.6 3.2l2.2 2.2-6.9 6.9H3.7v-2.2z'),
-    refresh: ic('M13 8a5 5 0 1 1-1.46-3.54M13 2.6v3h-3'),
+    play: TuffIcon('play-line', 'sl-ic'),
+    again: TuffIcon('random-line', 'sl-ic'),
+    nudge: TuffIcon('settings-6-line', 'sl-ic'),
+    save: TuffIcon('download-2-line', 'sl-ic'),
+    chevron: TuffIcon('right-line', 'sl-ic sl-chev'),
+    code: TuffIcon('code-line', 'sl-ic'),
+    copy: TuffIcon('copy-2-line', 'sl-ic'),
+    game: TuffIcon('game-2-line', 'sl-ic'),
+    edit: TuffIcon('edit-line', 'sl-ic'),
+    refresh: TuffIcon('refresh-2-line', 'sl-ic'),
   };
+  // The wave buttons show the wave's own shape (square, saw, sine, noise), drawn here: little pictures of
+  // the sound, which no icon set has. Simple lines on a 16 x 16 grid.
+  const ic = (d, cls = 'sl-ic') => `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true"><path d="${d}"/></svg>`;
   const WAVE_ICON = {
     square: ic('M1 11.5V4.5h3.5v7H8v-7h3.5v7H15'),
     saw: ic('M1 11.5l4.6-7v7l4.6-7v7l4.6-7'),

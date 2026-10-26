@@ -298,11 +298,12 @@
       { name: 'Send a pretend post', note: 'POST with a JSON body. The test server only pretends to save it.', method: 'POST', url: 'https://jsonplaceholder.typicode.com/posts', bodyType: 'json', body: '{\n  "title": "Hello from Tuff",\n  "body": "My first post",\n  "userId": 1\n}' },
     ];
 
+    // MingCute icons, through TuffIcon.
     const ICON = {
-      chev: '<svg class="ax-ic" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg>',
-      x: '<svg class="ax-ic" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
-      plus: '<svg class="ax-ic" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg>',
-      warn: '<svg class="ax-ic" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.8v3.6M8 10.9v.1"/></svg>',
+      chev: TuffIcon('right-line', 'ax-ic'),
+      x: TuffIcon('close-line', 'ax-ic'),
+      plus: TuffIcon('add-line', 'ax-ic'),
+      warn: TuffIcon('alert-line', 'ax-ic'),
     };
 
     const S = {

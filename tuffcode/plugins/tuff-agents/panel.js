@@ -18,30 +18,33 @@ TuffPlugins.register('tuff-agents', (t) => {
     ['Make it nicer', 'Suggest ways to make this app look and feel nicer.', 'spark', 'Ideas for looks and feel'],
     ['Teach me something', 'Teach me one new Tuff trick that would help with this code, with a short example.', 'cap', 'One new Tuff trick'],
   ];
-  // Small line icons (16x16, stroked).
+  // Small line icons: MingCute, through TuffIcon. Each one takes the class it's drawn with (ta-ic, or
+  // ta-tool-ic in the list of what the agent did).
   const ICONS = {
-    book: '<path d="M3 3.5h4a2 2 0 0 1 2 2V13a1.5 1.5 0 0 0-1.5-1.5H3zM13 3.5H9a2 2 0 0 0-2 2V13a1.5 1.5 0 0 1 1.5-1.5H13z"/>',
-    bug: '<rect x="5" y="5.5" width="6" height="7.5" rx="3"/><path d="M8 5.5V13M5 8.5H2.5M13.5 8.5H11M5.5 11.5l-2 1.5M10.5 11.5l2 1.5M6 5.5 4.5 3.5M10 5.5l1.5-2"/>',
-    spark: '<path d="M8 2.5l1.3 3.7 3.7 1.3-3.7 1.3L8 12.5l-1.3-3.7L3 7.5l3.7-1.3z"/><path d="M12.5 11.5l.5 1.5 1.5.5-1.5.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5z"/>',
-    cap: '<path d="M1.5 6.5 8 3.5l6.5 3L8 9.5z"/><path d="M4 8v3c1 1 2.5 1.5 4 1.5s3-.5 4-1.5V8M14.5 6.5v4"/>',
-    file: '<path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/>',
-    pencil: '<path d="M10.5 3 13 5.5 6 12.5H3.5V10z"/>',
-    play: '<path d="M5 3.5v9l7-4.5z"/>',
-    check: '<path d="M8 2 13 4v4c0 3-2.2 5-5 6-2.8-1-5-3-5-6V4z"/><path d="m5.8 8 1.6 1.6L10.4 6.4"/>',
-    search: '<circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/>',
-    list: '<path d="M6 4h7.5M6 8h7.5M6 12h7.5M2.5 4h.01M2.5 8h.01M2.5 12h.01"/>',
-    globe: '<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c1.8 2 1.8 9 0 11M8 2.5c-1.8 2-1.8 9 0 11"/>',
-    copy: '<rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1.5"/><path d="M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/>',
-    insert: '<path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/>',
-    apply: '<path d="m3.5 8.5 3 3 6-7"/>',
-    cloud: '<path d="M4.5 12.5a3 3 0 0 1-.4-6 4 4 0 0 1 7.8.8 2.6 2.6 0 0 1-.4 5.2z"/><path d="M8 7v4M6.5 9.5 8 11l1.5-1.5"/>',
-    chip: '<rect x="4" y="4" width="8" height="8" rx="1.5"/><path d="M6 1.5V4M10 1.5V4M6 12v2.5M10 12v2.5M1.5 6H4M1.5 10H4M12 6h2.5M12 10h2.5"/>',
-    offline: '<path d="M2.5 8a8 8 0 0 1 11 0M4.5 10a5 5 0 0 1 7 0M8 12.5h.01"/><path d="M2.5 2.5l11 11"/>',
-    info: '<circle cx="8" cy="8" r="5.5"/><path d="M8 7.5v3.5M8 5h.01"/>',
-    bulb: '<path d="M6.2 12.5h3.6M6.7 14.5h2.6"/><path d="M8 1.5a4.5 4.5 0 0 0-2.6 8.2c.5.4.8.9.8 1.5v.3h3.6v-.3c0-.6.3-1.1.8-1.5A4.5 4.5 0 0 0 8 1.5z"/>',
-    warn: '<path d="M8 2.5 14 13H2z"/><path d="M8 6.5v3M8 11.5h.01"/>',
+    book: (c) => TuffIcon('book-6-line', c),
+    bug: (c) => TuffIcon('bug-line', c),
+    spark: (c) => TuffIcon('magic-2-line', c),
+    cap: (c) => TuffIcon('mortarboard-line', c),
+    file: (c) => TuffIcon('file-line', c),
+    pencil: (c) => TuffIcon('edit-line', c),
+    play: (c) => TuffIcon('play-line', c),
+    check: (c) => TuffIcon('safety-certificate-line', c),
+    search: (c) => TuffIcon('search-line', c),
+    list: (c) => TuffIcon('list-check-2-line', c),
+    globe: (c) => TuffIcon('earth-line', c),
+    copy: (c) => TuffIcon('copy-2-line', c),
+    insert: (c) => TuffIcon('arrow-to-down-line', c),
+    apply: (c) => TuffIcon('check-line', c),
+    cloud: (c) => TuffIcon('download-3-line', c),
+    chip: (c) => TuffIcon('chip-line', c),
+    offline: (c) => TuffIcon('wifi-off-line', c),
+    info: (c) => TuffIcon('information-line', c),
+    bulb: (c) => TuffIcon('bulb-line', c),
+    warn: (c) => TuffIcon('alert-line', c),
   };
-  const icon = (n, cls = 'ta-ic') => `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+  const icon = (n, cls = 'ta-ic') => (ICONS[n] ? ICONS[n](cls) : '');
+  // An icon with its own size, for buttons whose CSS doesn't size it (the header's plug, ⋯ and back buttons).
+  const sized = (svg, px) => svg.replace('<svg', `<svg width="${px}" height="${px}"`);
   const toolIcon = (text) => icon(/^(Changed|Wrote)\b/.test(text) ? 'pencil' : /^Ran\b/.test(text) ? 'play' : /^Checked\b/.test(text) ? 'check'
     : /^(Searched the project|Looked through)/.test(text) ? 'search' : /web/i.test(text) ? 'globe' : /^Planned/.test(text) ? 'list'
       : /Tuff (guide|examples)/.test(text) ? 'book' : 'file', 'ta-tool-ic');
@@ -65,7 +68,7 @@ TuffPlugins.register('tuff-agents', (t) => {
   }
   const NAME = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity', tuffai: 'Tuff AI' };
   const GB = (n) => `${(n / 1e9).toFixed(1)} GB`;
-  const PLUG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5M6.5 8h11v3.5a5.5 5.5 0 0 1-11 0z"/><path d="M12 17v4"/></svg>';
+  const PLUG = sized(TuffIcon('plugin-line'), 16);
   const STEPS = {
     start: "TuffCode's tools start up",
     tools: 'Agents can see all 4 tools',
@@ -159,7 +162,7 @@ TuffPlugins.register('tuff-agents', (t) => {
         <div class="ta-top">
           <div class="ta-agents" role="tablist" aria-label="Agent"></div>
           <button class="ta-ib" data-a="setup" title="Agent tools: set up and check (MCP)">${PLUG}</button>
-          <button class="ta-ib" data-a="menu" title="More">⋯</button>
+          <button class="ta-ib" data-a="menu" title="More">${sized(TuffIcon('more-1-line'), 16)}</button>
           <div class="ta-menu hidden"></div>
         </div>
         <div class="ta-status"></div>
@@ -302,7 +305,7 @@ TuffPlugins.register('tuff-agents', (t) => {
   // TuffCode's own dropdown (a system <select> can't be styled). It opens upwards from the message
   // box and works from the keyboard: arrows, Home/End, Enter or Space to pick, Esc to close.
   function dropdown(box, { label, title, onPick }) {
-    box.innerHTML = `<button type="button" class="ta-dd-btn" aria-haspopup="listbox" aria-expanded="false" title="${esc(title)}"><span class="ta-dd-k">${esc(label)}</span><span class="ta-dd-v"></span><svg class="ta-dd-chev" viewBox="0 0 16 16"><path d="M4.5 9.5L8 6l3.5 3.5"/></svg></button><div class="ta-dd-menu hidden" role="listbox" aria-label="${esc(label)}"></div>`;
+    box.innerHTML = `<button type="button" class="ta-dd-btn" aria-haspopup="listbox" aria-expanded="false" title="${esc(title)}"><span class="ta-dd-k">${esc(label)}</span><span class="ta-dd-v"></span>${TuffIcon('up-line', 'ta-dd-chev')}</button><div class="ta-dd-menu hidden" role="listbox" aria-label="${esc(label)}"></div>`;
     const btn = $('.ta-dd-btn', box);
     const menu = $('.ta-dd-menu', box);
     let items = [];
@@ -310,7 +313,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     let hot = -1;
     const isOpen = () => !menu.classList.contains('hidden');
     const draw = () => {
-      menu.innerHTML = items.map((it, i) => `<div role="option" class="ta-dd-opt${it.id === value ? ' on' : ''}${i === hot ? ' hot' : ''}" data-i="${i}" data-v="${esc(it.id)}" aria-selected="${it.id === value}">${it.icon || ''}<span class="ta-dd-txt"><b>${esc(it.name)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</span><svg class="ta-dd-tick" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg></div>`).join('');
+      menu.innerHTML = items.map((it, i) => `<div role="option" class="ta-dd-opt${it.id === value ? ' on' : ''}${i === hot ? ' hot' : ''}" data-i="${i}" data-v="${esc(it.id)}" aria-selected="${it.id === value}">${it.icon || ''}<span class="ta-dd-txt"><b>${esc(it.name)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</span>${TuffIcon('check-line', 'ta-dd-tick')}</div>`).join('');
       menu.querySelector('.hot')?.scrollIntoView({ block: 'nearest' });
     };
     const outside = (e) => { if (!box.contains(e.target)) close(); };
@@ -372,7 +375,7 @@ TuffPlugins.register('tuff-agents', (t) => {
     };
   }
 
-  const MODEL_ICON = '<svg class="ta-dd-ic" viewBox="0 0 16 16"><path d="M8 1.5l1.7 4.8L14.5 8l-4.8 1.7L8 14.5l-1.7-4.8L1.5 8l4.8-1.7z"/></svg>';
+  const MODEL_ICON = TuffIcon('ai-fill', 'ta-dd-ic');
   const LEVEL_BARS = { off: 0, minimal: 1, low: 1, medium: 2, high: 3, xhigh: 4, max: 5, ultra: 5 };
   const LEVEL_SUB = { minimal: 'Fastest', low: 'Quick answers', medium: 'Balanced', high: 'Thinks it through', xhigh: 'Thinks longer', max: 'Most thorough', ultra: 'Deepest and slowest' };
   const levelIcon = (id) => `<span class="ta-dd-lv" aria-hidden="true">${[1, 2, 3, 4, 5].map((n) => `<i class="${n <= (LEVEL_BARS[id] || 0) ? 'on' : ''}" style="height:${4 + n * 2}px"></i>`).join('')}</span>`;
@@ -801,7 +804,7 @@ TuffPlugins.register('tuff-agents', (t) => {
       : c.ok ? '<p class="tas-ok">All good. Every agent connected below can use these tools.</p>'
         : "<p class=\"tas-bad\">Something isn't working. The red step says what went wrong. If it keeps happening, reinstall TuffCode.</p>";
     box.innerHTML = `
-      <div class="tas-head"><button class="ta-ib" data-s="back" title="Back to the chat">←</button><b>Agent tools</b></div>
+      <div class="tas-head"><button class="ta-ib" data-s="back" title="Back to the chat">${sized(TuffIcon('arrow-left-line'), 16)}</button><b>Agent tools</b></div>
       <p class="tas-intro">AI agents learn Tuff from TuffCode's tools: the Tuff guide, example apps, a checker and a runner. They plug in through <b>MCP</b>, the standard way AI agents use tools.</p>
       <section>
         <h4><span>1</span>Check the tools work</h4>

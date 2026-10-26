@@ -1,10 +1,17 @@
-// The plugin icons (Tuff Agents: chat bubble, Snippet Library: scissors) are what the app actually draws:
-// in the right toolstrip, on the marketplace cards and in the empty Tuff Agents chat.
+// The plugin icons (Tuff Agents: a chat bubble with a sparkle, Snippet Library: scissors) are what the app actually
+// draws: in the right toolstrip, on the marketplace cards and in the empty Tuff Agents chat. Since 1.3.0 they're
+// MingCute's chat-3-ai-line and scissors-line, like the rest of TuffCode's icons (renderer/js/icons.js).
 export const meta = { title: 'plugin icons' };
 
-const CHAT = 'M3 7.5A3.5 3.5 0 0 1 6.5 4h11'; // start of the chat bubble path
-const SCISSORS = 'M8.6 15.6L21 5.5'; // a scissors blade
-const OLD = ['M11 3.5l1.9 4.8', 'M8 7l-5 5 5 5M16 7']; // the old sparkles and </>
+const CHAT = 'm10 18.814l.186-.982'; // in MingCute's chat-3-ai-line
+const SCISSORS = 'M16.984 2.283a2 2 0 0 1 .492'; // the start of MingCute's scissors-line
+// Every built-in plugin's icon, by the start of its first path (the Marketplace card of a plugin that isn't installed
+// draws it from plugins/registry.json, an installed one from its plugin.json).
+const ICON = { 'tuff-agents': CHAT, snippets: SCISSORS, 'api-explorer': 'M8 4H7a2 2 0 0 0-2 2v3.99a2',
+  'sprite-studio': 'm13.707 7.257l-.689-.724', 'sound-lab': 'M4 10v4m4-7v10m4-13v16m4-13v' };
+// The old ones: sparkles, </>, the hand-drawn chat bubble, scissors blade, braces, pencil and pixels, and sound bars.
+const OLD = ['M11 3.5l1.9 4.8', 'M8 7l-5 5 5 5M16 7', 'M3 7.5A3.5 3.5 0 0 1 6.5 4h11', 'M8.6 15.6L21 5.5',
+  'M8 3.5c-1.7 0-2.5.8-2.5 2.5v', 'M15.6 4.4a2 2 0 0 1 2.8 0l1.', 'M3.5 10.5v3M7.5 7v10M11.5 3.'];
 
 export default async (t) => {
   const check = t.check;
@@ -13,9 +20,16 @@ export default async (t) => {
   // The SVG inside a mask url, decoded, for every element matching sel
   const masksOf = (sel) => ev(`[...document.querySelectorAll(${JSON.stringify(sel)})].map(el => decodeURIComponent(getComputedStyle(el).webkitMaskImage || ''))`);
 
-  // Marketplace: install both plugins (a fresh profile has none)
+  // Marketplace: a fresh profile has no plugins, so every card draws its icon from registry.json, and those are
+  // the new icons too.
   await ev(`(() => { window.TuffIDE.showSideView('plugins', true); return 1; })()`);
-  await t.waitFor(`document.querySelectorAll('.pl-card').length >= 2`);
+  await t.waitFor(`document.querySelectorAll('.pl-card').length >= ${Object.keys(ICON).length}`);
+  const before = await ev(`Object.fromEntries([...document.querySelectorAll('.pl-card')].map(c => [c.dataset.id, decodeURIComponent(getComputedStyle(c.querySelector('.pl-ic .pi')).webkitMaskImage || '')]))`);
+  for (const [id, d] of Object.entries(ICON)) {
+    check(`Marketplace, not installed: ${id} draws its new icon`, (before[id] || '').includes(d) && !OLD.some((o) => before[id].includes(o)), (before[id] || 'no card').slice(60, 160));
+  }
+
+  // Install two of them
   for (const id of ['tuff-agents', 'snippets']) {
     await ev(`document.querySelector('.pl-card[data-id="${id}"] [data-a="install"]')?.click(); 1`);
     await t.sleep(1500);
@@ -47,17 +61,16 @@ export default async (t) => {
   const ts = await rect('#toolstrip-right');
   if (ts) await t.shot('ni_toolstrip.png', { x: ts.x - 4, y: ts.y - 4, width: ts.width + 8, height: Math.min(ts.height + 8, 120) });
 
-  // Settings is a drawn cog wheel (8 teeth around a hole) on every system, not a font glyph, and the
-  // Gear Customizer's gear in the editor margin is the same cog.
-  const cog = await ev(`(() => { const b = document.querySelector('#btn-settings'); const s = b?.querySelector('svg.i-cog'); const r = s?.getBoundingClientRect(); return s && { d: s.querySelector('path').getAttribute('d'), fill: getComputedStyle(s).fill, w: r.width, h: r.height, glyph: !!b.querySelector('.fl') }; })()`);
-  const teeth = (d) => (d.match(/A8\.5 8\.5/g) || []).length;
-  check('Settings: the button draws a cog wheel with 8 teeth and a hole, filled in the icon colour', !!cog && teeth(cog.d) === 8 && /a3\.4 3\.4/.test(cog.d) && cog.fill !== 'none' && cog.w === 16 && cog.h === 16 && !cog.glyph, cog && { ...cog, d: cog.d.slice(0, 60) });
+  // Settings is a drawn cog wheel (MingCute's settings-5-line: a hole, then the wheel) on every system, not a font
+  // glyph, and the Gear Customizer's gear in the editor margin is the same cog.
+  const cog = await ev(`(() => { const b = document.querySelector('#btn-settings'); const s = b?.querySelector('svg.i-cog'); const r = s?.getBoundingClientRect(); const ps = s ? [...s.querySelectorAll('path')] : []; return s && { icon: s.dataset.icon, paths: ps.length, d: ps[0]?.getAttribute('d') || '', stroke: ps[1] ? getComputedStyle(ps[1]).stroke : '', w: r.width, h: r.height, glyph: !!b.querySelector('.fl') }; })()`);
+  check('Settings: the button draws a cog wheel around a hole, in the icon colour', !!cog && cog.icon === 'settings-5-line' && cog.paths === 2 && /^M15 12a3 3 0 1 1-6 0/.test(cog.d) && cog.stroke !== 'none' && cog.w === 16 && cog.h === 16 && !cog.glyph, cog && { ...cog, d: cog.d.slice(0, 60) });
   const marginGear = await ev(`(() => { for (const sh of document.styleSheets) { let rules; try { rules = sh.cssRules; } catch { continue; } for (const r of rules) if (r.selectorText === '.tuff-gear') return decodeURIComponent(r.style.backgroundImage || ''); } return ''; })()`);
   check('The Gear Customizer draws the same cog', !!cog && marginGear.includes(cog.d.slice(0, 120)), marginGear.slice(0, 160));
   const sb = await rect('#btn-settings');
-  const idle = await ev(`getComputedStyle(document.querySelector('#btn-settings svg')).fill`);
+  const idle = await ev(`getComputedStyle(document.querySelector('#btn-settings svg')).color`);
   await t.move(sb.x + sb.width / 2, sb.y + sb.height / 2);
-  const hot = await ev(`getComputedStyle(document.querySelector('#btn-settings svg')).fill`);
+  const hot = await ev(`getComputedStyle(document.querySelector('#btn-settings svg')).color`);
   check('Settings: the cog brightens on hover like the other buttons', hot !== idle, { idle, hot });
   await t.shot('ni_settings.png', { x: sb.x - 50, y: sb.y - 5, width: sb.width + 60, height: sb.height + 10 });
   await ev(`document.querySelector('#btn-settings').click(); 1`);

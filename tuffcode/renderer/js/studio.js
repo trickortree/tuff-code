@@ -61,47 +61,48 @@
   // Which bit of a widget's preview is its label, for double-click editing (argument index).
   const INLINE = { heading: 0, text: 0, small: 0, button: 0, toggle: 0, checkbox: 0, spinner: 0 };
 
-  const svg = (d, extra = '') => `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"${extra}>${d}</svg>`;
+  // Icons: MingCute, from icons.js (TuffIcon). One per widget in the Add tab, then the toolbar's and the Inspector's,
+  // which Tuff Engine uses too (kit.UI).
   const ICONS = {
-    heading: svg('<path d="M3.5 3v10M10.5 3v10M3.5 8h7M13 6.5v6"/>'),
-    text: svg('<path d="M3 3.5h10M8 3.5v9.5"/>'),
-    small: svg('<path d="M4.5 6.5h7M8 6.5v6"/>'),
-    button: svg('<rect x="1.5" y="4.5" width="13" height="7" rx="3.5"/><path d="M5.5 8h5"/>'),
-    input: svg('<rect x="1.5" y="4" width="13" height="8" rx="2"/><path d="M4.5 6.5v3"/>'),
-    toggle: svg('<rect x="1.5" y="4.5" width="13" height="7" rx="3.5"/><circle cx="10.8" cy="8" r="1.9"/>'),
-    checkbox: svg('<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M5.5 8.2l1.8 1.8 3.3-3.6"/>'),
-    dropdown: svg('<rect x="1.5" y="4" width="13" height="8" rx="2"/><path d="M9.5 7.2l1.4 1.4 1.4-1.4"/>'),
-    slider: svg('<path d="M1.5 8h13"/><circle cx="6" cy="8" r="2.2" fill="currentColor" stroke="none"/>'),
-    progress: svg('<rect x="1.5" y="6" width="13" height="4" rx="2"/><path d="M3.5 8h5.5" stroke-width="2.2"/>'),
-    spinner: svg('<path d="M8 2.5a5.5 5.5 0 1 1-5.5 5.5"/>'),
-    clock: svg('<circle cx="8" cy="8" r="5.8"/><path d="M8 4.8V8l2.2 1.6"/>'),
-    image: svg('<rect x="1.5" y="2.5" width="13" height="11" rx="2"/><circle cx="5.8" cy="6.3" r="1.3"/><path d="M2 12l3.6-3.5 2.6 2.6 2-2 3.8 3.4"/>'),
-    divider: svg('<path d="M2 8h12"/><path d="M2 4.5h12M2 11.5h12" opacity=".35"/>'),
-    space: svg('<path d="M8 2v12M5.5 4.5L8 2l2.5 2.5M5.5 11.5L8 14l2.5-2.5"/>'),
-    row: svg('<rect x="1.5" y="4" width="5.6" height="8" rx="1.4"/><rect x="8.9" y="4" width="5.6" height="8" rx="1.4"/>'),
-    card: svg('<rect x="1.5" y="2.5" width="13" height="11" rx="2.6"/><path d="M4.5 6h7M4.5 9h4.5"/>'),
-    page: svg('<path d="M4 1.8h5.5L13 5.3v8.9H4z"/><path d="M9.5 1.8v3.5H13"/><path d="M2.5 4v11.5h8"/>'),
-    window: svg('<rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M1.5 5.5h13"/>'),
+    heading: TuffIcon('heading-1-line'),
+    text: TuffIcon('text-line'),
+    small: TuffIcon('font-size-line'),
+    button: TuffIcon('button-line'),
+    input: TuffIcon('keyboard-line'),
+    toggle: TuffIcon('toggle-right-line'),
+    checkbox: TuffIcon('checkbox-line'),
+    dropdown: TuffIcon('dropdown-line'),
+    slider: TuffIcon('settings-6-line'),
+    progress: TuffIcon('battery-2-line'),
+    spinner: TuffIcon('three-quarters-circle-dash-line'),
+    clock: TuffIcon('time-line'),
+    image: TuffIcon('pic-2-line'),
+    divider: TuffIcon('dividing-line-line'),
+    space: TuffIcon('spacing-vertical-line'),
+    row: TuffIcon('columns-2-line'),
+    card: TuffIcon('profile-line'),
+    page: TuffIcon('document-2-line'),
+    window: TuffIcon('web-line'),
   };
   const UI = {
-    undo: svg('<path d="M5.5 4L2.5 7l3 3"/><path d="M2.5 7H10a3.5 3.5 0 010 7H7"/>'),
-    redo: svg('<path d="M10.5 4l3 3-3 3"/><path d="M13.5 7H6a3.5 3.5 0 000 7h3"/>'),
-    minus: svg('<path d="M4 8h8"/>'),
-    plus: svg('<path d="M4 8h8M8 4v8"/>'),
-    up: svg('<path d="M8 13V3M4 7l4-4 4 4"/>'),
-    down: svg('<path d="M8 3v10M4 9l4 4 4-4"/>'),
-    dup: svg('<rect x="5" y="5" width="8.5" height="8.5" rx="1.8"/><path d="M11 3.2A1.8 1.8 0 009.5 2.5H4.3a1.8 1.8 0 00-1.8 1.8v5.2c0 .7.3 1.2.8 1.5"/>'),
-    trash: svg('<path d="M2.5 4.5h11M6.5 4.5V3h3v1.5M4 4.5l.7 9h6.6l.7-9"/>'),
-    code: svg('<path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5"/>'),
-    play: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M5 3.6c0-.8.9-1.3 1.6-.85l6.2 4.1c.6.4.6 1.3 0 1.7l-6.2 4.1C5.9 13.1 5 12.6 5 11.8z"/></svg>',
-    grid: svg('<rect x="2" y="2" width="5" height="5" rx="1.2"/><rect x="9" y="2" width="5" height="5" rx="1.2"/><rect x="2" y="9" width="5" height="5" rx="1.2"/><rect x="9" y="9" width="5" height="5" rx="1.2"/>'),
-    search: svg('<circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/>'),
-    close: svg('<path d="M4 4l8 8M12 4l-8 8"/>'),
-    palette: svg('<path d="M8 1.8a6.2 6.2 0 100 12.4c1 0 1.4-.6 1.4-1.3 0-.9-.8-1.2-.8-2 0-.7.6-1.2 1.4-1.2h1.6a2.6 2.6 0 002.6-2.6C14.2 4.3 11.4 1.8 8 1.8z"/><circle cx="5" cy="7" r=".9" fill="currentColor"/><circle cx="7.6" cy="4.6" r=".9" fill="currentColor"/><circle cx="10.6" cy="5.6" r=".9" fill="currentColor"/>'),
-    fit: svg('<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/>'),
-    arrow: svg('<path d="M6 3.5L10.5 8 6 12.5"/>'),
-    expand: svg('<path d="M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9"/>'),
-    shrink: svg('<path d="M13.5 6.5h-4v-4M9.5 6.5l4.5-4.5M2.5 9.5h4v4M6.5 9.5L2 14"/>'),
+    undo: TuffIcon('back-line'),
+    redo: TuffIcon('forward-line'),
+    minus: TuffIcon('minimize-line'),
+    plus: TuffIcon('add-line'),
+    up: TuffIcon('arrow-up-line'),
+    down: TuffIcon('arrow-down-line'),
+    dup: TuffIcon('copy-2-line'),
+    trash: TuffIcon('delete-2-line'),
+    code: TuffIcon('code-line'),
+    play: TuffIcon('play-fill'),
+    grid: TuffIcon('grid-line'),
+    search: TuffIcon('search-line'),
+    close: TuffIcon('close-line'),
+    palette: TuffIcon('palette-line'),
+    fit: TuffIcon('fullscreen-line'),
+    arrow: TuffIcon('right-line'),
+    expand: TuffIcon('fullscreen-2-line'),
+    shrink: TuffIcon('fullscreen-exit-2-line'),
   };
   const kindInfo = (n) => (n.kind === 'window' ? WINDOW : KINDS[n.kind]);
   const tipFor = (kind) => window.TUFF_METHOD_DOCS?.[kind]?.[1] || '';
@@ -1020,7 +1021,7 @@
         <div class="sd-main">
           <aside class="sd-left">
             <div class="sd-tabs">
-              <button data-tab="add" title="Add widgets">${UI.plus}<span class="lbl">Add</span></button><button data-tab="layers" title="Layers">${UI.grid}<span class="lbl">Layers</span></button>
+              <button data-tab="add" title="Add widgets">${UI.plus}<span class="lbl">Add</span></button><button data-tab="layers" title="Layers">${TuffIcon('layers-line')}<span class="lbl">Layers</span></button>
             </div>
             <div class="sd-pane" data-pane="add">
               <label class="sd-search">${UI.search}<input id="sd-search" placeholder="Search widgets" spellcheck="false"></label>
@@ -1776,7 +1777,7 @@
     C.key = keyOf(node);
     const info = kindInfo(node);
     box.innerHTML = `<div class="cz-head"><span class="ic">${ICONS[node.kind]}</span><b>${esc(info.label)}</b><span class="nm">${esc(node.var || '')}</span>
-      <button class="cz-x" title="Close (Esc)"><svg viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8"/></svg></button></div>
+      <button class="cz-x" title="Close (Esc)">${UI.close}</button></div>
       <div class="cz-body"></div>
       <div class="cz-foot"><span>Changes are written into your code.</span><button class="btn sm" data-a="studio">Open in Design Studio</button></div>`;
     renderForm($('.cz-body', box), {

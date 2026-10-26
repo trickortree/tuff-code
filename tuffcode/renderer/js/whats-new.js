@@ -165,7 +165,7 @@
         <div class="wn-fade" aria-hidden="true"></div>
       </div>
       <div class="wn-foot">
-        <span class="wn-more" aria-hidden="true">Scroll for more<svg viewBox="0 0 16 16"><path d="M4 6l4 4 4-4"/></svg></span>
+        <span class="wn-more" aria-hidden="true">Scroll for more${TuffIcon('down-line')}</span>
         <button class="btn primary" data-a="close">Let's go</button>
       </div>
     </div>`;

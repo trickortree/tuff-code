@@ -756,7 +756,7 @@
   // "the basics", "Section 2.1"
   const sectionName = (sec) => (sec.id === 'basics' ? 'the basics' : sec.title.split(' · ')[0]);
   const byId = (id) => LESSONS.find((l) => l.id === id);
-  const CHECK_SVG = '<svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg>';
+  const CHECK_SVG = TuffIcon('check-fill');
 
   function save() {
     ide.saveSettings({ learnDone: [...done], learnCurrent: current, learnOpen: [...openSections] });
@@ -843,7 +843,7 @@
         : `<button class="btn sm primary" data-act="open">${done.has(l.id) ? 'Open lesson file' : 'Start lesson'}</button>
            ${l.studio ? '<button class="btn sm" data-act="studio">Open Design Studio</button>' : ''}
            ${l.engine ? '<button class="btn sm" data-act="engine">Open Tuff Engine</button>' : ''}
-           <button class="btn sm run" data-act="run"><svg viewBox="0 0 16 16"><path d="M5 3.6c0-.8.9-1.3 1.6-.85l6.2 4.1c.6.4.6 1.3 0 1.7l-6.2 4.1C5.9 13.1 5 12.6 5 11.8z"/></svg>Run</button>`;
+           <button class="btn sm run" data-act="run">${TuffIcon('play-fill')}Run</button>`;
       const nextSection = SECTIONS[SECTIONS.indexOf(sec) + 1];
       const next = done.has(l.id) && nextLesson ? '<button class="btn sm" data-act="next">Next lesson</button>'
         : done.has(l.id) && nextSection ? `<button class="btn sm" data-act="nextsection">Try ${nextSection.title.split(' · ')[0]}</button>` : '';
@@ -852,7 +852,7 @@
         <pre class="lx-code"></pre>
         <div class="lx-task"><div class="lbl">YOUR TASK</div>${l.task}</div>
         <div class="lx-actions">${actions}${next}</div>
-        ${st ? `<div class="lx-status ${st.pass ? 'pass' : 'fail'}">${st.pass ? CHECK_SVG : '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.5M8 11h.01"/></svg>'}<span></span></div>` : ''}`;
+        ${st ? `<div class="lx-status ${st.pass ? 'pass' : 'fail'}">${st.pass ? CHECK_SVG : TuffIcon('warning-line')}<span></span></div>` : ''}`;
       c.querySelector('.lx-code').textContent = l.example;
       if (st) c.querySelector('.lx-status span').textContent = st.msg;
       c.querySelector('[data-act="open"]')?.addEventListener('click', () => openLesson(l));
@@ -885,7 +885,7 @@
       const isOpen = openSections.has(sec.id);
       const head = document.createElement('button');
       head.className = 'learn-section' + (isOpen ? ' open' : '');
-      head.innerHTML = `<svg class="ls-chev" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4"/></svg><span class="ls-title">${sec.title}</span>${sec.optional ? '<span class="ls-tag">Optional</span>' : ''}<span class="ls-count">${count} / ${sec.lessons.length}</span>`;
+      head.innerHTML = `${TuffIcon('right-line', 'ls-chev')}<span class="ls-title">${sec.title}</span>${sec.optional ? '<span class="ls-tag">Optional</span>' : ''}<span class="ls-count">${count} / ${sec.lessons.length}</span>`;
       head.onclick = () => {
         if (isOpen) openSections.delete(sec.id);
         else openSections.add(sec.id);
