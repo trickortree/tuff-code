@@ -47,6 +47,8 @@ function outsideFiles(dir, src, wanted) {
   for (const m of src.matchAll(/"([^"\n]*)"|'([^'\n]*)'/g)) {
     const name = (m[1] ?? m[2]).trim();
     if (!/^(\.\/)?\.\.[\\/]/.test(name)) continue;
+    // A bare "../" is a folder above only when a name is added to it ("../" + name): not in say "go up with ../"
+    if (/^(\.\/)?(\.\.[\\/])+$/.test(name) && src.slice(m.index + m[0].length).trimStart()[0] !== '+') continue;
     const full = path.resolve(dir, name);
     if (insideOf(dir, full) || found.has(full)) continue; // inside the folder after all
     let st = null;
@@ -322,10 +324,13 @@ async function build(opts, emit) {
       '        text += f"\\n  {err.line} | {lines[err.line - 1]}"',
       '    if text not in _shown:  # the same error again (a key pressed over and over) is shown once',
       '        _shown.add(text)',
+      '        tuff.SHOWING_BOX.set()  # a window\'s close time limit waits while it\'s up',
       '        try:',
       '            _box(text)',
       '        except Exception:',
       '            pass',
+      '        finally:',
+      '            tuff.SHOWING_BOX.clear()',
       'tuff.report = report',
     ]),
     // A problem inside Tuff itself (its window engine, or a bug in it) isn't a Tuff error: Python would only print it

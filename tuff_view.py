@@ -354,7 +354,7 @@ def run(main, *args):
             try:
                 kind, view = runner.requests.get(timeout=0.25)
             except queue.Empty:
-                if runner.view is not None and runner.view._close_overdue():
+                if runner.view is not None and runner.view._close_overdue() and not _box_up():
                     # A close handler stuck where nothing can stop it (waiting for input, a long wait()), with the
                     # window gone: end the program, rather than leave it running where nobody can see it.
                     sys.stderr.write(f"Tuff error: the window closed, but your app:closed function was still running "
@@ -372,8 +372,11 @@ def run(main, *args):
     if runner.view is not None and _stuck_threads(2.0):
         # pywebview answers each page call on a thread of its own. If one of them got stuck while the window
         # was closing, Python would wait for it forever on the way out, so end the process here instead.
-        if isinstance(outcome.get("error"), Exception):  # it can't be raised now: shown the way Python shows one
-            sys.excepthook(type(outcome["error"]), outcome["error"], outcome["error"].__traceback__)
+        err = outcome.get("error")
+        if isinstance(err, ViewError):  # one of ours, for people: said the way tuff.py says them
+            sys.stderr.write(f"Tuff error: {err}\n")
+        elif isinstance(err, Exception):  # it can't be raised now: shown the way Python shows one
+            sys.excepthook(type(err), err, err.__traceback__)
         sys.stdout.flush()
         sys.stderr.flush()
         value = outcome.get("value")
@@ -381,6 +384,16 @@ def run(main, *args):
     if "error" in outcome:
         raise outcome["error"]
     return outcome.get("value")
+
+
+def _box_up():
+    """Is a built app's error box up (tuff.SHOWING_BOX)? Then a close handler that's waiting on it isn't stuck. tuff.py
+    is "tuff" when a launcher imports it, and "__main__" when it's run itself."""
+    for name in ("tuff", "__main__"):
+        box = getattr(sys.modules.get(name), "SHOWING_BOX", None)
+        if box is not None and box.is_set():
+            return True
+    return False
 
 
 def _stuck_threads(timeout):

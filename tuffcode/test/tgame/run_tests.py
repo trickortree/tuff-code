@@ -4365,7 +4365,7 @@ TOOLBOX_FIXES_OUTPUT = ["Bob", "Bob", '[["HI", 1]]', '["trout"]', "[3, 4]", "4",
                         "[1, [...]]", "3", "3", "0.00", "true", "true",
                         "tan(90) has no answer: at 90 degrees (and 270) the line is straight up.",
                         "A dictionary's keys can be text or numbers, not true/false.",
-                        'back doesn\'t have the number 1, but it has "1" (text). Keys that come back from file.load are always text: use back["1"] or back[text(1)].',
+                        'back doesn\'t have the number 1, but it has "1" (text). Keys that come back from file.load or a web page\'s JSON are always text: use back["1"] or back[text(1)].',
                         "one", '["", "", "X"]', '{"hi": 2}', "mail.com", " Smith", "[6, 7, 8]", "8", "7", '{"Ann": 5}', "108", "[1]",
                         "The positions in [start:end] must be whole numbers, not nil.", "true",
                         "Cat", "[1, 2]", "5", "6", "@mail.com", '{"name": "Sam"}', "order is nil, so it's not a position, and it has no :pop."]

@@ -1803,6 +1803,7 @@ class Interpreter:
         }
         self.started = time.perf_counter()
         self.held = []  # the starts of the names[order:pop] being worked out (see eval "slice")
+        self.depth = 0  # Tuff functions running inside each other (see MAX_DEPTH)
         if os.environ.get("TUFF_NO_WRITES") == "1":  # tuff_run for AI agents: file writes stay in memory
             self.writes = False
         takes_err = {"number", "num", "int", "text", "str", "print"}  # they hand an err back, or show it as "err"
@@ -2365,7 +2366,7 @@ class Interpreter:
                     named = node_text(obj_node)
                     use = f"{named}[\"{as_text}\"] or {named}[text({shown})]" if named else f"[\"{as_text}\"] or [text({shown})]"
                     raise TuffError(f"{owner} doesn't have the number {shown}, but it has \"{as_text}\" (text). Keys that "
-                                    f"come back from file.load are always text: use {use}.")
+                                    f"come back from file.load or a web page's JSON are always text: use {use}.")
                 tip = f" Check first with {owner}:has({shown}), or use {owner}:get({shown}, default)." if node_text(obj_node) else ""
                 raise TuffError(f"{owner} doesn't have {shown}.{tip}")
             return obj[key]
@@ -2451,12 +2452,19 @@ class Interpreter:
                 raise TuffError(f"{fn.name}() needs {want} input{'s' if want != 1 else ''}, but got {len(args)}.")
             local = Env(fn.env)
             local.vars.update(zip(fn.params, args))
+            if self.depth >= MAX_DEPTH:  # (deep enough for real work; a runaway stops here before it eats the memory)
+                raise TuffError(f"{fn.name}() called itself too many times.")
+            self.depth += 1
             try:
                 return self.run_block(fn.body, local)
             except ReturnSignal as r:
                 return r.value
             except RecursionError:
                 raise TuffError(f"{fn.name}() called itself too many times.")
+            except MemoryError:
+                raise TuffError(f"The program ran out of memory inside {fn.name}(). Is something growing without end?")
+            finally:
+                self.depth -= 1
         raise TuffError(f"{to_text(fn, True)} isn't a function, so it can't be called with ( ).")
 
     def method(self, e, env):
@@ -5461,14 +5469,20 @@ def report(err, src):
     sys.stderr.write("\n".join(out) + "\n")
     sys.stderr.flush()
     if WINDOWED:
+        SHOWING_BOX.set()
         try:
             from tkinter import messagebox
             messagebox.showerror("Something went wrong", "\n".join(out[:2]))
         except Exception:
             pass
+        finally:
+            SHOWING_BOX.clear()
 
 
 WINDOWED = False
+# An error box is up (a built app's): while it is, a window's close time limit (tuff_view's CLOSE_LIMIT) waits for it,
+# so an error in app:closed stays on the screen until it's read.
+SHOWING_BOX = threading.Event()
 
 
 def setup_streams():
@@ -5527,14 +5541,20 @@ def base_folder(path):
 # function can call itself over 10,000 times, and one that never stops still ends in under a second with "f() called
 # itself too many times." Programs with tgui, mtgui or tdraw (tkinter) keep the main thread, which a Mac's windows need,
 # and so do apps with no console (report's box is tkinter's).
-DEEP_CALLS = 150_000
+MAX_DEPTH = 10_050  # Tuff calls inside each other (depth(10000) and a little more): 7 to 14 Python calls each
+DEEP_CALLS = 200_000
 DEEP_STACKS = (512 << 20, 255 << 20, 64 << 20)  # the first one a thread can start with (Windows takes under 256 MB)
+# From Python 3.12 (what TuffCode's runtime is built with) Python's own calls don't use the stack, so the usual thread
+# goes as deep: the program's thread gets the usual stack, not a big one that Windows would set aside in full for every run.
+STACK_FREE = sys.version_info >= (3, 12)
 TK_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|tdraw)\b", re.M)
 
 
 def big_stack():
     """Makes the next thread Python starts a big-stack one, with the biggest size in DEEP_STACKS a thread can start
     with. Gives that size, or 0 when none can (it gets the usual stack). threading.stack_size(0) once it has started."""
+    if STACK_FREE:
+        return 0
     for size in DEEP_STACKS:
         try:
             threading.stack_size(size)
@@ -5633,6 +5653,9 @@ def run_file(path):
     except (ReturnSignal, BreakSignal, ContinueSignal) as sig:
         word = {"ReturnSignal": "return", "BreakSignal": "break", "ContinueSignal": "continue"}[type(sig).__name__]
         report(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}.", sig.line, sig.col), src)
+        return 1
+    except MemoryError:  # (1.4.1) a list or text growing without end, outside any function
+        report(TuffError("The program ran out of memory. Is a list or some text growing without end?"), src)
         return 1
     except KeyboardInterrupt:
         return 130

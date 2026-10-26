@@ -169,7 +169,7 @@ both = items + ["jam"]      # join two lists (makes a new list)
 - `return` only works inside a function.
 - **Make every function at the top level of the file**, not inside another function or inside `if`, `for` or `while`. Top-level functions can be used anywhere, even above where they're written. A function made inside a block or another function only exists there, and only once its line has run.
 - Inputs belong to the function. Any other name follows rule 2.
-- Functions can call themselves, but only about 100 calls deep. Use a loop for anything that could go deeper.
+- Functions can call themselves up to about 10,000 calls deep (1.4.1; it was about 100). One that never stops ends with "f() called itself too many times.", which try/catch can catch.
 
 ## Dictionaries
 ```tuff
