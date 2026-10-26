@@ -14,8 +14,8 @@ const PLAN = path.join(OUT, 'learn-sections', 'autopilot.json');
 export const meta = { title: 'Learn Tuff: the sections, old progress, and the new lessons\' checks', timeout: 360000, env: { TUFF_TGAME_AUTOPILOT: PLAN } };
 
 const NL = '\n';
-const TITLES = ['Basics', 'Section 2 · Build apps', 'Section 2.1 · Modern apps', 'Section 2.2 · Advanced apps', 'Section 3 · The internet', 'Section 4 · Games'];
-const NEW = ['atgui', 'tap', 'tgame'];
+const TITLES = ['Basics', 'Section 1.5 · Make it look good', 'Section 2 · Build apps', 'Section 2.1 · Modern apps', 'Section 2.2 · Advanced apps', 'Section 3 · The internet', 'Section 4 · Games', 'Section 5 · Drawing'];
+const NEW = ['look', 'atgui', 'tap', 'tgame', 'tdraw'];
 // What a 1.0.4 profile saved: two Basics lessons, one Build apps lesson and two Modern apps lessons done.
 const OLD_DONE = ['say-hello', 'variables', 'tgui-window', 'mtgui-window', 'mtgui-studio'];
 // Console tap lessons: what to type, and what to use when the internet isn't there.
@@ -60,7 +60,7 @@ export default async (t, ctx) => {
   const tags = await ev(`[...document.querySelectorAll('#learn-body .learn-section')].map((h) => !!h.querySelector('.ls-tag'))`);
   check('Every section but Basics is marked Optional', JSON.stringify(tags) === JSON.stringify([false, true, true, true, true, true]), tags);
   const fresh = secs.filter((s) => NEW.includes(s.id));
-  check('Advanced apps, The internet and Games each have 5 to 9 lessons', fresh.length === 3 && fresh.every((s) => s.lessons.length >= 5 && s.lessons.length <= 9), fresh.map((s) => [s.id, s.lessons.length]));
+  check('Make it look good, Advanced apps, The internet, Games and Drawing each have 5 to 9 lessons', fresh.length === NEW.length && fresh.every((s) => s.lessons.length >= 5 && s.lessons.length <= 9), fresh.map((s) => [s.id, s.lessons.length]));
   const games = fresh.find((s) => s.id === 'tgame');
   check('The last Games lesson is "Make your own game"', games && games.lessons.at(-1).title === 'Make your own game', games && games.lessons.map((l) => l.title));
   const files = secs.flatMap((s) => s.lessons.map((l) => l.file));

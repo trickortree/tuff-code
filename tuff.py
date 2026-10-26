@@ -540,7 +540,7 @@ class Err:
 
 
 ERR = Err()
-LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame")
+LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame", "tdraw")
 # Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
@@ -1249,6 +1249,7 @@ class Runtime:
     def __init__(self, interp):
         self.interp = interp
         self.finish_hooks = []
+        self.wait_hooks = []
 
     def text(self, v):
         return to_text(plain(v))
@@ -1287,6 +1288,10 @@ class Runtime:
 
     def on_finish(self, fn):
         self.finish_hooks.append(fn)
+
+    def on_wait(self, fn):
+        """fn runs over and over while the program waits (wait(1)), so a library's window keeps drawing."""
+        self.wait_hooks.append(fn)
 
     def call(self, fn, *args):
         """Run a Tuff function from a library callback. Errors are reported, not raised."""
@@ -1381,6 +1386,13 @@ class Interpreter:
         except ImportError:
             raise TuffError("mtgui needs Python's tkinter, which isn't installed. Reinstall Python and tick 'tcl/tk and IDLE'.")
         return tuff_tgui.make_library(self.rt, modern=True)
+
+    def lib_tdraw(self):
+        try:
+            import tuff_tdraw
+        except ImportError:
+            raise TuffError("tdraw needs Python's tkinter, which isn't installed. Reinstall Python and tick 'tcl/tk and IDLE'.")
+        return tuff_tdraw.make_library(self.rt, TEXT_COLORS)
 
     def lib_tap(self):
         try:
@@ -1526,7 +1538,15 @@ class Interpreter:
 
     def b_wait(self, seconds):
         sys.stdout.flush()
-        time.sleep(max(0, float(seconds)))
+        end = time.perf_counter() + max(0, float(seconds))
+        while self.rt.wait_hooks:  # a tdraw window keeps drawing while the program waits
+            for hook in self.rt.wait_hooks:
+                hook()
+            left = end - time.perf_counter()
+            if left <= 0:
+                return
+            time.sleep(min(0.02, left))
+        time.sleep(max(0, end - time.perf_counter()))
 
     def b_range(self, a, b=None, step=1):
         if b is None:
@@ -2607,6 +2627,15 @@ def with_gamekit(tg, lib):
                                 if hasattr(lib, f))}
 
 
+def tdraw_pen_methods():
+    """A tdraw pen's :methods, for the checker (None without tkinter)."""
+    try:
+        import tuff_tdraw
+    except ImportError:
+        return None
+    return tuff_tdraw.PEN_METHODS
+
+
 def nodes(x):
     """Every node inside a node, or inside a list of nodes."""
     if isinstance(x, N):
@@ -2874,6 +2903,8 @@ class Checker:
                 return "@window" if e.fn.name == "window" else None
             if lib == "$module:tgame":
                 return {"window": "game", "world": "world"}.get(e.fn.name)
+            if lib == "$module:tdraw":
+                return "tdpen" if e.fn.name == "pen" else None
             return None
         if k == "method":
             if self.is_print(e.obj):  # say:ascii(...) and say:color(...) say a line, like say does
@@ -3067,6 +3098,13 @@ class Checker:
             if self.anims is None:
                 self.anims = {n: b.fn for n, b in self.interp.lib_anims().items()}
             return self.anims
+        if lib == "tdraw":  # its functions open nothing until they're called
+            if getattr(self, "tdraw", None) is None:
+                try:
+                    self.tdraw = {n: b.fn for n, b in self.interp.lib_tdraw().items()}
+                except TuffError:
+                    return None
+            return self.tdraw
         if lib == "tap":
             tap = tap_tables()
             return tap["lib"] if tap else None
@@ -3291,6 +3329,8 @@ class Checker:
         gui = gui_tables()
         if gui is None:
             return True
+        if name in (tdraw_pen_methods() or ()):
+            return True
         at = atgui_tables()
         if at is not None and any(name in m for m in at["kinds"].values()):
             return True
@@ -3491,6 +3531,11 @@ class Checker:
             return
         if self.is_tgame(obj):
             self.check_tgame(e, obj, bare_fix)
+            return
+        if obj == "tdpen":  # a tdraw pen
+            names = tdraw_pen_methods()
+            if names and name not in names:
+                self.problem(e, method_help("A pen", name, names))
             return
         gui = gui_tables()
         tap = tap_tables() if obj in self.TAP_GIVES else None

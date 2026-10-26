@@ -5,7 +5,7 @@ const fsp = fs.promises;
 const { spawn } = require('child_process');
 
 const RUNTIME_DIR = app.isPackaged ? path.join(process.resourcesPath, 'runtime-src') : path.join(__dirname, '..');
-const RUNTIME_FILES = ['tuff.py', 'tuff_tgui.py', 'tuff_tap.py', 'tuff_atgui.py'];
+const RUNTIME_FILES = ['tuff.py', 'tuff_tgui.py', 'tuff_tap.py', 'tuff_atgui.py', 'tuff_tdraw.py'];
 const DEFAULT_ICON = path.join(__dirname, 'renderer', 'assets', 'icon.png');
 const ASSET_EXTS = new Set(['.png', '.gif', '.ico', '.jpg', '.jpeg', '.webp', '.svg', '.txt', '.json', '.csv', '.wav']);
 // Libraries whose windows are web views (tuff_view.py and its page, tuff_view_web): each is tuff_<name>.py.
@@ -340,9 +340,10 @@ async function build(opts, emit) {
   }
   const src = await fsp.readFile(program, 'utf8');
   const usesGui = /^\s*(import|mention)\s+m?tgui\b/m.test(src);
+  const usesDraw = /^\s*(import|mention)\s+tdraw\b/m.test(src); // tdraw draws with tkinter's turtle, like tgui's windows
   // tap needs Python's ssl (and certifi, where installed, for a Mac app's https:// certificates).
   const usesTap = /^\s*(import|mention)\s+tap\b/m.test(src);
-  const windowed = opts.windowed ?? (usesGui || viewLibs.length > 0);
+  const windowed = opts.windowed ?? (usesGui || usesDraw || viewLibs.length > 0);
   step('pack', 'done', `Packed your program${assets.length ? ` and ${assets.length} file${assets.length > 1 ? 's' : ''} (${assets.slice(0, 3).join(', ')}${assets.length > 3 ? '…' : ''})` : ''}`);
 
   step('build', 'running', BUILDING, 'This usually takes 20–60 seconds.');
@@ -353,7 +354,9 @@ async function build(opts, emit) {
     // A Mac app's icon has to be .icns; PyInstaller would need extra tools to convert ours.
     ...(WIN ? ['--icon', iconFile] : macIcon ? ['--icon', macIcon] : []), windowed ? '--windowed' : '--console',
     ...addData.flatMap((d) => ['--add-data', d]),
-    ...(usesGui ? ['--hidden-import', 'tuff_tgui'] : ['--exclude-module', 'tkinter', '--exclude-module', 'tuff_tgui']),
+    ...(usesGui ? ['--hidden-import', 'tuff_tgui'] : ['--exclude-module', 'tuff_tgui']),
+    ...(usesDraw ? ['--hidden-import', 'tuff_tdraw', '--hidden-import', 'turtle'] : ['--exclude-module', 'tuff_tdraw']),
+    ...(usesGui || usesDraw ? [] : ['--exclude-module', 'tkinter']),
     ...(usesTap ? ['--hidden-import', 'tuff_tap', '--hidden-import', 'ssl', '--hidden-import', 'certifi'] : ['--exclude-module', 'tuff_tap']),
     ...(viewLibs.length ? ['--hidden-import', 'tuff_view', ...viewModules.flatMap((m) => ['--hidden-import', m])] : ['--exclude-module', 'tuff_view', '--exclude-module', 'webview']),
     ...VIEW_LIBS.filter((lib) => !viewLibs.includes(lib)).flatMap((lib) => ['--exclude-module', `tuff_${lib}`]),

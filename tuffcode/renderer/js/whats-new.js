@@ -115,6 +115,33 @@ If you already had 1.3.0, the icons are what's new. Everything else here came in
 
 ${NOTES['1.3.0'].notes}`,
   };
+  NOTES['1.3.5'] = {
+    images: ['1.png'],
+    notes: `### Colours in the Run window
+- **Coloured lines:** \`say:color("Game over!", "red")\`. Any colour name, or a code like \`"#ff8800"\`.
+- **A bar behind the line:** a second colour, like \`say:color("LEVEL UP!", "black", "lime")\`. \`bold\`, \`dim\`, \`italic\` and \`underline\` work too.
+- **Rainbow:** \`say:color("WINNER", "rainbow")\` gives every letter its own colour, and the colours keep flowing.
+- **A pen for everything:** \`print:pen("cyan")\` styles every line after it, until \`print:pen()\`.
+
+### Big letters
+- \`say:ascii("GAME OVER")\` writes in big block letters, with six fonts: \`block\`, \`wide\`, \`small\`, \`shadow\`, \`led\` and \`hash\`.
+- Colours, bars and rainbow work on them too, and \`score = say:ascii(0, "gold")\` then \`score:rewrite(42)\` makes a big live scoreboard.
+
+### Animations
+- Add one to a line and it plays when it's said: \`fade\`, \`build\`, \`explode\`, \`assemble\`, \`type\`, \`glitch\`, \`drop\` and \`wave\`, like \`say:ascii("BOOM", "explode", "red")\`.
+- They work in a real terminal and in Build exe console apps too.
+
+### Drawing: tdraw
+- **A new library for drawing with a pen.** \`mention tdraw\`, then \`pen = tdraw.pen()\`, \`pen:forward(100)\`, \`pen:right(90)\`.
+- Shapes and fills (\`pen:circle(50, "gold")\`, \`pen:star(100)\`, \`pen:polygon(6, 40)\`), text, rainbow pens, a background colour, and \`tdraw.on_click\` for drawing with the mouse.
+
+### Learn
+- **Two new sections:** "Make it look good" (colours, big letters, animations, a scoreboard project) and "Drawing" (five lessons with tdraw).
+
+### Good to know
+- The editor checks the new words as you type: \`say:color("hi", "redd")\` asks if you meant "red".
+- Claude, Codex, Antigravity and Pumice 1 know all of it.`,
+  };
 
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   // The little Markdown the notes use: ### headings, - bullets, **bold**, `code` and [links](https://...).

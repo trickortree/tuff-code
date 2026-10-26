@@ -444,6 +444,53 @@ window.TUFF_DOCS = {
   }
 })();
 
+// 1.3.5: say:color, say:ascii and print:pen, and tdraw (drawing with a pen). A name another library has too keeps its
+// doc, with this use added at the end.
+(() => {
+  window.TUFF_LIBS.tdraw = {
+    pen: ['pen = tdraw.pen()', 'Opens the drawing window and gives a pen in the middle (0, 0), facing right. x goes right, y goes up. Move it with :forward, :left, :right, :go and :jump.'],
+    background: ['tdraw.background("navy")', 'The drawing window\'s background colour.'],
+    clear: ['tdraw.clear()', 'Wipes everything every pen has drawn.'],
+    title: ['tdraw.title("My art")', 'The drawing window\'s title.'],
+    size: ['tdraw.size(800, 600)', 'The drawing window\'s size.'],
+    on_click: ['tdraw.on_click(clicked)', 'Runs clicked(x, y) when the drawing is clicked.'],
+  };
+  window.TUFF_DOCS.tdraw = ['mention tdraw', 'Drawing with a pen (a turtle): lines, shapes, fills, text and rainbow pens, in a window that stays open. pen = tdraw.pen(), then pen:forward(100), pen:right(90).'];
+  window.TUFF_DOCS.print = ['print(a, b, ...)', 'Like `say`, but takes several values separated by commas. print:color, print:ascii and print:pen (also say:color, say:ascii, say:pen) style what it shows.'];
+  const docs = window.TUFF_METHOD_DOCS;
+  const own = {
+    ascii: ['say:ascii("GAME OVER", "red", "explode")', 'Big ASCII-art letters. After the text, in any order: a font (block, wide, small, shadow, led, hash), colours (the letters\', then a bar behind them), rainbow, bold/dim/italic/underline and an animation (fade, build, explode, assemble, type, glitch, drop, wave). It gives back the line: :rewrite keeps it big.'],
+    pen: ['print:pen("lime", "bold")', 'Every line said after it gets this look (colours, rainbow, styles) until print:pen().'],
+    color: ['say:color("Game over!", "red")', 'A coloured line. After the text, in any order: colours (the first is the letters\', a second is a bar behind the whole line), "rainbow", bold/dim/italic/underline and an animation (fade, type, glitch...). tdraw: pen:color("red") sets the pen\'s colour ("rainbow" changes as it moves), pen:color("red", "gold") the line and the fill.'],
+    forward: ['pen:forward(100)', 'tdraw: moves the pen forward, drawing a line (unless it\'s :up).'],
+    back: ['pen:back(50)', 'tdraw: moves the pen backward, drawing as it goes.'],
+    left: ['pen:left(90)', 'tdraw: turns the pen left by that many degrees (90 if you leave it out).'],
+    right: ['pen:right(90)', 'tdraw: turns the pen right by that many degrees (90 if you leave it out).'],
+    go: ['pen:go(x, y)', 'tdraw: moves the pen straight to x, y, drawing a line.'],
+    jump: ['pen:jump(x, y)', 'tdraw: moves the pen to x, y without drawing.'],
+    home: ['pen:home()', 'tdraw: back to the middle, facing right, without drawing.'],
+    face: ['pen:face(90)', 'tdraw: points the pen: 0 is right, 90 up, 180 left, 270 down.'],
+    up: ['pen:up()', 'tdraw: lifts the pen, so moving doesn\'t draw.'],
+    down: ['pen:down()', 'tdraw: puts the pen down again, so moving draws.'],
+    width: ['pen:width(5)', 'tdraw: how thick the pen\'s lines are.'],
+    speed: ['pen:speed "fast"', 'tdraw: "slow", "normal", "fast" (the start) or "instant" (no animation, for big drawings), or 1 to 10.'],
+    circle: ['pen:circle(50, "gold")', 'tdraw: a circle of that radius, starting where the pen is. A colour after it fills it.'],
+    square: ['pen:square(80, "sky")', 'tdraw: a square with that side. A colour after it fills it.'],
+    triangle: ['pen:triangle(80)', 'tdraw: a triangle with that side. A colour after it fills it.'],
+    polygon: ['pen:polygon(6, 40)', 'tdraw: a shape with that many sides, each that long (6 makes a hexagon). A colour after it fills it.'],
+    star: ['pen:star(100, "gold")', 'tdraw: a five-pointed star. A colour after it fills it.'],
+    dot: ['pen:dot(20, "red")', 'tdraw: a filled dot where the pen is. The colour is optional.'],
+    write: ['pen:write("Hello", 24)', 'tdraw: writes text where the pen is. The size is optional.'],
+    hide: ['pen:hide()', 'tdraw: hides the turtle (the drawing stays).'],
+    show: ['pen:show()', 'tdraw: shows the turtle again.'],
+    x: ['pen:x()', 'tdraw: where the pen is, across.'],
+    y: ['pen:y()', 'tdraw: where the pen is, up and down.'],
+  };
+  for (const [name, [sig, text]] of Object.entries(own)) {
+    docs[name] = docs[name] && name !== 'color' ? [docs[name][0], `${docs[name][1]} ${text}`] : [sig, text];
+  }
+})();
+
 const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average'];
 
 // A line that opens an indented block: if/elif/else/while/for/func ending in ':' or 'then'.
