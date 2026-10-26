@@ -168,7 +168,10 @@ ${NOTES['1.3.0'].notes}`,
 - \`sin\`, \`cos\` and \`tan\` (in degrees), \`log\`, and random decimals with \`random()\`.
 
 ### Learn
-- **A new section, Toolbox:** dictionaries, text tools, sorting, files, and what to do when things go wrong.`,
+- **A new section, Toolbox:** dictionaries, text tools, sorting, files, and what to do when things go wrong.
+
+### Also from 1.3.5 and 1.3.6
+- Coloured lines and big letters (\`say:color\`, \`say:ascii\`), 8 animations, \`line:play\`, and **tdraw** for drawing with a pen.`,
   };
   // 1.3.6 adds a few things to 1.3.5. Copies coming from before 1.3.5 only see 1.3.6's notes, so they carry 1.3.5's too.
   NOTES['1.3.6'] = {
