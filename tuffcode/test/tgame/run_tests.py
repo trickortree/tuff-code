@@ -4435,8 +4435,68 @@ def t_toolbox_fixes(c):
             and not os.path.exists(os.path.join(project, "data.json")), "...and nothing on disk changed")
 
 
+LOOKS_PROGRAM = '''mention anims
+name = input:color("Name? ", "green")
+say "Hi " + name
+anims.loading("Pulling info...", 0.2, "sky")
+anims.countdown(1, "Go!", "lime", "bold")
+print:pen("cyan")
+again = input "Again? "
+anims.loading("With the pen", 0.1)
+'''
+LOOKS_CHECKS = [
+    ('x = input:color("Hi? ", "gren")', 'input:color doesn\'t know "gren". Did you mean "green"?'),
+    ('x = input:color("Hi? ", "explode")', 'input:color sets colours and styles. Animations like "explode" go on say:ascii or say:color.'),
+    ('x = input:ascii("Hi")', "input has one method, :color"),
+    ('x = input:color "Hi"', "Put input:color's question and look in brackets"),
+    ('mention anims\nanims.loading("Hi", "gren")', 'anims.loading doesn\'t know "gren". Did you mean "green"?'),
+    ('mention anims\nanims.loading("Hi", "fade")', 'anims.loading sets colours and styles.'),
+    ('mention anims\nanims.countdown(3, "Go!", "lime")\nx = input:color("Name? ", "green", "bold")', "OK"),
+]
+
+
+def t_looks(c):
+    """1.4.1: input:color's question and anims' lines take looks (colours, rainbow, styles), and print:pen colours
+    them too. What TuffCode's Run panel is sent (TUFF_IDE=1), read without opening anything."""
+    import base64
+    import re
+    folder = os.path.join(HERE, "out", "looks")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "looks.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(LOOKS_PROGRAM)
+    p = subprocess.run(tuff_cmd() + [path], input="Sam\nyes\n", capture_output=True, text=True, encoding="utf-8", timeout=60,
+                       env={**os.environ, "TUFF_IDE": "1"})
+    c.check(p.returncode == 0, "the looks program runs to the end", (p.stdout + p.stderr)[-500:])
+    sent = []
+    for kind, args in re.findall(r"\x1b\]tuff;(\w+);([^\x07]*)\x07", p.stdout):
+        parts = args.split(";")
+        text = base64.b64decode(parts[0 if kind == "prompt" else 1]).decode("utf-8")
+        style = parts[1 if kind == "prompt" else 2] if len(parts) > (1 if kind == "prompt" else 2) else ""
+        sent.append((kind, text, json.loads(base64.b64decode(style[5:])) if style.startswith("rich:") else {}))
+    prompts = [s for s in sent if s[0] == "prompt"]
+    c.check(prompts and prompts[0][1] == "Name? " and prompts[0][2].get("fg") == "#22a35a",
+            'input:color("Name? ", "green") sends its question in green, on the answer\'s line', prompts[:1])
+    loading = [s for s in sent if s[0] == "say" and "Pulling info" in s[1]]
+    c.check(loading and loading[0][2].get("fg") == "#87ceeb", 'anims.loading("Pulling info...", 0.2, "sky") is sky blue', loading[:1])
+    count = [s for s in sent if s[0] == "say" and s[1] == "1"]
+    c.check(count and count[0][2].get("fg") == "#84cc16" and count[0][2].get("bold") == 1, "anims.countdown takes lime and bold after its inputs", count[:1])
+    c.check(len(prompts) > 1 and prompts[1][1] == "Again? " and prompts[1][2].get("fg") == "#22d3ee",
+            "with print:pen on, a plain input's question has the pen's look", prompts[1:2])
+    pen = [s for s in sent if s[0] == "say" and "With the pen" in s[1]]
+    c.check(pen and pen[0][2].get("fg") == "#22d3ee", "with print:pen on, anims' lines have the pen's look", pen[:1])
+    plain_run = subprocess.run(tuff_cmd() + [path], input="Sam\nyes\n", capture_output=True, text=True, encoding="utf-8", timeout=60)
+    c.check(plain_run.stdout.startswith("Name? Hi Sam"), "in a pipe the question is plain text", plain_run.stdout[:80])
+    for i, (code, want) in enumerate(LOOKS_CHECKS):
+        bad = os.path.join(folder, f"check{i}.tuf")
+        with open(bad, "w", encoding="utf-8") as f:
+            f.write(code + "\n")
+        out = subprocess.run(tuff_cmd() + ["--check", bad], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(want in out.stdout + out.stderr, f"--check on {code.splitlines()[-1]!r} says {want!r}", (out.stdout + out.stderr)[:300])
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
-         "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes,
+         "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
          "models": t_models, "people": t_people,
          "churn": t_churn, "pause_key": t_pause_key, "close": t_close, "hud_3d": t_hud_3d, "terrain": t_terrain,

@@ -1234,6 +1234,13 @@
         void span.offsetWidth;
         span.classList.add('flash');
       }
+    } else if (kind === 'prompt') {
+      // prompt;<b64>;<style> (1.4.1): input:color's question in its look, on the line the answer is typed on
+      const text = decode64(args[0] || '');
+      const span = appendOut(text, 'tline tprompt', c);
+      const look = richStyle(args[1]);
+      if (look) richLine(span, text, look);
+      if (c.who === 1 && runInput) runInput.focus();
     } else if (kind === 'error') {
       markError(state.lastRunFile, +args[0], +args[1], decode64(args[2] || ''));
     } else if (kind === 'clear') {

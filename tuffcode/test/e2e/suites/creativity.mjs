@@ -93,6 +93,16 @@ export default async (t, ctx) => {
   }
   check(':play("glitch") on a rainbow line keeps it a flowing rainbow in every frame', seen > 10 && lost === 0, { seen, lost });
 
+  // 1.4.1: input:color's question is in its look, on the line the answer is typed on
+  await run('ask.tuf', ['name = input:color("Name? ", "green", "bold")', 'say "Hi " + name'].join('\n') + '\n', false);
+  await t.waitFor(`!!document.querySelector('#run-output .tline.tprompt') && !!document.querySelector('#run-input')`, 15000);
+  const asked = await ev(`(() => { const p = document.querySelector('#run-output .tline.tprompt'); const i = document.querySelector('#run-input'); return { text: p.textContent, color: p.style.color, weight: p.style.fontWeight, sameLine: Math.abs(p.getBoundingClientRect().top - i.getBoundingClientRect().top) < 6 }; })()`);
+  check('input:color("Name? ", "green", "bold") asks in green and bold, and the answer is typed on the same line',
+    asked.text === 'Name? ' && asked.color === 'rgb(34, 163, 90)' && asked.weight === '700' && asked.sameLine, asked);
+  await ev(`(() => { const i = document.querySelector('#run-input'); i.value = 'Sam'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return 1; })()`);
+  const answered = await t.waitFor(`[...document.querySelectorAll('#run-output .tline')].some((s) => s.textContent === 'Hi Sam')`, 10000);
+  check('...and the program gets the answer', !!answered, await lines());
+
   // Big letters in every font, and a score that changes
   await run('fonts.tuf', [
     'for font in ["block", "wide", "small", "shadow", "led", "hash"]:',

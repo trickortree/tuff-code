@@ -211,6 +211,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #run-output .tline.rich.art { display: inline-block; max-width: 100%; overflow-x: auto; white-space: pre; line-height: 1.08; vertical-align: top;
   text-shadow: .5px 0 currentColor, 0 .5px currentColor; } /* closes the hairline gaps between blocks at fractional character widths */
 #run-output .tline.rich.art.bar { padding: 4px 8px; }
+/* input:color's question (1.4.1) stays on the line the answer is typed on: a bar is just behind its words */
+#run-output .tline.tprompt.rich.bar { display: inline; min-width: 0; padding: 0 4px; }
 /* "rainbow" moves: every letter's colour turns round the colour wheel, so the rainbow flows along the line (the
    letters only: a bar behind them keeps its colour) */
 #run-output .tline.rich.rainbow > span { display: inline-block; animation: tline-rainbow 2.4s linear infinite; animation-delay: var(--rainbow-at, 0s); }

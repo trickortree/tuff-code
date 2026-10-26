@@ -310,7 +310,9 @@ board:play("explode")                               # an animation on the line w
   - **fonts** (say:ascii only): `block`, `wide`, `small`, `shadow`, `led`, `hash`.
   - **animations:** `fade`, `build`, `explode`, `assemble`, `type`, `glitch`, `drop`, `wave`.
 - An animation plays when the line is said: about 1 to 2 seconds, and the program waits for it. `explode` leaves the line empty. Animations work on `say:color` lines too, like `say:color("Loading...", "type")`.
-- `print:pen` takes colours and styles, not fonts or animations.
+- `print:pen` takes colours and styles, not fonts or animations. It colours everything said after it: `say`, `print`, `input`'s questions and anims' lines.
+- **A question in a look (1.4.1):** `name = input:color("Name? ", "green")` asks like `input`, with the question in colours, rainbow or styles (not animations: say the question with `say:color(..., "type")` first for that). It gives back what was typed.
+- **Anims in a look (1.4.1):** look words go after an anim's usual inputs: `anims.loading("Pulling info...", "green")`, `anims.bar("Saving", 2, 20, "rainbow")`, `anims.countdown(3, "Go!", "lime", "bold")`.
 - Where it shows:
   - **TuffCode's Run window:** all of it.
   - **A real terminal** (and a Build exe console app): ANSI colours, and animations play. Rainbow doesn't flow there.

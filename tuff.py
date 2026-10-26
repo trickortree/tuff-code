@@ -409,13 +409,29 @@ class Parser:
             return N("say", tok, value=self.expr())
         if self.at("KW", "input"):
             self.next()
+            if self.at("METHOD"):  # input:color("Name? ", "green"): the question in a look, like say:color (1.4.1)
+                self.next()
+                name_tok = self.peek()
+                name = self.member_name('Expected a method name after "input:", like input:color("Name? ", "green").')
+                if name not in ("color", "colour"):
+                    tip = " For big letters, say them first with say:ascii(...), then ask with input." if name == "ascii" else ""
+                    raise TuffError(f'input has one method, :color, like input:color("Name? ", "green"), not :{name}.{tip}',
+                                    name_tok.line, name_tok.col)
+                if not self.at("OP", "("):
+                    raise TuffError('Put input:color\'s question and look in brackets, like input:color("Name? ", "green").',
+                                    name_tok.line, name_tok.col)
+                self.next()
+                args = self.call_args(")")
+                if not args:
+                    raise TuffError('input:color needs the question first, like input:color("Name? ", "green").', name_tok.line, name_tok.col)
+                return N("input", tok, prompt=args[0], looks=args[1:])
             if self.at("OP", "("):
                 self.next()
                 prompt = None if self.at("OP", ")") else self.expr()
                 self.expect("OP", ")")
             else:
                 prompt = self.expr() if self.starts_expr() else None
-            return N("input", tok, prompt=prompt)
+            return N("input", tok, prompt=prompt, looks=None)
         return self.or_expr()
 
     def or_expr(self):
@@ -1236,7 +1252,7 @@ def look_help(owner, given, word, art, pen):
     if word in ART_FONTS:
         return f'"{word}" is a font for big letters: use it with say:ascii("Hi", "{word}").'
     if word in ART_EFFECTS:
-        return f'print:pen sets colours and styles. Animations like "{word}" go on say:ascii or say:color.'
+        return f'{owner} sets colours and styles. Animations like "{word}" go on say:ascii or say:color.'
     known = list(TEXT_COLORS) + ["rainbow", *TEXT_STYLES] + (list(ART_FONTS) if art else []) + ([] if pen else list(ART_EFFECTS))
     hint = difflib.get_close_matches(word, known, n=1, cutoff=0.6)
     kinds = ["colours (red, gold, sky... or \"#ff8800\")", "rainbow", "styles (" + ", ".join(TEXT_STYLES) + ")"]
@@ -1606,6 +1622,20 @@ class Console:
         if up > 0:
             self.write(f"\x1b[{up}A\r\x1b[2K{text}\x1b[{up}B\r")
 
+    def ask(self, prompt, look):
+        """input:color's question (and input's with print:pen on): in its look, on the line the answer is typed on."""
+        rows, _ = look_text(prompt, look, False)
+        runs = frame_of(rows, look.letters(rows))[1]
+        if IDE:
+            data = {"fg": look.fg, "bg": look.bg, "runs": runs or None, "rainbow": 1 if look.rainbow else None}
+            data = {k: v for k, v in data.items() if v}
+            data.update({s: 1 for s in look.styles})
+            self.write(f"\x1b]tuff;prompt;{b64(prompt)};rich:{b64(json.dumps(data, separators=(',', ':')))}\x07")
+        elif sys.stdout.isatty():  # (no bar to the window's edge: the answer is typed after it)
+            self.write("\n".join(row.replace("\x1b[K", "") for row in ansi_rows(prompt, runs, look)))
+        else:
+            self.write(prompt)
+
     def clear(self, count=None):
         if IDE:
             self.write(f"\x1b]tuff;clear;{'all' if count is None else count}\x07")
@@ -1615,8 +1645,11 @@ class Console:
             self.write("\x1b[1A\x1b[2K" * min(count, self.rows) + "\r")
         self.rows = 0 if count is None else max(0, self.rows - count)
 
-    def input(self, prompt):
-        self.write(prompt)
+    def input(self, prompt, look=None):
+        if look and prompt:
+            self.ask(prompt, look)
+        else:
+            self.write(prompt)
         data = sys.stdin.readline()
         if data == "":
             raise TuffError("The program asked for an answer, but there was no more input to read.")
@@ -1895,9 +1928,33 @@ class Interpreter:
         con = self.console
         spin = "/-\\|"
 
-        def loading(text="Loading", seconds=2):
+        def looked(name, inputs, texts, most):
+            """anims' usual inputs, then look words after them, like say:color's (1.4.1):
+            anims.loading("Pulling info...", "green"). A word where a number goes is a look word too; texts are the
+            places that take text. With print:pen on, the pen's look is the starting point."""
+            usual, words = [], []
+            for i, a in enumerate(inputs):
+                if words or (isinstance(plain(a), str) and i not in texts):
+                    words.append(a)
+                else:
+                    usual.append(a)
+            if len(usual) > most:
+                raise TuffError(f"anims.{name} takes {most} inputs before its look words, not {len(usual)}.")
+            look = read_look(f"anims.{name}", words, pen=True) if words else None  # (an anim is an animation already)
+            if look is not None or self.pen:
+                look = (look or Look()).with_pen(self.pen)
+            return usual, look
+
+        def start(text, look):
+            return con.say_look(text, look) if look else con.say(text)
+
+        def loading(*inputs):
+            usual, look = looked("loading", inputs, {0}, 2)
+            return loading_(*usual, look=look)
+
+        def loading_(text="Loading", seconds=2, look=None):
             text = to_text(text)
-            line = con.say(f"/ {text}")
+            line = start(f"/ {text}", look)
             frames = max(1, round(float(seconds) / 0.1))
             for i in range(frames):
                 con.rewrite(line, f"{spin[i % 4]} {text}{'.' * (i // 3 % 4)}")
@@ -1905,10 +1962,14 @@ class Interpreter:
             con.rewrite(line, f"✓ {text}... done")
             return line
 
-        def bar(text="Working", seconds=2, width=20):
+        def bar(*inputs):
+            usual, look = looked("bar", inputs, {0}, 3)
+            return bar_(*usual, look=look)
+
+        def bar_(text="Working", seconds=2, width=20, look=None):
             text = to_text(text)
             width = max(5, int(width))
-            line = con.say("")
+            line = start("", look)
             steps = max(1, round(float(seconds) / 0.05))
             for i in range(steps + 1):
                 filled = round(width * i / steps)
@@ -1917,17 +1978,25 @@ class Interpreter:
                     time.sleep(0.05)
             return line
 
-        def type_(text, speed=0.04):
+        def type_(*inputs):
+            usual, look = looked("type", inputs, {0}, 2)
+            return type__(*usual, look=look)
+
+        def type__(text, speed=0.04, look=None):
             text = to_text(text)
-            line = con.say("")
+            line = start("", look)
             for i in range(1, len(text) + 1):
                 con.rewrite(line, text[:i])
                 time.sleep(max(0, float(speed)))
             return line
 
-        def countdown(start=3, then="Go!"):
-            n = int(plain(start))
-            line = con.say(str(n))
+        def countdown(*inputs):
+            usual, look = looked("countdown", inputs, {1}, 2)
+            return countdown_(*usual, look=look)
+
+        def countdown_(begin=3, then="Go!", look=None):
+            n = int(plain(begin))
+            line = start(str(n), look)
             for i in range(n - 1, 0, -1):
                 time.sleep(1)
                 con.rewrite(line, str(i))
@@ -2185,7 +2254,12 @@ class Interpreter:
             return self.print_builtin
         if k == "input":
             prompt = "" if e.prompt is None else to_text(self.eval(e.prompt, env))
-            return self.console.input(prompt)
+            look = None
+            if getattr(e, "looks", None) is not None:  # input:color("Name? ", "green")
+                look = read_look("input:color", [self.eval(a, env) for a in e.looks], pen=True)  # (no animations)
+            if look is not None or self.pen:  # with print:pen on, the question has the pen's look too
+                look = (look or Look()).with_pen(self.pen)
+            return self.console.input(prompt, look)
         if k == "binop":
             return self.binop(e.op, self.eval(e.left, env), self.eval(e.right, env))
         if k == "and":
@@ -3761,6 +3835,13 @@ class Checker:
             self.expr(e.prompt, scope)
             if e.prompt is not None and (e.prompt.kind in ("and", "or") or (e.prompt.kind == "binop" and e.prompt.op in self.COMPARE)):
                 self.problem(e, "input took everything after it as its question, so it asks the wrong thing. Store the answer first: answer = input \"...\", then compare answer.")
+            for a in getattr(e, "looks", None) or []:  # input:color("Name? ", "green"): the words written in quotes
+                self.expr(a, scope)
+                if a.kind == "const" and isinstance(a.value, str):
+                    try:
+                        read_look("input:color", [a.value], pen=True)
+                    except TuffError as err:
+                        self.problem(a, err.msg)
         elif k in ("binop", "and", "or"):
             self.expr(e.left, scope)
             self.expr(e.right, scope)
@@ -4149,6 +4230,20 @@ class Checker:
             any(name in m for m in gui["kinds"].values()) or (tap is None or any(name in m for m in tap["kinds"].values())) or \
             (tg is None or any(name in m for m in tg["kinds"].values()))
 
+    ANIMS_TEXTS = {"countdown": {1}}  # where each anims function takes text (others: the first input); see lib_anims
+
+    def check_anims_looks(self, e):
+        """anims.loading("Pulling info...", "green"): a word where text doesn't go is a look word (1.4.1)."""
+        name, texts, looks = e.fn.name, self.ANIMS_TEXTS.get(e.fn.name, {0}), False
+        for i, a in enumerate(e.args):
+            looks = looks or (a.kind == "const" and isinstance(a.value, str) and i not in texts)
+            if looks and a.kind == "const" and isinstance(a.value, str):
+                try:
+                    read_look(f"anims.{name}", [a.value], pen=True)
+                except TuffError as err:
+                    self.problem(a, err.msg)
+                    return
+
     def check_call(self, e, scope):
         fn, n = e.fn, len(e.args)
         if fn.kind == "var":
@@ -4184,6 +4279,8 @@ class Checker:
                 members = self.lib_members(lib[8:]) or {}
                 if fn.name in members and not accepts(members[fn.name], n):
                     self.problem(e, f"{lib[8:]}.{fn.name}() got the wrong number of inputs ({n}).")
+                elif lib == "$module:anims" and fn.name in members:
+                    self.check_anims_looks(e)
 
     def check_number_input(self, a, name):
         """number(), num() and int() give err for text that isn't a number, but anything else that isn't text or a
@@ -5150,7 +5247,7 @@ class SceneConsole(Console):
     def write(self, text):
         pass
 
-    def input(self, prompt):
+    def input(self, prompt, look=None):
         return ""
 
 

@@ -284,10 +284,10 @@ window.TUFF_LIBS = {
     window: ['mtgui.window("Title", width, height)', 'Opens a modern app window with gradients, gloss and shine.'],
   },
   anims: {
-    loading: ['anims.loading(text, seconds)', 'A spinning / - \\ | loader with animated dots. Both inputs are optional.'],
-    bar: ['anims.bar(text, seconds, width)', 'A progress bar that fills from 0% to 100%. width is how many blocks wide it is (20 by default).'],
-    type: ['anims.type(text, speed)', 'Types text out one letter at a time. speed is seconds per letter (0.04 by default), so a bigger number is slower.'],
-    countdown: ['anims.countdown(start, then)', 'Counts down on one line, then shows the `then` text.'],
+    loading: ['anims.loading(text, seconds)', 'A spinning / - \\ | loader with animated dots. Both inputs are optional. After its inputs, look words like say:color\'s (1.4.1): colours, rainbow, bold/dim/italic/underline. anims.loading("Pulling info...", "green")'],
+    bar: ['anims.bar(text, seconds, width)', 'A progress bar that fills from 0% to 100%. width is how many blocks wide it is (20 by default). After its inputs, look words like say:color\'s (1.4.1): colours, rainbow, bold/dim/italic/underline.'],
+    type: ['anims.type(text, speed)', 'Types text out one letter at a time. speed is seconds per letter (0.04 by default), so a bigger number is slower. After its inputs, look words like say:color\'s (1.4.1): colours, rainbow, bold/dim/italic/underline.'],
+    countdown: ['anims.countdown(start, then)', 'Counts down on one line, then shows the `then` text. After its inputs, look words like say:color\'s (1.4.1): colours, rainbow, bold/dim/italic/underline. anims.countdown(3, "Go!", "lime")'],
   },
   tap: {
     get: ['tap.get(url, headers)', 'Gets a web page or API and gives back a response: res:status, res:ok, res:text, res:json, res:header(name). headers is optional: a data object.'],
@@ -304,7 +304,7 @@ window.TUFF_LIBS = {
 
 window.TUFF_DOCS = {
   say: ['say value', 'Shows a line in the Run window. `line = say "hi"` keeps the line so you can :rewrite it later.'],
-  input: ['input "question"', 'Asks the person running the program to type something and gives back their answer as text.'],
+  input: ['input "question"', 'Asks the person running the program to type something and gives back their answer as text. input:color("Name? ", "green") asks with the question in a look (colours, rainbow, styles), like say:color.'],
   func: ['func name(inputs):', 'Makes a function. It gives back its last value automatically, or whatever you `return`.'],
   return: ['return value', 'Leaves the function and gives back a value.'],
   if: ['if condition:', 'Runs the indented block only when the condition is true. `then` works instead of `:`.'],
@@ -463,7 +463,7 @@ window.TUFF_DOCS = {
   const own = {
     play: ['line:play("explode")', 'Plays an animation on a line you already said, where it is: fade, build, explode, assemble, type, glitch, drop or wave. With wait(3) before it, it plays 3 seconds later.'],
     ascii: ['say:ascii("GAME OVER", "red", "explode")', 'Big ASCII-art letters. After the text, in any order: a font (block, wide, small, shadow, led, hash), colours (the letters\', then a bar behind them), rainbow, bold/dim/italic/underline and an animation (fade, build, explode, assemble, type, glitch, drop, wave). It gives back the line: :rewrite keeps it big.'],
-    pen: ['print:pen("lime", "bold")', 'Every line said after it gets this look (colours, rainbow, styles) until print:pen().'],
+    pen: ['print:pen("lime", "bold")', 'Every line said after it gets this look (colours, rainbow, styles) until print:pen(): say, print, input\'s questions and anims too.'],
     color: ['say:color("Game over!", "red")', 'A coloured line. After the text, in any order: colours (the first is the letters\', a second is a bar behind the whole line), "rainbow", bold/dim/italic/underline and an animation (fade, type, glitch...). tdraw: pen:color("red") sets the pen\'s colour ("rainbow" changes as it moves), pen:color("red", "gold") the line and the fill. On a widget, label:color "red" changes its text color, and in tgame hero:color("gold") colours a sprite, object or group.'],
     forward: ['pen:forward(100)', 'tdraw: moves the pen forward, drawing a line (unless it\'s :up).'],
     back: ['pen:back(50)', 'tdraw: moves the pen backward, drawing as it goes.'],
@@ -741,6 +741,10 @@ window.registerTuff = function registerTuff(monaco, accent) {
             label: m, kind: K.Method, insertText: m, range, detail: window.TUFF_METHOD_DOCS[m]?.[0], documentation: window.TUFF_METHOD_DOCS[m]?.[1],
           })),
         };
+      }
+      if (/\binput:$/.test(before)) { // input:color (1.4.1): the question in a look
+        return { suggestions: [{ label: 'color', kind: K.Method, insertText: 'color', range, detail: 'input:color("Name? ", "green")',
+          documentation: 'Asks like input, with the question in a look: colours (the letters\', then a bar behind them), "rainbow" and bold/dim/italic/underline. It gives back what was typed.' }] };
       }
       if (/\w:$/.test(before)) {
         // atgui's, tgame's and tdraw's own methods (their docs start with "atgui", "tgame" or "tdraw") only crowd the
