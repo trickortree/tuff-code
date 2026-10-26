@@ -616,14 +616,25 @@ window.registerTuff = function registerTuff(monaco, accent) {
       if (/^\s*(import|mention)\s+$/.test(before)) {
         return { suggestions: Object.keys(window.TUFF_LIBS).map((l) => ({ label: l, kind: K.Module, insertText: l, range, documentation: window.TUFF_DOCS[l]?.[1] })) };
       }
+      if (/\b(say|print):$/.test(before)) { // say:ascii, say:color, say:pen (1.3.5)
+        return {
+          suggestions: ['ascii', 'color', 'pen'].map((m) => ({
+            label: m, kind: K.Method, insertText: m, range, detail: window.TUFF_METHOD_DOCS[m]?.[0], documentation: window.TUFF_METHOD_DOCS[m]?.[1],
+          })),
+        };
+      }
       if (/\w:$/.test(before)) {
-        // atgui's and tgame's own methods (their docs start with "atgui" or "tgame") only crowd the list in files
-        // that use that library. A game with a panel or a screen uses atgui's widgets too.
+        // atgui's, tgame's and tdraw's own methods (their docs start with "atgui", "tgame" or "tdraw") only crowd the
+        // list in files that use that library. A game with a panel or a screen uses atgui's widgets too. print's
+        // :ascii and :pen come only after say: or print: (above).
         const src = model.getValue();
         const games = /^\s*(import|mention)\s+tgame\b/m.test(src);
         const modern = /^\s*(import|mention)\s+atgui\b/m.test(src) || (games && /:\s*(panel|screen|start_screen|main_menu)\b/.test(src));
+        const drawing = /^\s*(import|mention)\s+tdraw\b/m.test(src);
         const names = Object.keys(window.TUFF_METHOD_DOCS).filter((m) => {
           const doc = window.TUFF_METHOD_DOCS[m][1] || '';
+          if (m === 'ascii' || m === 'pen') return false;
+          if (/^tdraw\b/.test(doc)) return drawing;
           if (/^In tgame:/.test(doc)) return games || modern;  // a name both have (align, animate...): in either's files
           return (games || !/^tgame\b/.test(doc)) && (modern || !/^atgui\b/.test(doc));
         });

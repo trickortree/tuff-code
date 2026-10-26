@@ -58,7 +58,7 @@ export default async (t, ctx) => {
   const titles = await ev(`[...document.querySelectorAll('#learn-body .learn-section .ls-title')].map((e) => e.textContent)`);
   check(`The sections are, in order: ${TITLES.join(', ')}`, JSON.stringify(titles) === JSON.stringify(TITLES) && JSON.stringify(secs.map((s) => s.title)) === JSON.stringify(TITLES), titles);
   const tags = await ev(`[...document.querySelectorAll('#learn-body .learn-section')].map((h) => !!h.querySelector('.ls-tag'))`);
-  check('Every section but Basics is marked Optional', JSON.stringify(tags) === JSON.stringify([false, true, true, true, true, true]), tags);
+  check('Every section but Basics is marked Optional', JSON.stringify(tags) === JSON.stringify([false, ...TITLES.slice(1).map(() => true)]), tags);
   const fresh = secs.filter((s) => NEW.includes(s.id));
   check('Make it look good, Advanced apps, The internet, Games and Drawing each have 5 to 9 lessons', fresh.length === NEW.length && fresh.every((s) => s.lessons.length >= 5 && s.lessons.length <= 9), fresh.map((s) => [s.id, s.lessons.length]));
   const games = fresh.find((s) => s.id === 'tgame');
