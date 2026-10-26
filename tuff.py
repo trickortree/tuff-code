@@ -1061,8 +1061,22 @@ def art_frames(rows, boxes, look):
     return frames
 
 
+# A Mac's Terminal app shows only 256 colours (24-bit codes come out wrong there): it gets the nearest of those.
+ANSI_256 = os.environ.get("TERM_PROGRAM") == "Apple_Terminal" and os.environ.get("COLORTERM", "").lower() not in ("truecolor", "24bit")
+
+
 def ansi_color(hex_color, ground=38):
-    return f"\x1b[{ground};2;{int(hex_color[1:3], 16)};{int(hex_color[3:5], 16)};{int(hex_color[5:7], 16)}m"
+    r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
+    if not ANSI_256:
+        return f"\x1b[{ground};2;{r};{g};{b}m"
+    steps = [0, 95, 135, 175, 215, 255]  # xterm's 6 x 6 x 6 colour cube, or its 24 greys, whichever is closer
+    near = lambda v: min(range(6), key=lambda i: abs(steps[i] - v))
+    cube = (near(r), near(g), near(b))
+    grey = min(23, max(0, round(((r + g + b) / 3 - 8) / 10)))
+    dist = lambda c: (c[0] - r) ** 2 + (c[1] - g) ** 2 + (c[2] - b) ** 2
+    use_grey = dist((8 + grey * 10,) * 3) < dist(tuple(steps[i] for i in cube))
+    n = 232 + grey if use_grey else 16 + 36 * cube[0] + 6 * cube[1] + cube[2]
+    return f"\x1b[{ground};5;{n}m"
 
 
 def ansi_rows(text, runs, look):
