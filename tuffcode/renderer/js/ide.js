@@ -1142,12 +1142,60 @@
     for (const piece of text.split(/(?<=\n)/)) appendOut(piece, cls, c);
   }
 
+  // say:color, say:ascii and print:pen (1.3.2): a line's style "rich:<base64 JSON>" says how it looks. fg and bg
+  // are #rrggbb (bg is a bar behind the whole line), bold/dim/italic/underline are 1, runs are [row, start, length,
+  // colour] for letters in their own colour (rainbow, and the animations' frames), art is big ASCII-art letters
+  // (they don't wrap: a wide one scrolls sideways) and anim is an animation's frame (no flash).
+  const COLOR = /^#[0-9a-f]{6}$/i;
+  const richStyle = (arg) => {
+    if (!arg || !arg.startsWith('rich:')) return null;
+    try { return JSON.parse(decode64(arg.slice(5))); } catch { return null; }
+  };
+  function richLine(span, text, look) {
+    span.classList.add('rich');
+    span.classList.toggle('art', !!look.art);
+    span.classList.toggle('bar', COLOR.test(look.bg || ''));
+    span.style.color = COLOR.test(look.fg || '') ? look.fg : '';
+    span.style.backgroundColor = COLOR.test(look.bg || '') ? look.bg : '';
+    span.style.fontWeight = look.bold ? '700' : '';
+    span.style.fontStyle = look.italic ? 'italic' : '';
+    span.style.textDecoration = look.underline ? 'underline' : '';
+    span.style.opacity = look.dim ? '0.6' : '';
+    const runs = Array.isArray(look.runs) ? look.runs : [];
+    if (!runs.length) { span.textContent = text; return; }
+    const rows = text.split('\n');
+    const byRow = new Map();
+    for (const run of runs) {
+      if (!Array.isArray(run) || !COLOR.test(run[3] || '')) continue;
+      if (!byRow.has(run[0])) byRow.set(run[0], []);
+      byRow.get(run[0]).push(run);
+    }
+    const parts = [];
+    rows.forEach((row, r) => {
+      let pos = 0;
+      for (const [, start, len, color] of (byRow.get(r) || []).sort((a, b) => a[1] - b[1])) {
+        if (start < pos) continue;
+        if (start > pos) parts.push(row.slice(pos, start));
+        const s = document.createElement('span');
+        s.style.color = color;
+        s.textContent = row.slice(start, start + len);
+        parts.push(s);
+        pos = start + len;
+      }
+      parts.push(row.slice(pos) + (r < rows.length - 1 ? '\n' : ''));
+    });
+    span.replaceChildren(...parts);
+  }
+
   function handleOsc(kind, args, c) {
     if (kind === 'say') {
       // say;<id>;<b64>[;<style>]: "notice" is the yellow line a tgame program starts with. The second player
       // leaves it out: the first copy has said it.
       if (c.who === 2 && args[2] === 'notice') return 'skip';
-      const span = appendOut(decode64(args[1] || ''), args[2] === 'notice' ? 'tline notice' : 'tline', c);
+      const text = decode64(args[1] || '');
+      const span = appendOut(text, args[2] === 'notice' ? 'tline notice' : 'tline', c);
+      const look = richStyle(args[2]);
+      if (look) richLine(span, text, look);
       c.lines.set(args[0], span);
       // tgame's notice gets a button that opens the game in Tuff Engine.
       if (args[2] === 'notice' && /^Tuff Engine/.test(span.textContent)) {
@@ -1162,7 +1210,10 @@
     } else if (kind === 'rewrite') {
       const span = c.lines.get(args[0]);
       if (!span) return;
-      span.textContent = decode64(args[1] || '');
+      const look = richStyle(args[2]);
+      if (look) richLine(span, decode64(args[1] || ''), look);
+      else span.textContent = decode64(args[1] || '');
+      if (look && look.anim) return; // an animation's frame: no flash
       const now = performance.now();
       const rapid = now - (span.lastRewrite || 0) < 400;
       span.lastRewrite = now;
