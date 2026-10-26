@@ -1,4 +1,5 @@
-"""Run every atgui test: the checker cases, then real .tuf programs in real windows, one at a time.
+"""Run every atgui test: the checker cases and app:closed with no window, then real .tuf programs in real windows, one at
+a time.
 
     py -3 tuffcode/test/atgui/run_all.py [--only name,name] [--out-dir folder]
 
@@ -86,8 +87,9 @@ def window_of(pid, title):
 
 def os_close(when):
     """Run programs/osclose.tuf through plain tuff.py and send its window WM_CLOSE (what the X sends), `when`:
-    "appears" (the instant it does), "loads" (0.15 s later), "runs" (once its timer said "running") or "gone"
-    (like "runs", then the process is ended as soon as the window has gone)."""
+    "appears" (the instant it does), "loads" (0.15 s later), "runs" (once its timer said "running"), "gone"
+    (like "runs", then the process is ended as soon as the window has gone) or "gone_early" (like "appears", then
+    ended as soon as it has gone)."""
     import ctypes
     import threading
     from ctypes import wintypes
@@ -120,7 +122,7 @@ def os_close(when):
     closed_at = time.perf_counter()
     if hwnd is not None:
         user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
-        if when == "gone":
+        if when in ("gone", "gone_early"):
             while user32.IsWindow(hwnd) and user32.IsWindowVisible(hwnd) and time.perf_counter() - closed_at < 10:
                 time.sleep(0.001)
             result["gone_ms"] = round((time.perf_counter() - closed_at) * 1000)
@@ -162,6 +164,21 @@ def main():
             c = {"passed": 0, "failed": 1, "failures": [p.stdout[-800:]]}
         R.check(c["failed"] == 0, f"--check: {c['passed']} cases right, {c['failed']} wrong", c.get("failures"))
         R.numbers["check_cases"] = c["passed"] + c["failed"]
+
+    if wants("closing"):
+        print("== app:closed with the window's close simulated, no window (close_test.py)", flush=True)
+        out = os.path.join(OUT, "closing.json")
+        if os.path.exists(out):
+            os.remove(out)
+        p = subprocess.run([sys.executable, os.path.join(HERE, "close_test.py"), "--out", out],
+                           cwd=REPO, env=ENV, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        try:
+            c = json.load(open(out, encoding="utf-8"))
+        except (OSError, ValueError):
+            c = {"passed": 0, "failed": 1, "failures": [p.stdout[-800:] + p.stderr[-400:]]}
+        R.check(c["failed"] == 0, f"app:closed at every moment, stuck, and with popups: {c['passed']} right, {c['failed']} wrong",
+                c.get("failures"))
+        R.numbers["closing"] = c.get("numbers")
 
     if wants("docs"):
         print("== the editor's tables (docs_test.mjs)", flush=True)
@@ -211,8 +228,9 @@ def main():
         print("== programs/popups.tuf: ask, confirm and alert in the top-level code", flush=True)
         r = drive("popups", "tuffcode/test/atgui/programs/popups.tuf", "tuffcode/test/atgui/programs/popups.js")
         R.check(r.get("code") == 0 and r.get("stderr") == "", "ran and closed itself, no errors", (r.get("exit"), r.get("stderr")))
-        R.check(lines(r.get("stdout", "")) == ["Hi Ada", "true", "false", "after alert", "true"],
-                "each popup gave its answer, and timers ran while they were open", lines(r.get("stdout", "")))
+        R.check(lines(r.get("stdout", "")) == ["Hi Ada", "true", "false", "after alert", "true", "closed"],
+                "each popup gave its answer, timers ran while they were open, and app:closed ran after app:close",
+                lines(r.get("stdout", "")))
 
     if wants("frameless"):
         print("== programs/frameless.tuf: a window without a frame, with atgui's title bar", flush=True)
@@ -227,16 +245,18 @@ def main():
     if wants("osclose") and os.name == "nt":
         print("== programs/osclose.tuf: closed with WM_CLOSE (the window's X), through plain tuff.py", flush=True)
         # At every moment the window can be closed: the instant it appears (its page isn't ready yet, which once
-        # made app:closed never run), while its page loads, and while its timer runs. Then once more, ending the
-        # process the moment its window has gone, as Cmd+Q on a Mac or logging off Windows does.
+        # made app:closed never run), while its page loads, and while its timer runs. Then twice more, ending the
+        # process the moment its window has gone, as Cmd+Q on a Mac or logging off Windows does: closed while it
+        # runs, and the instant it appears (the window waits for app:closed then too, since 1.4.1).
         for when, what in (("appears", "the instant its window appears"), ("loads", "0.15 s later, while its page loads"),
-                           ("runs", "while its timer runs"), ("gone", "and the process ended the moment its window was gone")):
+                           ("runs", "while its timer runs"), ("gone", "and the process ended the moment its window was gone"),
+                           ("gone_early", "the instant it appeared, and the process ended the moment it was gone")):
             r = os_close(when)
             R.check(r["hwnd"] is not None, f"{when}: its window opened")
-            if when == "gone":
+            if when in ("gone", "gone_early"):
                 R.check("closed by the system" in r["lines"],
-                        f"gone: app:closed had run when the window went, {r['gone_ms']} ms after WM_CLOSE", r["lines"])
-                R.numbers["close_window_gone_ms"] = r["gone_ms"]
+                        f"{when}: app:closed had run when the window went, {r['gone_ms']} ms after WM_CLOSE", r["lines"])
+                R.numbers[f"close_window_{when}_ms"] = r["gone_ms"]
                 continue
             R.check(r["code"] == 0 and r["lines"] and r["lines"][-1] == "closed by the system"
                     and r["lines"].count("closed by the system") == 1 and set(r["lines"]) <= {"running", "closed by the system"}
