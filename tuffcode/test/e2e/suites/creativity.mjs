@@ -52,6 +52,14 @@ export default async (t, ctx) => {
   await t.sleep(400);
   const h2 = await hue();
   check('...and the rainbow keeps moving after the program ends (its hue turns)', /hue-rotate/.test(h1) && h1 !== h2, { h1, h2 });
+  // A PC with Windows' Animation effects off says "reduce motion": the rainbow still flows there, slower
+  await t.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+  const r1 = await hue();
+  await t.sleep(400);
+  const r2 = await hue();
+  const slow = await ev(`getComputedStyle([...document.querySelectorAll('#run-output .tline.rainbow > span')][0]).animationDuration`);
+  check('With "reduce motion" on, the rainbow still flows, slowly', /hue-rotate/.test(r1) && r1 !== r2 && slow === '9s', { r1, r2, slow });
+  await t.send('Emulation.setEmulatedMedia', { features: [] });
   check('print:pen("cyan") colours the lines after it, and print:pen() stops it', by('this is cyan').color === 'rgb(34, 211, 238)' && by('back to normal').color === '', [by('this is cyan'), by('back to normal')]);
   await t.shot('looks.png', await below('Game over!'));
 
