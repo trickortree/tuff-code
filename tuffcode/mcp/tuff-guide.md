@@ -17,7 +17,14 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `f"Hi {name}"`, `.format()` | `"Hi " + name`. Numbers join on their own (`"Score: " + 5`), but put sums in brackets: `"Score: " + (score + 1)` |
 | `items.append(x)` | `items:add(x)` |
 | `s.upper()`, `s.strip()` | `s:upper()`, `s:trim()` |
-| `x in items`, `"a" in s` | `items:has(x)`, `s:has("a")` (`in` only appears in `for` loops) |
+| `x in items`, `"a" in s` | `items:has(x)`, `s:has("a")`, `ages:has("sam")` (`in` only appears in `for` loops) |
+| `d = {"a": 1}`, `d["a"]`, `d.get("a", 0)` | the same braces and `[ ]`; `d:get("a", 0)`, `d:keys()`, `d:values()`, `d:remove("a")` |
+| `s[1:3]` (end not included) | `s[1:3]` includes position 3, like `range`; `s[:3]`, `s[2:]`, `s[-2:]`, `s[i + 1:j]` |
+| `s.split(",")`, `", ".join(items)`, `s.replace(a, b)` | `s:split(",")`, `items:join(", ")`, `s:replace(a, b)` |
+| `items.sort()`, `sorted(items, key=f)` | `items:sort()`, `items:sort(f)`, `items:reverse()` |
+| `open("f.txt").read()`, `json.dump` | `file.read("f.txt")`, `file.write`, `file.lines`, `file.save("f.json", data)`, `file.load` |
+| `try:` / `except Exception as e:` | `try:` / `catch e:` (`e` is the message, as text; any name that isn't Tuff's own, like `err` or `text`) |
+| `f"{x:.2f}"` | `text(x, 2)` |
 | `range(3)` gives 0, 1, 2 | `range(3)` gives 1, 2, 3, and `range(1, 3)` gives 1, 2, 3: both ends are included |
 | `for i in range(len(items)):` | `for item in items:`, or `for i in range(0, len(items) - 1):` |
 | `thing.method()` | `thing:method()`, with no spaces around the `:` (only libraries use a dot: `mtgui.window(...)`) |
@@ -29,15 +36,15 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `[0] * 3` | `[0, 0, 0]` |
 | default or keyword inputs, `global` | plain inputs only; `global` isn't needed (see rule 2) |
 | `print(x, end="")` | an error: build the whole line with `+` first, or add to a shown line with `line:append(...)` |
-| `import random`, `import math` | nothing to import. Built in: `random(a, b)`, `sqrt`, `floor`, `ceil`, `round`, `abs`, `min`, `max`, `sum`, `average`, `pi`. There's no sin, cos, tan, log or exp, no `random.choice` (use `items[random(0, len(items) - 1)]`) and no shuffle |
+| `import random`, `import math`, `import time` | nothing to import. Built in: `random(a, b)` (and `random()` for a decimal from 0 to 1), `sqrt`, `floor`, `ceil`, `round`, `abs`, `min`, `max`, `sum`, `average`, `pi`, `sin`/`cos`/`tan` (in degrees), `log`, `now()`, `today()`, `date()`, `time()`. There's no exp, no `random.choice` (use `items[random(0, len(items) - 1)]`) and no shuffle |
 | `requests.get(url)`, `json.loads(...)` | `mention tap`, then `res = tap.get(url)` and `res:json` (see "tap") |
 | `import pygame` | `mention tgame`, then `game = tgame.window("Title", 800, 600)` (see "tgame") |
-| dictionaries, classes, `try`/`except`, `lambda`, slices like `s[1:3]`, `sort()`, `split()`, `exit()` | not in Tuff (see "What Tuff can't do") |
+| classes, `lambda`, `exit()` | not in Tuff (see "What Tuff can't do") |
 
 These words are keywords and can't be names: `func return if elif else then while for in break continue and or not is true false nil say input flush import mention`.
 
 ## Two rules that trip everyone up
-**Rule 1: a method's input without brackets takes the rest of the line.** When what follows a method's name could start a value (a name, a number, text, `-`, `[`, `not`, `true`, `false` or `nil`), that and the rest of the line are the method's input. `items:has x and ready` means `items:has(x and ready)`, and `say slider:value - 1` gives the slider an input of `-1`. Anything else ends the call: `stack:pop + 10` is normal maths. So whenever more of the line follows a method call, put its inputs in brackets, even empty ones:
+**Rule 1: a method's input without brackets takes the rest of the line.** When what follows a method's name could start a value (a name, a number, text, `-`, `[`, `{`, `not`, `true`, `false` or `nil`), that and the rest of the line are the method's input. `items:has x and ready` means `items:has(x and ready)`, and `say slider:value - 1` gives the slider an input of `-1`. Anything else ends the call: `stack:pop + 10` is normal maths. So whenever more of the line follows a method call, put its inputs in brackets, even empty ones:
 ```tuff
 items = ["eggs"]
 ready = true
@@ -53,7 +60,7 @@ say level - 1
 **Rule 2: names are shared.** A variable made at the top of the program can be changed by any function. Inside a function, `x = 5` (or `for x in ...`) changes the top-level `x` if that already exists when the function runs. Otherwise `x` is a scratch name that only lives inside the function, and disappears when it ends. So:
 - give every top-level variable its starting value near the top of the program (`score = 0`), before calling functions that use it;
 - give each function's scratch values names that aren't used anywhere else (`total_count`, not `i`, if the top level has an `i`);
-- never use a built-in's name for your own variable: `sum = 0` replaces `sum()` everywhere. The built-ins are `print`, `text`, `str`, `number`, `num`, `int`, `len`, `round`, `random`, `wait`, `range`, `clear`, `sqrt`, `abs`, `floor`, `ceil`, `min`, `max`, `sum`, `average`, `pi`, `err` and `all`.
+- never use a built-in's name for your own variable: `sum = 0` replaces `sum()` everywhere. The built-ins are `print`, `text`, `str`, `number`, `num`, `int`, `len`, `round`, `random`, `wait`, `range`, `clear`, `sqrt`, `abs`, `floor`, `ceil`, `min`, `max`, `sum`, `average`, `pi`, `sin`, `cos`, `tan`, `log`, `now`, `today`, `time`, `date`, `file`, `err` and `all`.
 
 ## Basics
 ```tuff
@@ -104,8 +111,8 @@ say double(4)
   - `round` rounds exact halves to the even number: `round(2.5)` is 2 and `round(82.25, 1)` is 82.2. For money and grades, use `round_half_up` from "Patterns".
 - **Random numbers:**
   - `random(1, 6)` gives a whole number from 1 to 6, both included. `random(10)` gives 1 to 10.
-  - It needs whole numbers, and `random()` with no inputs is an error.
-  - For a decimal, divide: `random(0, 100) / 100`.
+  - `random()` gives a decimal from 0 to 1, and `random(0.5)` a decimal from 0 to 0.5.
+  - When either end has digits after the point, `random(a, b)` gives a decimal in between: `random(0.5, 2.5)`. Otherwise it gives a whole number, even from a decimal like `12 / 2` or `1.0`: `random(1, 12 / 2)` is a whole number from 1 to 6.
 - **Typed numbers:** `input` always gives text, so `"5" + 1` is `"51"` and `"5" * 2` is `"55"`.
   - Turn it into a number first: `number("42")` is 42 and `number("4.5")` is 4.5. Spaces around the number are ignored: `number(" 5 ")` is 5. `num(...)` is a short name for `number(...)`.
   - `int(...)` gives a whole number, dropping the decimals toward zero: `int("42")` is 42, `int(3.7)` and `int("3.7")` are 3, `int(-2.9)` is -2. `str(...)` is the same as `text(...)`.
@@ -118,15 +125,15 @@ say double(4)
   - `+` works left to right, so `"Total: " + a + b` gives "Total: 23". Put the maths in brackets: `"Total: " + (a + b)`.
 - **Repeating and letters:**
   - `"ha" * 3` is `"hahaha"`. The number must be whole, and 0 or less gives `""`.
-  - Use `len(t)`, `t[0]`, and `t[-1]` for the last letter.
+  - Use `len(t)`, `t[0]`, and `t[-1]` for the last letter. `t[0:2]` is the first three letters (see "Text tools and parts").
   - `for letter in t:` goes through it.
-  - A letter can't be changed in place; build new text with `+`.
+  - A letter can't be changed in place; build new text with `+` or `t:replace(...)`.
 - **Methods:** `t:upper()`, `t:lower()`, `t:trim()` (removes spaces at both ends) and `t:has("x")` (true or false). They give back new text; `t:trim()` on its own line changes nothing, so write `t = t:trim()`.
 - **Escapes:**
   - `"line 1\nline 2"`, `"tab\there"`, `"say \"hi\""` and `"back\\slash"`.
   - Single quotes work too: `'it\'s'`.
   - A backslash before any other letter stays as it is, but `\n` and `\t` still mean a new line and a tab, so write file paths with forward slashes: `"pics/cat.png"`.
-- **Not in Tuff:** split, replace, join, slicing (`t[1:3]`) and formatting. Build text with `+` and loops instead.
+- **More tools:** `t:split(",")`, `t:replace("a", "b")`, `items:join(", ")`, parts like `t[1:3]`, `t:starts`, `t:find`, `t:count`, `t:pad_left` and `text(x, 2)` (a number with 2 decimals) are in "Text tools and parts".
 
 ## Lists
 ```tuff
@@ -151,8 +158,9 @@ both = items + ["jam"]      # join two lists (makes a new list)
 - **Joining:** `+` only joins lists when both sides are lists. `items + "jam"` turns the whole list into text, so use `items:add("jam")`.
 - **Sharing:** lists are shared, not copied. After `b = a`, adding to `b` also changes `a`. Make a copy with `b = a + []`; lists inside it are still shared.
 - **What lists hold:** lists can hold anything, including other lists (`grid[0][1] = 9`), and can be written over several lines.
-- **Showing a list:** `say ["a", "b"]` shows `["a", "b"]`, with text items in quotes, and so does a list joined with text. To show the items without quotes, `say` each one in a loop.
-- **Not in Tuff:** there's no sort and there are no dictionaries. Keep two lists side by side instead, like `names` and `scores`.
+- **Showing a list:** `say ["a", "b"]` shows `["a", "b"]`, with text items in quotes, and so does a list joined with text. To show the items without quotes, join them: `say items:join(", ")`.
+- **More tools:** `items:sort()` sorts a list (see "Sorting"), `items[1:3]` is a new list of positions 1 to 3 (see "Text tools and parts"), and `items:find(x)` gives where `x` is, or -1.
+- **Values by name:** for a score per player, use a dictionary, like `scores = {"sam": 3}`, not two lists side by side (see "Dictionaries").
 
 ## Functions
 - `func name(a, b):` then an indented body. The last line's value is given back automatically. A loop gives back nil, and `say` gives back the line it showed (so a function ending in `say w * h` gives back the text "12", not a number). End with `return value` when the answer matters.
@@ -162,6 +170,108 @@ both = items + ["jam"]      # join two lists (makes a new list)
 - **Make every function at the top level of the file**, not inside another function or inside `if`, `for` or `while`. Top-level functions can be used anywhere, even above where they're written. A function made inside a block or another function only exists there, and only once its line has run.
 - Inputs belong to the function. Any other name follows rule 2.
 - Functions can call themselves, but only about 100 calls deep. Use a loop for anything that could go deeper.
+
+## Dictionaries
+```tuff
+ages = {"sam": 14, "ann": 12}       # keys (text or numbers) and their values
+say ages["sam"]                     # 14 (a key that isn't there stops the program: check first)
+ages["bob"] = 15                    # adds a key, or changes it
+if ages:has("ann"):
+    say "Ann is " + ages["ann"]
+say ages:get("zed", 0)              # the value, or 0 when the key isn't there
+ages:remove("ann")
+for name in ages:                   # a loop goes through the keys
+    say name + " is " + ages[name]
+say ages:keys()                     # ["sam", "bob"]
+say ages:values()                   # [14, 15]
+say len(ages)                       # 2 (ages:size() is the same)
+```
+- **Keys** are text or numbers. `true` or `false` as a key is an error.
+- **Values** can be anything. A dictionary can hold lists and other dictionaries: `scores = {"red": [3, 4], "blue": [5]}`, then `scores["red"][1]`.
+- Written over several lines inside `{ }`, it's one line of code.
+- **Files:** save one with `file.save` (see "Files"), and load it back with `file.load`. A file keeps every key as text, so number keys come back as text: save `{1: "gold"}`, and after `file.load` read it with `d["1"]`, not `d[1]`. The error for a missing key says so.
+- `:size()`, `:get`, `:has`, `:keys` and `:set("bob", 15)` work like a tap data object's (see "tap"), so a function can take either one.
+
+## Text tools and parts
+```tuff
+s = "hello world"
+say s[0:4]                          # "hello": positions 0 to 4, both included (like range)
+say s[6:]                           # "world" (from 6 to the end); s[:4] is from the start
+say s[-5:]                          # the last 5
+say s[0:len(s) - 2]                 # "hello worl": all but the last letter
+say "a,b,c":split(",")              # ["a", "b", "c"]; :split() splits at spaces
+say s:replace("world", "Tuff")      # "hello Tuff"
+say ["x", "y", "z"]:join(", ")      # "x, y, z"
+say s:starts("hell")                # true (also :ends)
+say s:find("o")                     # 4, or -1 if it isn't there (lists have :find too)
+say s:count("l")                    # 3
+say "7":pad_left(3, "0")            # "007" (also :pad_right(10) to line up columns)
+say text(3.14159, 2)                # "3.14"
+```
+- **Parts** include both ends, like `range`. Either end can be left out (`s[:3]`, `s[2:]`) or worked out (`s[i + 1:j]`, `s[0:len(s) - 1]` is all of it).
+- Parts work on lists too: `[1, 2, 3, 4, 5][1:3]` is `[2, 3, 4]`. A part is always new text or a new list; the old one doesn't change.
+- **Parts or methods:** in an index (the `[ ]` right after a value, like `s[a:b]`), `a:b` is a part when `a` is a number. When `a` holds a list, text or a widget, it's a method call, as it always was: `names[order:pop]` uses the last item of `order` as the position.
+- In a list you write (`[word:upper, 1]`), `a:b` is always a method call. After a method's name, `[` starts a list: `pairs:add [word:upper, 1]` adds that list.
+
+## Sorting
+```tuff
+nums = [5, 3, 9, 1]
+nums:sort()                         # [1, 3, 5, 9], in place
+nums:reverse()                      # [9, 5, 3, 1]
+words = ["banana", "Apple", "cherry"]
+words:sort()                        # A to Z, any case
+func by_len(w):
+    len(w)
+words:sort(by_len)                  # sorts by what by_len gives back
+```
+- `:sort` and `:reverse` change the list itself (and give it back). To keep the old order too, sort a copy: `sorted = nums + []`, then `sorted:sort()`.
+- Numbers come before text when a list has both.
+- A dictionary can't be sorted, but its keys can: `names = ages:keys()`, then `names:sort()`.
+
+## Files
+```tuff
+file.write("notes.txt", "first line")   # makes the file, or replaces what's in it
+file.add("notes.txt", "another line")   # adds a line at the end
+say file.read("notes.txt")              # all of it, as text
+for line in file.lines("notes.txt"):    # its lines, as a list
+    say line
+if file.exists("notes.txt"):
+    file.delete("notes.txt")
+file.save("save.json", {"name": "Sam", "level": 3})    # any data (text, numbers, lists, dictionaries)
+data = file.load("save.json", {})       # back again; {} if there's no file yet
+```
+- `file` is built in: there's nothing to mention. Files are in the program's own folder unless the path says otherwise.
+- `file.save` writes JSON, so a dictionary's number keys come back from `file.load` as text: `data["1"]`, not `data[1]`.
+- Tuff Engine's live preview keeps writes in memory: `file.write`, `file.add`, `file.save` and `file.delete` work while it runs (later reads see them), and no file on disk changes. Agents' `tuff_run` does the same (see "Using the tools").
+
+## When something goes wrong: try and catch
+```tuff
+try:
+    data = file.read("settings.txt")
+catch problem:                      # problem (or no name) is what went wrong, as text
+    say "No settings yet: " + problem
+    data = ""
+```
+- Anything in `try:` that would stop the program (a missing file, a bad web request, dividing by zero...) runs `catch:` instead, and the program goes on.
+- The problem's name can't be one of Tuff's own: `catch err:` is an error (`err` is what `num("abc")` gives), and so are `catch text:`, `catch len:`, `catch time:`, `catch file:` and the other built-ins' names. Call it something else, like `catch problem:`.
+- `try:` and `catch:` start a block when the `:` ends the line or has a space after it, and so does `catch problem:`. With the `:` glued to a word, `try:say "hi"` is a one-line block too, unless the program gives `try` or `catch` a value (`catch = []`, `for catch in ...`, or a function input called `catch`): then it's a method call. So a variable called `try` or `catch` still works: `catch = []`, then `catch:add(1)`.
+
+## Date, time and maths
+```tuff
+say now()                           # "14:05:09"
+say today()                         # "2026-10-26"
+d = date()                          # a dictionary: year, month, day, weekday, hour, minute, second
+say "Happy " + d["weekday"]
+start = time()                      # seconds since the program started
+wait(1.5)
+say "That took " + text(time() - start, 1) + " s"
+say sin(90)                         # 1: sin, cos and tan take degrees
+say log(1000, 10)                   # 3; log(x) is the natural log
+say random()                        # a decimal from 0 to 1; random(0.5, 2.5) a decimal in that range
+```
+- `date()` gives a new dictionary each time, so read it once and use its keys: `d["hour"]`, `d["minute"]`.
+- `tan(90)` is an error, because tan has no value there. `log` needs a number above 0.
+- `random(6)` is a whole number from 1 to 6, and `random(0.5)` a decimal from 0 to 0.5. `random(a, b)` gives a decimal when either end has digits after the point, like `random(0.5, 2)`, and a whole number otherwise: `random(0, 10 / 2)` is a whole number from 0 to 5, because `10 / 2` (5) has no digits after the point.
 
 ## Live lines and clearing (console programs)
 ```tuff
@@ -604,8 +714,8 @@ func reset_best(key):                         # R forgets the high score
 game:every_frame step
 game:on_key("r", reset_best)
 ```
-- **Saving:** `game:save("best", score)` saves right away (there's nothing else to do before the game closes). It keeps numbers, text, true/false, nil, lists and tables, inside each other too: `game:save("unlocked", ["forest", "cave"])`. A table is a tap data object: `mention tap`, then `stats = tap.data()`, `stats:set("level", 3)` and `game:save("stats", stats)`. Saving a function, a sprite or an object is an error: save the numbers you need instead, like `game:save("x", player:x())`.
-- **Loading:** `game:load("best", 0)` gives back what was saved under that name, or the second input when nothing was saved yet (nil if you leave it out). Lists and tables come back as lists and tables: `stats = game:load("stats")`, then `stats:get("level")`. `game:saved("best")` is true when something is saved under that name.
+- **Saving:** `game:save("best", score)` saves right away (there's nothing else to do before the game closes). It keeps numbers, text, true/false, nil, lists and tables, inside each other too: `game:save("unlocked", ["forest", "cave"])`. A table is a dictionary, like `game:save("stats", {"level": 3, "coins": 20})`, or a tap data object. Saving a function, a sprite or an object is an error: save the numbers you need instead, like `game:save("x", player:x())`.
+- **Loading:** `game:load("best", 0)` gives back what was saved under that name, or the second input when nothing was saved yet (nil if you leave it out). Lists come back as lists, and tables as dictionaries (with `:get`, `:has`, `:keys`, `:set` and `:size`, as before): `stats = game:load("stats")`, then `stats["level"]` or `stats:get("level")`. Like `file.save`, a save keeps keys as text, so a number key comes back as text. `game:saved("best")` is true when something is saved under that name.
 - **Forgetting:** `game:forget("best")` forgets one save, and `game:forget()` forgets every save the game has (a "reset progress" button).
 - **Where saves go:** one file per game, named after the title in `tgame.window("Star Catcher")` (changing it later with `game:title` doesn't move the saves), in a TuffSaves folder in the user's own data folder. The same game run from TuffCode or built with Build exe shares its saves, and games with other titles never see them, so give each game its own title. Tuff Engine's preview never saves: there `game:load` always gives the default.
 #### Splash screens, main menus and the mouse
@@ -1198,7 +1308,7 @@ In a window app, check a text box before using it: `if num(bill:value()) is err:
     - wrong picture files.
   - **Python habits and type mixups:**
     - the `range(len(...))` off-by-one;
-    - `random()` and `:pop(0)`;
+    - `:pop(0)`;
     - text mixed with numbers, like typed answers used as numbers or `"Total: " + a + b`;
     - chained comparisons;
     - `or "y"` in a condition;
@@ -1208,6 +1318,9 @@ In a window app, check a text box before using it: `if num(bill:value()) is err:
   - mistakes that depend on values while running, like the contents of a list or a position past its end;
   - widgets that don't fit the window.
 - **`tuff_run`** runs a console program with your answers. It shows the final Run window, with each answer after its question; lines changed with `:rewrite` or `clear` show their final state. If the program asks more questions than there are answers, it stops with an error saying so.
+  - **Files:** writes stay in memory for that run. `file.write`, `file.add`, `file.save` and `file.delete` work, and later reads in the same run see them, but nothing is saved and no file on disk changes. To change the user's files, edit them yourself.
+  - **Folders:** with `"code"`, relative paths are in the project folder, so a snippet can read the project's files. With `"file"`, they're in that file's folder.
+  - When you run Tuff another way (in a terminal), set `TUFF_NO_WRITES=1` for the same in-memory writes, and `TUFF_BASE_DIR=<folder>` to make relative paths start in that folder instead of the program's.
 - **Testing a window program:** window programs open a real window, so test them with a self-test.
   1. Add `app:after(0.5, selftest)` just before the last line.
   2. Write `func selftest():` so that it calls your event functions, uses `say` to show what it finds, and ends with `app:close`.
@@ -1216,11 +1329,13 @@ In a window app, check a text box before using it: `if num(bill:value()) is err:
 
 ## What Tuff can't do
 Tuff has none of these:
-- files (except pictures for `image` and `icon`), or the internet except through `tap`;
-- dictionaries, classes, sorting, or exceptions (`try`);
-- splitting, replacing or formatting text, or slices;
-- random decimals (divide a whole number instead), or sin, cos, tan, log or exp;
+- the internet except through `tap`, or files outside text and JSON (`file`);
+- classes, or `lambda` (give a function's name instead, like `words:sort(by_len)`);
+- tuples or sets (use lists and dictionaries);
+- default or keyword inputs;
+- exp, or other maths beyond sin, cos, tan, log and sqrt;
+- formatting beyond `text(x, 2)` and `:pad_left` / `:pad_right`;
 - drawing, sound, or keyboard and mouse events in tgui and mtgui (see "How a window app runs"). atgui has key shortcuts, hover and clicks on any widget, and a game made with `tgame` has all of them;
 - `exit()`, or Python modules.
 
-There's no date or time function either. A clock widget's `:value` gives the time of day, and `wait(seconds)` pauses a console program.
+For dates and times there's `now()`, `today()`, `date()` and `time()`, and `wait(seconds)` pauses a console program.

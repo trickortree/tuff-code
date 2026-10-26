@@ -814,6 +814,85 @@
     },
   ];
 
+  // 1.4.0: the Toolbox: dictionaries, text tools, sorting, files, try/catch, date and time.
+  const TOOLBOX = [
+    {
+      id: 'tools-dict',
+      title: 'Dictionaries',
+      body: `<p>A <b>dictionary</b> keeps values by name: <code>ages = {"sam": 14, "ann": 12}</code>. Read one with <code>ages["sam"]</code>, and add or change one with <code>ages["bob"] = 15</code>.</p>
+             <p><code>ages:has("sam")</code> checks a key is there, <code>ages:get("zed", 0)</code> gives a default when it isn't, and <code>for name in ages:</code> goes through the keys.</p>`,
+      example: 'prices = {"apple": 0.5, "bread": 2.25}\nprices["milk"] = 1.1\nfor item in prices:\n    say item + ": " + text(prices[item], 2)\nsay "Do we sell eggs? " + prices:has("eggs")',
+      task: 'Make a dictionary of three friends and their favourite colours, then go through it and say each one.',
+      starter: '# Section 1.6, Lesson 1: Dictionaries\n# Make a dictionary of three friends and their favourite colours, then say each one in a loop.\n\n',
+      solution: 'colours = {"Sam": "blue", "Ann": "green", "Bo": "red"}\nfor friend in colours:\n    say friend + " likes " + colours[friend]\n',
+      check: (src) => {
+        // Written out ({"Sam": "blue"}, on one line or several), or made empty and filled: colours["Sam"] = "blue".
+        const made = /\w+\s*=\s*\{[^}]*:/.test(src) || /\b(\w+)\s*=\s*\{\s*\}[\s\S]*\b\1\s*(\[[^\]\n]+\]\s*=(?!=)|:set\b)/.test(src);
+        if (!made) return 'Make a dictionary with braces, like: colours = {"Sam": "blue", "Ann": "green"}';
+        if (!/^\s*for\s+\w+\s+in\s+\w+\s*:/m.test(src)) return 'Go through it with a loop: for friend in colours:';
+        return /\w\[\s*[A-Za-z_]\w*\s*\]|:get\b/.test(src) ? true : 'Inside the loop, read each value with colours[friend]';
+      },
+    },
+    {
+      id: 'tools-text',
+      title: 'Text tools',
+      body: `<p><code>"a,b,c":split(",")</code> cuts text into a list, and <code>items:join(", ")</code> puts a list back together. <code>s:replace("old", "new")</code> swaps text.</p>
+             <p>A part of some text is <code>s[0:4]</code>: positions 0 to 4, both included, like <code>range</code>. <code>s[:3]</code> is from the start, <code>s[2:]</code> to the end. <code>text(3.14159, 2)</code> gives "3.14".</p>`,
+      example: 'line = "Sam,14,blue"\nparts = line:split(",")\nsay parts[0] + " is " + parts[1]\nsay "Sam":upper()[0:1] + "!"\nsay "I like red":replace("red", parts[2])',
+      task: 'Take the text <code>"apples,pears,plums"</code>, split it into a list, and say the fruit joined with <code>" and "</code>.',
+      starter: '# Section 1.6, Lesson 2: Text tools\n# Split "apples,pears,plums" into a list, then say them joined with " and ".\n\nfruit = "apples,pears,plums"\n',
+      solution: 'fruit = "apples,pears,plums"\nlist = fruit:split(",")\nsay list:join(" and ")\n',
+      check: (src) => {
+        if (!/:split\b/.test(src)) return 'Split it at the commas: fruit:split(",")';
+        return /:join\b/.test(src) ? true : 'Put them back together with :join(" and ")';
+      },
+    },
+    {
+      id: 'tools-sort',
+      title: 'Sorting',
+      body: `<p><code>scores:sort()</code> sorts a list in place: numbers small to big, text A to Z. <code>scores:reverse()</code> turns it around.</p>
+             <p>To sort by something else, give <code>:sort</code> a function: <code>names:sort(by_length)</code> sorts by what <code>by_length(name)</code> gives back.</p>`,
+      example: 'scores = [72, 95, 64, 88]\nscores:sort()\nscores:reverse()\nsay "Top score: " + scores[0]\nsay "Top three: " + scores[0:2]',
+      task: 'Sort a list of five numbers from biggest to smallest, and say the biggest.',
+      starter: '# Section 1.6, Lesson 3: Sorting\n# Sort five numbers from biggest to smallest, then say the biggest.\n\nnumbers = [12, 7, 30, 18, 3]\n',
+      solution: 'numbers = [12, 7, 30, 18, 3]\nnumbers:sort()\nnumbers:reverse()\nsay "Biggest: " + numbers[0]\n',
+      check: (src) => {
+        if (!/:sort\b/.test(src)) return 'Sort it first: numbers:sort()';
+        // Then :reverse, or :sort with a function that puts the biggest first: numbers:sort(biggest_first).
+        return /:reverse\b|:sort[ \t]*\(?[ \t]*[A-Za-z_]/.test(src) ? true : 'Then turn it around, biggest first: numbers:reverse()';
+      },
+    },
+    {
+      id: 'tools-files',
+      title: 'Files',
+      body: `<p><code>file.write("notes.txt", text)</code> saves text in your project folder, <code>file.add</code> adds a line, and <code>file.read</code> or <code>file.lines</code> read it back.</p>
+             <p>For data, <code>file.save("save.json", scores)</code> keeps lists and dictionaries, and <code>file.load("save.json", {})</code> loads them (or gives <code>{}</code> the first time).</p>`,
+      example: 'visits = file.load("visits.json", {"count": 0})\nvisits["count"] = visits["count"] + 1\nfile.save("visits.json", visits)\nsay "You have run this " + visits["count"] + " times"',
+      task: 'Make a program that remembers a list of names: load it (an empty list the first time), add a new name, save it, and say how many there are.',
+      starter: '# Section 1.6, Lesson 4: Files\n# Load a list of names (empty the first time), add one, save it, and say how many there are.\n\n',
+      solution: 'names = file.load("names.json", [])\nnames:add("Sam")\nfile.save("names.json", names)\nsay "There are " + len(names) + " names"\n',
+      check: (src) => {
+        if (!/file\.load\s*\(/.test(src)) return 'Load what you saved before: names = file.load("names.json", [])';
+        if (!/file\.save\s*\(/.test(src)) return 'Save it again with file.save("names.json", names)';
+        return /:add\b/.test(src) ? true : 'Add a name before saving: names:add("Sam")';
+      },
+    },
+    {
+      id: 'tools-try',
+      title: 'When things go wrong',
+      body: `<p>Some things can fail: a file that isn't there, a web page that doesn't answer. Put them in <code>try:</code>, and <code>catch:</code> runs instead of the program stopping.</p>
+             <p><code>catch problem:</code> gives what went wrong as text. <code>now()</code>, <code>today()</code> and <code>time()</code> (seconds since the start) are handy in logs.</p>`,
+      example: 'try:\n    notes = file.read("missing.txt")\ncatch problem:\n    say "Couldn\'t read it: " + problem\n    notes = ""\nfile.add("log.txt", today() + " " + now() + " ran the program")',
+      task: 'Ask for a number with <code>input</code>, and use <code>try:</code> and <code>catch:</code> so typing a word says "That isn\'t a number" instead of stopping.',
+      starter: '# Section 1.6, Lesson 5: When things go wrong\n# Ask for a number. If it isn\'t one, catch the problem and say "That isn\'t a number".\n\n',
+      solution: 'answer = input "A number? "\ntry:\n    say "Doubled: " + int(answer) * 2\ncatch:\n    say "That isn\'t a number"\n',
+      check: (src) => {
+        if (!/^\s*try\s*:/m.test(src)) return 'Start a try: block around the part that can fail';
+        return /^\s*catch\b[^\n]*:/m.test(src) ? true : 'Add a catch: block right after it, saying "That isn\'t a number"';
+      },
+    },
+  ];
+
   // 1.3.5: tdraw, drawing with a pen (a turtle).
   const TDRAW = [
     {
@@ -897,11 +976,13 @@
   ];
 
   LOOK.forEach((l) => { l.section = 'look'; });
+  TOOLBOX.forEach((l) => { l.section = 'tools'; });
   TDRAW.forEach((l) => { l.section = 'tdraw'; });
 
   const SECTIONS = [
     { id: 'basics', title: 'Basics', lessons: BASICS, prefix: '' },
     { id: 'look', title: 'Section 1.5 · Make it look good', optional: true, lessons: LOOK, prefix: 'look-' },
+    { id: 'tools', title: 'Section 1.6 · Toolbox', optional: true, lessons: TOOLBOX, prefix: 'tools-' },
     { id: 'tgui', title: 'Section 2 · Build apps', optional: true, lessons: TGUI, prefix: 'tgui-' },
     { id: 'mtgui', title: 'Section 2.1 · Modern apps', optional: true, lessons: MTGUI, prefix: 'mtgui-' },
     { id: 'atgui', title: 'Section 2.2 · Advanced apps', optional: true, lessons: ATGUI, prefix: 'atgui-' },

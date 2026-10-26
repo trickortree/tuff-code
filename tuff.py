@@ -33,10 +33,11 @@ class TuffError(Exception):
 # ---------------------------------------------------------------- tokenizer
 
 class Tok:
-    __slots__ = ("kind", "value", "line", "col")
+    __slots__ = ("kind", "value", "line", "col", "part")
 
-    def __init__(self, kind, value, line, col):
+    def __init__(self, kind, value, line, col, part=False):
         self.kind, self.value, self.line, self.col = kind, value, line, col
+        self.part = part  # a glued ':' right inside an index's [ ]: a method's ':' or a part's (s[a:b]), the parser decides
 
     def show(self):
         if self.kind == "STR":
@@ -63,11 +64,11 @@ def source_lines(src):
 def tokenize(src):
     toks = []
     indents = [0]
-    depth = 0
+    brackets = []  # the open ( [ { a line is inside (a line only continues inside brackets)
     lines = source_lines(src)
     for ln, raw in enumerate(lines, 1):
         stripped = raw.lstrip(" \t")
-        if depth == 0:
+        if not brackets:
             if not stripped or stripped.startswith("#"):
                 continue
             width = sum(4 if ch == "\t" else 1 for ch in raw[: len(raw) - len(stripped)])
@@ -124,16 +125,25 @@ def tokenize(src):
                 i = j + 1
             elif c == ":":
                 glued = i > 0 and raw[i - 1] not in " \t" and i + 1 < n and (raw[i + 1].isalpha() or raw[i + 1] == "_")
-                toks.append(Tok("METHOD" if glued else "COLON", ":", ln, col))
+                # In an index's [ ], a:b can be a part (s[a:b]) or, as in 1.3.6, a method (names[order:pop]), and in
+                # { } a key and its value ({name:age}) or a method ({"k": box:value}): Parser.part_colon decides. In a
+                # list's [ ] and in ( ) it's always a method ([slider:value]).
+                part = glued and bool(brackets) and brackets[-1] in ("[i", "{")
+                toks.append(Tok("METHOD" if glued else "COLON", ":", ln, col, part=part))
                 i += 1
             elif raw[i:i + 2] in ("==", "!=", "<=", ">=", "+=", "-=", "*=", "/="):
                 toks.append(Tok("OP", raw[i:i + 2], ln, col))
                 i += 2
-            elif c in "+-*/%^<>=()[],.":
-                if c in "([":
-                    depth += 1
-                elif c in ")]":
-                    depth = max(0, depth - 1)
+            elif c in "+-*/%^<>=()[]{},.":
+                if c == "[":  # an index's [ ] (after a value: s[1:3]) or a list's ([a, b])
+                    after_value = toks and (toks[-1].kind in ("NAME", "STR") or (toks[-1].kind == "OP" and toks[-1].value in ")]}"))
+                    if after_value and len(toks) >= 2 and toks[-1].kind == "NAME" and toks[-2].kind == "METHOD" and raw[i - 1] in " \t":
+                        after_value = False  # pairs:add [word:upper, 1]: after a method's name and a space, [ starts its input
+                    brackets.append("[i" if after_value else "[l")
+                elif c in "({":
+                    brackets.append(c)
+                elif c in ")]}" and brackets:
+                    brackets.pop()
                 toks.append(Tok("OP", c, ln, col))
                 i += 1
             elif not c.isprintable():  # U+2028, a form feed, a no-break space: nothing to see between the quotes
@@ -141,7 +151,7 @@ def tokenize(src):
                                 "Delete it, or type this line again.", ln, col)
             else:
                 raise TuffError(f"I don't understand the character '{c}'.", ln, col)
-        if depth == 0:
+        if not brackets:
             toks.append(Tok("NEWLINE", None, ln, n + 1))
     end = len(lines) + 1
     while len(indents) > 1:
@@ -171,6 +181,34 @@ class Parser:
     def __init__(self, toks):
         self.toks = toks
         self.i = 0
+        self.converted = []  # the glued ':'s chosen as a part's ':' (see index), so a reparse can undo them
+        # The names the program gives a value (x = ..., for x in): a variable called try or catch stays one.
+        self.given = {t.value for t, nxt in zip(toks, toks[1:]) if t.kind == "NAME" and nxt.kind == "OP" and nxt.value in ASSIGN_OPS}
+        self.given |= {nxt.value for t, nxt in zip(toks, toks[1:]) if t.kind == "KW" and t.value == "for" and nxt.kind == "NAME"}
+        inputs = False  # func f(catch): its inputs
+        self.funcs = {nxt.value for t, nxt in zip(toks, toks[1:]) if t.kind == "KW" and t.value == "func" and nxt.kind == "NAME"}
+        for t, nxt in zip(toks, toks[1:]):
+            if t.kind == "KW" and t.value == "func":
+                inputs = None
+            elif inputs is None and t.kind == "OP" and t.value == "(":
+                inputs = True
+            elif inputs and t.kind == "NAME":
+                self.given.add(t.value)
+            elif inputs is not False and t.kind == "OP" and t.value == ")":
+                inputs = False
+        self.values = self.given | self.funcs | BUILTIN_NAMES | OWN_NAME_BUILTINS | {"err", "pi", "all"}
+
+    def block_word(self, ahead, catch=False):
+        """Is the try or catch here (ahead tokens before the ':') the start of a block? try: and catch: with a
+        ':' that ends the line or has a space after it are, and catch problem: is. try:say "hi" (the ':' glued to
+        a word) is too, unless the program has its own variable called try."""
+        word = self.toks[self.i + ahead - 1].value
+        nxt = self.toks[self.i + ahead]
+        if nxt.kind == "COLON":
+            return True
+        if catch and nxt.kind == "NAME":
+            return self.toks[self.i + ahead + 1].kind in ("COLON", "METHOD")
+        return nxt.kind == "METHOD" and word not in self.given
 
     def peek(self):
         return self.toks[self.i]
@@ -194,7 +232,7 @@ class Parser:
         tok = self.peek()
         return (
             tok.kind in EXPR_STARTS
-            or (tok.kind == "OP" and tok.value in ("(", "[", "-"))
+            or (tok.kind == "OP" and tok.value in ("(", "[", "{", "-"))
             or (tok.kind == "KW" and tok.value in EXPR_START_KWS)
         )
 
@@ -271,6 +309,29 @@ class Parser:
                 name = self.expect("NAME", msg=f"Expected a library name, like: {tok.value} anims").value
                 self.end_line()
                 return N("import", tok, name=name)
+        # try: ... catch: (or catch problem:) ... (1.4.0). Soft words: they only count at the start of a line with a
+        # ':' after them, and a program that gives try or catch a value (catch = [], then catch:add(fish)) keeps them.
+        if tok.kind == "NAME" and tok.value == "try" and self.block_word(1):
+            self.next()
+            body = self.block()
+            if not (self.at("NAME", "catch") and self.block_word(1, catch=True)):
+                nxt = self.peek()
+                if nxt.kind == "NAME" and nxt.value in ("except", "catch", "rescue"):
+                    raise TuffError("Write the catch line as catch: or catch problem: (a name for the problem, no brackets).",
+                                    nxt.line, nxt.col)
+                raise TuffError("A try: block needs a catch: block right after it, for when something goes wrong.", nxt.line, nxt.col)
+            self.next()
+            name = None
+            if self.at("NAME"):
+                name_tok = self.next()
+                name = name_tok.value
+                if name in BUILTIN_NAMES or name in OWN_NAME_BUILTINS or name in ("err", "pi", "all"):
+                    what = "value" if name in ("err", "pi", "all") else "function"
+                    raise TuffError(f"{name} is Tuff's own {what}, so catch can't use it for the problem. "
+                                    "Call it something else, like: catch problem:", name_tok.line, name_tok.col)
+            return N("try", tok, body=body, name=name, handler=self.block())
+        if tok.kind == "NAME" and tok.value == "catch" and self.block_word(1, catch=True):
+            raise TuffError("'catch' needs a 'try:' block right above it.", tok.line, tok.col)
         stmt = self.simple_statement()
         self.end_line()
         return stmt
@@ -326,7 +387,7 @@ class Parser:
         target = self.expr()
         if self.at("OP") and self.peek().value in ASSIGN_OPS:
             op = self.next().value
-            if target.kind not in ("var", "index"):
+            if target.kind not in ("var", "index") and not (target.kind == "slice" and target.alt is not None):
                 raise TuffError("You can only store a value in a variable or a list item.", tok.line, tok.col)
             return N("assign", tok, target=target, op=op, value=self.expr())
         return N("expr", tok, expr=target)
@@ -445,9 +506,7 @@ class Parser:
                 node = N("call", tok, fn=node, args=self.call_args(")"))
             elif self.at("OP", "["):
                 self.next()
-                index = self.expr()
-                self.expect("OP", "]")
-                node = N("index", tok, obj=node, index=index)
+                node = self.index(node, tok)
             elif self.at("OP", "."):
                 self.next()
                 name = self.member_name("Expected a name after '.', like: anims.loading()")
@@ -471,6 +530,104 @@ class Parser:
             else:
                 return node
 
+    def part_colon(self, in_dict=False):
+        """Where the glued ':' that starts this [ ]'s part (s[a:b], s[:n]) is, or this { } entry's value ({name:age}),
+        when there's no spaced one at the bracket's own level. With several: the one after a number (or right
+        after the bracket), else one followed by the program's own name or a built-in (s[s:find(" "):n],
+        email[email:find("@"):len(email) - 1]), else the first that isn't a method call with brackets, else the first."""
+        depth, j, found = 0, self.i, []
+        while self.toks[j].kind not in ("NEWLINE", "EOF"):
+            t = self.toks[j]
+            if t.kind == "OP" and t.value in ("(", "[", "{"):
+                depth += 1
+            elif t.kind == "OP" and t.value in (")", "]", "}"):
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0 and in_dict and t.kind == "OP" and t.value == ",":
+                break
+            elif depth == 0 and t.kind == "COLON":
+                return None
+            elif depth == 0 and t.kind == "METHOD" and t.part:
+                found.append(j)
+            j += 1
+        for j in found:
+            before = self.toks[j - 1]
+            if j == self.i or before.kind == "NUM" or (in_dict and before.kind == "STR"):
+                return j
+        for j in found:
+            if self.toks[j + 1].kind == "NAME" and self.toks[j + 1].value in self.values:
+                return j
+        for j in found:
+            if not (self.toks[j + 2].kind == "OP" and self.toks[j + 2].value == "("):
+                return j
+        return found[0] if found else None
+
+    def index(self, obj, tok):
+        """x[i], or a part: s[1:3], s[:3], s[2:] (both ends included, like range). A glued a:b here was a method
+        call in 1.3.6 (names[order:pop], items[p:index()]). When the start is one value (names[order:pop]), the
+        part keeps that reading too, in alt: the value is worked out first either way, and when the program runs a
+        number makes it a part. A start worked out from several (items[1 + stack:pop]) is decided here: a part when
+        what follows the ':' is the program's own name or a built-in (s[i + 1:j]), else 1.3.6's method call, which
+        keeps 1.3.6's order (and what and/or skip)."""
+        j = self.part_colon()
+        if j is None:
+            start = None if self.at("COLON") else self.expr()
+            if not self.at("COLON"):
+                self.expect("OP", "]")
+                return N("index", tok, obj=obj, index=start)
+            self.next()
+            end = None if self.at("OP", "]") else self.expr()
+            self.expect("OP", "]")
+            return N("slice", tok, obj=obj, start=start, end=end, recv=None, alt=None, mname=None)
+        colon = self.toks[j]
+        back, mark = self.i, len(self.converted)
+        colon.kind = "COLON"
+        self.converted.append(colon)
+        try:
+            start = None if self.at("COLON") else self.expr()
+            self.expect("COLON")
+            end = None if self.at("OP", "]") else self.expr()
+            self.expect("OP", "]")
+        except TuffError:  # not a part after all (names[d:get "k"]): read it as 1.3.6 did
+            self.unconvert(mark)
+            self.i = back
+            start = self.expr()
+            self.expect("OP", "]")
+            return N("index", tok, obj=obj, index=start)
+        node = N("slice", tok, obj=obj, start=start, end=end, recv=None, alt=None, mname=None)
+        if start is None or self.toks[j - 1].kind == "NUM":
+            return node  # s[:n], s[2:n]: nothing before the ':' can have methods
+        single = start.kind in ("var", "call", "index", "slice", "attr", "method") or (start.kind == "const" and isinstance(start.value, str))
+        after = self.toks[j + 1]
+        if not single and after.kind == "NAME" and after.value in self.values:
+            return node  # s[i + 1:j]
+        done = self.i
+        self.unconvert(mark)
+        self.i = back
+        try:
+            old = self.expr()
+            ok = self.at("OP", "]") and self.i + 1 == done
+        except TuffError:
+            ok = False
+        self.i = done
+        if not ok:
+            return node
+        if not single:  # items[1 + stack:pop], x[ok and stack:pop or 0]: 1.3.6's reading
+            return N("index", tok, obj=obj, index=old)
+        method = next((m for m in nodes(old) if m.kind == "method" and (m.line, m.col) == (colon.line, colon.col)), None)
+        if method is None:
+            return node
+        held = N("held", colon, of=start)
+        method.obj = held
+        node.start, node.recv, node.alt, node.mname = held, start, old, method.name
+        return node
+
+    def unconvert(self, mark):
+        """Give the part ':'s chosen since mark back their method meaning."""
+        while len(self.converted) > mark:
+            self.converted.pop().kind = "METHOD"
+
     def primary(self):
         tok = self.next()
         if tok.kind in ("NUM", "STR"):
@@ -485,6 +642,19 @@ class Parser:
             return inner
         if tok.kind == "OP" and tok.value == "[":
             return N("list", tok, items=self.call_args("]"))
+        if tok.kind == "OP" and tok.value == "{":  # a dictionary: {"sam": 14, "ann": 12}
+            keys, values = [], []
+            while not self.at("OP", "}"):
+                colon = self.part_colon(in_dict=True)  # {name:age}, {names[0]:ages[0]}
+                if colon is not None:
+                    self.toks[colon].kind = "COLON"
+                keys.append(self.expr())
+                self.expect("COLON", msg='Expected a \':\' between a key and its value, like {"sam": 14}.')
+                values.append(self.expr())
+                if not self.at("OP", "}"):
+                    self.expect("OP", ",", msg="Expected ',' or '}'.")
+            self.next()
+            return N("dict", tok, keys=keys, values=values)
         raise TuffError(f"I expected a value here, but found {tok.show()}.", tok.line, tok.col)
 
 
@@ -550,11 +720,13 @@ VIEW_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:" + "|".join(VIEW_L
 TGAME_NOTICE = "Tuff Engine is here: open this game in TuffCode's Tuff Engine tab (Ctrl+Shift+G) to build it visually."
 TGAME_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+tgame\b", re.M)
 BUILTIN_NAMES = {"print", "number", "num", "text", "str", "int", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
-                 "floor", "ceil", "min", "max", "sum", "average"}
+                 "floor", "ceil", "min", "max", "sum", "average",
+                 "now", "today", "time", "date", "sin", "cos", "tan", "log"}  # 1.4.0
 # Built-ins that are new in Tuff 1.0.4 and that people already use as their own variables (num = 0, err = "...").
 # Giving one a value inside a function makes that function's own variable, as it did before they were built in,
 # and the built-in stays for the rest of the program. At the top of the program it still replaces the built-in.
-OWN_NAME_BUILTINS = {"num", "int", "str", "err"}
+OWN_NAME_BUILTINS = {"num", "int", "str", "err",
+                     "now", "today", "time", "date", "log", "file", "sin", "cos", "tan"}  # 1.4.0's: names programs already used for their own things
 
 
 # return, break and continue on their way out. They keep their line, for when there's nothing to catch them.
@@ -577,7 +749,7 @@ def b64(text):
     return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
-def to_text(v, nested=False):
+def to_text(v, nested=False, inside=()):
     if v is None:
         return "nil"
     if v is True:
@@ -588,8 +760,12 @@ def to_text(v, nested=False):
         return str(int(v)) if v.is_integer() else repr(v)
     if isinstance(v, str):
         return f'"{v}"' if nested else v
+    if isinstance(v, (list, dict)) and any(v is x for x in inside):  # a list that holds itself: [1, [...]]
+        return "[...]" if isinstance(v, list) else "{...}"
     if isinstance(v, list):
-        return "[" + ", ".join(to_text(x, True) for x in v) + "]"
+        return "[" + ", ".join(to_text(x, True, inside + (v,)) for x in v) + "]"
+    if isinstance(v, dict):
+        return "{" + ", ".join(f"{to_text(k, True)}: {to_text(x, True, inside + (v,))}" for k, x in v.items()) + "}"
     if isinstance(v, Line):
         return to_text(v.text, nested)
     if isinstance(v, (Func, Builtin)):
@@ -616,6 +792,8 @@ def type_name(v):
         return "text"
     if isinstance(v, list):
         return "a list"
+    if isinstance(v, dict):
+        return "a dictionary"
     if isinstance(v, Line):
         return "a line"
     if isinstance(v, Module):
@@ -634,7 +812,211 @@ def truthy(v):
         return True
     if isinstance(v, Err):
         return False
-    return v not in (None, False, 0, "") and v != []
+    return v not in (None, False, 0, "") and v != [] and v != {}
+
+
+def make_file_members(interp):
+    """file (1.4.0): text files and saved data, in the program's own folder unless the path says otherwise. When
+    interp.writes is False (Tuff Engine's preview, and tuff_run for AI agents: TUFF_NO_WRITES=1) the writes are kept
+    in memory for this run only: later reads see them, and nothing on disk changes."""
+    rt = interp.rt
+    memory = {}  # with writes off: a file's text as this run left it, or None for one it deleted
+
+    def where(path, what):
+        p = rt.text(path)
+        if not p.strip():
+            raise TuffError(f"{what} needs a file name, like \"notes.txt\".")
+        return rt.path(p), p
+
+    def spot(full):
+        return os.path.normcase(os.path.abspath(full))
+
+    def read(path, what="file.read"):
+        full, p = where(path, what)
+        if spot(full) in memory:
+            if memory[spot(full)] is None:
+                raise TuffError(f"Couldn't find {p} in your project folder. Check first with file.exists(\"{p}\").")
+            return memory[spot(full)]
+        try:
+            interp.room(os.path.getsize(full))
+            with open(full, "rb") as f:
+                data = f.read()
+        except FileNotFoundError:
+            raise TuffError(f"Couldn't find {p} in your project folder. Check first with file.exists(\"{p}\").")
+        except OSError as exc:
+            raise TuffError(f"Couldn't read {p}: {exc.strerror or exc}.")
+        return decode(data, p, what)[0].replace("\r\n", "\n")
+
+    def decode(data, p, what):
+        """A file's text and how it's saved: UTF-8, UTF-16 (PowerShell's >), or the old Windows way (Excel's CSV)."""
+        if data[:2] == b"\xff\xfe":
+            return data[2:].decode("utf-16-le", errors="replace"), "utf-16-le"
+        if data[:2] == b"\xfe\xff":
+            return data[2:].decode("utf-16-be", errors="replace"), "utf-16-be"
+        if b"\x00" in data:
+            raise TuffError(f"{p} isn't a text file, so {what} can't read it.")
+        try:
+            return data.decode("utf-8-sig"), "utf-8"
+        except UnicodeDecodeError:
+            return data.decode("cp1252", errors="replace"), "cp1252"
+
+    def write_text(path, text, mode, what):
+        full, p = where(path, what)
+        if not interp.writes:
+            had = memory.get(spot(full)) if spot(full) in memory else (read(path, what) if mode == "a" and os.path.isfile(full) else "")
+            memory[spot(full)] = (had or "") + text if mode == "a" else text
+            interp.room(len(memory[spot(full)]))  # Tuff Engine's preview counts what it keeps
+            return None
+        try:
+            folder = os.path.dirname(full)
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+            with open(full, mode, encoding="utf-8", newline="") as f:
+                f.write(text)
+        except OSError as exc:
+            raise TuffError(f"Couldn't write {p}: {exc.strerror or exc}.")
+        return None
+
+    def write(path, text):
+        return write_text(path, rt.text(text), "w", "file.write")
+
+    def add(path, text):  # adds a line to the end (makes the file if it isn't there), on a line of its own
+        full, p = where(path, "file.add")
+        line = rt.text(text)
+        if not interp.writes:
+            had = read(path, "file.add") if exists(path) else ""
+            return write_text(path, ("\n" if had and not had.endswith("\n") else "") + line + "\n", "a", "file.add")
+        try:  # in the file's own way of saving text and ending lines, so a UTF-16 or Excel file stays readable
+            with open(full, "rb") as f:
+                had, how = decode(f.read(), p, "file.add")
+        except FileNotFoundError:
+            had, how = "", "utf-8"
+        except OSError as exc:
+            raise TuffError(f"Couldn't read {p}: {exc.strerror or exc}.")
+        end = "\r\n" if "\r\n" in had else "\n"
+        chunk = ("" if not had or had.endswith("\n") else end) + line.replace("\n", end) + end
+        try:
+            folder = os.path.dirname(full)
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+            with open(full, "ab") as f:
+                f.write(chunk.encode(how, errors="replace"))
+        except OSError as exc:
+            raise TuffError(f"Couldn't write {p}: {exc.strerror or exc}.")
+        return None
+
+    def lines(path):
+        text = read(path, "file.lines")
+        return text.split("\n")[:-1] if text.endswith("\n") else (text.split("\n") if text else [])
+
+    def exists(path):
+        full = where(path, "file.exists")[0]
+        if spot(full) in memory:
+            return memory[spot(full)] is not None
+        return os.path.isfile(full)
+
+    def delete(path):
+        full, p = where(path, "file.delete")
+        if not interp.writes:
+            if not exists(path):
+                raise TuffError(f"Couldn't find {p} to delete it.")
+            memory[spot(full)] = None
+            return None
+        try:
+            os.remove(full)
+        except FileNotFoundError:
+            raise TuffError(f"Couldn't find {p} to delete it.")
+        except OSError as exc:
+            raise TuffError(f"Couldn't delete {p}: {exc.strerror or exc}.")
+        return None
+
+    def to_json(v, seen=()):
+        v = plain(v)
+        if v is None or isinstance(v, (bool, int, float, str)):
+            if isinstance(v, float) and not math.isfinite(v):
+                raise TuffError(f"file.save can't keep {to_text(v)}: JSON only has ordinary numbers.")
+            return v
+        data = getattr(v, "tap", None)  # a tap data object (from :json or tap.data()): its named values
+        if isinstance(v, Native) and isinstance(getattr(data, "values", None), dict):
+            v = data.values
+        if isinstance(v, (list, dict)):
+            if any(v is s for s in seen):
+                raise TuffError(f"file.save can't save a {'list' if isinstance(v, list) else 'dictionary'} that holds itself.")
+            seen = seen + (v,)
+            if isinstance(v, list):
+                return [to_json(x, seen) for x in v]
+            keys = [to_text(k) for k in v]  # JSON's keys are text, so number keys come back as text
+            if len(set(keys)) < len(keys):
+                same = next(k for k in keys if keys.count(k) > 1)
+                raise TuffError(f"file.save can't keep both {same} and \"{same}\" as keys: saved, every key is text, so they'd be one.")
+            return {k: to_json(x, seen) for k, x in zip(keys, v.values())}
+        raise TuffError(f"file.save keeps text, numbers, true/false, nil, lists and dictionaries, not {type_name(v)}.")
+
+    def save(path, value):  # any data, as JSON
+        try:
+            text = json.dumps(to_json(value), indent=2, ensure_ascii=False)
+        except RecursionError:
+            raise TuffError("file.save can't save data with lists or dictionaries inside each other this many times.")
+        return write_text(path, text, "w", "file.save")
+
+    def load(path, default=None):
+        full, p = where(path, "file.load")
+        if not exists(path) and default is not None:
+            return default
+        text = read(path, "file.load")
+        try:
+            return json.loads(text)
+        except RecursionError:
+            raise TuffError(f"{p} has lists or dictionaries inside each other too many times for file.load.")
+        except ValueError:
+            raise TuffError(f"{p} isn't saved data (JSON), so file.load can't read it. Use file.read for text.")
+
+    b = rt.builtin
+    return {"read": b("file.read", read), "write": b("file.write", write), "add": b("file.add", add),
+            "lines": b("file.lines", lines), "exists": b("file.exists", exists), "delete": b("file.delete", delete),
+            "save": b("file.save", save), "load": b("file.load", load)}
+
+
+def method_names(v):
+    """The :methods a value has, or None when that can't be told here (a library's object knows its own)."""
+    if isinstance(v, Line):
+        return SIMPLE_METHODS["line"]
+    if isinstance(v, str):
+        return SIMPLE_METHODS["text"]
+    if isinstance(v, list):
+        return SIMPLE_METHODS["list"]
+    if isinstance(v, dict):
+        return SIMPLE_METHODS["dict"]
+    if isinstance(v, Native):
+        return tuple(v.methods)
+    if isinstance(v, Builtin):
+        return ("ascii", "color", "colour", "pen") if v.name == "print" else ()
+    if isinstance(v, (bool, Module, Func)) or v is ALL:
+        return ()
+    return None
+
+
+def sort_key(v):
+    """How :sort compares: numbers with numbers, text with text (alphabetically, any case), true/false with themselves."""
+    v = plain(v)
+    if isinstance(v, bool):
+        return (0, v)
+    if isinstance(v, (int, float)):
+        return (1, v)
+    if isinstance(v, str):
+        return (2, v.lower(), v)
+    raise TypeError("can't sort")
+
+
+def dict_key(k):
+    """A dictionary's key: text or a number. Not a list (it can change), and not true/false, which would be the
+    same key as 1 and 0."""
+    k = plain(k)
+    if isinstance(k, Err):
+        k.stop("A dictionary's key")
+    if isinstance(k, (str, int, float)) and not isinstance(k, bool):
+        return k
+    raise TuffError(f"A dictionary's keys can be text or numbers, not {type_name(k)}.")
 
 
 def plain(v):
@@ -1345,6 +1727,8 @@ class Runtime:
 
 
 class Interpreter:
+    writes = True  # file.write and the rest (Tuff Engine's preview writes nothing)
+
     def __init__(self, src="", base_dir="."):
         self.src = src
         self.base_dir = base_dir
@@ -1355,9 +1739,9 @@ class Interpreter:
         builtins = {
             "print": self.b_print,
             "number": self.b_number,
-            "text": lambda v: to_text(plain(v)),
+            "text": self.b_text,
             # The names people bring from Python: str is text, int is a whole number.
-            "str": lambda v: to_text(plain(v)),
+            "str": self.b_text,
             "int": self.b_int,
             "num": lambda v: self.b_number(v, "num"),
             "len": self.b_len,
@@ -1374,15 +1758,70 @@ class Interpreter:
             "max": lambda *v: max(self.num_list("max", v)),
             "sum": lambda *v: sum(self.num_list("sum", v, allow_empty=True)),
             "average": lambda *v: (lambda nums: sum(nums) / len(nums))(self.num_list("average", v)),
+            # 1.4.0: date and time, and more maths (angles in degrees, like tdraw's and tgame's turns)
+            "now": lambda: time.strftime("%H:%M:%S"),
+            "today": lambda: time.strftime("%Y-%m-%d"),
+            "time": lambda: round(time.perf_counter() - self.started, 3),
+            "date": self.b_date,
+            "sin": lambda deg: self.trig("sin", deg, math.sin),
+            "cos": lambda deg: self.trig("cos", deg, math.cos),
+            "tan": lambda deg: self.trig("tan", deg, math.tan),
+            "log": self.b_log,
         }
+        self.started = time.perf_counter()
+        self.held = []  # the starts of the names[order:pop] being worked out (see eval "slice")
+        if os.environ.get("TUFF_NO_WRITES") == "1":  # tuff_run for AI agents: file writes stay in memory
+            self.writes = False
         takes_err = {"number", "num", "int", "text", "str", "print"}  # they hand an err back, or show it as "err"
         for name, fn in builtins.items():
             (self.own_names if name in OWN_NAME_BUILTINS else self.globals).vars[name] = Builtin(name, fn, name in takes_err)
+        self.own_names.vars["file"] = Module("file", make_file_members(self))
         self.print_builtin = self.globals.vars["print"]  # say:ascii(...) is print's, even in a program with its own print
         self.pen = None  # print:pen's look, for every line said after it
         self.globals.vars["all"] = ALL
         self.globals.vars["pi"] = math.pi
         self.own_names.vars["err"] = ERR
+
+    def b_text(self, v, decimals=None):
+        """text(value), and text(3.14159, 2) is "3.14" (a number with that many decimals, 1.4.0)."""
+        v = plain(v)
+        if decimals is None:
+            return to_text(v)
+        d = self.num_arg("text", decimals)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise TuffError(f"text(value, decimals) needs a number to show with decimals, not {type_name(v)}.")
+        if d > 100:
+            raise TuffError(f"text(value, {to_text(d)}): the most decimals it shows is 100.")
+        shown = f"{v:.{max(0, int(d))}f}"
+        return shown[1:] if shown.startswith("-") and not shown.strip("-0.") else shown  # -0.001 to 2 places is 0.00
+
+    def b_date(self):
+        """date(): today and now as a dictionary: year, month, day, weekday, hour, minute, second."""
+        t = time.localtime()
+        return {"year": t.tm_year, "month": t.tm_mon, "day": t.tm_mday, "weekday": time.strftime("%A", t),
+                "hour": t.tm_hour, "minute": t.tm_min, "second": t.tm_sec}
+
+    def trig(self, name, deg, fn):
+        deg = self.num_arg(name, deg)
+        if name == "tan" and deg % 180 == 90:
+            raise TuffError(f"tan({to_text(deg)}) has no answer: at 90 degrees (and 270) the line is straight up.")
+        result = fn(math.radians(deg))
+        return round(result, 12) + 0.0  # sin(180) is 0, not 1.2e-16
+
+    def b_log(self, v, base=None):
+        v = self.num_arg("log", v)
+        if v <= 0:
+            raise TuffError("log() needs a number above 0.")
+        if base is None:
+            return math.log(v)
+        base = self.num_arg("log", base)
+        if base <= 0 or base == 1:
+            raise TuffError("log(number, base): the base must be above 0 and not 1, like log(100, 10).")
+        if base == 10:  # exact for powers: log(1000, 10) is 3, not 2.9999999999999996
+            return math.log10(v)
+        if base == 2:
+            return math.log2(v)
+        return round(math.log(v, base), 12) + 0.0
 
     # math helpers
     def num_arg(self, name, v):
@@ -1557,19 +1996,27 @@ class Interpreter:
 
     def b_len(self, v):
         v = plain(v)
-        if not isinstance(v, (str, list)):
-            raise TuffError(f"len() needs text or a list, not {type_name(v)}.")
+        if not isinstance(v, (str, list, dict)):
+            raise TuffError(f"len() needs text, a list or a dictionary, not {type_name(v)}.")
         return len(v)
 
     def b_random(self, *ends):
-        if not 1 <= len(ends) <= 2:
+        """random(1, 6) and random(6): a whole number. random() is a decimal from 0 to 1, and random(0.5, 2.5) (a
+        decimal in it) a decimal in that range (1.4.0)."""
+        if not ends:
+            return random.random()
+        if len(ends) > 2:
             raise TuffError("random() needs a range, like random(1, 6), or just the top, like random(6).")
         nums = [self.num_arg("random", v) for v in ends]
-        if any(isinstance(v, float) and not v.is_integer() for v in nums):
-            raise TuffError("random() needs whole numbers, like random(1, 6). For a decimal, divide: random(0, 100) / 100.")
-        low, high = (1, nums[0]) if len(nums) == 1 else nums
+        # A decimal is one with digits after the point: random(1, 12 / 2) still gives whole numbers, as in 1.3.6.
+        decimal = any(isinstance(v, float) and not v.is_integer() for v in nums)
+        low, high = ((0 if decimal else 1), nums[0]) if len(nums) == 1 else nums  # random(0.5): from 0 to 0.5
         if low > high:
-            raise TuffError(f"random({to_text(low)}, {to_text(high)}): the first number must be the smaller one.")
+            shown = to_text(high) if len(nums) == 1 else f"{to_text(low)}, {to_text(high)}"
+            raise TuffError(f"random({shown}): the first number must be the smaller one." if len(nums) > 1 else
+                            f"random({shown}) gives a number from {to_text(low)} up to {shown}, so {shown} has to be at least {to_text(low)}.")
+        if decimal:
+            return random.uniform(low, high)
         return random.randint(int(low), int(high))
 
     def b_wait(self, seconds):
@@ -1612,19 +2059,43 @@ class Interpreter:
 
     def s_assign(self, s, env):
         value = self.eval(s.value, env)
-        if s.op != "=":
-            value = self.binop(s.op[0], self.eval(s.target, env), value)
-        if s.target.kind == "var":
-            env.set(s.target.name, value)
+        t = s.target
+        if t.kind == "var":
+            if s.op != "=":
+                value = self.binop(s.op[0], self.eval(t, env), value)
+            env.set(t.name, value)
+            return value
+        obj = plain(self.eval(t.obj, env))  # the list or dictionary and the key are worked out once: votes[input()] += 1
+        index = getattr(t, "index", None)
+        if t.kind == "slice":  # board[moves:pop] = "X": only 1.3.6's method reading can be stored into
+            which, key, _ = self.part(t, env)
+            if which != "key":
+                raise TuffError("A part like [1:3] can't be changed with =. Make the new text or list with + instead.")
         else:
-            obj = plain(self.eval(s.target.obj, env))
-            if not isinstance(obj, list):
-                owner = node_text(s.target.obj) or "thing"
-                tip = f" Use :set instead, like {owner}:set({key_example(s.target.index)}, value)." \
-                    if isinstance(obj, Native) and "keys" in obj.methods and "set" in obj.methods else ""
-                raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.{tip}")
-            obj[self.list_index(obj, self.eval(s.target.index, env))] = value
+            key = self.eval(index, env)
+        if s.op != "=":
+            value = self.binop(s.op[0], self.item(obj, key, t.obj, index), value)
+        if isinstance(obj, dict):  # ages["sam"] = 15 sets (or adds) a key
+            obj[dict_key(key)] = value
+            return value
+        if not isinstance(obj, list):
+            owner = node_text(t.obj) or "thing"
+            example = key_example(index) if index is not None else '"name"'
+            tip = f" Use :set instead, like {owner}:set({example}, value)." \
+                if isinstance(obj, Native) and "keys" in obj.methods and "set" in obj.methods else ""
+            raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.{tip}")
+        obj[self.list_index(obj, key)] = value
         return value
+
+    def s_try(self, s, env):
+        """try: ... catch problem: ... (1.4.0): a Tuff error inside try runs catch instead of stopping the program.
+        problem (optional) is the error's message."""
+        try:
+            return self.run_block(s.body, env)
+        except TuffError as err:
+            if s.name:
+                env.set(s.name, err.msg)
+            return self.run_block(s.handler, env)
 
     def s_if(self, s, env):
         for cond, body in s.branches:
@@ -1648,6 +2119,8 @@ class Interpreter:
         items = plain(self.eval(s.items, env))
         if isinstance(items, bool) or isinstance(items, (int, float)):
             raise TuffError(f"Can't loop over a number. Try: for {s.name} in range({to_text(items)}):")
+        if isinstance(items, dict):  # a dictionary: its keys
+            items = list(items)
         if not isinstance(items, (list, str)):
             owner = s.items.name if s.items.kind == "var" else "thing"
             tip = f" Loop over its names instead: for {s.name} in {owner}:keys():" if isinstance(items, Native) and "keys" in items.methods else ""
@@ -1667,6 +2140,8 @@ class Interpreter:
         return None
 
     def s_import(self, s, env):
+        if s.name == "file":  # built in, so there's nothing to load
+            return None
         if s.name not in LIBRARIES:
             hint = difflib.get_close_matches(s.name, LIBRARIES, n=1, cutoff=0.5)
             extra = f" Did you mean '{hint[0]}'?" if hint else f" Available libraries: {', '.join(LIBRARIES)}."
@@ -1726,26 +2201,112 @@ class Interpreter:
             return -v
         if k == "list":
             return [self.eval(x, env) for x in e.items]
+        if k == "dict":
+            return {dict_key(self.eval(key, env)): self.eval(value, env) for key, value in zip(e.keys, e.values)}
         if k == "index":
             obj = plain(self.eval(e.obj, env))
+            return self.item(obj, self.eval(e.index, env), e.obj, e.index)
+        if k == "held":  # the start of names[order:pop], already worked out (see "slice")
+            return self.held[-1]
+        if k == "slice":  # s[1:3]: positions 1 to 3, both included (like range); s[:3] from the start, s[2:] to the end
+            obj = plain(self.eval(e.obj, env))
+            which, first, last = self.part(e, env)
+            if which == "key":  # names[order:pop]: 1.3.6's method call gave the position or key
+                return self.item(obj, first, e.obj, None)
             if not isinstance(obj, (list, str)):
-                owner = node_text(e.obj) or "thing"
-                tip = f" Use :get instead, like {owner}:get({key_example(e.index)})." if isinstance(obj, Native) and "keys" in obj.methods else ""
-                raise TuffError(f"Can't use [ ] on {type_name(obj)}.{tip}")
-            return obj[self.list_index(obj, self.eval(e.index, env))]
+                raise TuffError(f"Only text and lists have parts like [1:3], not {type_name(obj)}.")
+            size = len(obj)
+            a, b = max(0, self.spot(e, first, 0, size)), min(size - 1, self.spot(e, last, size - 1, size))
+            return obj[a:b + 1] if a <= b else obj[0:0]
         if k == "call":
             return self.call(e, env)
         if k == "method":
-            return self.method(e, env)
+            try:
+                return self.method(e, env)
+            except (OverflowError, MemoryError):  # a number or text too big for the computer, inside a method
+                raise TuffError("That's too big to work out: a number or text this large doesn't fit in memory.")
         if k == "attr":
             obj = self.eval(e.obj, env)
+            if isinstance(obj, Builtin) and e.obj.kind == "var" and e.obj.name in PY_NAMES:  # time.sleep(1)
+                raise TuffError(f"Tuff has no {e.obj.name}.{e.name}. {PY_NAMES[e.obj.name]}")
             if not isinstance(obj, Module):
-                kind = "list" if isinstance(obj, list) else "text" if isinstance(obj, str) else None
+                kind = "list" if isinstance(obj, list) else "text" if isinstance(obj, str) else "dict" if isinstance(obj, dict) else None
                 raise TuffError(dot_help(type_name(obj), e.obj, e.name, kind))
             if e.name not in obj.members:
                 raise TuffError(f"{obj.name} doesn't have '{e.name}'. It has: {', '.join(obj.members)}.")
             return obj.members[e.name]
         raise TuffError(f"Internal error: unknown expression '{k}'.")
+
+    def room(self, size):
+        """Something about size bytes big is about to be made. Only Tuff Engine's preview keeps count."""
+
+    def repeat(self, text, times):
+        if len(text) * times > 500_000_000:
+            raise TuffError(f"That text would be {len(text) * times} characters long, too long to make.")
+        return text * times
+
+    LEFT_OUT = object()  # a part's end that isn't written: s[:3], s[2:]
+
+    def part(self, e, env):
+        """Works out x[a:b]'s ends: ("part", start, end), or ("key", k, None) when it's 1.3.6's method call
+        (names[order:pop], see Parser.index): a, worked out once, isn't a number, and it has that method."""
+        if e.alt is None:
+            first = self.LEFT_OUT if e.start is None else plain(self.eval(e.start, env))
+            return "part", first, self.LEFT_OUT if e.end is None else plain(self.eval(e.end, env))
+        a = self.eval(e.recv, env)
+        v = plain(a)
+        self.held.append(a)
+        try:
+            if isinstance(v, Err):
+                v.stop(f"{node_text(e.recv) or 'The value before the :'}")
+            if v is None:  # names[order:pop] with order nil: neither a position nor something with :pop
+                raise TuffError(f"{node_text(e.recv) or 'The value before the :'} is nil, so it's not a position, and it has no :{e.mname}.")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                first = plain(self.eval(e.start, env))
+                return "part", first, plain(self.eval(e.end, env))
+            names = method_names(a)
+            if names is not None and e.mname not in names:  # word[first:last] with first some text
+                who = node_text(e.recv)
+                tip = f" {who} is text: turn it into a number first, like int({who})." if who and isinstance(v, str) else ""
+                raise TuffError(f"The positions in [start:end] must be whole numbers, not {type_name(v)}.{tip}")
+            return "key", self.eval(e.alt, env), None
+        finally:
+            self.held.pop()
+
+    def spot(self, e, v, default, size):
+        """A part's position, counted from the end when it's below 0."""
+        if v is self.LEFT_OUT:
+            return default
+        if isinstance(v, Err):
+            v.stop("A part's position")
+        if isinstance(v, bool) or not isinstance(v, int):
+            tip = " (For a method call inside [ ], put brackets around it, like (stack:pop).)" \
+                if e.alt is None and isinstance(v, (list, str, dict, Native)) else ""
+            raise TuffError(f"The positions in [start:end] must be whole numbers, not {type_name(v)}.{tip}")
+        return v + size if v < 0 else v
+
+    def item(self, obj, key, obj_node, key_node):
+        """obj[key]: a dictionary's value, or the item at a position in a list or text."""
+        if isinstance(obj, dict):
+            key = dict_key(key)
+            if key not in obj:
+                owner = node_text(obj_node) or "the dictionary"
+                shown = to_text(key, True)
+                as_text = to_text(key) if isinstance(key, (int, float)) else None
+                if as_text in obj:  # {"1": ...}: from file.load, which gives keys back as text (JSON's keys are)
+                    named = node_text(obj_node)
+                    use = f"{named}[\"{as_text}\"] or {named}[text({shown})]" if named else f"[\"{as_text}\"] or [text({shown})]"
+                    raise TuffError(f"{owner} doesn't have the number {shown}, but it has \"{as_text}\" (text). Keys that "
+                                    f"come back from file.load are always text: use {use}.")
+                tip = f" Check first with {owner}:has({shown}), or use {owner}:get({shown}, default)." if node_text(obj_node) else ""
+                raise TuffError(f"{owner} doesn't have {shown}.{tip}")
+            return obj[key]
+        if not isinstance(obj, (list, str)):
+            owner = node_text(obj_node) or "thing"
+            example = key_example(key_node) if key_node is not None else '"name"'
+            tip = f" Use :get instead, like {owner}:get({example})." if isinstance(obj, Native) and "keys" in obj.methods else ""
+            raise TuffError(f"Can't use [ ] on {type_name(obj)}.{tip}")
+        return obj[self.list_index(obj, key)]
 
     def list_index(self, obj, index):
         index = plain(index)
@@ -1784,9 +2345,9 @@ class Interpreter:
             if num(a) and num(b):
                 return a * b
             if isinstance(a, str) and isinstance(b, int) and not isinstance(b, bool):
-                return a * b
+                return self.repeat(a, b)
             if isinstance(b, str) and isinstance(a, int) and not isinstance(a, bool):
-                return b * a
+                return self.repeat(b, a)
         elif num(a) and num(b):
             if op == "-":
                 return a - b
@@ -1889,12 +2450,105 @@ class Interpreter:
             if name == "has":
                 need(1)
                 return to_text(args[0]) in obj
+            # 1.4.0's text tools
+            if name == "split":  # "a,b":split(",") is ["a", "b"]; with nothing, it splits at spaces
+                if len(args) > 1:
+                    raise TuffError(':split takes what to split at, like :split(","), or nothing (spaces).')
+                sep = to_text(args[0]) if args else None
+                if sep == "":
+                    return list(obj)
+                return obj.split(sep)
+            if name == "replace":
+                need(2)
+                old, new = to_text(args[0]), to_text(args[1])
+                if old and len(new) > len(old):
+                    self.room(len(obj) + obj.count(old) * (len(new) - len(old)))
+                elif not old:
+                    self.room(len(obj) + (len(obj) + 1) * len(new))
+                return obj.replace(old, new)
+            if name in ("starts", "ends"):
+                need(1)
+                return (obj.startswith if name == "starts" else obj.endswith)(to_text(args[0]))
+            if name == "find":  # where it first is, or -1
+                need(1)
+                return obj.find(to_text(args[0]))
+            if name == "count":
+                need(1)
+                return obj.count(to_text(args[0]))
+            if name in ("pad_left", "pad_right"):  # "7":pad_left(3, "0") is "007"
+                if not 1 <= len(args) <= 2:
+                    raise TuffError(f':{name} takes a width and, if you like, what to fill with: :{name}(5) or :{name}(3, "0").')
+                width = self.num_arg(name, args[0])
+                fill = to_text(args[1]) if len(args) > 1 else " "
+                if len(fill) != 1:
+                    raise TuffError(f":{name} fills with one character, like \"0\" or \" \".")
+                if not math.isfinite(width):
+                    raise TuffError(f":{name} needs a width that's a number, not {to_text(width)}.")
+                if width > 10_000_000:
+                    raise TuffError(f":{name}({to_text(width)}) is too wide: the most is 10000000.")
+                self.room(int(width) * (4 if ord(fill) > 255 else 1))
+                return obj.rjust(int(width), fill) if name == "pad_left" else obj.ljust(int(width), fill)
             what, kind = "Text", "text"
+        elif isinstance(obj, dict):  # 1.4.0's dictionaries
+            if name == "has":
+                need(1)
+                return dict_key(args[0]) in obj
+            if name == "get":  # ages:get("bob", 0): the value, or the default (nil) when it isn't there
+                if not 1 <= len(args) <= 2:
+                    raise TuffError(':get takes a key and, if you like, what to give when it isn\'t there: :get("sam", 0).')
+                return obj.get(dict_key(args[0]), args[1] if len(args) > 1 else None)
+            if name == "set":
+                need(2)
+                obj[dict_key(args[0])] = args[1]
+                return obj
+            if name == "remove":
+                need(1)
+                key = dict_key(args[0])
+                if key not in obj:
+                    raise TuffError(f"{to_text(key, True)} isn't in this dictionary.")
+                del obj[key]
+                return obj
+            if name in ("keys", "values"):
+                no_inputs()
+                return list(obj) if name == "keys" else list(obj.values())
+            if name == "size":  # like len(d), and like a tap data object's :size
+                no_inputs()
+                return len(obj)
+            what, kind = "A dictionary", "dict"
         elif isinstance(obj, list):
             if name == "add":
                 need(1)
                 obj.append(args[0])
                 return obj
+            if name == "sort":  # in place; :sort(by) sorts by what by(item) gives back
+                if len(args) > 1:
+                    raise TuffError(":sort takes nothing, or a function to sort by, like :sort(by_score).")
+                if args and not isinstance(args[0], (Func, Builtin)):
+                    raise TuffError(":sort takes a function name to sort by, like :sort(by_score) (without brackets).")
+                keyed = [(self.invoke(args[0], [x]) if args else x, x) for x in obj]
+                try:
+                    keyed.sort(key=lambda kx: sort_key(kx[0]))
+                except TypeError:
+                    bad = next((plain(k) for k, _ in keyed if not isinstance(plain(k), (int, float, str))), None)
+                    by = f"{args[0].name}() gave back" if args else "The list has"
+                    raise TuffError(f":sort sorts numbers, text and true/false (numbers first, then text A to Z). {by} {type_name(bad)}"
+                                    + (", which can't be sorted." if args else ", which can't be sorted. Give :sort a function that says what to sort it by, like :sort(by_score)."))
+                obj[:] = [x for _, x in keyed]
+                return obj
+            if name == "reverse":
+                no_inputs()
+                obj.reverse()
+                return obj
+            if name == "join":  # ["a", "b"]:join(", ") is "a, b"
+                if len(args) > 1:
+                    raise TuffError(':join takes what to put between the items, like :join(", "), or nothing.')
+                parts = [to_text(x) for x in obj]
+                between = to_text(args[0]) if args else ""
+                self.room(sum(len(x) for x in parts) + len(between) * len(parts))
+                return between.join(parts)
+            if name == "find":
+                need(1)
+                return next((i for i, x in enumerate(obj) if self.binop("==", x, args[0])), -1)
             # Same matching as 'is': true and 1 are different things.
             spot = lambda: next((i for i, x in enumerate(obj) if self.binop("==", x, args[0])), None)
             if name == "remove":
@@ -1916,7 +2570,9 @@ class Interpreter:
             what, kind = "A list", "list"
         else:
             raise TuffError(f"{type_name(obj).capitalize()} doesn't have any :methods.")
-        raise TuffError(method_help(what, name, SIMPLE_METHODS[kind], kind))
+        msg = method_help(what, name, SIMPLE_METHODS[kind], kind)
+        tip = PY_ONLY.get(name.lower())
+        raise TuffError(msg + (f" {tip}" if tip and "instead" not in msg else ""))
 
 
 # ---------------------------------------------------------------- checking without running
@@ -1927,19 +2583,30 @@ PY_NAMES = {
     "False": "Tuff writes false in lowercase.",
     "None": "Tuff writes nil for 'nothing'.",
     "float": "To turn text into a number, use number(text).",
-    "math": "sqrt, floor, ceil, abs, round and pi are built in, so there's nothing to import.",
-    "time": "Use wait(seconds) to pause. In an app, app:every(seconds, fn) runs something again and again.",
+    "math": "sqrt, floor, ceil, abs, round, pi, sin, cos, tan and log are built in, so there's nothing to import.",
+    "time": "Tuff's time() is the seconds since the program started. Use wait(seconds) to pause. In an app, app:every(seconds, fn) runs something again and again.",
+    "json": "file.save(\"data.json\", value) and file.load(\"data.json\") keep lists and dictionaries as JSON.",
+    "open": "Use file.read(\"notes.txt\") and file.write(\"notes.txt\", text). They work in your program's folder.",
+    "datetime": "now(), today() and date() give the time and the date.",
     "length": "Use len(value) for how long some text or a list is.",
     "self": "Tuff has no classes. Keep things in variables and functions.",
 }
 # Methods from other languages, and the Tuff method that does the same job.
 PY_METHODS = {
-    "list": {"append": "add", "push": "add", "insert": "add", "contains": "has", "includes": "has", "delete": "remove", "discard": "remove"},
+    "list": {"append": "add", "push": "add", "insert": "add", "contains": "has", "includes": "has", "delete": "remove", "discard": "remove",
+             "index": "find", "sorted": "sort", "indexof": "find"},
     "text": {"strip": "trim", "contains": "has", "includes": "has", "upper_case": "upper", "lower_case": "lower",
-             "uppercase": "upper", "lowercase": "lower", "toupper": "upper", "tolower": "lower"},
+             "uppercase": "upper", "lowercase": "lower", "toupper": "upper", "tolower": "lower",
+             "startswith": "starts", "endswith": "ends", "index": "find", "indexof": "find", "ljust": "pad_right", "rjust": "pad_left"},
+    "dict": {"contains": "has", "includes": "has", "pop": "remove", "delete": "remove", "update": "set", "items": "keys", "length": "size", "count": "size"},
 }
-SIMPLE_METHODS = {"text": ("upper", "lower", "trim", "has"), "list": ("add", "remove", "pop", "has"), "line": ("rewrite", "append", "clear", "text", "play")}
+SIMPLE_METHODS = {"text": ("upper", "lower", "trim", "has", "split", "replace", "starts", "ends", "find", "count", "pad_left", "pad_right"),
+                  "list": ("add", "remove", "pop", "has", "sort", "reverse", "join", "find"),
+                  "dict": ("has", "get", "set", "remove", "keys", "values", "size"),
+                  "line": ("rewrite", "append", "clear", "text", "play")}
 ONE_INPUT = {"has", "add", "remove", "play"}
+INPUTS = {"replace": (2, 2), "set": (2, 2), "get": (1, 2), "pad_left": (1, 2), "pad_right": (1, 2), "split": (0, 1), "join": (0, 1),
+          "sort": (0, 1), "starts": (1, 1), "ends": (1, 1), "find": (1, 1), "count": (1, 1)}  # 1.4.0's: (fewest, most) inputs
 LOOK_INPUTS = {"rewrite", "append"}  # the new text, then look and animation words (1.3.6)
 
 
@@ -1962,6 +2629,8 @@ def dot_help(what, obj_node, name, kind=None):
     """For thing.name when thing isn't a library: methods use ':'."""
     alt = PY_METHODS.get(kind, {}).get(name.lower(), name)
     owner = obj_node.name if getattr(obj_node, "kind", None) == "var" else "thing"
+    if kind == "dict" and alt not in SIMPLE_METHODS["dict"]:  # ages.sam: a dictionary's values are read with [ ]
+        return f"Only libraries use '.', and this is {what}. Read a value with [ ], like {owner}[\"{name}\"]"
     return f"Only libraries use '.', and this is {what}. For methods use ':', like {owner}:{alt}"
 
 
@@ -2431,7 +3100,7 @@ SAVE_INPUTS = {
     "forget": ("the save's name, or nothing to forget every save", '{o}:forget("best")', (0, 1)),
 }
 SAVE_KEEPS = "numbers, text, true/false, lists and tables"
-SAVE_KINDS = ("$number", "$text", "$bool", "$nil", "$list", "$line", "data object")  # what :save can keep
+SAVE_KINDS = ("$number", "$text", "$bool", "$nil", "$list", "$line", "$dict", "data object")  # what :save can keep
 # tgame's multiplayer as the checker knows it (Checker.check_net): game:host, :join, :send, :share and the rest, on a
 # game or a world. For each, what it takes, for messages, an example ({o} is the game's name), the input counts that
 # fit, and what its first input is when that has to be text. :send and :share carry what :save keeps. on_message,
@@ -2714,24 +3383,17 @@ class Scope:
 
 # Methods that other languages have, with the Tuff way to do it, for "nothing in Tuff has :x".
 PY_ONLY = {
-    "split": "Tuff can't split text. Go through it letter by letter with a for loop.",
-    "join": "Join text with +.",
-    "replace": "Tuff can't replace inside text. Build new text with + in a loop.",
-    "format": "Join text with +, like \"Hi \" + name.",
-    "startswith": "Compare the first letter: t[0] is \"a\".",
-    "endswith": "Compare the last letter: t[-1] is \"a\".",
-    "find": "Use :has to check, like t:has(\"a\").",
-    "index": "Loop with a counter to find a position.",
-    "count": "Loop and count with a variable.",
-    "sort": "Tuff has no sort. Sort with a loop, or keep the list in order as you add.",
-    "reverse": "Build a reversed list with a loop.",
-    "keys": "Tuff has no dictionaries. Keep two lists side by side.",
-    "items": "Tuff has no dictionaries. Keep two lists side by side.",
-    "values": "Tuff has no dictionaries. Keep two lists side by side.",
-    "get": "Tuff has no dictionaries. Keep two lists side by side.",
+    "format": "Join text with +, like \"Hi \" + name. For decimals, text(x, 2) gives \"3.14\".",
+    "startswith": "Text has :starts, like t:starts(\"a\").",
+    "endswith": "Text has :ends, like t:ends(\"a\").",
+    "index": "Text and lists have :find, which gives the position (or -1).",
+    "items": "Loop over a dictionary's keys: for key in ages: then ages[key].",
     "extend": "Join lists with +, like items = items + more.",
     "isdigit": "Use the is_number pattern from the guide.",
-    "capitalize": "Use t[0]:upper() + the rest built with a loop.",
+    "capitalize": "Use t[0]:upper() + t[1:] (a part from position 1 to the end).",
+    "substring": "Take a part with [ ], like t[0:4] (positions 0 to 4, both included).",
+    "substr": "Take a part with [ ], like t[0:4] (positions 0 to 4, both included).",
+    "slice": "Take a part with [ ], like items[1:3] (positions 1 to 3, both included).",
 }
 
 
@@ -2742,13 +3404,14 @@ class Checker:
 
     CONTAINERS = ("window", "row", "card", "page")
     TYPE = {"$text": "text", "$list": "a list", "$line": "a line", "$number": "a number", "$bool": "true/false",
-            "$nil": "nil", "$func": "a function", "$builtin": "a function"}
-    NUMBER_FNS = {"number", "num", "int", "len", "random", "round", "sqrt", "abs", "floor", "ceil", "min", "max", "sum", "average"}
+            "$nil": "nil", "$func": "a function", "$builtin": "a function", "$dict": "a dictionary"}
+    NUMBER_FNS = {"number", "num", "int", "len", "random", "round", "sqrt", "abs", "floor", "ceil", "min", "max", "sum", "average",
+                  "time", "sin", "cos", "tan", "log"}
     NUMBER_INPUT_FNS = {"round", "floor", "ceil", "abs", "sqrt", "min", "max", "sum", "average"}  # these fail on text
     MATHS = ("+", "-", "*", "/", "%", "^")
     COMPARE = ("==", "!=", "<", ">", "<=", ">=")
     ORDER = ("<", ">", "<=", ">=")
-    ZERO_INPUT = {"upper", "lower", "trim", "pop", "clear", "text"}  # list/text/line methods without inputs
+    ZERO_INPUT = {"upper", "lower", "trim", "pop", "clear", "text", "keys", "values", "reverse", "size"}  # list/text/line/dictionary methods without inputs
     TEXT_VALUE = {"input", "heading", "text", "small", "button", "dropdown", "clock"}  # :value() gives text
     # What each event hands its function, and where the function goes in the call. A function may
     # take fewer inputs than it's given (extras are dropped), not more.
@@ -2785,6 +3448,7 @@ class Checker:
         self.interp = Interpreter()
         self.builtins = {**self.interp.own_names.vars, **self.interp.globals.vars}
         self.memo = {}
+        self.held = []  # the kinds of the starts of names[order:pop] being checked (see as_method)
         self.anims = None
         self.calls = {}  # name -> every line it's called on, like name(...)
         self.top = Scope()
@@ -2824,6 +3488,13 @@ class Checker:
                 self.collect(s.body, scope, False)
             elif k == "while":
                 self.collect(s.body, scope, False)
+            elif k == "try":
+                self.collect(s.body, scope, False)
+                if s.name:  # catch problem: the error's message
+                    self.loop_vars.add(s.name)
+                    scope.names.add(s.name)
+                    self.everywhere.add(s.name)
+                self.collect(s.handler, scope, False)
             elif k == "if":
                 for _, b in s.branches:
                     self.collect(b, scope, False)
@@ -2899,7 +3570,8 @@ class Checker:
             elif vk == "$list" and s.op == "+=":
                 kinds.add("$list")
         if not kinds and name in self.builtins:
-            kinds.add("$builtin" if isinstance(self.builtins[name], Builtin) else "$number" if name == "pi" else None)
+            b = self.builtins[name]
+            kinds.add("$builtin" if isinstance(b, Builtin) else "$number" if name == "pi" else f"$module:{name}" if isinstance(b, Module) else None)
         result = kinds.pop() if len(kinds) == 1 else None
         if not seen:
             self.memo[name] = result
@@ -2912,6 +3584,15 @@ class Checker:
             return "$text" if isinstance(v, str) else "$bool" if isinstance(v, bool) else "$nil" if v is None else "$number"
         if k == "list":
             return "$list"
+        if k == "dict":
+            return "$dict"
+        if k == "held":  # the start of names[order:pop] (see Parser.index)
+            return self.held[-1] if self.held else self.kind(e.of, seen)
+        if k == "slice":  # a part of text is text, a part of a list a list
+            if self.as_method(e) is not False:  # names[order:pop]: an item of names (or can't tell yet)
+                return None
+            obj = self.kind(e.obj, seen)
+            return obj if obj in ("$text", "$list") else None
         if k == "say":
             return "$line"
         if k == "sayfn":
@@ -2938,7 +3619,7 @@ class Checker:
             return f"$libfn:{lib[8:]}.{e.name}" if lib and lib.startswith("$module:") else None
         if k == "call" and e.fn.kind == "var" and e.fn.name not in self.user:
             name = e.fn.name
-            return "$text" if name in ("text", "str") else "$list" if name == "range" else "$number" if name in self.NUMBER_FNS else None
+            return "$text" if name in ("text", "str", "now", "today") else "$list" if name == "range" else "$dict" if name == "date"                 else "$number" if name in self.NUMBER_FNS else None
         if k == "call" and e.fn.kind == "attr":
             lib = self.kind(e.fn.obj, seen)
             if lib in ("$module:tgui", "$module:mtgui") and e.fn.name == "window":
@@ -2967,9 +3648,12 @@ class Checker:
             if obj in self.CONTAINERS and gui and e.name in gui["kinds"] and e.name != "window" and (e.name != "page" or obj == "window"):
                 return e.name
             if obj == "$text":
-                return "$bool" if e.name == "has" else "$text" if e.name in ("upper", "lower", "trim") else None
+                return "$bool" if e.name in ("has", "starts", "ends") else "$text" if e.name in ("upper", "lower", "trim", "replace", "pad_left", "pad_right")                     else "$list" if e.name == "split" else "$number" if e.name in ("find", "count") else None
             if obj == "$list":
-                return "$list" if e.name in ("add", "remove") else "$bool" if e.name == "has" else None
+                return "$list" if e.name in ("add", "remove", "sort", "reverse") else "$bool" if e.name == "has" else "$text" if e.name == "join"                     else "$number" if e.name == "find" else None
+            if obj == "$dict":
+                return "$bool" if e.name == "has" else "$list" if e.name in ("keys", "values") else "$dict" if e.name in ("set", "remove") \
+                    else "$number" if e.name == "size" else None
             if obj == "$line" and e.name == "text":
                 return "$text"
             if e.name == "value" and not e.args and obj:
@@ -2999,7 +3683,7 @@ class Checker:
         if k == "func":
             self.body(s.body, self.scope_of[id(s)], False, True)
         elif k == "import":
-            if s.name not in LIBRARIES:
+            if s.name not in LIBRARIES and s.name != "file":
                 hint = difflib.get_close_matches(s.name, LIBRARIES, n=1, cutoff=0.5)
                 extra = f" Did you mean '{hint[0]}'?" if hint else f" Available libraries: {', '.join(LIBRARIES)}."
                 self.problem(s, f"There's no library called '{s.name}'.{extra}")
@@ -3043,6 +3727,9 @@ class Checker:
             self.expr(s.cond, scope)
             self.check_condition(s.cond)
             self.body(s.body, scope, True, in_func)
+        elif k == "try":
+            self.body(s.body, scope, in_loop, in_func)
+            self.body(s.handler, scope, in_loop, in_func)
         elif k == "for":
             self.expr(s.items, scope)
             if self.kind(s.items) == "$number":
@@ -3090,6 +3777,36 @@ class Checker:
             self.expr(e.obj, scope)
             self.expr(e.index, scope)
             self.check_index(e)
+        elif k == "dict":
+            for x in e.keys + e.values:
+                self.expr(x, scope)
+            for key in e.keys:
+                kk = self.kind(key)
+                if kk in ("$list", "$dict", "$bool", "$nil"):
+                    self.problem(key, f"A dictionary's keys can be text or numbers, not {self.TYPE[kk]}.")
+        elif k == "slice":
+            self.expr(e.obj, scope)
+            if e.alt is None:
+                self.expr(e.start, scope)
+                self.expr(e.end, scope)
+                self.check_part(e)
+                return
+            self.expr(e.recv, scope)
+            method, recv = self.as_method(e), self.kind(e.recv)
+            self.held.append(recv)
+            try:
+                simple = SIMPLE_METHODS.get(recv[1:]) if method and recv.startswith("$") else None
+                if simple is not None and e.mname not in simple:  # word[first:last] with first some text
+                    self.problem(e, f"The positions in [start:end] must be whole numbers, not {self.TYPE.get(recv, 'that')}.")
+                elif method:  # names[order:pop], as in 1.3.6: a method of what's before the ':'
+                    self.expr(e.alt, scope)
+                elif method is False:
+                    self.expr(e.start, scope)
+                    self.expr(e.end, scope)
+                    self.check_part(e)
+                # (None: can't tell before it runs which one it is, so nothing more is certain)
+            finally:
+                self.held.pop()
         elif k == "call":
             if e.fn.kind == "var":
                 self.use(e.fn, scope, func=True)
@@ -3144,6 +3861,8 @@ class Checker:
             if self.anims is None:
                 self.anims = {n: b.fn for n, b in self.interp.lib_anims().items()}
             return self.anims
+        if lib == "file":  # the built-in file library (1.4.0)
+            return {n: b.fn for n, b in self.builtins["file"].members.items()} if isinstance(self.builtins.get("file"), Module) else None
         if lib == "tdraw":  # its functions open nothing until they're called
             if getattr(self, "tdraw", None) is None:
                 try:
@@ -3175,8 +3894,9 @@ class Checker:
                 for x in nodes(f.body):
                     owner[id(x)] = f.name
         calls, uses = {}, {}  # name -> its calls; function name -> (call or event input, given to an event?)
+        inputs = {f.name: set(f.params) for f in nodes(self.program) if f.kind == "func"}
         for x in nodes(self.program):
-            if x.kind == "call" and x.fn.kind == "var":
+            if x.kind == "call" and x.fn.kind == "var" and x.fn.name not in inputs.get(owner.get(id(x)), ()):
                 calls.setdefault(x.fn.name, []).append(x)
                 uses.setdefault(x.fn.name, []).append((x, False))
             elif x.kind == "method":
@@ -3334,19 +4054,62 @@ class Checker:
             if self.is_decimal(n):
                 self.problem(n, "This is a decimal (it comes from /), even if it looks whole, so it can't repeat text. Use floor(...) around the division.")
 
+    def dicts_in_data(self):
+        """Does the program put a 1.4.0 dictionary into something with :set (a data object can hold one)? Then what
+        :get gives back may be a dictionary, and [ ] works on it."""
+        if getattr(self, "_dicts_in_data", None) is None:
+            self._dicts_in_data = any(m.kind == "method" and m.name == "set" and len(m.args) == 2 and self.kind(m.args[1]) == "$dict"
+                                      for m in nodes(self.program))
+        return self._dicts_in_data
+
     def json_like(self, e, seen=frozenset()):
         """Could this be one of tap's data objects: one made with tap.data(), a response's :json (an object, unless
         the server sent a list), or what :get or [ ] gave back from one of those?"""
         if self.kind(e) == "data object":
             return True
         if e.kind == "method":
-            return (e.name == "json" and not e.args) or (e.name == "get" and self.json_like(e.obj, seen))
+            return (e.name == "json" and not e.args) or (e.name == "get" and not self.dicts_in_data() and self.json_like(e.obj, seen))
         if e.kind == "index":
             return self.json_like(e.obj, seen)
         if e.kind == "var" and e.name not in seen and e.name not in self.params and e.name not in self.loop_vars:
             sets = self.assigned.get(e.name, [])
             return bool(sets) and all(s.op == "=" and self.json_like(s.value, seen | {e.name}) for s in sets)
         return False
+
+    def as_method(self, e):
+        """For x[a:b] with a glued ':' (Parser.index): True when it's 1.3.6's method call (a is a list, text or a
+        widget), False when it's a part, None when it can't be told before the program runs."""
+        if getattr(e, "alt", None) is None:
+            return False
+        start = self.kind(e.recv)
+        if start == "$number":
+            return False
+        if start is not None and start != "$bool":
+            return True
+        root = e.end
+        while root.kind in ("call", "binop", "and", "or", "method", "index", "slice", "attr"):
+            root = root.fn if root.kind == "call" else root.left if root.kind in ("binop", "and", "or") else root.obj
+        # s[a:b] where b is one of the program's names (and not also a method's name): a part
+        known = root.kind == "var" and (root.name in self.everywhere or root.name in self.func_count) and \
+            not self.method_exists(root.name)
+        return False if known and start is None else None
+
+    def check_part(self, e):
+        """s[a:b]: the positions are whole numbers, and only text and lists have parts."""
+        obj = self.kind(e.obj)
+        if obj in ("$dict", "$number", "$bool", "$nil", "$func", "$builtin") or (obj or "").startswith("$module:"):
+            self.problem(e, f"Only text and lists have parts like [1:3], not {self.TYPE.get(obj, 'a library')}.")
+            return
+        for end in (e.start, e.end):
+            if end is None:
+                continue
+            k = self.kind(end)
+            if k in ("$text", "$list", "$dict", "$bool"):
+                self.problem(end, f"The positions in [start:end] must be whole numbers, not {self.TYPE[k]}.")
+                return
+            if self.is_decimal(end):
+                self.problem(end, "This is a decimal (it comes from /), even if it looks whole, so it can't be a position. Use floor(...) around the division.")
+                return
 
     def check_index(self, e):
         idx = self.kind(e.index)
@@ -3356,13 +4119,11 @@ class Checker:
         elif idx == "$text" and self.json_like(e.obj):
             self.problem(e, f"List positions must be whole numbers, not text. If {who + ' is' if who else 'it is'} a data object "
                             f"(from :json), use :get instead, like {who or 'thing'}:get({key_example(e.index)}).")
-        elif idx == "$text":
+        elif idx == "$text" and self.kind(e.obj) in ("$list", "$text"):  # (a dictionary's keys are often text)
             who = self.describe(e.index)
             self.problem(e, "List positions must be whole numbers, not text." + (f" Use number({who})." if who and self.typed(e.index) else ""))
         elif self.is_decimal(e.index):
             self.problem(e.index, "This is a decimal (it comes from /), even if it looks whole, so it can't be a position. Use floor(...) around the division.")
-        elif e.index.kind == "method" and not e.index.args and not self.method_exists(e.index.name):
-            self.problem(e, "Tuff has no slices like word[a:b]. Build the part you need with a loop.")
         elif e.index.kind == "call" and e.index.fn.kind == "var" and e.index.fn.name == "random" and "random" not in self.user and e.obj.kind == "var":
             args = e.index.args
             ends_at_len = args and args[-1].kind == "call" and args[-1].fn.kind == "var" and args[-1].fn.name == "len" and len(args[-1].args) == 1 and \
@@ -3382,7 +4143,7 @@ class Checker:
             return True
         tap = tap_tables()
         tg = tgame_tables()
-        return name in SIMPLE_METHODS["text"] or name in SIMPLE_METHODS["list"] or name in SIMPLE_METHODS["line"] or \
+        return name in SIMPLE_METHODS["text"] or name in SIMPLE_METHODS["list"] or name in SIMPLE_METHODS["line"] or name in SIMPLE_METHODS["dict"] or \
             any(name in m for m in gui["kinds"].values()) or (tap is None or any(name in m for m in tap["kinds"].values())) or \
             (tg is None or any(name in m for m in tg["kinds"].values()))
 
@@ -3400,10 +4161,8 @@ class Checker:
             elif name not in self.user and isinstance(self.builtins.get(name), Builtin):
                 if not accepts(self.builtins[name].fn, n):
                     self.problem(e, f"{name}() got the wrong number of inputs ({n}).")
-                elif name == "random" and not 1 <= n <= 2:
-                    self.problem(e, "random() needs a range, like random(1, 6), or just the top, like random(6). For a decimal, use random(0, 100) / 100.")
-                elif name == "random" and any(a.kind == "const" and isinstance(a.value, float) and not a.value.is_integer() for a in e.args):
-                    self.problem(e, "random() needs whole numbers, like random(1, 6). For a decimal, divide: random(0, 100) / 100.")
+                elif name == "random" and not 0 <= n <= 2:
+                    self.problem(e, "random() needs a range, like random(1, 6), just the top, like random(6), or nothing for a decimal from 0 to 1.")
                 elif name in self.NUMBER_INPUT_FNS:
                     for a in e.args:
                         if self.kind(a) == "$text":
@@ -3483,8 +4242,16 @@ class Checker:
             if members is not None and e.name not in members:
                 self.problem(e, f"{obj[8:]} doesn't have '{e.name}'. It has: {', '.join(members)}.")
             return
+        if e.obj.kind == "var" and e.obj.name in PY_NAMES and obj in ("$builtin", None) and e.obj.name not in self.user:
+            self.problem(e, f"Tuff has no {e.obj.name}.{e.name}. {PY_NAMES[e.obj.name]}")
+            return
         if obj is not None:
             self.problem(e, dot_help(self.what(obj), e.obj, e.name, obj.lstrip("$")))
+            return
+        if e.obj.kind == "var" and e.obj.name in OWN_NAME_BUILTINS:  # a function's own `file`: here it's the file library
+            members = self.lib_members(e.obj.name) if e.obj.name == "file" else None
+            if members is not None and e.name not in members:
+                self.problem(e, f"file doesn't have '{e.name}'. It has: {', '.join(members)}.")
             return
         # Unknown value: only a library can use '.', and libraries only have these.
         gui = gui_tables()
@@ -3573,6 +4340,10 @@ class Checker:
                 self.problem(e.args[0], f'line:play doesn\'t know "{e.args[0].value}".' + (f' Did you mean "{hint[0]}"?' if hint else "") + f" Animations: {', '.join(ART_EFFECTS)}.")
             elif name in ONE_INPUT and n != 1:
                 self.problem(e, f":{name} needs 1 input.")
+            elif name in INPUTS and not INPUTS[name][0] <= n <= INPUTS[name][1]:
+                lo, hi = INPUTS[name]
+                count = f"{lo} input{'s' if lo != 1 else ''}" if lo == hi else f"{lo} or {hi} inputs"
+                self.problem(e, f"{owner}:{name} takes {count}, not {n}.")
             elif name in self.ZERO_INPUT and e.bare:
                 self.problem(e, bare_fix)
             elif name in self.ZERO_INPUT and n:
@@ -4137,7 +4908,8 @@ class Checker:
 
         def changed(lst, where):
             return any(x.kind == "assign" and x.target.kind == "var" and x.target.name in (s.name, lst) for x in body) or \
-                any(x.kind == "method" and x.obj.kind == "var" and x.obj.name == lst and x.name in ("add", "remove", "pop") for x in where)
+                any(x.kind == "method" and (x.obj.of if x.obj.kind == "held" else x.obj).kind == "var" and
+                    (x.obj.of if x.obj.kind == "held" else x.obj).name == lst and x.name in ("add", "remove", "pop") for x in where)
 
         if compared:
             return
@@ -4391,6 +5163,7 @@ class SceneInterpreter(Interpreter):
     preview as "too-much" (Tuff Engine says so, and shows what was made before it)."""
     ONE = 100_000_000
     ALL = 400_000_000
+    writes = False  # the preview runs by itself on every change: it never writes files
 
     def __init__(self, src, base_dir):
         super().__init__(src, base_dir)
@@ -4578,13 +5351,18 @@ def read_source(path):
     return None
 
 
+def base_folder(path):
+    """The folder a program's files are in: its own, or TUFF_BASE_DIR's (tuff_run gives a snippet the project's)."""
+    return os.environ.get("TUFF_BASE_DIR") or os.path.dirname(os.path.abspath(path))
+
+
 def run_file(path):
     src = read_source(path)
     if src is None:
         return 1
     try:
         program = Parser(tokenize(src)).program()
-        interp = Interpreter(src, os.path.dirname(os.path.abspath(path)))
+        interp = Interpreter(src, base_folder(path))
         for stmt in program:
             if stmt.kind == "func":
                 interp.run(stmt, interp.globals)
@@ -4636,7 +5414,7 @@ def check_file(path):
         report(err, src)
         return 1
     try:
-        problems = Checker(program, os.path.dirname(os.path.abspath(path))).run()
+        problems = Checker(program, base_folder(path)).run()
     except Exception:  # a bug in the checker must never block a correct program
         problems = []
     if problems:
@@ -4661,6 +5439,8 @@ def usage():
 
 def main():
     setup_streams()
+    if hasattr(sys, "set_int_max_str_digits"):  # say 2 ^ 20000 shows every digit (Python stops at 4300)
+        sys.set_int_max_str_digits(0)
     args = sys.argv[1:]
     if not args:
         print("Welcome to TuffCode, coding made easy.")

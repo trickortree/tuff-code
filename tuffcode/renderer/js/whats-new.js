@@ -142,6 +142,37 @@ ${NOTES['1.3.0'].notes}`,
 - The editor checks the new words as you type: \`say:color("hi", "redd")\` asks if you meant "red".
 - Claude, Codex, Antigravity and Pumice 1 know all of it.`,
   };
+  // 1.4.0, the Toolbox Update (a beta for now: its picture comes later).
+  NOTES['1.4.0'] = {
+    images: ['1.png'],
+    notes: `### Dictionaries
+- **Keep things by name:** \`ages = {"sam": 14, "ann": 12}\`, then \`ages["sam"]\`, and \`ages["bob"] = 15\` to add one.
+- \`ages:has("sam")\`, \`ages:get("zed", 0)\`, \`ages:remove("ann")\`, \`ages:keys()\` and \`ages:values()\`. \`for name in ages:\` goes through the keys.
+
+### Text tools
+- **Parts:** \`s[0:4]\`, \`s[2:]\` and \`s[-3:]\`, on text and lists. Both ends are included, like \`range\`.
+- \`:split(",")\`, \`:replace("a", "b")\`, \`:starts\`, \`:ends\`, \`:find\`, \`:count\`, \`:pad_left(3, "0")\` and \`:pad_right\`. \`items:join(", ")\` puts a list back together. \`text(3.14159, 2)\` gives "3.14".
+
+### Sorting
+- \`items:sort()\`, \`items:sort(by_score)\` and \`items:reverse()\`.
+
+### Files
+- \`file.read\`, \`file.write\`, \`file.add\`, \`file.lines\`, \`file.exists\` and \`file.delete\`, in your project folder.
+- \`file.save("save.json", data)\` and \`file.load("save.json", {})\` keep lists and dictionaries for next time. There's nothing to mention.
+
+### When things go wrong
+- \`try:\` then \`catch problem:\`. Something that would stop the program (a missing file, a bad web request) runs \`catch\` instead.
+
+### Date, time and maths
+- \`now()\`, \`today()\`, \`date()\` (year, month, day, weekday...) and \`time()\` for timers.
+- \`sin\`, \`cos\` and \`tan\` (in degrees), \`log\`, and random decimals with \`random()\`.
+
+### Learn
+- **A new section, Toolbox:** dictionaries, text tools, sorting, files, and what to do when things go wrong.
+
+### Also from 1.3.5 and 1.3.6
+- Coloured lines and big letters (\`say:color\`, \`say:ascii\`), 8 animations, \`line:play\`, and **tdraw** for drawing with a pen.`,
+  };
   // 1.3.6 adds a few things to 1.3.5. Copies coming from before 1.3.5 only see 1.3.6's notes, so they carry 1.3.5's too.
   NOTES['1.3.6'] = {
     images: ['1.png'],

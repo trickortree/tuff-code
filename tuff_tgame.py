@@ -7027,16 +7027,14 @@ def save_file_name(title):
     return name + ".json"
 
 
-def tuff_value(rt, v, name):
-    """A saved JSON value as Tuff has it: an object comes back as a table (a tap data object), arrays as lists."""
+def tuff_value(v):
+    """A saved JSON value as Tuff has it: arrays come back as lists, and an object as a dictionary (1.4.0), so
+    stats["level"] works. A table a 1.3.6 game saved from tap.data() reads the same way it did, since a dictionary has
+    :get, :has, :keys, :set and :size too. Always a new copy: changing what :load gave doesn't change what's saved."""
     if isinstance(v, list):
-        return [tuff_value(rt, x, name) for x in v]
+        return [tuff_value(x) for x in v]
     if isinstance(v, dict):
-        try:
-            import tuff_tap
-        except ImportError:  # an app built from a program that never mentions tap leaves tap out
-            raise rt.error(f"The save \"{name}\" has a table in it, and tables need tap: add  mention tap  at the top.")
-        return tuff_tap.Lib(rt).from_json(v)
+        return {k: tuff_value(x) for k, x in v.items()}
     return v
 
 
@@ -7078,8 +7076,9 @@ class SavedData:
         return n
 
     def keepable(self, v, inside=(), method="save"):
-        """The JSON value for a Tuff value :save can keep: numbers, text, true/false, nil, lists and tables (tap's
-        data objects), inside each other too. Anything else is a Tuff error on the :save line. game:send and
+        """The JSON value for a Tuff value :save can keep: numbers, text, true/false, nil, lists and tables
+        (dictionaries, or tap's data objects), inside each other too. A dictionary's number keys are kept as text, as
+        file.save keeps them (JSON's names are text). Anything else is a Tuff error on the :save line. game:send and
         game:share take the same values (method: which one it is, for the message)."""
         rt = self.rt
         v = rt.plain(v)
@@ -7101,7 +7100,7 @@ class SavedData:
             inside = (*inside, v)
             if isinstance(v, list):
                 return [self.keepable(x, inside, method) for x in v]
-            return {str(k): self.keepable(x, inside, method) for k, x in (v if table is None else table).items()}
+            return {rt.text(k): self.keepable(x, inside, method) for k, x in (v if table is None else table).items()}
         raise rt.error(f"{self.what(method)} can {verb} {SAVE_KEEPS}, not {rt.what(v)}.")
 
     # ---- the file
@@ -7124,6 +7123,8 @@ class SavedData:
         return self.values
 
     def set_aside(self):
+        if os.environ.get("TUFF_NO_WRITES") == "1":
+            return
         bad = self.path + ".bad"
         try:
             os.replace(self.path, bad)
@@ -7133,6 +7134,8 @@ class SavedData:
         self.note(f"The saved data for \"{self.title}\" was damaged, so the game starts with nothing saved.{kept}")
 
     def write(self):
+        if os.environ.get("TUFF_NO_WRITES") == "1":  # tuff_run for AI agents: saves stay in memory, like file.write's
+            return
         import tempfile
         text = json.dumps({"game": self.title, "saves": self.values}, ensure_ascii=False, indent=2) + "\n"
         tmp = None
@@ -7163,6 +7166,8 @@ class SavedData:
                     pass
 
     def remove_file(self):
+        if os.environ.get("TUFF_NO_WRITES") == "1":
+            return
         try:
             os.remove(self.path)
         except FileNotFoundError:
@@ -7188,7 +7193,7 @@ class SavedData:
         if self.off:
             return default
         values = self.read()
-        return tuff_value(self.rt, values[name], name) if name in values else default
+        return tuff_value(values[name]) if name in values else default
 
     def saved(self, name):
         name = self.name_of(name, "saved", f'{self.what("saved")}("best")')
@@ -8853,15 +8858,6 @@ class Net:
             raise self.rt.error(f"This game is {'in a room' if self.state == 'in' else 'looking for a room'} already. "
                                 f"Use {self.what('leave')}() first to {'host one' if method == 'host' else 'join another'}.")
 
-    def value_in(self, v, what):
-        """A value from another game as Tuff has it (a table needs tap, like a save's)."""
-        try:
-            return tuff_value(self.rt, v, what)
-        except Exception:
-            self.game.engine_error(self.rt.error(f"\"{what}\" came with a table, and tables need tap: add  mention tap  at "
-                                                 "the top."), "multiplayer")
-            return None
-
     def fire(self, fns, *args):
         for fn in list(fns):
             self.game.fire(fn, *args)
@@ -9014,7 +9010,7 @@ class Net:
 
     def shared(self, name, default=None):
         k = self.text_input(name, "shared", f'coins = {self.what("shared")}("coins", 0)')
-        return self.value_in(self.values[k], k) if k in self.values else default
+        return tuff_value(self.values[k]) if k in self.values else default  # a table comes as a dictionary, like a save's
 
     def on(self, fns, fn, method):
         fns.append(self.game.lib.check_fn(fn, f":{method}"))
@@ -9078,7 +9074,7 @@ class Net:
                 person.label(name)
         elif t == "msg":
             sender = self.players.get(e.get("from"), "Someone")
-            self.fire(self.msg_fns, e.get("m"), self.value_in(e.get("v"), e.get("m")), sender)
+            self.fire(self.msg_fns, e.get("m"), tuff_value(e.get("v")), sender)
         elif t == "pos":
             if e.get("id") != self.me:
                 self.place(e.get("id"), e.get("p"))

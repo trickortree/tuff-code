@@ -10,7 +10,7 @@ const vm = require('vm');
 const { spawn } = require('child_process');
 const os = require('os');
 
-const VERSION = '1.3.6';
+const VERSION = '1.4.0';
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const RENDERER_JS = path.join(__dirname, '..', 'renderer', 'js');
 
@@ -66,7 +66,8 @@ function examples() {
 // Run the interpreter. Returns { code, out, stdout, stderr, timedOut }.
 // echo: typed answers show up in the output. ide: the console speaks TuffCode's line protocol
 // (say / rewrite / clear), so screen() can rebuild what the Run window would show.
-function runTuff(args, { input = '', timeout = 10, cwd, echo = false, ide = false } = {}) {
+// vars: more environment variables for tuff.py; a null one is taken out, so it isn't passed on from ours.
+function runTuff(args, { input = '', timeout = 10, cwd, echo = false, ide = false, vars = {} } = {}) {
   return new Promise((resolve) => {
     const [cmd, ...base] = tuffCommand();
     let out = '';
@@ -76,6 +77,7 @@ function runTuff(args, { input = '', timeout = 10, cwd, echo = false, ide = fals
     let proc;
     try {
       const env = { ...process.env, PYTHONIOENCODING: 'utf-8', TUFF_IDE: ide ? '1' : '', TUFF_ECHO_INPUT: echo ? '1' : '' };
+      for (const [k, v] of Object.entries(vars)) { if (v == null) delete env[k]; else env[k] = v; }
       proc = spawn(cmd, [...base, ...args], { cwd, windowsHide: true, env });
     } catch (err) {
       resolve({ code: -1, out: `Could not start Tuff: ${err.message}`, stdout, stderr: '', timedOut });
@@ -168,7 +170,7 @@ const TOOLS = [
   },
   {
     name: 'tuff_check',
-    description: 'Check Tuff code for mistakes without running it: syntax, names that are never set or only exist inside another function (with "did you mean"), wrong input counts, event functions that would crash or are passed with brackets, methods a list, text, window or widget doesn\'t have, unknown styles and colors, and Python habits that break in Tuff (range(len(...)), typed text used as a number, "Total: " + a + b, :pop(0), random()). Pass "file" (path to a .tuf file) or "code". Returns OK, or every problem with its line number, in plain English. Use it on every Tuff file you write or change, especially window (tgui/mtgui) apps, which tuff_run can only test with a self-test (see the guide).',
+    description: 'Check Tuff code for mistakes without running it: syntax, names that are never set or only exist inside another function (with "did you mean"), wrong input counts, event functions that would crash or are passed with brackets, methods a list, text, window or widget doesn\'t have, unknown styles and colors, and Python habits that break in Tuff (range(len(...)), typed text used as a number, "Total: " + a + b, :pop(0)). Pass "file" (path to a .tuf file) or "code". Returns OK, or every problem with its line number, in plain English. Use it on every Tuff file you write or change, especially window (tgui/mtgui) apps, which tuff_run can only test with a self-test (see the guide).',
     inputSchema: { type: 'object', properties: { file: { type: 'string', description: 'Path to a .tuf file (relative to the project or absolute).' }, code: { type: 'string', description: 'Tuff source code to check.' } } },
     annotations: { readOnlyHint: true },
     async run(a) {
@@ -183,12 +185,15 @@ const TOOLS = [
   },
   {
     name: 'tuff_run',
-    description: 'Run a Tuff program and return what its Run window shows at the end (lines changed with :rewrite or removed with clear show their final state), with each typed answer shown after its question. Pass "file" or "code", plus optional "input" (the answers to type, one per line) and "timeout_seconds" (default 10, max 60). If the program asks more questions than there are answers, it stops with an error saying so. Programs that open app windows (tgui/mtgui) show a real window on the user\'s screen until the timeout, so use tuff_check for those.',
+    description: 'Run a Tuff program and return what its Run window shows at the end (lines changed with :rewrite or removed with clear show their final state), with each typed answer shown after its question. Pass "file" or "code", plus optional "input" (the answers to type, one per line) and "timeout_seconds" (default 10, max 60). If the program asks more questions than there are answers, it stops with an error saying so. File writes stay in memory for that run: file.write, file.add, file.save and file.delete work and later reads in the same run see them, but nothing is saved and no file on disk changes. Relative file paths are in the project folder for "code", and in the file\'s own folder for "file", so a snippet can read the project\'s files. Programs that open app windows (tgui/mtgui) show a real window on the user\'s screen until the timeout, so use tuff_check for those.',
     inputSchema: { type: 'object', properties: { file: { type: 'string' }, code: { type: 'string' }, input: { type: 'string' }, timeout_seconds: { type: 'number' } } },
     async run(a) {
       const src = sourceFile(a);
+      // A test run never changes the user's files (TUFF_NO_WRITES keeps writes in memory). A "code" snippet sits in a
+      // temp folder, so TUFF_BASE_DIR puts its relative paths in the project instead; a "file" uses its own folder.
+      const vars = { TUFF_NO_WRITES: '1', TUFF_BASE_DIR: a.file ? null : process.cwd() };
       try {
-        const r = await runTuff([src.file], { input: a.input || '', timeout: a.timeout_seconds || 10, cwd: a.file ? path.dirname(src.file) : process.cwd(), echo: true, ide: true });
+        const r = await runTuff([src.file], { input: a.input || '', timeout: a.timeout_seconds || 10, cwd: a.file ? path.dirname(src.file) : process.cwd(), echo: true, ide: true, vars });
         const text = [screen(r.stdout).trim(), clean(r.stderr).trim()].filter(Boolean).join('\n');
         const status = r.timedOut ? `Stopped after ${a.timeout_seconds || 10} seconds (still running).` : `Exit code ${r.code}.`;
         return `${text || '(no output)'}\n\n${status}`;

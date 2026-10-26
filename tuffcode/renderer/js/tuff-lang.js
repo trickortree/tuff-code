@@ -1,6 +1,7 @@
 window.TUFF_KEYWORDS = [
   'say', 'input', 'func', 'return', 'if', 'elif', 'else', 'then', 'while', 'for', 'in',
   'break', 'continue', 'and', 'or', 'not', 'is', 'true', 'false', 'nil', 'flush', 'import', 'mention',
+  'try', 'catch', // 1.4.0 (only at the start of a line with a ':' after them, so they still work as names)
 ];
 
 window.TUFF_METHOD_DOCS = {
@@ -250,8 +251,8 @@ window.TUFF_METHOD_DOCS = {
 
 // tgame's saved game data: game:save, :load, :saved and :forget, the same on a 2D game and a 3D world.
 Object.assign(window.TUFF_METHOD_DOCS, {
-  save: ['game:save("best", score)', 'tgame: saves a value under a name, right away, so it\'s still there the next time the game runs: a high score, the level, settings. It keeps numbers, text, true/false, nil, lists and tables (tap data objects). Saves belong to the game\'s title, so give each game its own.'],
-  load: ['best = game:load("best", 0)', 'tgame: gives back what was saved under that name, even by an earlier run of the game, or the second input when nothing was saved yet (nil if you leave it out). Lists and tables come back as lists and tables.'],
+  save: ['game:save("best", score)', 'tgame: saves a value under a name, right away, so it\'s still there the next time the game runs: a high score, the level, settings. It keeps numbers, text, true/false, nil, lists and dictionaries (and tap data objects). Saves belong to the game\'s title, so give each game its own.'],
+  load: ['best = game:load("best", 0)', 'tgame: gives back what was saved under that name, even by an earlier run of the game, or the second input when nothing was saved yet (nil if you leave it out). Lists come back as lists, and dictionaries (and tap data objects) as dictionaries.'],
   saved: ['game:saved("best")', 'tgame: true if something is saved under that name.'],
   forget: ['game:forget("best")', 'tgame: forgets one save. game:forget() forgets every save this game has.'],
 });
@@ -463,7 +464,7 @@ window.TUFF_DOCS = {
     play: ['line:play("explode")', 'Plays an animation on a line you already said, where it is: fade, build, explode, assemble, type, glitch, drop or wave. With wait(3) before it, it plays 3 seconds later.'],
     ascii: ['say:ascii("GAME OVER", "red", "explode")', 'Big ASCII-art letters. After the text, in any order: a font (block, wide, small, shadow, led, hash), colours (the letters\', then a bar behind them), rainbow, bold/dim/italic/underline and an animation (fade, build, explode, assemble, type, glitch, drop, wave). It gives back the line: :rewrite keeps it big.'],
     pen: ['print:pen("lime", "bold")', 'Every line said after it gets this look (colours, rainbow, styles) until print:pen().'],
-    color: ['say:color("Game over!", "red")', 'A coloured line. After the text, in any order: colours (the first is the letters\', a second is a bar behind the whole line), "rainbow", bold/dim/italic/underline and an animation (fade, type, glitch...). tdraw: pen:color("red") sets the pen\'s colour ("rainbow" changes as it moves), pen:color("red", "gold") the line and the fill.'],
+    color: ['say:color("Game over!", "red")', 'A coloured line. After the text, in any order: colours (the first is the letters\', a second is a bar behind the whole line), "rainbow", bold/dim/italic/underline and an animation (fade, type, glitch...). tdraw: pen:color("red") sets the pen\'s colour ("rainbow" changes as it moves), pen:color("red", "gold") the line and the fill. On a widget, label:color "red" changes its text color, and in tgame hero:color("gold") colours a sprite, object or group.'],
     forward: ['pen:forward(100)', 'tdraw: moves the pen forward, drawing a line (unless it\'s :up).'],
     back: ['pen:back(50)', 'tdraw: moves the pen backward, drawing as it goes.'],
     left: ['pen:left(90)', 'tdraw: turns the pen left by that many degrees (90 if you leave it out).'],
@@ -493,11 +494,96 @@ window.TUFF_DOCS = {
   }
 })();
 
-const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average'];
+// 1.4.0, the Toolbox Update: dictionaries, text tools, sorting, files, try/catch, date and time, more maths.
+(() => {
+  window.TUFF_LIBS.file = {
+    read: ['file.read("notes.txt")', 'The text in a file, from your project folder.'],
+    write: ['file.write("notes.txt", text)', 'Makes the file (or replaces what is in it) with the text.'],
+    add: ['file.add("log.txt", line)', 'Adds a line to the end of a file (making it if it isn\'t there).'],
+    lines: ['file.lines("names.txt")', 'A file\'s lines, as a list.'],
+    exists: ['file.exists("save.json")', 'True if the file is there.'],
+    delete: ['file.delete("old.txt")', 'Deletes a file.'],
+    save: ['file.save("save.json", data)', 'Saves text, numbers, lists and dictionaries as JSON, to load back later.'],
+    load: ['data = file.load("save.json", {})', 'Loads what file.save saved. The second input is what you get if the file isn\'t there yet. JSON keeps every key as text, so a dictionary\'s number keys come back as text: d["1"], not d[1].'],
+  };
+  Object.assign(window.TUFF_DOCS, {
+    file: ['file.read("notes.txt")', 'Text files and saved data, in your project folder: file.read, write, add, lines, exists, delete, save and load. Nothing to mention.'],
+    try: ['try:', 'Runs the block, and if something goes wrong in it, runs the catch: block below instead of stopping the program.'],
+    catch: ['catch problem:', 'Runs when something in the try: block above went wrong. problem is what went wrong, as text. Any name works except Tuff\'s own, like err, text, len or time, and catch: on its own works too.'],
+    now: ['now()', 'The time now, as text like "14:05:09".'],
+    today: ['today()', 'Today\'s date, as text like "2026-10-26".'],
+    time: ['time()', 'Seconds since the program started (with decimals). Save it, then subtract later for a timer.'],
+    date: ['d = date()', 'Today and now as a dictionary: d["year"], d["month"], d["day"], d["weekday"], d["hour"], d["minute"], d["second"].'],
+    sin: ['sin(degrees)', 'Sine of an angle in degrees: sin(90) is 1.'],
+    cos: ['cos(degrees)', 'Cosine of an angle in degrees: cos(180) is -1.'],
+    tan: ['tan(degrees)', 'Tangent of an angle in degrees: tan(45) is 1. tan(90) has no answer, so it gives an error.'],
+    log: ['log(number, base)', 'The logarithm: log(100, 10) is 2 and log(1000, 10) is 3. Without a base, the natural log.'],
+    random: ['random(low, high)', 'A random whole number from low to high, both included, like random(1, 6). If either end has digits after the point, like random(0.5, 2), it gives a decimal in that range (12 / 2 and 1.0 count as whole). random(6) is a whole number from 1 to 6, random(0.5) a decimal from 0 to 0.5, and random() a decimal from 0 to 1.'],
+    text: ['text(value, decimals)', 'Turns any value into text. text(3.14159, 2) is "3.14".'],
+    len: ['len(value)', 'How many characters are in some text, items in a list, or keys in a dictionary.'],
+  });
+  const docs = window.TUFF_METHOD_DOCS;
+  const own = {
+    split: ['t:split(",")', 'Text split into a list at each ",". With nothing, it splits at spaces.'],
+    replace: ['t:replace("old", "new")', 'The text with every "old" replaced by "new".'],
+    starts: ['t:starts("Mr")', 'True if the text starts with it.'],
+    ends: ['t:ends(".txt")', 'True if the text ends with it.'],
+    find: ['t:find("x")', 'Where it first is in the text (or a list), from 0, or -1 if it isn\'t there.'],
+    count: ['t:count("a")', 'How many times it is in the text.'],
+    pad_left: ['t:pad_left(3, "0")', 'The text filled on the left to that width: "7" becomes "007".'],
+    pad_right: ['t:pad_right(10)', 'The text filled on the right with spaces to that width, to line up columns.'],
+    sort: ['items:sort()', 'Sorts the list in place, numbers small to big, text A to Z. items:sort(by_score) sorts by what by_score(item) gives back.'],
+    reverse: ['items:reverse()', 'Turns the list around, in place.'],
+    join: ['items:join(", ")', 'The items as one text, with ", " between them.'],
+    keys: ['ages:keys()', 'A dictionary\'s keys, as a list.'],
+    values: ['ages:values()', 'A dictionary\'s values, as a list.'],
+    get: ['ages:get("sam", 0)', 'A dictionary\'s value for a key, or the second input (nil if left out) when the key isn\'t there.'],
+    set: ['ages:set("sam", 15)', 'Sets a key in a dictionary (same as ages["sam"] = 15). A key is text or a number.'],
+    has: ['ages:has("sam")', 'Dictionaries: true if it has that key, like ages:has "sam".'],
+    remove: ['ages:remove("sam")', 'On a dictionary, ages:remove "sam" takes that key out.'],
+    size: ['ages:size()', 'On a dictionary, ages:size() is how many keys it has, the same as len(ages).'],
+  };
+  // A name a library has too (split in atgui, join and count in tgame, keys and get in tap) puts this use first and
+  // the library's after it, so the doc starts with no library's name and ':' offers it in every program. A name whose
+  // doc isn't one library's (set, has, size...) keeps it first, with this use added at the end.
+  for (const [name, [sig, text]] of Object.entries(own)) {
+    const old = docs[name];
+    const lib = old && old[1].match(/^(atgui|tgame|tdraw|tap)\b[^:.]*:\s*/);
+    if (!old) docs[name] = [sig, text];
+    else if (lib) docs[name] = [sig, `${text} In ${lib[1]}, ${old[0]}: ${old[1].slice(lib[0].length)}`];
+    else if (/^In tgame:/.test(old[1])) docs[name] = [sig, `${text} ${old[1]}`];
+    else docs[name] = [old[0], `${old[1]} ${text}`];
+  }
+})();
 
-// A line that opens an indented block: if/elif/else/while/for/func ending in ':' or 'then'.
-const BLOCK_OPENER = /^\s*(if|elif|else|while|for|func)\b.*(:|\bthen)\s*(#.*)?$/;
-const BLOCK_START = /^\s*(if|elif|else|while|for|func)\b/;
+const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average',
+  'now', 'today', 'time', 'date', 'sin', 'cos', 'tan', 'log'];
+// Libraries that are always there, with nothing to mention (1.4.0's file.read...). They aren't functions, and
+// import/mention doesn't offer them.
+const TUFF_READY_LIBS = ['file'];
+
+// try: and catch: (or catch problem:) at the start of a line, with nothing glued after the ':' (1.4.0). These always
+// start a block. try:say "hi", with the ':' glued to a word, does too unless the program gives try a value (see
+// tryCatchWord); anywhere else try and catch are a program's own names, like catch = [] or catch:add(1).
+const TRY_CATCH = /^\s*(try|catch(\s+[A-Za-z_]\w*)?)\s*:(?=\s|#|$)/;
+// A line that opens an indented block: if/elif/else/while/for/func ending in ':' or 'then', or try:/catch problem:.
+const BLOCK_OPENER = /^\s*((if|elif|else|while|for|func)\b.*(:|\bthen)|(try|catch(\s+[A-Za-z_]\w*)?)\s*:)\s*(#.*)?$/;
+const BLOCK_START = new RegExp(String.raw`^\s*(if|elif|else|while|for|func)\b|` + TRY_CATCH.source);
+
+// Does the program give try and catch values of its own (try = ..., for catch in, a function input called catch)?
+function ownTryCatch(model) {
+  return { try: givesValue(model, 'try'), catch: givesValue(model, 'catch') };
+}
+
+// The try or catch that starts this line's block, or null, as tuff.py decides it: try: and catch: with nothing glued
+// to the ':' and catch problem: always do, and try:say "hi" (the ':' glued to a word) does too, unless the program
+// gives that word a value (own, from ownTryCatch). Then it's a method call, so a 1.3.6 program's catch:add(fish) works.
+function tryCatchWord(text, own) {
+  const m = /^\s*(try|catch)(\s+[A-Za-z_]\w*)?\s*:/.exec(text);
+  if (!m) return null;
+  if (m[2]) return m[1] === 'catch' ? 'catch' : null;
+  return /^\s*(try|catch):[A-Za-z_]/.test(text) && own[m[1]] ? null : m[1];
+}
 
 // True when the end of `text` is inside a "string", a 'string' or a # comment.
 function insideStringOrComment(text) {
@@ -526,7 +612,35 @@ window.tuffWantsSuggest = function tuffWantsSuggest(model, position) {
   }
   if (!/[A-Za-z_]\w*:$/.test(before)) return false;
   const atEnd = !line.slice(position.column - 1).trim();
-  return !(atEnd && BLOCK_START.test(line));
+  // catch: in a program with its own catch (catch = []) is on its way to catch:add(...).
+  const own = /^\s*(try|catch):$/.exec(before);
+  return !(atEnd && BLOCK_START.test(line)) || !!(own && givesValue(model, own[1]));
+};
+
+// Typing the ':' of catch: or catch problem: moves the line out to its try:'s indent, like else (ide.js calls this).
+// It isn't in decreaseIndentPattern: Monaco outdents a line the moment it matches and never puts it back, and in a
+// program that gives catch a value (catch = [], for catch in, a function input) catch:add(fish) is a method call that
+// keeps its place. Gives back the edit, or null.
+window.tuffCatchOutdent = function tuffCatchOutdent(model, position) {
+  const n = position.lineNumber;
+  const line = model.getLineContent(n);
+  if (!/^\s*catch(\s+[A-Za-z_]\w*)?\s*:\s*(#.*)?$/.test(line)) return null;
+  const own = ownTryCatch(model);
+  if (own.catch) return null;
+  const indent = (s) => s.length - s.trimStart().length;
+  const at = indent(line);
+  let limit = at + 1; // the try has to be further out than every line between them
+  for (let i = n - 1; i >= 1; i--) {
+    const text = model.getLineContent(i);
+    if (!text.trim() || /^\s*#/.test(text) || indent(text) >= limit) continue;
+    if (tryCatchWord(text, own) === 'try') {
+      if (indent(text) >= at) return null; // already there
+      return { range: { startLineNumber: n, startColumn: 1, endLineNumber: n, endColumn: at + 1 }, text: text.slice(0, indent(text)) };
+    }
+    limit = indent(text);
+    if (!limit) return null;
+  }
+  return null;
 };
 
 window.registerTuff = function registerTuff(monaco, accent) {
@@ -568,6 +682,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
     surroundingPairs: [{ open: '"', close: '"' }, { open: '(', close: ')' }, { open: '[', close: ']' }],
     indentationRules: {
       increaseIndentPattern: BLOCK_OPENER,
+      // catch outdents when its ':' is typed, but only in a program without its own catch: see tuffCatchOutdent.
       decreaseIndentPattern: /^\s*(elif|else)\b/,
     },
     onEnterRules: [
@@ -583,9 +698,11 @@ window.registerTuff = function registerTuff(monaco, accent) {
       if (!word) return null;
       const before = model.getLineContent(position.lineNumber).slice(0, word.startColumn - 1);
       const lib = before.match(/(\w+)\.$/);
+      // A built-in's name the program gives a value (a 1.3.6 program's log = []) is the program's own variable.
+      const own = TUFF_BUILTINS.includes(word.word) && givesValue(model, word.word);
       const doc = (lib && window.TUFF_LIBS[lib[1]]?.[word.word])
         || (/\w:$/.test(before) && window.TUFF_METHOD_DOCS[word.word])
-        || window.TUFF_DOCS[word.word];
+        || (!own && window.TUFF_DOCS[word.word]);
       if (!doc) return null;
       return {
         range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn),
@@ -616,7 +733,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
         };
       }
       if (/^\s*(import|mention)\s+$/.test(before)) {
-        return { suggestions: Object.keys(window.TUFF_LIBS).map((l) => ({ label: l, kind: K.Module, insertText: l, range, documentation: window.TUFF_DOCS[l]?.[1] })) };
+        return { suggestions: Object.keys(window.TUFF_LIBS).filter((l) => !TUFF_READY_LIBS.includes(l)).map((l) => ({ label: l, kind: K.Module, insertText: l, range, documentation: window.TUFF_DOCS[l]?.[1] })) };
       }
       if (/\b(say|print):$/.test(before)) { // say:ascii, say:color, say:pen (1.3.5)
         return {
@@ -666,20 +783,25 @@ window.registerTuff = function registerTuff(monaco, accent) {
         { label: 'atgui app', kind: K.Snippet, insertText: 'mention atgui\n\napp = atgui.window("${1:My App}", 900, 600)\napp:accent "${2:indigo}"\nside = app:sidebar(220)\nside:heading "${3:My App}"\npages = side:list(["Home", "Settings"])\npages:change opened\ntitle = app:heading "Home"\ncard = app:card\ncard:text "${4:Hello!}"\n\nfunc opened(name):\n    title:set name\n    $0\n', insertTextRules: R, range, detail: 'A modern app with a sidebar' },
       ];
       const kws = window.TUFF_KEYWORDS.map((k) => ({ label: k, kind: K.Keyword, insertText: k, range, documentation: window.TUFF_DOCS[k]?.[1] }));
-      const fns = TUFF_BUILTINS.map((b) => ({ label: b, kind: K.Function, insertText: `${b}($0)`, insertTextRules: R, range, detail: window.TUFF_DOCS[b]?.[0], documentation: window.TUFF_DOCS[b]?.[1] }));
-      const seen = new Set([...window.TUFF_KEYWORDS, ...TUFF_BUILTINS]);
+      // A built-in's name the program gives a value (a 1.3.6 program's log = []) comes in below as its own name.
+      const src = model.getValue();
+      const builtins = TUFF_BUILTINS.filter((b) => !(src.includes(b) && givesValue(model, b)));
+      const fns = builtins.map((b) => ({ label: b, kind: K.Function, insertText: `${b}($0)`, insertTextRules: R, range, detail: window.TUFF_DOCS[b]?.[0], documentation: window.TUFF_DOCS[b]?.[1] }));
+      // file goes in as file: the '.' after it opens its list.
+      const libs = TUFF_READY_LIBS.map((l) => ({ label: l, kind: K.Module, insertText: l, range, detail: window.TUFF_DOCS[l]?.[0], documentation: window.TUFF_DOCS[l]?.[1] }));
+      const seen = new Set([...window.TUFF_KEYWORDS, ...builtins, ...TUFF_READY_LIBS]);
       const ids = [];
       for (const f of userFuncs(model)) {
         seen.add(f.name);
         ids.push({ label: f.name, kind: K.Function, insertText: `${f.name}($0)`, insertTextRules: R, range, detail: `func ${f.name}(${f.params.join(', ')})` });
       }
-      for (const m of model.getValue().matchAll(/[A-Za-z_]\w{1,}/g)) {
+      for (const m of src.matchAll(/[A-Za-z_]\w{1,}/g)) {
         if (!seen.has(m[0]) && m[0] !== word.word) {
           seen.add(m[0]);
           ids.push({ label: m[0], kind: K.Variable, insertText: m[0], range });
         }
       }
-      return { suggestions: [...snippets, ...kws, ...fns, ...ids] };
+      return { suggestions: [...snippets, ...kws, ...fns, ...libs, ...ids] };
     },
   });
 
@@ -693,7 +815,9 @@ window.registerTuff = function registerTuff(monaco, accent) {
 function tuffIdents(model) {
   const out = [];
   const lines = model.getLinesContent();
+  const own = ownTryCatch(model);
   lines.forEach((text, i) => {
+    const block = tryCatchWord(text, own) ? text.search(/\S/) : -1; // where this line's try: or catch: word is
     let quote = null;
     for (let c = 0; c < text.length;) {
       const ch = text[c];
@@ -707,7 +831,8 @@ function tuffIdents(model) {
       const m = /^[A-Za-z_]\w*/.exec(text.slice(c));
       if (m && !/\w/.test(text[c - 1] || '')) {
         const prev = text[c - 1];
-        if (prev !== '.' && prev !== ':' && !window.TUFF_KEYWORDS.includes(m[0])) {
+        const word = window.TUFF_KEYWORDS.includes(m[0]) && (!['try', 'catch'].includes(m[0]) || c === block);
+        if (prev !== '.' && prev !== ':' && !word) {
           out.push({ name: m[0], line: i + 1, start: c + 1, end: c + 1 + m[0].length });
         }
         c += m[0].length;
@@ -753,12 +878,25 @@ function definitionOf(model, name, atLine) {
     const col = text.indexOf('(') + 1 + text.slice(text.indexOf('(')).search(new RegExp(`\\b${name}\\b`));
     return { line: inside.line, start: col, end: col + name.length };
   }
+  return valueLine(model, name);
+}
+
+// The first line that gives `name` a value: name = ..., name += ..., for name in ... or catch name:.
+function valueLine(model, name) {
+  const given = new RegExp(`^(\\s*(?:for\\s+)?)${name}\\s*(?:=(?!=)|[+\\-*/]=|\\s+in\\b)`);
+  const caught = new RegExp(`^(\\s*catch\\s+)${name}\\s*:`);
   const lines = model.getLinesContent();
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(new RegExp(`^(\\s*)(?:for\\s+)?(${name})\\s*(?:=(?!=)|[+\\-*/]=|\\s+in\\b)`));
-    if (m) return { line: i + 1, start: m[0].indexOf(name) + 1, end: m[0].indexOf(name) + 1 + name.length };
+    const m = lines[i].match(given) || lines[i].match(caught);
+    if (m) return { line: i + 1, start: m[1].length + 1, end: m[1].length + 1 + name.length };
   }
   return null;
+}
+
+// Does the program give `name` a value of its own (a variable, a loop or catch name, a function or an input)?
+// Then it's the program's name, even when Tuff has one like it: a 1.3.6 program's log = [] still renames.
+function givesValue(model, name) {
+  return userFuncs(model).some((f) => f.name === name || f.params.includes(name)) || !!valueLine(model, name);
 }
 
 // The call the cursor is inside: name, how it's called and which input it's on.
@@ -770,9 +908,12 @@ function callAt(textBefore) {
     const c = textBefore[i];
     if (quote) { if (c === quote) quote = null; continue; }
     if (c === '"' || c === "'") { quote = c; continue; }
-    if (c === ')' || c === ']') depth++;
-    else if (c === '[') depth--;
-    else if (c === '(') {
+    if (c === ')' || c === ']' || c === '}') depth++;
+    else if (c === '[' || c === '{') {
+      // Inside a list or a dictionary that isn't closed yet, show({"a": 1, "b": 2 is still on show's first input.
+      if (depth) depth--;
+      else commas = 0;
+    } else if (c === '(') {
       if (depth === 0) {
         const m = textBefore.slice(0, i).match(/(?:([A-Za-z_]\w*)\.|:)?([A-Za-z_]\w*)\s*$/);
         if (!m) return null;
@@ -815,7 +956,8 @@ function registerTuffNavigation(monaco) {
     resolveRenameLocation(model, position) {
       const w = wordAt(model, position);
       if (!w) return { rejectReason: 'Put the cursor on a name you made (a variable or a function) to rename it.', range: undefined, text: '' };
-      if (TUFF_BUILTINS.includes(w.word) || window.TUFF_LIBS[w.word]) return { rejectReason: `'${w.word}' is part of Tuff, so it can't be renamed.`, range: undefined, text: '' };
+      const builtIn = TUFF_BUILTINS.includes(w.word) || Object.hasOwn(window.TUFF_LIBS, w.word);
+      if (builtIn && !givesValue(model, w.word)) return { rejectReason: `'${w.word}' is part of Tuff, so it can't be renamed.`, range: undefined, text: '' };
       return { range: range(position.lineNumber, w.startColumn, w.endColumn), text: w.word };
     },
     provideRenameEdits(model, position, newName) {
@@ -875,7 +1017,7 @@ function registerTuffNavigation(monaco) {
       }
       const inner = sig && sig.match(/\(([^)]*)\)/);
       if (!inner) return null;
-      const params = inner[1].split(',').map((s) => s.trim()).filter(Boolean);
+      const params = (inner[1].match(/("[^"]*"|[^,"])+/g) || []).map((s) => s.trim()).filter(Boolean); // t:split(",") has one input
       return {
         value: { signatures: [{ label: sig, documentation: doc, parameters: params.map((p) => ({ label: p })) }], activeSignature: 0, activeParameter: Math.min(call.active, Math.max(0, params.length - 1)) },
         dispose() {},
