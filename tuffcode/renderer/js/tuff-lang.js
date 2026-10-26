@@ -1,6 +1,7 @@
 window.TUFF_KEYWORDS = [
   'say', 'input', 'func', 'return', 'if', 'elif', 'else', 'then', 'while', 'for', 'in',
   'break', 'continue', 'and', 'or', 'not', 'is', 'true', 'false', 'nil', 'flush', 'import', 'mention',
+  'try', 'catch', // 1.4.0 (only at the start of a line with a ':' after them, so they still work as names)
 ];
 
 window.TUFF_METHOD_DOCS = {
@@ -493,7 +494,58 @@ window.TUFF_DOCS = {
   }
 })();
 
-const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average'];
+// 1.4.0, the Toolbox Update: dictionaries, text tools, sorting, files, try/catch, date and time, more maths.
+(() => {
+  window.TUFF_LIBS.file = {
+    read: ['file.read("notes.txt")', 'The text in a file, from your project folder.'],
+    write: ['file.write("notes.txt", text)', 'Makes the file (or replaces what is in it) with the text.'],
+    add: ['file.add("log.txt", line)', 'Adds a line to the end of a file (making it if it isn\'t there).'],
+    lines: ['file.lines("names.txt")', 'A file\'s lines, as a list.'],
+    exists: ['file.exists("save.json")', 'True if the file is there.'],
+    delete: ['file.delete("old.txt")', 'Deletes a file.'],
+    save: ['file.save("save.json", data)', 'Saves text, numbers, lists and dictionaries as JSON, to load back later.'],
+    load: ['data = file.load("save.json", {})', 'Loads what file.save saved. The second input is what you get if the file isn\'t there yet.'],
+  };
+  Object.assign(window.TUFF_DOCS, {
+    file: ['file.read("notes.txt")', 'Text files and saved data, in your project folder: file.read, write, add, lines, exists, delete, save and load. Nothing to mention.'],
+    try: ['try:', 'Runs the block, and if something goes wrong in it, runs the catch: block below instead of stopping the program.'],
+    catch: ['catch problem:', 'Runs when something in the try: block above went wrong. problem (any name, optional) is what went wrong, as text.'],
+    now: ['now()', 'The time now, as text like "14:05:09".'],
+    today: ['today()', 'Today\'s date, as text like "2026-10-26".'],
+    time: ['time()', 'Seconds since the program started (with decimals). Save it, then subtract later for a timer.'],
+    date: ['d = date()', 'Today and now as a dictionary: d["year"], d["month"], d["day"], d["weekday"], d["hour"], d["minute"], d["second"].'],
+    sin: ['sin(degrees)', 'Sine of an angle in degrees: sin(90) is 1.'],
+    cos: ['cos(degrees)', 'Cosine of an angle in degrees: cos(180) is -1.'],
+    tan: ['tan(degrees)', 'Tangent of an angle in degrees: tan(45) is 1.'],
+    log: ['log(number, base)', 'The logarithm: log(100, 10) is 2. Without a base, the natural log.'],
+    random: ['random(low, high)', 'A random whole number from low to high, both included. random() is a decimal from 0 to 1, and random(0.5, 2.5) a decimal in that range.'],
+    text: ['text(value, decimals)', 'Turns any value into text. text(3.14159, 2) is "3.14".'],
+  });
+  const docs = window.TUFF_METHOD_DOCS;
+  const own = {
+    split: ['t:split(",")', 'Text split into a list at each ",". With nothing, it splits at spaces.'],
+    replace: ['t:replace("old", "new")', 'The text with every "old" replaced by "new".'],
+    starts: ['t:starts("Mr")', 'True if the text starts with it.'],
+    ends: ['t:ends(".txt")', 'True if the text ends with it.'],
+    find: ['t:find("x")', 'Where it first is in the text (or a list), from 0, or -1 if it isn\'t there.'],
+    count: ['t:count("a")', 'How many times it is in the text.'],
+    pad_left: ['t:pad_left(3, "0")', 'The text filled on the left to that width: "7" becomes "007".'],
+    pad_right: ['t:pad_right(10)', 'The text filled on the right with spaces to that width, to line up columns.'],
+    sort: ['items:sort()', 'Sorts the list in place, numbers small to big, text A to Z. items:sort(by_score) sorts by what by_score(item) gives back.'],
+    reverse: ['items:reverse()', 'Turns the list around, in place.'],
+    join: ['items:join(", ")', 'The items as one text, with ", " between them.'],
+    keys: ['ages:keys()', 'A dictionary\'s keys, as a list.'],
+    values: ['ages:values()', 'A dictionary\'s values, as a list.'],
+    get: ['ages:get("sam", 0)', 'A dictionary\'s value for a key, or the second input (nil if left out) when the key isn\'t there.'],
+    set: ['ages:set("sam", 15)', 'Sets a key in a dictionary (same as ages["sam"] = 15).'],
+  };
+  for (const [name, [sig, text]] of Object.entries(own)) {
+    docs[name] = docs[name] ? [docs[name][0], `${docs[name][1]} ${text}`] : [sig, text];
+  }
+})();
+
+const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average',
+  'now', 'today', 'time', 'date', 'sin', 'cos', 'tan', 'log', 'file'];
 
 // A line that opens an indented block: if/elif/else/while/for/func ending in ':' or 'then'.
 const BLOCK_OPENER = /^\s*(if|elif|else|while|for|func)\b.*(:|\bthen)\s*(#.*)?$/;
