@@ -33,6 +33,10 @@ DEFAULT_ICON = os.path.join(WEB_DIR, "icon.png")
 OPEN_TIMEOUT = 30
 # How long a closing window waits for the program's close handlers before it goes (see View._on_closing).
 CLOSE_GRACE = 2.0
+# How long the close handlers may run (they run once the window has closed). A library stops its own then if it can
+# (atgui stops app:closed's function with a Tuff error), and a program still in one CLOSE_GRACE s later is ended (see
+# run()), so a close handler that's stuck can't keep the program running with no window.
+CLOSE_LIMIT = 10.0
 WEBVIEW2_URL = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
 WEBVIEW2_MISSING = ("This program shows its window with Microsoft Edge WebView2, which isn't installed on this PC. "
                     f"Install the WebView2 Runtime from {WEBVIEW2_URL} and run it again.")
@@ -350,6 +354,14 @@ def run(main, *args):
             try:
                 kind, view = runner.requests.get(timeout=0.25)
             except queue.Empty:
+                if runner.view is not None and runner.view._close_overdue():
+                    # A close handler stuck where nothing can stop it (waiting for input, a long wait()), with the
+                    # window gone: end the program, rather than leave it running where nobody can see it.
+                    sys.stderr.write(f"Tuff error: the window closed, but your app:closed function was still running "
+                                     f"{CLOSE_LIMIT + CLOSE_GRACE:g} seconds later, so the program was stopped.\n")
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+                    os._exit(1)
                 continue
             if kind == "done":
                 break
@@ -647,7 +659,7 @@ class View:
     _mlock = threading.Lock()  # the mouse's moves are added up on two threads
 
     def __init__(self, title="Tuff", width=900, height=600, icon=None, resizable=True, frameless=False, fps=60,
-                 background="#0b0e14", assets=None, on_error=None, debug=False, **options):
+                 background="#0b0e14", assets=None, on_error=None, debug=False, on_close=None, **options):
         runner = _runner
         if runner is None:
             raise ViewError("Windows open inside tuff_view.run(...), which gives the window system the main thread.")
@@ -671,7 +683,8 @@ class View:
         self._ready = threading.Event()
         self._closed = False
         self._close_done = False      # the close handlers have started (they run once)
-        self._close_finished = False  # ...and finished
+        self._close_started = None    # ...when (time.monotonic())
+        self._close_finished = False  # ...and they've finished
         self._in_call = 0             # calls into pywebview's window in progress (see _window_call)
         self._failure = None
         self._win = None
@@ -708,6 +721,11 @@ class View:
         token = secrets.token_urlsafe(16)
         files.roots[token] = (WEB_DIR, self._assets)
         self._base = f"http://127.0.0.1:{files.server_address[1]}/{token}/"
+        if on_close is not None:
+            # A close handler given here is there before the window can close, so a window closed the instant it
+            # appears waits for it too (see _on_closing). One added with on() once View() is back still runs, but a
+            # window closed while it was opening has gone without waiting for it.
+            self.on("close", on_close)
         runner.view = self
         runner.requests.put(("window", self))
         deadline = time.monotonic() + OPEN_TIMEOUT
@@ -830,7 +848,8 @@ class View:
 
         The close is noted now, not when the window is gone, and the window waits (at most CLOSE_GRACE s) for the
         program's close handlers to run. Quitting a Mac app with Cmd+Q, or logging off Windows, can end the process
-        as soon as its window has gone, before a handler that only started then had a chance to finish.
+        as soon as its window has gone, before a handler that only started then had a chance to finish. Closed
+        before View() came back (its page not ready yet), it waits for the handlers given to View(on_close=...).
         """
         self._on_closed()
         if not self._handlers.get(None, NO_HANDLERS).get("close"):
@@ -842,7 +861,7 @@ class View:
                 left = deadline - time.monotonic()
                 if left <= 0:
                     break
-                self._cond.wait(left)
+                self._cond.wait(min(left, 0.05))  # (a program that ends without handling the close doesn't say so)
         return None  # False would cancel the close
 
     def _on_closed(self):
@@ -1102,6 +1121,7 @@ class View:
             if self._close_done:
                 return
             self._close_done = True
+            self._close_started = time.monotonic()
             try:
                 self._handle(e, t)
             finally:
@@ -1120,6 +1140,11 @@ class View:
         """
         if self._closed and not self._close_done:
             self._dispatch({"type": "close"})
+
+    def _close_overdue(self):
+        """Main thread: the close handlers are still running CLOSE_GRACE s after CLOSE_LIMIT (run() ends the program)."""
+        started = self._close_started
+        return started is not None and not self._close_finished and time.monotonic() > started + CLOSE_LIMIT + CLOSE_GRACE
 
     def _handle(self, e, t):
         for i in e.get("path") or ():

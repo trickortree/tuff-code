@@ -7,6 +7,7 @@ programs in real windows. Each window opens for a few seconds and closes by itse
 ```
 py -3 tuffcode/test/atgui/run_all.py [--only check,widgets,...] [--out-dir folder]   # everything, about 50 s
 py -3 tuffcode/test/atgui/check_test.py                                              # the checker cases only
+py -3 tuffcode/test/atgui/close_test.py                                              # app:closed, no window opens
 node tuffcode/test/atgui/docs_test.mjs                                               # the editor's tables only
 py -3 tuffcode/test/atgui/freeze.py                                                  # packaging proof, about 30 s
 py -3 tuffcode/test/atgui/drive.py program.tuf [--driver driver.js] [--out r.json]   # one program
@@ -32,12 +33,13 @@ Real focus events only fire while the window is the foreground one, so `widgets.
 | Step (`--only` name) | What it proves |
 | --- | --- |
 | `check` (`check_test.py`) | `tuff.py --check`: 51 atgui mistakes caught (method names, input counts, styles, icons, themes, keys, event functions...), 10 correct programs accepted, including a kitchen sink of every widget and method |
+| `closing` (`close_test.py`) | `app:closed` with the window's close simulated, so no window opens (pywebview can't even load): closed the instant the window appears, as its page gets ready and while a timer runs, it runs once and has finished before the window goes, also when the process is ended right then (Cmd+Q, logging off); `app:close`; popups in `app:closed` answer at once, as if dismissed, and the save after them happens; an endless loop in it is stopped after `CLOSE_LIMIT` with a Tuff error on its line; a `wait()` that can't be stopped ends the program `CLOSE_GRACE` s later |
 | `docs` (`docs_test.mjs`) | `tuff-lang.js` loads as the MCP server loads it; every atgui method (96 names) has a doc; shared docs kept their text; the snippet passes `--check` |
 | `widgets` | Every widget and event through the page: the 29 lines the program says, in order (each event function's input included), and 45 checks of the page (styles, hover and pressed rules, tooltip, context menu, modal, Escape, markdown, code, pictures, split, glass, gradient, animation, escape hatches...) |
 | `selftest` | A program that drives itself: `:set`, `:value`, `:add`, `:remove`, `:clear`, pages, timers and `app:closed` |
 | `errors` | A mistake in a click, a keystroke and a timer function is reported once each, with its line, and the app keeps working |
-| `popups` | `app:ask`, `app:confirm` (a real Space press on the focused Yes, and Escape for No) and `app:alert` in the top-level code; timers keep running meanwhile |
-| `osclose` | Closing with WM_CLOSE (the X button), through plain `tuff.py`, at every moment: the instant the window appears (its page not ready yet), 0.15 s later and while a timer runs: exit 0, `app:closed` ran once. Then the process is ended the moment its window has gone, as Cmd+Q on a Mac or logging off Windows does: `app:closed`, which takes a moment, had already finished |
+| `popups` | `app:ask`, `app:confirm` (a real Space press on the focused Yes, and Escape for No) and `app:alert` in the top-level code; timers keep running meanwhile; `app:close` after them still runs `app:closed` |
+| `osclose` | Closing with WM_CLOSE (the X button), through plain `tuff.py`, at every moment: the instant the window appears (its page not ready yet), 0.15 s later and while a timer runs: exit 0, `app:closed` ran once. Then the process is ended the moment its window has gone, as Cmd+Q on a Mac or logging off Windows does, closed while it runs and closed the instant it appears: `app:closed`, which takes a moment, had already finished |
 | `frameless` | `app:titlebar`: drag regions, the three buttons, maximize and restore (button and double-click), resize, close |
 | `latency` | 100 clicks and 100 keystrokes, each timed from the DOM event to the Tuff function's change in the page |
 | `biglist` | 1,000 list items in a scroll area: scrolled for 3 s, a step every frame, with the frames timed; then item 900 is picked |
