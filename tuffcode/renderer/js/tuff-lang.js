@@ -577,6 +577,32 @@ window.TUFF_DOCS = {
   for (const [name, text] of Object.entries(also)) docs[name] = [docs[name][0], `${docs[name][1]} ${text}`];
 })();
 
+// 1.5.0: tterm, terminal games. A screen is a grid of letters the program draws on, with keys read as they're pressed:
+// in the Run panel (click it to play), a terminal or a Build exe. Its own methods' docs start with "tterm" (completions
+// offer them in files that mention tterm); a name another library has too keeps its doc, with this use at the end.
+(() => {
+  window.TUFF_LIBS.tterm = {
+    screen: ['screen = tterm.screen(40, 20)', 'A grid of letters for a terminal game, 40 across and 20 down (40, 20 if you leave them out). x goes right from 0 and y goes down from 0. Draw with :put, :text and :box, read keys with :pressed and :held, and run the game with :every_frame(step).'],
+  };
+  window.TUFF_DOCS.tterm = ['mention tterm', 'Terminal games like Snake: a grid of letters in colours, with keys read as they are pressed. They run in the Run panel (click the game to play; Esc ends it and lets go), a terminal or a Build exe. screen = tterm.screen(40, 20), then screen:every_frame(step).'];
+  const docs = window.TUFF_METHOD_DOCS;
+  const own = {
+    put: ['screen:put(x, y, "@", "lime")', 'puts one character at x, y, in a colour if you give one. A space, " ", rubs a cell out.'],
+    text: ['screen:text(2, 0, "Score: 3", "gold")', 'writes words from x, y to the right, in a colour if you give one.'],
+    box: ['screen:box(0, 0, 40, 20, "gray")', 'draws a border round width by height cells, with its top left corner at x, y.'],
+    clear: ['screen:clear()', 'rubs out the whole screen, to draw the next frame.'],
+    get: ['screen:get(x, y)', 'the character at x, y: " " for an empty cell, "" off the screen. Handy for walls: if screen:get(x, y) is "#".'],
+    pressed: ['screen:pressed("space")', 'true if the key went down since the last frame (a held key\'s repeats count too). Keys: a letter, a number, space, enter, tab, backspace, delete, up, down, left, right or "any". Esc ends the game.'],
+    held: ['screen:held("left")', 'true while the key is held down.'],
+    press: ['screen:press("right")', 'gives the next frame a key, as if it was pressed then (screen:press("down", 30) gives it to frame 30). For testing: with no one to press keys (tuff_run), frames don\'t wait for the clock and the game stops 100 frames after the last key.'],
+    every_frame: ['screen:every_frame(step)', 'runs step(dt) about 20 times a second, with the seconds since the last time, until screen:stop() or Esc. The screen shows after each one.'],
+    stop: ['screen:stop()', 'ends screen:every_frame after this frame. The program carries on after it.'],
+  };
+  for (const [name, [sig, text]] of Object.entries(own)) {
+    docs[name] = docs[name] ? [docs[name][0], `${docs[name][1]} In tterm, ${sig}: ${text}`] : [sig, `tterm: ${text.charAt(0).toUpperCase()}${text.slice(1)}`];
+  }
+})();
+
 const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average',
   'now', 'today', 'time', 'date', 'sin', 'cos', 'tan', 'log'];
 // Libraries that are always there, with nothing to mention (1.4.0's file.read...). They aren't functions, and
@@ -899,7 +925,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
       if (insideStringOrComment(line.slice(0, position.column - 1))) return { suggestions: [] };
       const libMatch = before.match(/(\w+)\.$/);
       const kinds = tuffKinds(model);
-      if (libMatch && !window.TUFF_LIBS[libMatch[1]]) { // rex. (1.5.0): its kind's fields, or every kind's when it can't be told
+      if (libMatch && !window.TUFF_LIBS[libMatch[1]] && !tuffOwnImports(model.getValue()).has(libMatch[1])) { // rex. (1.5.0): its kind's fields, or every kind's when it can't be told
         const kind = kindOf(model, libMatch[1], position.lineNumber, kinds);
         const seen = new Set();
         const fields = (kind ? [kind] : kinds).flatMap((k) => k.fields.map((f) => [k, f])).filter(([, f]) => !seen.has(f.name) && seen.add(f.name));
@@ -976,10 +1002,13 @@ window.registerTuff = function registerTuff(monaco, accent) {
         const games = /^\s*(import|mention)\s+tgame\b/m.test(src);
         const modern = /^\s*(import|mention)\s+atgui\b/m.test(src) || (games && /:\s*(panel|screen|start_screen|main_menu)\b/.test(src));
         const drawing = /^\s*(import|mention)\s+tdraw\b/m.test(src);
+        const terminal = /^\s*(import|mention)\s+tterm\b/m.test(src);
         const names = Object.keys(window.TUFF_METHOD_DOCS).filter((m) => {
           const doc = window.TUFF_METHOD_DOCS[m][1] || '';
           if (m === 'ascii' || m === 'pen') return false;
           if (/^tdraw\b/.test(doc)) return drawing;
+          if (/^tterm\b/.test(doc)) return terminal;
+          if (terminal && doc.includes('In tterm, ')) return true; // a screen's :pressed, :box... (tgame's names too)
           if (/^In tgame:/.test(doc)) return games || modern;  // a name both have (align, animate...): in either's files
           return (games || !/^tgame\b/.test(doc)) && (modern || !/^atgui\b/.test(doc));
         });
@@ -1007,6 +1036,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
         { label: 'tap', kind: K.Snippet, insertText: 'mention tap\n\nres = tap.get("${1:https://api.github.com/users/octocat}")\nif res:ok:\n    info = res:json\n    say info:get("${2:name}")\nelse:\n    say "Error " + res:status\n', insertTextRules: R, range, detail: 'Get JSON from the web' },
         { label: 'tgame 2D', kind: K.Snippet, insertText: 'mention tgame\n\ngame = tgame.window("${1:My Game}", 600, 400)\nplayer = game:box(300, 200, 40, 40, "${2:teal}")\nscore = game:text("Score: 0", 300, 30)\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        player:move(-300 * dt, 0)\n    if game:held("right"):\n        player:move(300 * dt, 0)\n    $0\n', insertTextRules: R, range, detail: 'A starter 2D game' },
         { label: 'tgame 3D', kind: K.Snippet, insertText: 'mention tgame\n\ngame = tgame.world("${1:My World}")\ngame:sky "${2:day}"\ngame:island(80)\nplayer = game:player("first person")\nfor i in range(1, 20):\n    tree = game:spawn("tree")\n    tree:clicked ${3:chop}\n\nfunc ${3:chop}(tree):\n    tree:shake()\n    $0\n\nwhile game:open():\n    game:frame()\n', insertTextRules: R, range, detail: 'A starter 3D world' },
+        { label: 'tterm game', kind: K.Snippet, insertText: 'mention tterm\n\nscreen = tterm.screen(${1:40}, ${2:20})\nx = 20\ny = 10\n\nfunc step(dt):\n    if screen:pressed("left"):\n        x -= 1\n    if screen:pressed("right"):\n        x += 1\n    if screen:pressed("up"):\n        y -= 1\n    if screen:pressed("down"):\n        y += 1\n    screen:clear()\n    screen:box(0, 0, ${1:40}, ${2:20}, "gray")\n    screen:put(x, y, "@", "lime")\n    $0\n\nscreen:every_frame(step)\n', insertTextRules: R, range, detail: 'A starter terminal game (tterm)' },
         { label: 'tgui app', kind: K.Snippet, insertText: 'import tgui\n\napp = tgui.window("${1:My App}")\napp:heading "${2:Hello!}"\n\nfunc ${3:clicked}():\n    $0\n\napp:button("${4:Click me}", ${3:clicked})\n', insertTextRules: R, range, detail: 'A starter app window' },
         { label: 'atgui app', kind: K.Snippet, insertText: 'mention atgui\n\napp = atgui.window("${1:My App}", 900, 600)\napp:accent "${2:indigo}"\nside = app:sidebar(220)\nside:heading "${3:My App}"\npages = side:list(["Home", "Settings"])\npages:change opened\ntitle = app:heading "Home"\ncard = app:card\ncard:text "${4:Hello!}"\n\nfunc opened(name):\n    title:set name\n    $0\n', insertTextRules: R, range, detail: 'A modern app with a sidebar' },
       ];

@@ -1157,7 +1157,7 @@ TOO_BIG = "That's too big to work out: a number or text this large doesn't fit i
 # OverflowError before. Whole numbers have no limit, so this is the only number that's too big to work out.
 TOO_BIG_NUMBER = ("That number is too big to work out. Whole numbers can be any size, but a decimal (what / gives, or "
                   "a sum with a decimal in it) only goes up to about 1 followed by 308 zeros.")
-LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame", "tdraw")
+LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame", "tdraw", "tterm")
 # Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
@@ -2057,6 +2057,9 @@ def ansi_rows(text, runs, look):
 
 class Console:
     animate = True  # SceneConsole: no animations in Tuff Engine's preview
+    # How input() reads a line (sys.stdin.readline when it's None). tterm (1.5.0) reads keys from stdin while a game
+    # runs, and gives input() the answers it read with them.
+    readline = None
 
     def __init__(self, first_id=1):
         self.next_id = first_id
@@ -2209,7 +2212,7 @@ class Console:
             self.ask(prompt, look)
         else:
             self.write(prompt)
-        data = sys.stdin.readline()
+        data = (self.readline or sys.stdin.readline)()
         if data == "":
             raise TuffError("The program asked for an answer, but there was no more input to read.")
         self.rows += 1
@@ -2718,6 +2721,13 @@ class Interpreter:
         except ImportError as exc:
             raise TuffError(f"tgame couldn't load ({exc}). Reinstall TuffCode.")
         return tuff_tgame.make_library(self.rt)
+
+    def lib_tterm(self):
+        try:
+            import tuff_tterm
+        except ImportError as exc:
+            raise TuffError(f"tterm couldn't load ({exc}). Reinstall TuffCode.")
+        return tuff_tterm.make_library(self.rt)
 
     def lib_anims(self):
         con = self.console
@@ -5154,6 +5164,22 @@ def tdraw_pen_methods():
     return tuff_tdraw.PEN_METHODS
 
 
+_TTERM = None
+
+
+def tterm_tables():
+    """What the checker knows about a tterm screen (1.5.0): its methods and the checks it shares with the runtime.
+    None without tuff_tterm.py."""
+    global _TTERM
+    if _TTERM is None:
+        try:
+            import tuff_tterm
+            _TTERM = tuff_tterm.tables()
+        except ImportError:
+            _TTERM = False
+    return _TTERM or None
+
+
 def nodes(x):
     """Every node inside a node, or inside a list of nodes."""
     if isinstance(x, N):
@@ -5398,6 +5424,8 @@ class Checker:
             return f"the kind {kind[6:]}"
         if kind.startswith("$module:"):
             return "a library"
+        if kind == "ttscreen":
+            return "a tterm screen"
         return "a function" if kind.startswith("$libfn:") else self.TYPE.get(kind) or a_kind(kind.lstrip("@"))
 
     def only_func(self, name):
@@ -5417,13 +5445,13 @@ class Checker:
         """{action's name: its inputs}"""
         return {f.action: f.params for f in self.kinds[kind].actions}
 
-    def own_files(self):
+    def has_own_files(self):
         """Does the program import files of its own? (Their kinds can have any fields and actions.)"""
         return any(name not in LIBRARIES and name != "file" for name in self.imports)
 
     def is_field(self, name):
         """Could thing.name be an object's field? (One of the program's kinds has it, or it can't be told.)"""
-        return self.own_files() or any(name in self.fields_of(k) for k in self.kinds)
+        return self.has_own_files() or any(name in self.fields_of(k) for k in self.kinds)
 
     def brackets_tip(self, obj, target, index, then):
         """The tip after "Can't use [ ] on a Pet." (as Interpreter.item and store give it), or "" for a kind itself."""
@@ -5593,6 +5621,8 @@ class Checker:
                 return {"window": "game", "world": "world"}.get(e.fn.name)
             if lib == "$module:tdraw":
                 return "tdpen" if e.fn.name == "pen" else None
+            if lib == "$module:tterm":
+                return "ttscreen" if e.fn.name == "screen" else None
             return None
         if k == "method":
             if self.is_print(e.obj):  # say:ascii(...) and say:color(...) say a line, like say does
@@ -5602,6 +5632,8 @@ class Checker:
                 return self.atgui_kind(obj[1:], e)
             if obj in self.TAP_GIVES:
                 return self.TAP_GIVES[obj].get(e.name)
+            if obj == "ttscreen":
+                return (tterm_tables() or {}).get("gives", {}).get(e.name)
             if self.is_tgame(obj):
                 tg = tgame_tables()
                 return tg["gives"].get(obj, {}).get(e.name) if tg else None
@@ -5900,6 +5932,13 @@ class Checker:
                 except TuffError:
                     return None
             return self.tdraw
+        if lib == "tterm":
+            if getattr(self, "tterm", None) is None:
+                try:
+                    self.tterm = {n: b.fn for n, b in self.interp.lib_tterm().items()}
+                except TuffError:
+                    return None
+            return self.tterm
         if lib == "tap":
             tap = tap_tables()
             return tap["lib"] if tap else None
@@ -6316,9 +6355,9 @@ class Checker:
         gui = gui_tables()
         if gui is None:
             return True
-        if self.own_files() or any(name in self.actions_of(k) for k in self.kinds):  # an object's action (1.5.0)
+        if self.has_own_files() or any(name in self.actions_of(k) for k in self.kinds):  # an object's action (1.5.0)
             return True
-        if name in (tdraw_pen_methods() or ()):
+        if name in (tdraw_pen_methods() or ()) or name in (tterm_tables() or {}).get("methods", ()):
             return True
         at = atgui_tables()
         if at is not None and any(name in m for m in at["kinds"].values()):
@@ -6397,6 +6436,12 @@ class Checker:
                     self.problem(e, f"{lib[8:]}.{fn.name}() got the wrong number of inputs ({n}).")
                 elif lib == "$module:anims" and fn.name in members:
                     self.check_anims_looks(e)
+                elif lib == "$module:tterm" and fn.name == "screen":
+                    t = tterm_tables()
+                    for arg, what in zip(e.args, ("width", "height")):
+                        msg = t and arg.kind in ("const", "neg") and t["size_problem"](self.number_of(arg), what, t["most"][what])
+                        if msg:
+                            self.problem(arg, msg)
 
     def check_format(self, part):
         """f"{name:0.00}": a number's format (0.00, 000 or money) on something that is never a number. (A width
@@ -6564,6 +6609,9 @@ class Checker:
         if obj.startswith("$libfn:"):
             self.problem(e, f"'{owner}' is the function {obj[7:]} itself, not what it makes. Add brackets, like: {owner} = {obj[7:]}(...)")
             return
+        if obj == "ttscreen":
+            self.check_tterm(e, owner)
+            return
         if obj.startswith("@"):
             self.check_atgui(e, obj[1:])
             return
@@ -6651,6 +6699,66 @@ class Checker:
                 self.check_file_input(e.args[0] if e.args else None, "icon")
             elif name == "set" and obj == "dropdown" and e.obj.kind == "var" and e.args:
                 self.check_dropdown_set(e)
+
+    @staticmethod
+    def number_of(e):
+        """The number an input is, when it's written in the program (5, -2), else None."""
+        if e.kind == "neg":
+            v = Checker.number_of(e.value)
+            return None if v is None else -v
+        if e.kind == "const" and isinstance(e.value, (int, float)) and not isinstance(e.value, bool):
+            return e.value
+        return None
+
+    def check_tterm(self, e, owner):
+        """A tterm screen's methods (1.5.0): their names and inputs, colours and keys written as text, put's one
+        character and every_frame's function."""
+        t = tterm_tables()
+        if t is None:
+            return
+        name, n, methods = e.name, len(e.args), t["methods"]
+        if name not in methods:
+            self.problem(e, method_help("A screen", name, list(methods)))
+            return
+        if not accepts(methods[name], n):
+            if e.bare and accepts(methods[name], 0):
+                self.problem(e, f"{owner}:{name} doesn't take an input, so what comes after it was read as one. Write {owner}:{name}() instead.")
+            else:
+                self.problem(e, f"{owner}:{name} got the wrong number of inputs ({n}).")
+            return
+
+        def text(i):
+            return e.args[i].value if n > i and e.args[i].kind == "const" and isinstance(e.args[i].value, str) else None
+        at = t["color_at"].get(name)
+        if at is not None and text(at) is not None:
+            msg = t["color_problem"](text(at), f"screen:{name}", TEXT_COLORS)
+            if msg:
+                self.problem(e.args[at], msg)
+        if name in ("pressed", "held", "press") and text(0) is not None:
+            key = t["key_name"](text(0))
+            if key is None:
+                self.problem(e.args[0], t["key_problem"](text(0), f"screen:{name}"))
+            elif key == "any" and name == "press":
+                self.problem(e.args[0], t["press_any"])
+            elif key == "escape" and name != "press":
+                self.problem(e.args[0], f'Esc ends screen:every_frame, so {owner}:{name}("{text(0)}") is never true. Use another key, like "p" for a pause.')
+        if name == "put" and text(2) is not None and t["char_problem"](text(2)):
+            self.problem(e.args[2], t["char_problem"](text(2)))
+        if name == "every_frame":
+            fn = e.args[0]
+            if fn.kind == "call" and fn.fn.kind == "var" and self.only_func(fn.fn.name) and not self.returns_function(fn.fn.name):
+                f = fn.fn.name
+                self.problem(fn, f"Pass the function's name without brackets: {f}, not {f}(). With brackets it runs once, before the game starts, instead of every frame.")
+            elif fn.kind == "method":
+                target = f"{fn.obj.name}:{fn.name}" if fn.obj.kind == "var" else f":{fn.name}"
+                self.problem(fn, f"{target} runs right away here, while this line runs. Make a small function (func step(dt): {target}) and pass its name.")
+            elif fn.kind == "const" and isinstance(fn.value, str):
+                self.problem(fn, f"This needs a function name, not text. Write {fn.value} without the quotes, and make it with func {fn.value}(dt):")
+            elif fn.kind == "var" and self.only_func(fn.name) and len(self.funcs[fn.name]) > 1:
+                want = len(self.funcs[fn.name])
+                self.problem(fn, f"{fn.name}() needs {want} inputs, but screen:every_frame only gives it 1 (dt, the seconds since the last frame). Write it as: func {fn.name}(dt):")
+            elif self.kind(fn) in self.TYPE and self.kind(fn) not in ("$func", "$builtin"):
+                self.problem(fn, t["frame_fn"])
 
     def check_dropdown_set(self, e):
         """box:set "Large" on a dropdown whose choices are written out and never changed."""

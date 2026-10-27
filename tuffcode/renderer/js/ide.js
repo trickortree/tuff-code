@@ -1208,6 +1208,9 @@
     span.replaceChildren(...parts);
   }
 
+  // A tterm game's keys go to the program over stdin (tterm.js), like the answers typed for input.
+  const sendKey = (line) => { if (state.running) api.run.input(line); };
+
   function handleOsc(kind, args, c) {
     if (kind === 'say') {
       // say;<id>;<b64>[;<style>]: "notice" is the yellow line a tgame program starts with. The second player
@@ -1217,6 +1220,7 @@
       const span = appendOut(text, args[2] === 'notice' ? 'tline notice' : 'tline', c);
       const look = richStyle(args[2]);
       if (look) richLine(span, text, look);
+      if (look && look.screen) window.TuffTerm?.screen(span, look, c.who === 1 ? sendKey : null); // a tterm game (1.5.0)
       c.lines.set(args[0], span);
       // tgame's notice gets a button that opens the game in Tuff Engine.
       if (args[2] === 'notice' && /^Tuff Engine/.test(span.textContent)) {
@@ -1234,6 +1238,7 @@
       const look = richStyle(args[2]);
       if (look) richLine(span, decode64(args[1] || ''), look);
       else span.textContent = decode64(args[1] || '');
+      if (look && look.screen) window.TuffTerm?.screen(span, look, c.who === 1 ? sendKey : null);
       if (look && look.anim) return; // an animation's frame: no flash
       const now = performance.now();
       const rapid = now - (span.lastRewrite || 0) < 400;
@@ -1494,6 +1499,7 @@
   api.run.onExit(({ id, code }) => {
     if (id !== state.runId) return;
     const output = runOutputText();
+    window.TuffTerm?.ended($('#run-output'));
     runInput?.remove();
     runInput = null;
     appendOut('\n', 'done');
@@ -1513,7 +1519,8 @@
     appendOut(`The second player finished with exit code ${code}\n`, 'done' + (code ? ' bad' : ''), copies[2]);
     setRunning2(false);
   });
-  $('#run-output').addEventListener('mouseup', () => {
+  $('#run-output').addEventListener('mouseup', (e) => {
+    if (e.target.closest?.('.tscreen.live')) return; // a tterm game keeps the keys it was clicked for
     if (runInput && !getSelection().toString()) runInput.focus();
   });
 

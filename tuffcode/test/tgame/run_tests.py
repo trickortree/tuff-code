@@ -6191,7 +6191,7 @@ func counter():
 MODULES_OUTPUT = ["money.tuf starts", "tax.tuf starts", "$6.38", "0.2", "$12.00", "0.5", "$15.00", "15", "<file money.tuf>",
                   "<library anims>", "true", "*** * a | b", "[10, 7, 3]", "HI!", "**",
                   "There's no extras.tuf next to shop.tuf (or in a libs folder there), and extras isn't one of Tuff's libraries "
-                  "(anims, tgui, mtgui, tap, atgui, tgame, tdraw).", "1", "2", "2", "0.50 and 99"]
+                  "(anims, tgui, mtgui, tap, atgui, tgame, tdraw, tterm).", "1", "2", "2", "0.50 and 99"]
 MONEY = 'rate = 0.2\nfunc as_money(x):\n    return f"{x:money}"\nfunc show():\n    secret = 1\n    return secret\n'
 # Mistakes: (the files, where the run stops: (the file it names, line, column, part of the message), or "OK", and part of
 # what --check on shop.tuf says, or "OK" when only the run can know). shop.tuf is the program.
@@ -6396,6 +6396,7 @@ def t_modules(c):
 
     # --as: TuffCode checks a copy of the editor's text (a temp file) as if it were the real file, so imports resolve.
     folder = modules_project("as", {"shop.tuf": "", "money.tuf": MONEY})
+    os.makedirs(OUT, exist_ok=True)
     copy = os.path.join(OUT, "modules_copy.tuf")
     with open(copy, "w", encoding="utf-8") as f:
         f.write('import money\nsay money.as_mony(1)\n')
@@ -7014,6 +7015,532 @@ def t_kinds(c):
             [(a, b) for a, b in zip(t["real"] if isinstance(t["real"], list) else [t["real"]], want) if a != b])
 
 
+# ---------------------------------------------------------------- 1.5.0: tterm, terminal games
+# A program that moves with keys from screen:press: right on frames 1 and 2, down held on frame 5, space and right on
+# frame 9, q (which stops it) on frame 20.
+TTERM_PROGRAM = """mention tterm
+screen = tterm.screen(12, 5)
+x = 1
+y = 2
+jumps = 0
+frames = 0
+total = 0
+func step(dt):
+    frames += 1
+    total += dt
+    if screen:pressed("right"):
+        x += 1
+    if screen:held("down"):
+        y += 1
+    if screen:pressed("space"):
+        jumps += 1
+    screen:clear()
+    screen:box(0, 0, 12, 5, "gray")
+    screen:text(1, 0, f"{jumps}", "gold")
+    screen:put(x, y, "@", "lime")
+    if screen:pressed("q"):
+        screen:stop()
+screen:press("right")
+screen:press("right")
+screen:press("down", 5)
+screen:press("space", 9)
+screen:press("right", 9)
+screen:press("q", 20)
+screen:every_frame(step)
+say f"x {x} y {y} jumps {jumps} frames {frames} time {total:0.00}"
+say screen:get(x, y) + screen:get(0, 0) + screen:get(99, 0) + "|" + screen
+"""
+TTERM_FRAME = ["┌1─────────┐", "│          │", "│          │", "│   @      │", "└──────────┘"]
+TTERM_AFTER = ["x 4 y 3 jumps 1 frames 20 time 1.00", "@┌|<screen 12x5>"]
+# Mistakes the run stops at, on their line: (program, line, what it says).
+TTERM_ERRORS = [
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nscreen:put(1, 1, "ab")', 3, "screen:put draws one character"),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nscreen:text(1, 1, "hi", "limme")', 3, 'doesn\'t know the colour "limme". Did you mean "lime"?'),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nsay screen:held("spcae")', 3, 'isn\'t a key tterm knows. Did you mean "space"?'),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nscreen:every_frame("step")', 3, "screen:every_frame needs a function's name"),
+    ('mention tterm\nscreen = tterm.screen(0, 4)', 2, "tterm.screen's width goes from 1 to 200"),
+    ('mention tterm\nscreen = tterm.screen("big", 4)', 2, "tterm.screen's width needs a number, not text"),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nscreen:put("a", 1, "@")', 3, "screen:put needs numbers for x and y, not text"),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nscreen:press("any")', 3, "screen:press needs a real key"),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nfunc step(dt):\n    screen:put(2, 1, "@")\n    say nope\nscreen:every_frame(step)', 5,
+     "I don't know what 'nope' is"),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nfunc step(dt):\n    screen:every_frame(step)\nscreen:every_frame(step)', 4,
+     "screen:every_frame is already running"),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nscreen:draw(1, 1)', 3, "A screen doesn't have :draw."),
+]
+# --check: (code after a screen and a step function, what it says, or "OK").
+TTERM_HEAD = "mention tterm\nscreen = tterm.screen(20, 10)\nfunc step(dt):\n    screen:clear()\n"
+TTERM_CHECKS = [
+    ('screen:draw(1, 2, "@")', "A screen doesn't have :draw."), ("screen:put(1, 2)", "screen:put got the wrong number of inputs (2)."),
+    ('screen:put(1, 2, "@", "limme")', 'screen:put doesn\'t know the colour "limme". Did you mean "lime"?'),
+    ('screen:box(0, 0, 5, 5, "grey9")', 'screen:box doesn\'t know the colour "grey9"'),
+    ('say screen:pressed("spcae")', '"spcae" isn\'t a key tterm knows. Did you mean "space"?'),
+    ('say screen:held("shift")', "a terminal doesn't tell a program about shift on its own"),
+    ('say screen:pressed("escape")', 'Esc ends screen:every_frame, so screen:pressed("escape") is never true'),
+    ('screen:press("any")', "screen:press needs a real key"), ('screen:put(1, 1, "ab")', "screen:put draws one character"),
+    ('screen:put(1, 1, "")', "screen:put needs a character to draw"),
+    ("screen:every_frame(step())", "Pass the function's name without brackets: step, not step()"),
+    ('screen:every_frame("step")', "This needs a function name, not text."),
+    ("func two(a, b):\n    say a\nscreen:every_frame(two)", "two() needs 2 inputs, but screen:every_frame only gives it 1"),
+    ("n = 5\nscreen:every_frame(n)", "screen:every_frame needs a function's name"),
+    ("screen:every_frame(screen:clear())", "screen:clear runs right away here"),
+    ("s = tterm.screen(0, 10)", "tterm.screen's width goes from 1 to 200"), ("s = tterm.screen(20, -3)", "tterm.screen's height goes from 1 to 100"),
+    ("s = tterm.scren(20, 10)", "tterm doesn't have 'scren'. It has: screen."), ("s = tterm.screen(1, 2, 3)", "tterm.screen() got the wrong number of inputs (3)."),
+    ("screen()", "'screen' is a tterm screen, not a function"), ("screen:stop 5", "Write screen:stop() instead."),
+    ("x = tterm.screen\nx:put(1, 1, \"@\")", "is the function tterm.screen itself"),
+    ("screen:every_frame(step)", "OK"), ('screen:put(1.5, 2, "é", "#ff8800")', "OK"), ('screen:put(1, 2, "🐍")', "OK"),
+    ('screen:put(1, 2, "👍🏽")', "OK"), ('screen:text(0, 0, f"x {1}", "dark green")', "OK"), ('say screen:get(1, 1) + "!"', "OK"),
+    ('if screen:pressed("any"):\n    say 1', "OK"), ('screen:press("down", 30)', "OK"), ('screen:press(" ")', "OK"), ("screen:stop()", "OK"),
+    ("screen:stop", "OK"), ("screen:clear", "OK"), ("s = tterm.screen()", "OK"), ("func one():\n    say 1\nscreen:every_frame(one)", "OK"),
+    ('k = "x"\nsay screen:held(k)', "OK"), ("say screen", "OK"), ("screen:box(-1, -1, 100, 3)", "OK"), ('say screen:pressed("Left")', "OK"),
+    ("func make():\n    return step\nscreen:every_frame(make())", "OK"), ("screen:every_frame(print)", "OK"),
+]
+# The editor (tuff-lang.js, with Node): the library, hovers, completions in a tterm file and in another, and the snippet.
+TTERM_LANG = r"""
+const fs = require('fs'), vm = require('vm');
+const window = {}, ctx = { window };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+let hover = null, completion = null, monarch = null;
+const monaco = { Range: class { constructor(...a) { this.a = a; } }, editor: { defineTheme() {} }, languages: {
+  register() {}, setMonarchTokensProvider(_id, def) { monarch = def; }, setLanguageConfiguration() {},
+  registerHoverProvider(_id, p) { hover = hover || p; }, registerDefinitionProvider() {}, registerReferenceProvider() {},
+  registerRenameProvider() {}, registerDocumentSymbolProvider() {}, registerSignatureHelpProvider() {}, registerColorProvider() {},
+  registerCompletionItemProvider(_id, p) { completion = p; },
+  CompletionItemKind: new Proxy({}, { get: (_t, k) => k }), CompletionItemInsertTextRule: {}, IndentAction: {}, SymbolKind: {} } };
+window.defineTuffTheme = () => {};
+window.registerTuff(monaco, '#3574f0');
+const model = (src, col) => { const lines = src.split('\n'); return { getLinesContent: () => lines, getLineContent: (n) => lines[n - 1],
+  getValue: () => src, getWordUntilPosition: () => ({ startColumn: col || 1, endColumn: col || 1 }),
+  getWordAtPosition: ({ lineNumber, column }) => { for (const m of lines[lineNumber - 1].matchAll(/\w+/g))
+    if (m.index < column && column <= m.index + m[0].length) return { word: m[0], startColumn: m.index + 1, endColumn: m.index + 1 + m[0].length };
+    return null; } }; };
+const names = (src) => { const lines = src.split('\n'); const col = lines[lines.length - 1].length + 1;
+  return completion.provideCompletionItems(model(src, col), { lineNumber: lines.length, column: col }).suggestions.map((s) => s.label); };
+const hoverAt = (src, column) => { const h = hover.provideHover(model(src), { lineNumber: 1, column }); return h ? h.contents.map((x) => x.value).join(' | ') : null; };
+const term = names('mention tterm\nscreen = tterm.screen(40, 20)\nscreen:');
+const plain = names('items = [1]\nitems:');
+const game = names('mention tgame\ngame = tgame.window("G")\ngame:');
+const snippet = completion.provideCompletionItems(model('', 1), { lineNumber: 1, column: 1 }).suggestions.find((s) => s.label === 'tterm game');
+console.log(JSON.stringify({
+  libs: Object.keys(window.TUFF_LIBS), lib: window.TUFF_LIBS.tterm, doc: window.TUFF_DOCS.tterm,
+  libNames: names('mention tterm\ns = tterm.'), mentions: names('mention '),
+  term, plain, game, snippet: snippet && snippet.insertText, highlighted: monarch.libs.includes('tterm'),
+  hoverPut: hoverAt('screen:put(1, 2, "@")', 9), hoverPressed: hoverAt('screen:pressed("a")', 10),
+  hoverScreen: hoverAt('s = tterm.screen(4, 4)', 12),
+}));
+"""
+# The Run panel's side (tterm.js, with Node and a stand-in for the page): a live screen takes the keys at once, sends
+# each one over stdin as a line (down, again as it repeats, up), Esc lets go, clicking elsewhere lets go, the second
+# player's copy and an ended game take none, and the IDE's own shortcuts (Ctrl+...) pass through.
+TTERM_PANEL = r"""
+const fs = require('fs'), vm = require('vm');
+let active = null;
+const document = { get activeElement() { return active; }, querySelectorAll: (sel) => spans.filter((s) => sel === '.tscreen.live' && s.classList.has('live') && s.classList.has('tscreen')) };
+const spans = [];
+function makeSpan() {
+  const handlers = {};
+  const classes = new Set();
+  const span = { dataset: {}, tabIndex: 0, handlers,
+    classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), has: (c) => classes.has(c),
+                 toggle: (c, on) => { if (on === undefined ? !classes.has(c) : on) classes.add(c); else classes.delete(c); return classes.has(c); } },
+    addEventListener: (k, fn) => { handlers[k] = fn; },
+    focus() { if (active !== span) { active = span; handlers.focus?.(); } },
+    blur() { if (active === span) { active = null; handlers.blur?.(); } } };
+  span.classList.has = (c) => classes.has(c);
+  spans.push(span);
+  return span;
+}
+const window = {};
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), { window, document });
+const T = window.TuffTerm;
+const sent = [];
+const send = (line) => sent.push(line.replace('\x1b', 'ESC').replace('\x07', 'BEL').trim());
+const key = (span, kind, k, code, extra = {}) => { const e = { key: k, code, preventDefault() { this.prevented = true; }, stopPropagation() {}, ...extra };
+  span.handlers[kind](e); return !!e.prevented; };
+const out = {};
+const a = makeSpan();
+T.screen(a, { screen: 1, live: 1 }, send);
+out.autoFocus = active === a;
+out.hintPlaying = a.dataset.hint;
+out.left = key(a, 'keydown', 'ArrowLeft', 'ArrowLeft');
+key(a, 'keydown', 'ArrowLeft', 'ArrowLeft', { repeat: true });
+key(a, 'keyup', 'ArrowLeft', 'ArrowLeft');
+key(a, 'keydown', 'A', 'KeyA');
+key(a, 'keyup', 'a', 'KeyA');
+key(a, 'keydown', ' ', 'Space');
+out.ctrlPassed = !key(a, 'keydown', 's', 'KeyS', { ctrlKey: true });
+out.f10Passed = !key(a, 'keydown', 'F10', 'F10');
+out.shiftPassed = !key(a, 'keydown', 'Shift', 'ShiftLeft');
+a.blur();
+out.hintAfterBlur = a.dataset.hint;
+a.handlers.mousedown({ preventDefault() {} });
+out.clickFocus = active === a;
+key(a, 'keydown', 'Escape', 'Escape');
+out.escLetGo = active !== a;
+out.sent = sent.slice();
+T.screen(a, { screen: 1 }, send);
+out.notLive = !a.classList.has('live') && a.dataset.hint === undefined && a.tabIndex === -1;
+sent.length = 0;
+out.deadKey = !key(a, 'keydown', 'ArrowUp', 'ArrowUp') && sent.length === 0;
+const b = makeSpan();
+T.screen(b, { screen: 1, live: 1 }, null);
+out.secondPlayer = !b.classList.has('live') && active !== b;
+const c = makeSpan();
+T.screen(c, { screen: 1, live: 1 }, send);
+T.ended();
+out.ended = !c.classList.has('live') && active !== c;
+out.keyNames = ['ArrowUp', 'Enter', 'Tab', 'Backspace', 'Delete', '7', '!', 'é', 'Shift', 'F5', 'Escape'].map((k) => T.keyName({ key: k }));
+console.log(JSON.stringify(out));
+"""
+
+
+def tterm_run(code, name, env=None, stdin="", slow=False):
+    """Runs a tterm program with no one to press keys (stdout and stdin are pipes): (exit code, stdout, stderr, seconds)."""
+    folder = os.path.join(HERE, "out", "tterm")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, name)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(code)
+    full = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW")}
+    full.update({"PYTHONIOENCODING": "utf-8", **(env or {})})
+    if slow:
+        full["TUFF_SLOW"] = "1"
+    t0 = time.perf_counter()
+    p = subprocess.run(tuff_cmd() + [path], input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=60, env=full, cwd=folder)
+    return p.returncode, p.stdout, p.stderr, time.perf_counter() - t0
+
+
+def tterm_messages(raw):
+    """The Run panel's messages in some output: [(kind, id, text, look or None)]."""
+    out = []
+    for kind, rest in re.findall(r"\x1b\]tuff;(\w+);([^\x07]*)\x07", raw):
+        parts = rest.split(";")
+        text = base64.b64decode(parts[1]).decode("utf-8") if kind in ("say", "rewrite") and len(parts) > 1 else ""
+        look = None
+        if len(parts) > 2 and parts[2].startswith("rich:"):
+            look = json.loads(base64.b64decode(parts[2][5:]).decode("utf-8"))
+        out.append((kind, parts[0], text, look))
+    return out
+
+
+def tterm_in_process(c):
+    """tuff_tterm.py's own parts, in this process: the keys a terminal sends, Windows' key codes, held from repeats,
+    wide characters, a terminal's drawing (only what changed), and the keys the Run panel sends."""
+    import tuff
+    import tuff_tterm as tt
+    c.check(tt.term_keys("\x1b[A\x1b[B\x1b[C\x1b[D\x1bOA\x1b[3~ \r\t\x7fqQ\x1b") ==
+            ["up", "down", "right", "left", "up", "delete", "space", "enter", "tab", "backspace", "q", "q", "escape"],
+            "a Mac or Linux terminal's keys: arrows (both ways), delete, space, enter, tab, backspace, letters and Esc",
+            tt.term_keys("\x1b[A\x1b[B\x1b[C\x1b[D\x1bOA\x1b[3~ \r\t\x7fqQ\x1b"))
+    c.check(tt.term_keys("\x1b[1;2A\x1bx") == ["up", "x"], "...shift+up is up, and Alt with a key (ESC x) is the key, not Esc",
+            tt.term_keys("\x1b[1;2A\x1bx"))
+    c.check([tt.vk_key(v, ch) for v, ch in ((0x25, ""), (0x26, ""), (0x20, " "), (0x0D, "\r"), (0x1B, "\x1b"), (0x41, "A"), (0x31, "!"),
+                                             (0x31, ""), (0x63, "3"), (0x10, ""), (0xBA, ";")) ] ==
+            ["left", "up", "space", "enter", "escape", "a", "!", "1", "3", None, ";"],
+            "Windows' console keys: arrows, space, enter, Esc, letters (Shift doesn't change them), what a key types, the number pad, not Shift")
+    r = tt.Repeats()
+    first = r.events(["right"], 10.0)
+    still = r.events([], 10.2)
+    again = r.events(["right"], 10.25)
+    gone = r.events([], 10.5)
+    c.check(first == [("down", "right")] and still == [] and again == [("down", "right")] and gone == [("up", "right")],
+            "in a terminal a key counts as held until a moment after it last came (it comes again as it repeats)", (first, still, again, gone))
+    c.check(tt.glyphs("a🐍é́👍🏽中\x07") == [("a", 1), ("🐍", 2), ("é́", 1), ("👍🏽", 2), ("中", 2), (" ", 1)],
+            "text in cells: an emoji or a Chinese letter is two cells wide, accents and skin tones stay with their letter, a control character is a space",
+            tt.glyphs("a🐍é́👍🏽中\x07"))
+    for word, want in (("Space", "space"), (" ", "space"), ("ArrowLeft", "left"), ("esc", "escape"), ("Q", "q"), ("any", "any"),
+                       ("shift", None), ("", None), ("ab", None)):
+        c.check(tt.key_name(word) == want, f"the key {word!r} is {want!r}", tt.key_name(word))
+    # A terminal's drawing, with the console's writes kept here.
+    interp = tuff.Interpreter("", HERE)
+    written = []
+    interp.console.write = written.append
+    lib = tt.Lib(interp.rt)
+    lib.place = "terminal"
+    s = tt.Screen(lib, 6, 3)
+    s.put(1, 1, "@", "lime")
+    s.put(0, 2, "🐍")
+    s.put(1, 2, "x")
+    s.show()
+    first = "".join(written)
+    lime = tuff.ansi_color(tuff.TEXT_COLORS["lime"])
+    c.check(first.startswith("\x1b[2J\x1b[H") and f"\x1b[2;1H {lime}@\x1b[39m    \x1b[0m\x1b[K" in first and first.endswith("\x1b[4;1H")
+            and "\x1b[3;1H🐍    \x1b[0m\x1b[K" in first and interp.console.rows == 3,
+            "a terminal: the first frame clears it and draws each row in its colours (an emoji covers two cells); the cursor waits below", repr(first))
+    written.clear()
+    s.show()
+    c.check(written == [], "...an unchanged screen draws nothing", written)
+    s.put(4, 0, "#", "red")
+    s.show()
+    again = "".join(written)
+    c.check(again.startswith("\x1b7\x1b[1;1H") and again.endswith("\x1b8") and "\x1b[2;1H" not in again and "\x1b[2J" not in again,
+            "...a change draws only its row, and the cursor goes back where it was", repr(again))
+    written.clear()
+    interp.console.rows = 0  # what the program's clear() leaves
+    s.show()
+    c.check(written == [], "...after the program's clear() it stays away until it changes", written)
+    s.put(5, 0, "!")
+    s.show()
+    c.check("".join(written).startswith("\x1b[2J"), "...and then it's drawn whole again", repr("".join(written))[:200])
+    s.press("a")
+    s.press("b", 5)
+    s.press("c")
+    s.press("d", 3)
+    c.check([k for _, k in s.queue] == ["a", "d", "b", "c"] and [f for f, _ in s.queue] == [1, 3, 5, 6],
+            "screen:press: the next frame without a key, or the one it says (in frame order)", s.queue)
+    m = [tt.KEY_LINE.fullmatch(x) for x in ("\x1b]tuff;key;down;left\x07", "\x1b]tuff;key;up;;\x07", "\x1b]tuff;key;none\x07", "typed")]
+    c.check(m[0].groups() == ("down", "left") and m[1].groups() == ("up", ";") and m[2].groups() == ("none", None) and m[3] is None,
+            "the Run panel's key lines (the ; key too), and a typed answer isn't one", [x and x.groups() for x in m])
+    if os.name == "nt":
+        import ctypes
+        rec = tt.console_record()
+        key = rec._fields_[1][1]._fields_[0][1]
+        c.check(ctypes.sizeof(rec) == 20 and rec.event.offset == 4 and ctypes.sizeof(key) == 16 and key.vk.offset == 6 and key.char.offset == 10
+                and key.state.offset == 12, "Windows' console input record has the layout Windows gives it (20 bytes, the key's code at 6)",
+                (ctypes.sizeof(rec), rec.event.offset, ctypes.sizeof(key)))
+        r, w = os.pipe()
+        os.write(w, b"abc")
+        waiting = tt.pipe_waiting(r)
+        os.read(r, 3)
+        os.close(w)
+        closed = tt.pipe_waiting(r)
+        os.close(r)
+        c.check(waiting == 3 and closed is None, "Windows: a pipe's waiting bytes are counted without waiting, and its end is seen", (waiting, closed))
+
+    # The game loop as in a terminal, with keys from a stand-in for the terminal: right held for 3 frames, then let go.
+    class Keys:
+        gone = False
+
+        def __init__(self):
+            self.polls, self.started, self.stopped = 0, False, False
+
+        def start(self):
+            self.started = True
+
+        def poll(self):
+            self.polls += 1
+            return {3: [("down", "right")], 6: [("up", "right")]}.get(self.polls, [])
+
+        def stop(self):
+            self.stopped = True
+    src = ('mention tterm\nscreen = tterm.screen(8, 2)\nx = 0\nn = 0\nfunc step(dt):\n    n += 1\n    if screen:held("right"):\n'
+           '        x += 1\n    screen:clear()\n    screen:put(x, 0, "@")\n    if n is 8:\n        screen:stop()\nscreen:every_frame(step)\n')
+    interp = tuff.Interpreter(src, HERE)
+    written = []
+    interp.console.write = written.append
+    program = tuff.Parser(tuff.tokenize(src)).program()
+    interp.run_block(program[:1], interp.globals)
+    lib = interp.globals.vars["tterm"].members["screen"].fn.__self__
+    lib.place, keys = "terminal", Keys()
+    lib.input = keys
+    t0 = time.perf_counter()
+    interp.run_block(program[1:], interp.globals)
+    secs = time.perf_counter() - t0
+    shown = "".join(written)
+    c.check(interp.globals.vars["x"] == 3 and interp.globals.vars["n"] == 8 and keys.started and keys.stopped and 0.3 < secs < 2
+            and shown.count("@") >= 3 and lib.running is None,
+            f"a terminal's game loop: 20 frames a second ({secs:.2f} s for 8), a held key moves it, and the keys are put back when it stops",
+            (interp.globals.vars["x"], interp.globals.vars["n"], keys.started, keys.stopped, secs))
+
+
+def t_tterm(c):
+    """Console only, no window: 1.5.0's tterm (terminal games). With no one to press keys (a pipe), screen:press gives
+    frames their keys, the frames don't wait for the clock and only the final screen shows, in both runtimes; a game
+    with no stop ends by itself; mistakes stop the run on their line and --check finds the certain ones; in TuffCode's
+    Run panel protocol (TUFF_IDE=1, keys sent over stdin) it moves with held keys, Esc ends it and input() gets the
+    answer typed during it; with stdin closed (tuff_run) it runs at once and says the screen once; the Snake starter;
+    tuff_tterm.py's parts in this process; the editor and the Run panel's side with Node; and Build exe packs it."""
+    if hasattr(sys.stdout, "reconfigure"):  # box lines and emoji in what it prints, on a console that can't show them
+        sys.stdout.reconfigure(errors="backslashreplace")
+    code, out, err, secs = tterm_run(TTERM_PROGRAM, "moves.tuf")
+    lines = out.splitlines()
+    c.check(code == 0 and lines[:5] == [r.rstrip() for r in TTERM_FRAME] and lines[5:] == TTERM_AFTER,
+            f"a pipe: the keys from screen:press move it, and only the final screen shows, as text ({secs:.1f} s)", out + err)
+    slow = interp_run(os.path.join(HERE, "out", "tterm", "slow"), TTERM_PROGRAM, True)
+    fast = interp_run(os.path.join(HERE, "out", "tterm", "fast"), TTERM_PROGRAM, False)
+    c.check(slow == fast and slow[0] == 0, "...the same in the tree walker (TUFF_SLOW=1) and the compiled runtime", (slow, fast))
+
+    idle = "mention tterm\nscreen = tterm.screen(5, 2)\nn = 0\nfunc step(dt):\n    n += 1\nscreen:every_frame(step)\nsay n\n"
+    code, out, err, secs = tterm_run(idle, "idle.tuf")
+    c.check(code == 0 and out.strip().splitlines()[-1] == "100" and secs < 10, f"a game that never stops ends by itself after 100 frames ({secs:.1f} s)", out + err)
+    busy = idle.replace("    n += 1\n", "    n += 1\n    screen:press(\"x\")\n")
+    code, out, err, secs = tterm_run(busy, "busy.tuf")
+    c.check(code == 0 and out.strip().splitlines()[-1] == "5000" and secs < 30, f"...and one that presses a key every frame ends after 5000 ({secs:.1f} s)", out + err)
+    later = idle.replace("screen:every_frame", 'screen:press("x", 150)\nscreen:every_frame')
+    code, out, err, secs = tterm_run(later, "later.tuf")
+    c.check(code == 0 and out.strip().splitlines()[-1] == "250", "...100 frames after the last key (one on frame 150)", out + err)
+    loop = ("mention tterm\nscreen = tterm.screen(8, 1)\nfor i in range(0, 7):\n    screen:clear()\n    screen:put(i, 0, \"*\")\n"
+            "    wait(0.01)\nsay \"done\"\n")
+    code, out, err, secs = tterm_run(loop, "loop.tuf")
+    c.check(code == 0 and out.splitlines() == ["done", "       *"], "a loop of its own (with wait) shows only how it ended, when the program ends", out + err)
+
+    for i, (prog, line, says) in enumerate(TTERM_ERRORS):
+        runs = [tterm_run(prog + "\n", f"error{i}.tuf", slow=slow) for slow in (False, True)]
+        code, out, err, _ = runs[0]
+        shown = prog.splitlines()[line - 1].strip()
+        c.check(code == 1 and f"Tuff error on line {line}: " in err and says in err and runs[0][:3] == runs[1][:3],
+                f"{shown!r} stops on line {line}: {says[:50]!r} (in both runtimes)", (err, runs[1][2]))
+    code, out, err, _ = tterm_run(TTERM_ERRORS[8][0] + "\n", "error_frame.tuf")
+    c.check(out.splitlines()[:2] == ["", "  @"], "...an error inside the game shows the screen as it was first", out)
+
+    # The Run panel (TUFF_IDE=1): keys come over stdin as lines, as tterm.js sends them.
+    ide_prog = ('mention tterm\nscreen = tterm.screen(16, 3)\nx = 1\nhits = 0\nfunc step(dt):\n    if screen:held("right"):\n        x += 1\n'
+                '    if screen:pressed("space"):\n        hits += 1\n    screen:clear()\n    screen:put(x, 1, "@", "lime")\n'
+                'screen:every_frame(step)\nsay f"moved {x > 4} hits {hits}"\nname = input "Name? "\nsay "hi " + name\n')
+    folder = os.path.join(HERE, "out", "tterm")
+    path = os.path.join(folder, "ide.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(ide_prog)
+    env = {**{k: v for k, v in os.environ.items() if k != "TUFF_SLOW"}, "TUFF_IDE": "1", "PYTHONIOENCODING": "utf-8"}
+    p = subprocess.Popen(tuff_cmd() + [path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=folder)
+    got = []
+    import threading
+    reader = threading.Thread(target=lambda: got.append(p.stdout.read()), daemon=True)
+    reader.start()
+
+    def send(line):
+        p.stdin.write(line.encode("utf-8"))
+        p.stdin.flush()
+    try:
+        time.sleep(1.0)
+        send("\x1b]tuff;key;down;right\x07\n")
+        time.sleep(0.5)
+        send("\x1b]tuff;key;up;right\x07\n\x1b]tuff;key;down;space\x07\n\x1b]tuff;key;up;space\x07\n")
+        time.sleep(0.3)
+        send("Sam\n")
+        time.sleep(0.2)
+        send("\x1b]tuff;key;down;escape\x07\n")
+        p.wait(15)
+    except (subprocess.TimeoutExpired, OSError):
+        p.kill()
+    reader.join(5)
+    p.stdin.close()
+    p.stderr.close()
+    raw = got[0].decode("utf-8", errors="replace") if got else ""
+    msgs = tterm_messages(raw)
+    screens = [m for m in msgs if m[3] and m[3].get("screen")]
+    said = [m[2] for m in msgs if m[0] == "say" and not (m[3] and m[3].get("screen"))]
+    c.check(p.returncode == 0 and screens and screens[0][0] == "say" and screens[0][3].get("live") == 1 and screens[0][3]["w"] == 16
+            and all(m[0] == "rewrite" and m[1] == screens[0][1] for m in screens[1:]),
+            "the Run panel: the screen is a say line marked as a live screen (16 across), rewritten in place", [m[:2] for m in screens[:5]])
+    c.check(screens and "live" not in screens[-1][3] and screens[-1][3].get("runs") and screens[-1][3]["runs"][0][3] == tuff_tterm_lime(),
+            "...the last frame isn't live any more (the panel lets go of the keys), and its colours are runs", screens[-1][3] if screens else None)
+    c.check(said[:1] == ["moved true hits 1"] and said[1:] == ["hi Sam"],
+            "...a held key moves it, a press counts once, Esc ends the game, and input() gets the answer typed while it ran", said)
+    c.check(len(screens) < 120, f"...it only sends a frame that changed ({len(screens)} for about 2 seconds)", len(screens))
+
+    # tuff_run: TUFF_IDE=1 with the answers given and stdin closed. No one can press a key, so it runs at once.
+    code, out, err, secs = tterm_run(TTERM_PROGRAM, "tuff_run.tuf", env={"TUFF_IDE": "1", "TUFF_ECHO_INPUT": "1"}, stdin="Sam\n")
+    msgs = tterm_messages(out)
+    screens = [m for m in msgs if m[3] and m[3].get("screen")]
+    c.check(code == 0 and len(screens) == 1 and [r.rstrip() for r in screens[0][2].split("\n")] == [r.rstrip() for r in TTERM_FRAME]
+            and "live" not in screens[0][3] and secs < 10,
+            f"tuff_run (stdin closed): it runs at once and says the final screen once ({secs:.1f} s)", [m[:3] for m in msgs])
+
+    # The Snake starter: down on frame 2 turns it, it goes down to the wall and the game is over; Esc stops it.
+    with open(os.path.join(GAMES, "tterm_snake.tuf"), encoding="utf-8") as f:
+        snake = f.read()
+    c.check(subprocess.run(tuff_cmd() + ["--check", os.path.join(GAMES, "tterm_snake.tuf")], capture_output=True, text=True,
+                           encoding="utf-8").stdout.strip() == "OK", "--check accepts the Snake starter (games/tterm_snake.tuf)")
+    turned = snake.replace("draw()\nscreen:every_frame(step)", 'screen:press("down", 2)\ndraw()\nscreen:every_frame(step)')
+    code, out, err, _ = tterm_run(turned, "snake_down.tuf")
+    rows = out.splitlines()
+    c.check(code == 0 and len(rows) >= 18 and rows[14][8] == "@" and rows[13][8] == "o" and rows[12][8] == "o" and "GAME OVER" in rows[8]
+            and rows[-1] == "Game over! You scored 0." and rows[16].strip() == "arrows: steer   esc: stop",
+            "the Snake starter: a key turns it down, it hits the bottom wall and the game is over", out + err)
+    stopped = snake.replace("draw()\nscreen:every_frame(step)", 'screen:press("escape", 4)\ndraw()\nscreen:every_frame(step)')
+    code, out, err, _ = tterm_run(stopped, "snake_esc.tuf")
+    c.check(code == 0 and out.splitlines()[-1] == "You stopped with 0 points." and "GAME OVER" not in out, "...and Esc stops it", out + err)
+
+    folder = os.path.join(HERE, "out", "tterm")
+    for i, (code_, want) in enumerate(TTERM_CHECKS):
+        path = os.path.join(folder, f"check{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(TTERM_HEAD + code_ + "\n")
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        shown = code_.splitlines()[-1].strip()
+        if want == "OK":
+            c.check(p.returncode == 0 and p.stdout.strip() == "OK", f"--check accepts: {shown}", (p.stdout + p.stderr)[:300])
+        else:
+            c.check(p.returncode == 1 and want in p.stderr, f"--check on {shown!r} says {want[:55]!r}", p.stderr[:300])
+
+    console, _games, _learned = interp_corpus()
+    names = [n for n, src in console if "mention tterm" in src]
+    c.check("tuffcode/test/tgame/games/tterm_snake.tuf" in names and sum(n.startswith("guide ") for n in names) >= 2,
+            "the interp test's corpus runs the Snake starter and the guide's tterm examples in both runtimes", names)
+
+    tterm_in_process(c)
+
+    try:
+        p = subprocess.run(["node", "-e", TTERM_LANG, os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        q = subprocess.run(["node", "-e", TTERM_PANEL, os.path.join(REPO, "tuffcode", "renderer", "js", "tterm.js")],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the editor and Run panel checks")
+        p = q = None
+    if p is not None:
+        try:
+            t = json.loads(p.stdout)
+        except ValueError:
+            t = None
+        c.check(t is not None, "the editor checks ran", (p.stdout + p.stderr)[-600:])
+        t = t or {}
+        c.check("tterm" in t.get("libs", []) and t.get("highlighted") and "tterm" in t.get("mentions", []) and t.get("libNames") == ["screen"],
+                "the editor knows tterm: highlighted, offered after mention, and tterm. offers screen", [t.get("mentions"), t.get("libNames")])
+        want = {"put", "text", "box", "clear", "get", "pressed", "held", "press", "every_frame", "stop"}
+        c.check(want <= set(t.get("term", [])), "screen: in a tterm file offers all ten methods", sorted(want - set(t.get("term", []))))
+        c.check(not {"put", "press"} & set(t.get("plain", [])) and not {"put", "press"} & set(t.get("game", [])),
+                "...and tterm's own (put, press) don't crowd other files", [x for x in ("put", "press") if x in t.get("plain", []) + t.get("game", [])])
+        c.check((t.get("hoverPut") or "").startswith("```tuff\nscreen:put(x, y, \"@\", \"lime\")") and "In tterm, screen:pressed" in (t.get("hoverPressed") or "")
+                and "A grid of letters" in (t.get("hoverScreen") or ""),
+                "hovers: screen:put, screen:pressed (after tgame's) and tterm.screen", [t.get("hoverPut"), t.get("hoverPressed"), t.get("hoverScreen")])
+        snip = t.get("snippet") or ""
+        if snip:
+            snip_code = re.sub(r"\$\{\d+:([^}]*)\}", r"\1", snip).replace("$0", "")
+            path = os.path.join(folder, "snippet.tuf")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(snip_code)
+            chk = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+            run = tterm_run(snip_code, "snippet_run.tuf")
+        c.check(snip and chk.stdout.strip() == "OK" and run[0] == 0 and "@" in run[1], "the 'tterm game' snippet passes --check and runs", snip)
+    if q is not None:
+        try:
+            u = json.loads(q.stdout)
+        except ValueError:
+            u = None
+        c.check(u is not None, "the Run panel checks ran", (q.stdout + q.stderr)[-600:])
+        u = u or {}
+        c.check(u.get("autoFocus") and u.get("hintPlaying") == "Esc to let go", "the Run panel: a game that starts takes the keys at once", u)
+        c.check(u.get("sent") == ["ESC]tuff;key;down;leftBEL", "ESC]tuff;key;down;leftBEL", "ESC]tuff;key;up;leftBEL", "ESC]tuff;key;down;aBEL",
+                                  "ESC]tuff;key;up;aBEL", "ESC]tuff;key;down;spaceBEL", "ESC]tuff;key;noneBEL", "ESC]tuff;key;down;escapeBEL",
+                                  "ESC]tuff;key;noneBEL"] and u.get("left"),
+                "...each key goes over stdin: down (and again as it repeats), up, letters in lower case, none when it lets go, and Esc", u.get("sent"))
+        c.check(u.get("ctrlPassed") and u.get("f10Passed") and u.get("shiftPassed"), "...Ctrl+S, F10 and Shift go on to the IDE", u)
+        c.check(u.get("hintAfterBlur") == "Click to play" and u.get("clickFocus") and u.get("escLetGo"),
+                "...clicking elsewhere lets go (\"Click to play\"), a click takes the keys again, and Esc lets go", u)
+        c.check(u.get("notLive") and u.get("deadKey") and u.get("secondPlayer") and u.get("ended"),
+                "...a finished game, the second player's copy and an ended run take no keys", u)
+        c.check(u.get("keyNames") == ["up", "enter", "tab", "backspace", "delete", "7", "!", "é", None, None, "escape"],
+                "...key names as tuff_tterm.py's: what a key types, or its name; none for Shift and F5", u.get("keyNames"))
+
+    build = open(os.path.join(REPO, "tuffcode", "build.js"), encoding="utf-8").read()
+    pkg = json.load(open(os.path.join(REPO, "tuffcode", "package.json"), encoding="utf-8"))
+    html = open(os.path.join(REPO, "tuffcode", "renderer", "index.html"), encoding="utf-8").read()
+    c.check("'tuff_tterm.py'" in build and "'--hidden-import', 'tuff_tterm'" in build and "&& !usesTerm" in build,
+            "Build exe packs tuff_tterm.py for a tterm game, as a console app", None)
+    c.check(all("--hidden-import tuff_tterm" in pkg["scripts"][s] for s in ("build:runtime", "build:runtime:mac"))
+            and any(r.get("from") == "../tuff_tterm.py" for r in pkg["build"]["extraResources"]),
+            "TuffCode's own runtime has tuff_tterm (and Build exe's copy of the files)", None)
+    c.check(html.index("js/tterm.js") < html.index("js/ide.js"), "index.html loads tterm.js before ide.js", None)
+
+
+def tuff_tterm_lime():
+    import tuff
+    return tuff.TEXT_COLORS["lime"]
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
@@ -7040,6 +7567,7 @@ TESTS.update({"frames": t_frames, "frames_window": t_frames_window})  # 1.5.0: s
 TESTS.update({"numbers": t_numbers})  # 1.5.0: too-big numbers, quicker library calls
 TESTS.update({"modules": t_modules})  # 1.5.0: your own files as libraries (import money)
 TESTS.update({"kinds": t_kinds})  # 1.5.0: your own objects
+TESTS.update({"tterm": t_tterm})  # 1.5.0: terminal games
 
 
 def main():

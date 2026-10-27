@@ -221,6 +221,16 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
    it's colours changing, not things moving about. */
 @media (prefers-reduced-motion: reduce) { #run-output .tline.rich.rainbow > span { animation-duration: 9s; } }
 @keyframes lineflash { from { background: color-mix(in srgb, var(--accent) 35%, transparent); } }
+/* tterm (1.5.0): a terminal game's screen keeps its rows together (no wrapping: the panel scrolls sideways for a wide
+   one), close enough for box lines to join. While the game runs it takes the keys once clicked, with a ring round it,
+   and a hint underneath says how ("Click to play", "Esc to let go"). */
+#run-output .tline.tscreen { display: inline-block; position: relative; margin: 2px 0 18px; padding: 6px 10px;
+  white-space: pre; line-height: 1.2; vertical-align: top; border-radius: 6px; outline: 0; box-shadow: 0 0 0 1px var(--border-soft);
+  background: color-mix(in srgb, var(--bg-editor) 82%, #000); }
+#run-output .tline.tscreen.live { cursor: pointer; }
+#run-output .tline.tscreen.playing { cursor: default; box-shadow: 0 0 0 2px var(--accent); }
+#run-output .tline.tscreen[data-hint]::after { content: attr(data-hint); position: absolute; left: 2px; top: 100%; margin-top: 3px;
+  font: 11px/14px var(--font-ui); color: var(--text-muted); white-space: nowrap; pointer-events: none; }
 #run-input { min-width: 40%; padding: 0; border: 0; outline: 0; background: transparent; color: var(--green); font: inherit; caret-color: var(--accent); }
 
 /* ---------- Status bar ---------- */
