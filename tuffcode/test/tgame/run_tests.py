@@ -4970,9 +4970,9 @@ def interp_corpus():
         for lesson in s["lessons"]:
             for part in ("example", "starter", "solution"):
                 add(f"learn {lesson['id']} {part}", lesson.get(part))
-    for name in ("TOOLBOX_PROGRAM", "TOOLBOX_FIXES", "LOOKS_PROGRAM", "DEEP_PROGRAM", "DEEP_RUNAWAY", "DEEP_SCENE"):
+    for name in ("TOOLBOX_PROGRAM", "TOOLBOX_FIXES", "LOOKS_PROGRAM", "DEEP_PROGRAM", "DEEP_RUNAWAY", "DEEP_SCENE", "NUMBERS_PROGRAM"):
         add(name.lower(), globals()[name])
-    for name in ("TOOLBOX_MISTAKES", "TOOLBOX_FIXES_CHECKS", "LOOKS_CHECKS"):
+    for name in ("TOOLBOX_MISTAKES", "TOOLBOX_FIXES_CHECKS", "LOOKS_CHECKS", "NUMBERS_ERRORS", "NUMBERS_CHECKS"):
         for i, (code, _) in enumerate(globals()[name]):
             add(f"{name.lower()} {i}", code + "\n")
     for i, code in enumerate(INTERP_CASES):
@@ -5034,8 +5034,8 @@ def t_interp(c):
     c.check(not timeouts, "...and none of them hangs", timeouts)
     errors = sum(1 for _, (slow, _f) in results if "Tuff error" in slow[2])
     c.check(errors >= 100, f"...{errors} of them stop with a Tuff error, which is on the same line and column in both", errors)
-    crashes = [name for name, (slow, _f) in results if "Traceback" in slow[2]]
-    c.check(len(crashes) <= 2, f"...and only {len(crashes)} crash in Python (the same way in both: 1.4.1's own bugs)", crashes)
+    crashes = [name for name, (slow, fast) in results if "Traceback" in slow[2] + fast[2]]
+    c.check(not crashes, "...and none of them crash in Python (10 ^ 400 / 3 and 2 ^ 99999 * 1.5 did, before 1.5.0's numbers fix)", crashes)
     # In TuffCode's Run panel (TUFF_IDE=1): the lines, rewrites, looks and prompts it's sent are the same too.
     ide = [(n, code) for n, code in console if n in ("looks_program", "toolbox_program") or "rewrite" in code or "print:pen" in code][:40]
     same = [n for i, (n, code) in enumerate(ide) if interp_run(os.path.join(folder, "ide_slow", str(i)), code, True, env={"TUFF_IDE": "1"})
@@ -5822,6 +5822,287 @@ def t_frames_window(c):
             "after the jump it stays on frame 8 (pink), in Python, in the page and on screen", jumped)
 
 
+# ---------------------------------------------------------------- numbers and library calls (1.5.0)
+
+TOO_BIG_SUM = "That number is too big to work out. Whole numbers can be any size"
+# Maths that stopped with a Python traceback (OverflowError) before 1.5.0, or with "round() failed: cannot convert
+# float infinity to integer" and the like: (code, (line, column, how the error starts)), the same in both runtimes.
+NUMBERS_ERRORS = [
+    ("say 10 ^ 400 / 3", (1, 14, TOO_BIG_SUM)), ("say 2 ^ 99999 * 1.5", (1, 15, TOO_BIG_SUM)),
+    ("x = 2 ^ 99999\nx *= 1.5", (2, 1, TOO_BIG_SUM)), ("x = 2 ^ 99999\nx += 0.5", (2, 1, TOO_BIG_SUM)),
+    ("x = 10 ^ 400\nx /= 3", (2, 1, TOO_BIG_SUM)), ("x = 10 ^ 400\nsay x - 0.5", (2, 7, TOO_BIG_SUM)),
+    ("x = 10 ^ 400\nsay x % 1.5", (2, 7, TOO_BIG_SUM)), ("x = 10 ^ 400\nsay 1.5 % x", (2, 9, TOO_BIG_SUM)),
+    ("x = 10 ^ 400\nsay x + 0.5 * 2", (2, 7, TOO_BIG_SUM)), ("say 10.0 ^ 400", (1, 10, TOO_BIG_SUM)),
+    ("x = 10 ^ 400\nsay x ^ 0.5", (2, 7, TOO_BIG_SUM)), ('say "Total: " + 10 ^ 400 / 3', (1, 26, TOO_BIG_SUM)),
+    ("func f(n):\n    return n * 1.5\nsay f(2 ^ 99999)", (2, 14, TOO_BIG_SUM)),
+    ('say f"{2 ^ 99999 * 1.5:0.00}"', (1, 18, TOO_BIG_SUM)), ("n = 10 ^ 400\nfor i in [1, 2]:\n    n /= 2", (3, 5, TOO_BIG_SUM)),
+    ("big = [10 ^ 400]\nbig[0] /= 3", (2, 1, TOO_BIG_SUM)), ('d = {"x": 10 ^ 400}\nd["x"] *= 1.5', (2, 1, TOO_BIG_SUM)),
+    ("say [2 ^ 99999 * 0.5]", (1, 16, TOO_BIG_SUM)), ("say -(2 ^ 99999) / 7", (1, 18, TOO_BIG_SUM)),
+    ("say 0 ^ -1", (1, 7, "0 ^ -1 has no answer: it's the same as dividing by zero.")),
+    ("say 0.0 ^ -2.5", (1, 9, "0 ^ -2.5 has no answer")),
+    ("say round(10.0 ^ 308 * 10)", (1, 10, "That number is too big for round() to work out.")),
+    ("say int(10.0 ^ 308 * 10)", (1, 8, "That number is too big for int() to work out.")),
+    ("say floor(10.0 ^ 308 * 10)", (1, 10, "That number is too big for floor() to work out.")),
+    ("say sqrt(2 ^ 99999)", (1, 9, "That number is too big for sqrt() to work out.")),
+    ("say sum(2 ^ 99999, 0.5)", (1, 8, "That number is too big for sum() to work out.")),
+    ("say average(2 ^ 99999, 1)", (1, 12, "That number is too big for average() to work out.")),
+    ("say range(2 ^ 99999)", (1, 10, "That number is too big for range() to work out.")),
+    ("wait(2 ^ 99999)", (1, 5, "That number is too big for wait() to work out.")),
+    ("say random(0.5, 2 ^ 99999)", (1, 11, "That number is too big for random() to work out.")),
+    ("say sin(2 ^ 99999)", (1, 8, "That number is too big for sin() to work out.")),
+    ("say sin(10.0 ^ 308 * 10)", (1, 8, "sin(inf) has no answer.")),
+    ("x = [1, 2]\nsay x[2 ^ 99999]", (2, 6, "That position is far outside this list (it has 2 items, starting at 0).")),
+    ('say "ab" * 2 ^ 99999', (1, 10, "That text would be far too long to make.")),
+]
+# Big numbers that work: whole numbers of any size, every digit of them, and catch getting the message.
+NUMBERS_PROGRAM = '''say 2 ^ 100
+say text(10 ^ 25, 2)
+say text(-7, 3)
+say len(text(2 ^ 99999))
+say text(2 ^ 99999, 1):ends(".0")
+say "" * 2 ^ 99999 + "empty"
+say len("ab" * 0)
+say number("1.0e999") is err
+say num("2.5e3")
+say 2 ^ 99999 > 1.5
+say 2 ^ 99999 / 2 ^ 99998
+say 2 ^ -99999
+say min(2 ^ 99999, 0.5)
+say log(2 ^ 99999, 2)
+say (2 ^ 99999) % 7
+say round(2 ^ 99999 * 1) == 2 ^ 99999
+say f"{2 ^ 70:000}"
+try:
+    say 10 ^ 400 / 3
+catch problem:
+    say problem:starts("That number is too big to work out.")
+total = 0
+for i in range(1, 3):
+    try:
+        total += 10 ^ 400 / 3
+    catch:
+        total += 1
+say total
+'''
+NUMBERS_OUTPUT = ["1267650600228229401496703205376", "10000000000000000000000000.00", "-7.000", "30103", "true", "empty", "0",
+                  "true", "2500", "true", "2", "0", "0.5", "99999", "1", "true", "1180591620717411303424", "true", "3"]
+# The checker: a sum of numbers written in the program that's too big is certain to stop the program (code, what
+# --check says first, or "OK"). In try: it may be on purpose, and with a variable only the run can tell.
+NUMBERS_CHECKS = [
+    ("say 10 ^ 400 / 3", (1, 14, TOO_BIG_SUM)),
+    ("x = 2 ^ 99999 * 1.5 + 1", (1, 15, TOO_BIG_SUM)),
+    ("func half():\n    return -(10 ^ 400) / 2\nsay half()", (2, 24, TOO_BIG_SUM)),
+    ('say "Big: " + 10.0 ^ 400', (1, 20, TOO_BIG_SUM)),
+    ("try:\n    say 10 ^ 400 / 3\ncatch problem:\n    say problem", "OK"),
+    ("say 2 ^ 99999\nsay 10 ^ 300 * 10\nsay 1 / 3 * 2 ^ 1000\nsay 2 ^ -5000", "OK"),
+    ("x = 10 ^ 400\nsay x / 3", "OK"),
+    ("say 2 ^ 2000000 * 1.5", "OK"),  # (too long to work out while checking: the run says so)
+]
+
+
+def numbers_runtime(slow):
+    """A tuff.Interpreter for the tree walker (slow) or the compiled runtime."""
+    import tuff
+    old = os.environ.pop("TUFF_SLOW", None)
+    if slow:
+        os.environ["TUFF_SLOW"] = "1"
+    try:
+        return tuff.Interpreter("", HERE)
+    finally:
+        os.environ.pop("TUFF_SLOW", None)
+        if old is not None:
+            os.environ["TUFF_SLOW"] = old
+
+
+def numbers_run(code, slow, names=None):
+    """Runs code in this process: (line, column, message) of its Tuff error, or None. names: values to start with."""
+    import tuff
+    interp = numbers_runtime(slow)
+    interp.globals.vars.update(names or {})
+    try:
+        interp.run_block(tuff.Parser(tuff.tokenize(code)).program(), interp.globals)
+    except tuff.TuffError as err:
+        return err.line, err.col, err.msg
+    return None
+
+
+def numbers_library(rt):
+    """A headless stand-in for a library: a window and a sprite with methods (new functions for each object, as tgame
+    makes them), a method of a Python object, a function wrapped like tdraw's guard, and a library function."""
+    import functools
+    import tuff
+    seen = {"frames": 0, "x": 0}
+
+    class Box:
+        def x(self):
+            return seen["x"]
+
+    def frame():
+        seen["frames"] += 1
+        return True
+
+    def move(dx, dy=0):
+        seen["x"] += dx
+
+    def guarded(fn):
+        @functools.wraps(fn)
+        def run(*args):
+            return fn(*args)
+        return run
+
+    def make(text, color="white"):
+        return text
+
+    return seen, {"game": rt.native("window", {"frame": frame}), "player": rt.native("sprite", {"move": move, "x": Box().x}),
+                  "pen": rt.native("pen", {"go": guarded(lambda steps: steps)}),
+                  "lib": tuff.Module("lib", {"make": rt.builtin("lib.make", make)})}
+
+
+def t_numbers(c):
+    """1.5.0's two rough edges. Numbers: a sum too big for a decimal (10 ^ 400 / 3, 2 ^ 99999 * 1.5) and the maths
+    built-ins given one stop with a Tuff error on the right line and column in both runtimes (they were a Python
+    traceback), whole numbers show every digit, and --check finds a too-big sum of numbers written in the program.
+    Library calls: how many inputs a library's function takes is worked out once (fits_inputs), with the same answers
+    as inspect.signature and the same messages, and game:frame() and player:move() are several times quicker."""
+    import functools
+    import inspect
+    import tuff
+    for code, (line, col, msg) in NUMBERS_ERRORS:
+        got = [numbers_run(code, slow) for slow in (True, False)]
+        c.check(got[0] == got[1] and got[0] and got[0][:2] == (line, col) and got[0][2].startswith(msg),
+                f"{code.splitlines()[-1]!r} stops on line {line}, column {col}: {msg[:50]}", got)
+    folder = os.path.join(HERE, "out", "numbers")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "numbers.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(NUMBERS_PROGRAM)
+    for slow in (True, False):
+        env = {k: v for k, v in os.environ.items() if k != "TUFF_SLOW"}
+        if slow:
+            env["TUFF_SLOW"] = "1"
+        p = subprocess.run(tuff_cmd() + [path], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env,
+                           stdin=subprocess.DEVNULL)
+        got = p.stdout.splitlines()
+        c.check(p.returncode == 0 and got[:len(NUMBERS_OUTPUT)] == NUMBERS_OUTPUT,
+                f"{'the tree walker' if slow else 'the compiled runtime'}: big whole numbers work and show every digit, and catch gets the message",
+                [(i + 1, want, got[i] if i < len(got) else None) for i, want in enumerate(NUMBERS_OUTPUT)
+                 if i >= len(got) or got[i] != want][:4] or p.stderr[-400:])
+    bad = os.path.join(folder, "too_big.tuf")
+    with open(bad, "w", encoding="utf-8") as f:
+        f.write("say 10 ^ 400 / 3\n")
+    p = subprocess.run(tuff_cmd() + [bad], capture_output=True, text=True, encoding="utf-8", timeout=60, stdin=subprocess.DEVNULL)
+    c.check(p.returncode == 1 and "Traceback" not in p.stderr and p.stderr.startswith(f"Tuff error on line 1: {TOO_BIG_SUM}")
+            and "               ^" in p.stderr, "tuff.py: say 10 ^ 400 / 3 is a Tuff error with the line and a ^ under the /", p.stderr[-500:])
+    # the checker
+    p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    c.check(p.stdout.strip() == "OK", "--check accepts the big numbers program", (p.stdout + p.stderr)[:600])
+    for code, want in NUMBERS_CHECKS:
+        problems = tuff.Checker(tuff.Parser(tuff.tokenize(code)).program(), folder).run()
+        if want == "OK":
+            c.check(not problems, f"--check says nothing about {code.splitlines()[-1]!r}", problems)
+        else:
+            run = numbers_run(code, False)
+            c.check(problems and problems[0][:2] == want[:2] and problems[0][2].startswith(want[2]) and run and run[:2] == want[:2],
+                    f"--check on {code.splitlines()[-1]!r}: line {want[0]}, column {want[1]} (where the run stops too)", (problems, run))
+    # fits_inputs: the same answers as inspect.signature(fn).bind(...), for every shape a library's function can have
+    def by_inspect(fn, n):
+        try:
+            inspect.signature(fn).bind(*([None] * n))
+            return True
+        except TypeError:
+            return False
+        except ValueError:
+            return None
+
+    class K:
+        def m0(self): pass
+        def m2(self, a, b=1): pass
+        def mv(self, *a): pass
+        def mk(self, *, k): pass
+        def mkd(self, *, k=1): pass
+        @classmethod
+        def cm(cls, a): pass
+
+    def wrap(fn):
+        @functools.wraps(fn)
+        def run(*args):
+            return fn(*args)
+        return run
+
+    def tagged(a, b):
+        pass
+
+    def bare():
+        pass
+
+    tagged.note = "an attribute of its own"
+    late = lambda a, b: 0  # noqa: E731
+    late.__defaults__ = (5,)
+    shapes = [lambda: 0, lambda a: 0, lambda a, b=2: 0, lambda *a: 0, lambda a, *b: 0, lambda a, /, b: 0, lambda a, *, k: 0,
+              lambda a, *, k=1: 0, lambda a=1, b=2, c=3: 0, lambda **kw: 0, lambda a, **kw: 0, K().m0, K().m2, K().mv, K().mk,
+              K().mkd, K().cm, K.m2, wrap(lambda a, b=1: 0), wrap(K().m2), wrap(wrap(lambda a: 0)), tagged, late, bare,
+              types_method(bare), len, print, functools.partial(lambda a, b: 0, 1), [].append, int, K()]
+    differ = [(fn, n, by_inspect(fn, n), tuff.fits_inputs(fn, n)) for fn in shapes for n in range(5)
+              if tuff.fits_inputs(fn, n) not in (None, by_inspect(fn, n)) or tuff.accepts(fn, n) != (by_inspect(fn, n) is not False)]
+    known = sum(1 for fn in shapes if tuff.fits_inputs(fn, 1) is not None)
+    c.check(not differ and known >= 24, f"fits_inputs agrees with inspect.signature on {len(shapes)} kinds of function, "
+            f"{known} of them without asking it", differ[:4])
+    # Library objects' methods and library functions, in both runtimes: right answers, the same messages for a wrong
+    # number of inputs, and inspect.signature isn't asked (it was, on every call)
+    loop = "i = 0\nwhile i < 300:\n    game:frame()\n    player:move(2)\n    say lib.make(\"hi\") + pen:go(3) + player:x()\n    i += 1\n"
+    calls = []
+    signature = inspect.signature
+    inspect.signature = lambda *a, **k: calls.append(a) or signature(*a, **k)
+    try:
+        for slow in (True, False):
+            mode = "the tree walker" if slow else "the compiled runtime"
+            interp = numbers_runtime(slow)
+            seen, names = numbers_library(interp.rt)
+            interp.globals.vars.update(names)
+            interp.console.say = lambda text, *a, **k: None
+            del calls[:]
+            interp.run_block(tuff.Parser(tuff.tokenize(loop)).program(), interp.globals)
+            c.check(seen == {"frames": 300, "x": 600} and not calls,
+                    f"{mode}: 1,500 library calls, and inspect.signature isn't asked once", (seen, len(calls)))
+            wrong = [numbers_run(code, slow, numbers_library(numbers_runtime(slow).rt)[1]) for code in
+                     ("x = 1\nplayer:move()", "game:frame(1)", "say lib.make()", "say pen:go(1, 2)", "player:move(1, 2, 3)")]
+            c.check(wrong == [(2, 7, "sprite:move got the wrong number of inputs (0)."), (1, 5, "window:frame got the wrong number of inputs (1)."),
+                              (1, 13, "lib.make() got the wrong number of inputs (0)."), (1, 8, "pen:go got the wrong number of inputs (2)."),
+                              (1, 7, "sprite:move got the wrong number of inputs (3).")],
+                    f"{mode}: a wrong number of inputs gives the same message as before, on the same line", wrong)
+    finally:
+        inspect.signature = signature
+    # Speed: 200,000 library method calls with fits_inputs, and (a tenth as many) the old way, asking inspect each
+    # time, less the time the same loop takes with no calls in it
+    keep = tuff.fits_inputs
+
+    def timed(slow, n, body, old=False):
+        interp = numbers_runtime(slow)
+        interp.globals.vars.update(numbers_library(interp.rt)[1])
+        program = tuff.Parser(tuff.tokenize(f"i = 0\nwhile i < {n}:\n{body}    i += 1\n")).program()
+        if old:
+            tuff.fits_inputs = lambda fn, count: None
+        try:
+            t0 = time.perf_counter()
+            interp.run_block(program, interp.globals)
+            return time.perf_counter() - t0
+        finally:
+            tuff.fits_inputs = keep
+
+    calls = "    game:frame()\n    player:move(1, 2)\n"
+    for slow in (True, False):
+        new = (timed(slow, 200_000, calls) - timed(slow, 200_000, "")) / 400_000 * 1e6
+        old = (timed(slow, 20_000, calls, old=True) - timed(slow, 20_000, "")) / 40_000 * 1e6
+        c.check(new * 2 < old, f"{'the tree walker' if slow else 'the compiled runtime'}: a library method call takes "
+                f"{new:.2f} us, and {old:.2f} us asking inspect each time as before ({old / max(new, 0.01):.1f}x)", (new, old))
+
+
+def types_method(fn):
+    """fn as a method of some object (here one with no place for the object, which inspect can't make a signature for)."""
+    import types
+    return types.MethodType(fn, object())
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
@@ -5845,6 +6126,7 @@ TESTS.update({"recursion": t_recursion, "recursion_window": t_recursion_window, 
 TESTS.update({"interp": t_interp})  # 1.5.0
 TESTS.update({"fstrings": t_fstrings})  # 1.5.0
 TESTS.update({"frames": t_frames, "frames_window": t_frames_window})  # 1.5.0: sprite sheets
+TESTS.update({"numbers": t_numbers})  # 1.5.0: too-big numbers, quicker library calls
 
 
 def main():

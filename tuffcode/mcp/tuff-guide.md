@@ -107,6 +107,16 @@ say double(4)
   - So does anything worked out from a decimal: `/=`, `average(...)`, `round(x, 2)`, `number("2.0")`, `abs(-1.0)`, or a sum with a decimal in it.
   - A decimal can't be a list position or repeat text. Use `floor(...)` to get a whole number.
 - **Showing decimals:** decimals show every digit: `0.1 + 0.2` shows 0.30000000000000004, and `1 / 3` shows 0.3333333333333333. Round any worked-out decimal before showing it, with `round(x, 2)` or `one_decimal` / `as_money` from "Patterns". Whole numbers show without `.0`.
+- **Big numbers:** a whole number can be as big as you like: `2 ^ 100` is 1267650600228229401496703205376, and `say` and `text(x, 2)` show every digit. A decimal only goes up to about 1 followed by 308 zeros, so a sum that would make a bigger one stops the program with "That number is too big to work out.", like `10 ^ 400 / 3` (`/` gives a decimal) or `2 ^ 2000 * 1.5`. `tuff_check` finds it before the program runs when the sum is all numbers written in the program. Inside `try:`, `catch` gets the message.
+```tuff
+big = 2 ^ 100                       # a whole number: any size
+say big                             # 1267650600228229401496703205376
+say text(10 ^ 25, 2)                # 10000000000000000000000000.00
+try:
+    say 10 ^ 400 / 3                # too big for a decimal
+catch problem:
+    say problem                     # That number is too big to work out. ...
+```
 - **Built in:** `round(x)`, `round(x, 2)`, `floor`, `ceil`, `abs`, `sqrt`, `min`, `max`, `sum`, `average` (give several numbers or one list), and `pi`.
   - `round` rounds exact halves to the even number: `round(2.5)` is 2 and `round(82.25, 1)` is 82.2. For money and grades, use `round_half_up` from "Patterns".
 - **Random numbers:**
@@ -1355,6 +1365,7 @@ In a window app, check a text box before using it: `if num(bill:value()) is err:
 ## How fast Tuff is
 - Since 1.5.0, Tuff turns each part of a program into quick code once, before it runs it, instead of working out what every line means each time it runs. Loops are 3 to 6 times faster than in 1.4: a million steps take about half a second.
 - Everything else is the same: the answers, the error messages, and the line and column each error points at.
+- A library's functions and methods, like `game:frame()` and `player:move(5, 0)`, are quick to call too: about a millionth of a second each on a typical PC (about 5 times quicker than in 1.4), so a game's every-frame code has time for plenty of them.
 - A function can call itself about 10,000 calls deep (see "Functions").
 - To build a long text in a loop, add the pieces to a list and join them at the end (`parts:add(word)`, then `parts:join(" ")`). Adding to the text itself copies all of it every time.
 - When you run Tuff in a terminal, `TUFF_SLOW=1` runs a program with the old way instead, for 1.5 only. Use it to check whether something that changed is the new speed-up's fault.

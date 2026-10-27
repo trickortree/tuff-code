@@ -317,7 +317,7 @@ window.TUFF_DOCS = {
   print: ['print(a, b, ...)', 'Like `say`, but takes several values separated by commas.'],
   number: ['number(text)', 'Turns text like "42" into the number 42. Text that is not a number gives err instead of stopping: check with `if number(t) is err:`.'],
   num: ['num(text)', 'Short for number(): num("42") is 42, and text that is not a number gives err.'],
-  int: ['int(value)', 'A whole number, dropping any decimals: int("42") is 42, int(3.7) is 3. Text that is not a number gives err.'],
+  int: ['int(value)', 'A whole number, dropping any decimals: int("42") is 42, int(3.7) is 3. Text that is not a number gives err. A whole number can be as big as you like (2 ^ 100 is fine), but a decimal only goes up to about 1 followed by 308 zeros.'],
   text: ['text(value)', 'Turns any value into text.'],
   str: ['str(value)', 'Same as text(): turns any value into text, like str(5) + " apples".'],
   err: ['err', 'What number(), num() and int() give back for text that is not a number. Check with `if num(answer) is err:`. Using an err in maths stops the program and says why.'],
@@ -519,7 +519,7 @@ window.TUFF_DOCS = {
     tan: ['tan(degrees)', 'Tangent of an angle in degrees: tan(45) is 1. tan(90) has no answer, so it gives an error.'],
     log: ['log(number, base)', 'The logarithm: log(100, 10) is 2 and log(1000, 10) is 3. Without a base, the natural log.'],
     random: ['random(low, high)', 'A random whole number from low to high, both included, like random(1, 6). If either end has digits after the point, like random(0.5, 2), it gives a decimal in that range (12 / 2 and 1.0 count as whole). random(6) is a whole number from 1 to 6, random(0.5) a decimal from 0 to 0.5, and random() a decimal from 0 to 1.'],
-    text: ['text(value, decimals)', 'Turns any value into text. text(3.14159, 2) is "3.14".'],
+    text: ['text(value, decimals)', 'Turns any value into text. text(3.14159, 2) is "3.14", and a whole number keeps every digit: text(10 ^ 25, 2) is "10000000000000000000000000.00".'],
     len: ['len(value)', 'How many characters are in some text, items in a list, or keys in a dictionary.'],
   });
   const docs = window.TUFF_METHOD_DOCS;

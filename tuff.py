@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 
 IDE = os.environ.get("TUFF_IDE") == "1"
 # Echo typed answers back, so a run fed from a file reads like a real session (the MCP tuff_run tool).
@@ -923,6 +924,10 @@ class Err:
 
 ERR = Err()
 TOO_BIG = "That's too big to work out: a number or text this large doesn't fit in memory."  # inside a method
+# 1.5.0: a sum whose answer is too big for a decimal (10 ^ 400 / 3, 2 ^ 99999 * 1.5), which stopped with Python's
+# OverflowError before. Whole numbers have no limit, so this is the only number that's too big to work out.
+TOO_BIG_NUMBER = ("That number is too big to work out. Whole numbers can be any size, but a decimal (what / gives, or "
+                  "a sum with a decimal in it) only goes up to about 1 followed by 308 zeros.")
 LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame", "tdraw")
 # Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
 # second thread, because the web view needs the main thread.
@@ -1279,9 +1284,60 @@ def plain(v):
     return v.text if isinstance(v, Line) else v
 
 
+# 1.5.0: how many inputs each Python function takes, by its code: (the inputs before any *args, whether it has
+# *args, how many inputs after it must be given by name). inspect.signature is slow to ask on every call, and a
+# game asks 60 times a second (game:frame(), player:move(5, 0)): a library makes new functions for each sprite,
+# but they share their code, so this is worked out once for each def in a library.
+INPUT_SHAPES = {}
+PY_FUNCTION, PY_METHOD = types.FunctionType, types.MethodType
+
+
+def fits_inputs(fn, count):
+    """Can fn, a function or method written in Python, be called with this many inputs? True or False (the answer
+    inspect.signature would give), or None when only inspect can tell (a function written in C, a partial...)."""
+    bound = fn.__class__ is PY_METHOD  # a method of a Python object: the object is its first input
+    if bound:
+        fn, count = fn.__func__, count + 1
+    if fn.__class__ is not PY_FUNCTION:
+        return None
+    for _ in range(100):
+        extra = fn.__dict__
+        if not extra:
+            break
+        if "__signature__" in extra or "_partialmethod" in extra or "__partialmethod__" in extra:
+            return None
+        inner = extra.get("__wrapped__")  # functools.wraps (tdraw's guard): it takes what the function inside takes
+        if inner is None:
+            break  # (attributes of its own don't change its inputs)
+        if inner.__class__ is PY_METHOD and not bound:
+            bound, fn, count = True, inner.__func__, count + 1
+        elif inner.__class__ is PY_FUNCTION:
+            fn = inner
+        else:
+            return None
+    else:
+        return None  # wrapped in itself
+    code = fn.__code__
+    shape = INPUT_SHAPES.get(code)
+    if shape is None:
+        shape = INPUT_SHAPES[code] = (code.co_argcount, bool(code.co_flags & inspect.CO_VARARGS), code.co_kwonlyargcount)
+    most, more, named = shape
+    if bound and not most and not more:
+        return None  # a method with no place for its object: inspect can't say
+    defaults = fn.__defaults__
+    if count < (most - len(defaults) if defaults else most) or (count > most and not more):
+        return False
+    if named:  # inputs that must be given by name, which a call from Tuff never does, unless they have defaults
+        given = fn.__kwdefaults__
+        return given is not None and len(given) == named
+    return True
+
+
 def call_python(label, fn, args, takes_err=False, fits=None):
     """Call a built-in written in Python, turning Python problems into friendly Tuff errors. fits: whether fn takes
-    this many inputs, when that's known already (a Builtin keeps it: inspect.signature is slow to ask every time)."""
+    this many inputs, when that's known already (a Builtin keeps it); otherwise fits_inputs works it out."""
+    if fits is None:
+        fits = fits_inputs(fn, len(args))
     if fits is None:
         try:
             inspect.signature(fn).bind(*args)
@@ -1299,6 +1355,10 @@ def call_python(label, fn, args, takes_err=False, fits=None):
         return fn(*args)
     except (TuffError, ReturnSignal, BreakSignal, ContinueSignal, KeyboardInterrupt, SystemExit, RecursionError):
         raise
+    except OverflowError:  # sqrt(2 ^ 99999), round() of a decimal that went past the biggest one...
+        raise TuffError(f"That number is too big for {label} to work out.") from None
+    except MemoryError:  # range(1, 10 ^ 12): Python gives no reason, so "range() failed:" would say nothing
+        raise TuffError(f"The program ran out of memory inside {label}. Is it making something far too big?") from None
     except Exception as exc:
         raise TuffError(f"{label} failed: {exc}")
 
@@ -2035,14 +2095,14 @@ def block_jumps(body):
 # The quick sums: for each operator, the functions that make a sum's function (a + b, and a + 5, 5 + a, a == "yes"
 # with a number or text written in the program) and a += statement's. Numbers (and two texts, for + and the
 # comparisons) are worked out right there, the way Interpreter.binop would; anything else goes to binop itself
-# (slow), which gives the same answers and the same messages. A / or % by 0 goes there too. They're written once
-# below and made for each operator, so each one has its operator in it.
+# (slow), which gives the same answers and the same messages. A / or % by 0 goes there too, and so does a sum
+# whose answer is too big for a decimal (10 ^ 400 / 3: Python's OverflowError). They're written once below and
+# made for each operator, so each one has its operator in it.
 QUICK_SUM = '''
 def @NAME@(@ARGS@, slow, line, col):
     def binop(env):
 @GET@        if @QUICK@:
-            return a @OP@ b
-@TEXTS@        try:
+@DO@@TEXTS@        try:
             return slow("@OP@", a, b)
         except TuffError as err:
             if err.line is None:
@@ -2065,7 +2125,15 @@ def @NAME@(s, get, @ARGS@, slow, hooks, step):
             names = None
         ta = a.__class__
         if @QUICK@:
-            a = a @OP@ b
+            try:
+                a = a @OP@ b
+            except OverflowError:  # too big for a decimal: binop says so
+                try:
+                    a = slow("@OP@", a, b)
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
 @TEXTS@        else:
             try:
                 a = slow("@OP@", a, b)
@@ -2095,8 +2163,12 @@ def quick_makers(op):
              ("number_right", "left, b", get_a, NUMBER_A, ""), ("number_left", "a, right", get_b, NUMBER_B + nonzero, "")]
     if texts:
         kinds += [("text_right", "left, b", get_a, "ta is str", ""), ("text_left", "a, right", get_b, "tb is str", "")]
+    do = "            return a @OP@ b\n"
+    if op in ("+", "-", "*", "/", "%"):  # (a comparison is never too big)
+        do = ("            try:\n                return a @OP@ b\n            except OverflowError:  # too big for a decimal: "
+              "binop says so, below\n                pass\n")
     src = "".join(QUICK_SUM.replace("@NAME@", n).replace("@ARGS@", a).replace("@GET@", g).replace("@QUICK@", q)
-                  .replace("@TEXTS@", t) for n, a, g, q, t in kinds)
+                  .replace("@DO@", do).replace("@TEXTS@", t) for n, a, g, q, t in kinds)
     if op in ("+", "-", "*", "/"):  # x += 1 and the rest: the value is worked out first, then x, as the tree walker does
         kinds = [("store", "value", "        b = value(env)\n        tb = b.__class__\n", f"{NUMBER_A} and {NUMBER_B}{nonzero}",
                   "        elif ta is str and tb is str:\n            a = a @OP@ b\n" if op == "+" else ""),
@@ -2190,7 +2262,10 @@ class Interpreter:
             raise TuffError(f"text(value, decimals) needs a number to show with decimals, not {type_name(v)}.")
         if d > 100:
             raise TuffError(f"text(value, {to_text(d)}): the most decimals it shows is 100.")
-        shown = f"{v:.{max(0, int(d))}f}"
+        places = max(0, int(d))
+        if isinstance(v, int):  # every digit, even of 10 ^ 25 or 2 ^ 99999 (as a decimal it would be rounded, or too big)
+            return str(v) + ("." + "0" * places if places else "")
+        shown = f"{v:.{places}f}"
         return shown[1:] if shown.startswith("-") and not shown.strip("-0.") else shown  # -0.001 to 2 places is 0.00
 
     def b_date(self):
@@ -2201,6 +2276,8 @@ class Interpreter:
 
     def trig(self, name, deg, fn):
         deg = self.num_arg(name, deg)
+        if isinstance(deg, float) and not math.isfinite(deg):  # a decimal that went past the biggest one (inf)
+            raise TuffError(f"{name}({to_text(deg)}) has no answer.")
         if name == "tan" and deg % 180 == 90:
             raise TuffError(f"tan({to_text(deg)}) has no answer: at 90 degrees (and 270) the line is straight up.")
         result = fn(math.radians(deg))
@@ -2419,9 +2496,12 @@ class Interpreter:
             raise TuffError(f"{name}() needs text or a number, not {type_name(v)}.")
         try:
             s = v.strip()
-            return float(s) if "." in s else int(s)
+            n = float(s) if "." in s else int(s)
         except ValueError:
             return Err(f"{name}() couldn't turn '{to_text(v)}' into a number")
+        if n.__class__ is float and not math.isfinite(n):  # "1.0e999": past the biggest decimal there is
+            return Err(f"{name}() couldn't turn '{to_text(v)}' into a number: it's too big for a decimal")
+        return n
 
     def b_int(self, v):
         # A whole number, dropping any decimals toward zero: int("42") is 42, int(3.7) and int("3.7") are 3.
@@ -2730,8 +2810,12 @@ class Interpreter:
             raise
 
     def repeat(self, text, times):
-        if len(text) * times > 500_000_000:
-            raise TuffError(f"That text would be {len(text) * times} characters long, too long to make.")
+        if not text or times <= 0:  # (Python can't repeat even "" more times than a list can hold)
+            return ""
+        size = len(text) * times
+        if size > 500_000_000:
+            raise TuffError(f"That text would be {size} characters long, too long to make." if size < 10 ** 15 else
+                            "That text would be far too long to make.")  # (not a number with thousands of digits)
         return text * times
 
     LEFT_OUT = object()  # a part's end that isn't written: s[:3], s[2:]
@@ -2799,7 +2883,8 @@ class Interpreter:
         if not isinstance(index, int) or isinstance(index, bool):
             raise TuffError(f"List positions must be whole numbers, not {type_name(index)}.")
         if not -len(obj) <= index < len(obj):
-            raise TuffError(f"Position {index} is outside this {'list' if isinstance(obj, list) else 'text'} (it has {len(obj)} items, starting at 0).")
+            where = f"Position {index} is" if abs(index) < 10 ** 15 else "That position is far"  # (not thousands of digits)
+            raise TuffError(f"{where} outside this {'list' if isinstance(obj, list) else 'text'} (it has {len(obj)} items, starting at 0).")
         return index
 
     def binop(self, op, a, b):
@@ -2812,45 +2897,48 @@ class Interpreter:
                 return not (isinstance(a, Err) and isinstance(b, Err))
             (a if isinstance(a, Err) else b).stop(f"Can't use {op} here, because one side")
         num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
-        if op == "+":
-            if isinstance(a, str) or isinstance(b, str):
-                return to_text(a) + to_text(b)
-            if num(a) and num(b):
-                return a + b
-            if isinstance(a, list) and isinstance(b, list):
-                return a + b
-        elif op == "==":
-            return a == b and type(a) is type(b) or (num(a) and num(b) and a == b)
-        elif op == "!=":
-            return not self.binop("==", a, b)
-        elif op in ("<", ">", "<=", ">="):
-            if (num(a) and num(b)) or (isinstance(a, str) and isinstance(b, str)):
-                return {"<": a < b, ">": a > b, "<=": a <= b, ">=": a >= b}[op]
-            raise TuffError(f"Can't compare {type_name(a)} with {type_name(b)} using {op}.")
-        elif op == "*":
-            if num(a) and num(b):
-                return a * b
-            if isinstance(a, str) and isinstance(b, int) and not isinstance(b, bool):
-                return self.repeat(a, b)
-            if isinstance(b, str) and isinstance(a, int) and not isinstance(a, bool):
-                return self.repeat(b, a)
-        elif num(a) and num(b):
-            if op == "-":
-                return a - b
-            if op == "^":
-                try:
-                    result = a ** b
-                except (OverflowError, ZeroDivisionError):
-                    raise TuffError("That number is too big (or impossible) to work out.")
-                if isinstance(result, complex):
-                    raise TuffError("A negative number can't be raised to a fraction.")
-                return result
-            if b == 0:
-                raise TuffError("You can't divide by zero.")
-            if op == "/":
-                return a / b
-            if op == "%":
-                return a % b
+        try:  # a whole number too big to be a decimal (10 ^ 400 / 3, 2 ^ 99999 * 1.5) is an OverflowError in Python
+            if op == "+":
+                if isinstance(a, str) or isinstance(b, str):
+                    return to_text(a) + to_text(b)
+                if num(a) and num(b):
+                    return a + b
+                if isinstance(a, list) and isinstance(b, list):
+                    return a + b
+            elif op == "==":
+                return a == b and type(a) is type(b) or (num(a) and num(b) and a == b)
+            elif op == "!=":
+                return not self.binop("==", a, b)
+            elif op in ("<", ">", "<=", ">="):
+                if (num(a) and num(b)) or (isinstance(a, str) and isinstance(b, str)):
+                    return {"<": a < b, ">": a > b, "<=": a <= b, ">=": a >= b}[op]
+                raise TuffError(f"Can't compare {type_name(a)} with {type_name(b)} using {op}.")
+            elif op == "*":
+                if num(a) and num(b):
+                    return a * b
+                if isinstance(a, str) and isinstance(b, int) and not isinstance(b, bool):
+                    return self.repeat(a, b)
+                if isinstance(b, str) and isinstance(a, int) and not isinstance(a, bool):
+                    return self.repeat(b, a)
+            elif num(a) and num(b):
+                if op == "-":
+                    return a - b
+                if op == "^":
+                    try:
+                        result = a ** b
+                    except ZeroDivisionError:  # 0 ^ -1 is 1 / 0
+                        raise TuffError(f"0 ^ {to_text(b)} has no answer: it's the same as dividing by zero.")
+                    if isinstance(result, complex):
+                        raise TuffError("A negative number can't be raised to a fraction.")
+                    return result
+                if b == 0:
+                    raise TuffError("You can't divide by zero.")
+                if op == "/":
+                    return a / b
+                if op == "%":
+                    return a % b
+        except OverflowError:
+            raise TuffError(TOO_BIG_NUMBER) from None
         verb = {"+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "use % on", "^": "use ^ on"}[op]
         raise TuffError(f"Can't {verb} {type_name(a)} and {type_name(b)}.")
 
@@ -2911,6 +2999,14 @@ class Interpreter:
     def method_call(self, e, obj, args):
         """obj:name(args), once obj and args are worked out."""
         name = e.name
+        if isinstance(obj, Native):  # a library's object, like game:frame() (first: a game calls these all the time)
+            fn = obj.methods.get(name)
+            if fn is None:
+                options = [m for m in obj.methods if m != "page" or obj.kind == "window"]
+                raise TuffError(method_help(a_kind(obj.kind).capitalize(), name, options))
+            return call_python(f"{obj.kind}:{name}", fn, args)
+        if isinstance(obj, Builtin) and obj.name == "print":
+            return self.print_method(e.obj.kind == "sayfn", name, args)
 
         def need(count):
             if len(args) != count:
@@ -2919,15 +3015,6 @@ class Interpreter:
         def no_inputs():
             if args:
                 raise TuffError(f":{name} doesn't take an input. Write :{name}() or just :{name}.")
-
-        if isinstance(obj, Builtin) and obj.name == "print":
-            return self.print_method(e.obj.kind == "sayfn", name, args)
-        if isinstance(obj, Native):
-            fn = obj.methods.get(name)
-            if fn is None:
-                options = [m for m in obj.methods if m != "page" or obj.kind == "window"]
-                raise TuffError(method_help(a_kind(obj.kind).capitalize(), name, options))
-            return call_python(f"{obj.kind}:{name}", fn, args)
 
         if isinstance(obj, Line):
             if name in ("rewrite", "append"):
@@ -3817,6 +3904,9 @@ def leaves_folder(path, folder):
 
 def accepts(fn, count):
     """Can fn be called with this many inputs? (True when we can't tell.)"""
+    fits = fits_inputs(fn, count)
+    if fits is not None:
+        return fits
     try:
         inspect.signature(fn).bind(*([None] * count))
         return True
@@ -4595,6 +4685,7 @@ class Checker:
         self.interp = Interpreter()
         self.builtins = {**self.interp.own_names.vars, **self.interp.globals.vars}
         self.memo = {}
+        self.sums = {}  # id(binop node): its value, for sums of numbers written in the program (see number_sum)
         self.held = []  # the kinds of the starts of names[order:pop] being checked (see as_method)
         self.anims = None
         self.calls = {}  # name -> every line it's called on, like name(...)
@@ -5248,6 +5339,48 @@ class Checker:
             n = e.right if a == "$text" else e.left
             if self.is_decimal(n):
                 self.problem(n, "This is a decimal (it comes from /), even if it looks whole, so it can't repeat text. Use floor(...) around the division.")
+        if op in self.MATHS and not self.trying:
+            self.check_too_big(e)
+
+    def check_too_big(self, e):
+        """10 ^ 400 / 3: a sum of numbers written in the program whose answer is too big for a decimal (1.5.0). Only
+        the part that goes too big is reported (in try:, it may be on purpose)."""
+        try:
+            if self.number_sum(e.left) is None or self.number_sum(e.right) is None:
+                return
+        except TuffError:
+            return  # (a part of it is reported already)
+        try:
+            self.number_sum(e)
+        except TuffError as err:
+            if err.msg == TOO_BIG_NUMBER:
+                self.problem(e, err.msg)
+
+    def number_sum(self, e):
+        """The value of a sum made only of numbers written in the program, like 2 ^ 10 * 1.5, worked out as the
+        program would; None when it isn't one, or it's a whole number too long to work out quickly here. Raises the
+        program's TuffError when it can't be worked out."""
+        k = e.kind
+        if k == "const":
+            return e.value if e.value.__class__ in (int, float) else None
+        if k == "neg":
+            v = self.number_sum(e.value)
+            return None if v is None else -v
+        if k != "binop" or e.op not in self.MATHS:
+            return None
+        if id(e) in self.sums:
+            return self.sums[id(e)]
+        a = self.number_sum(e.left)
+        b = None if a is None else self.number_sum(e.right)
+        if b is None:
+            return None
+        if a.__class__ is int and b.__class__ is int and abs(a) > 1 and (
+                (e.op == "^" and b * a.bit_length() > 1_000_000) or (e.op == "*" and a.bit_length() + b.bit_length() > 1_000_000)):
+            value = None  # a whole number with hundreds of thousands of digits: fine, but slow to work out here
+        else:
+            value = self.interp.binop(e.op, a, b)
+        self.sums[id(e)] = value
+        return value
 
     def as_method(self, e):
         """For x[a:b] with a glued ':' (Parser.index): True when it's 1.3.6's method call (a is a list, text or a
@@ -6549,9 +6682,9 @@ class SceneInterpreter(Interpreter):
     def binop(self, op, a, b):
         x, y = plain(a), plain(b)
         whole = lambda v: isinstance(v, int) and not isinstance(v, bool)
-        if op == "*" and isinstance(x, str) and whole(y):
+        if op == "*" and isinstance(x, str) and x and whole(y):  # ("" * 2 ^ 99999 is just "")
             self.room(sys.getsizeof(x) * max(y, 0))
-        elif op == "*" and isinstance(y, str) and whole(x):
+        elif op == "*" and isinstance(y, str) and y and whole(x):
             self.room(sys.getsizeof(y) * max(x, 0))
         elif op == "+" and isinstance(x, str) and isinstance(y, str):
             self.room(sys.getsizeof(x) + sys.getsizeof(y))
@@ -6839,6 +6972,9 @@ def run_file(path):
         return 1
     except MemoryError:  # (1.4.1) a list or text growing without end, outside any function
         report(TuffError("The program ran out of memory. Is a list or some text growing without end?"), src)
+        return 1
+    except OverflowError:  # (1.5.0) the maths says so itself, with the line; this is in case anything is missed
+        report(TuffError(TOO_BIG_NUMBER), src)
         return 1
     except KeyboardInterrupt:
         return 130
