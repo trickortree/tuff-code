@@ -143,6 +143,21 @@ ${NOTES['1.3.0'].notes}`,
 - Claude, Codex, Antigravity and Pumice 1 know all of it.`,
   };
   // 1.4.0, the Toolbox Update (a beta for now: its picture comes later).
+  // 1.5.0, The Workshop Update (being built: these notes grow with each beta).
+  NOTES['1.5.0'] = {
+    images: ['1.png'],
+    notes: `### Text templates
+- \`f"{name} has {score + 1} points"\`: any code inside { }, shown the way say shows it.
+- Formats by example: \`{price:money}\` gives $12.50, \`{x:0.00}\` two decimals (rounded half up), \`{n:000}\` 007, \`{name:12}\` a width.
+
+### Animated sprites
+- \`hero:frames(4)\` cuts a sprite sheet into frames, \`hero:animation("walk", [1, 2, 3, 4], 10)\` names some, and \`hero:play("walk")\` plays them. They pause with the game, and Sprite Studio's "Use in code" writes them for you.
+
+### Faster
+- Tuff programs run several times faster: a million-step loop takes a fraction of a second.
+
+More is coming in the next betas: your own files with import, kinds, a debugger, tterm, tmusic and a New Project gallery.`,
+  };
   // 1.4.1 fixes 1.4.0 and adds looks to input and anims.
   NOTES['1.4.1'] = {
     images: ['../1.4.0/1.png'],
