@@ -5041,8 +5041,6 @@ def t_interp(c):
     c.check(errors >= 100, f"...{errors} of them stop with a Tuff error, which is on the same line and column in both", errors)
     crashes = [name for name, (slow, fast) in results if "Traceback" in slow[2] + fast[2]]
     c.check(not crashes, "...and none of them crash in Python (10 ^ 400 / 3 and 2 ^ 99999 * 1.5 did, before 1.5.0's numbers fix)", crashes)
-    crashes = [name for name, (slow, _f) in results if "Traceback" in slow[2]]
-    c.check(len(crashes) <= 2, f"...and only {len(crashes)} crash in Python (the same way in both: 1.4.1's own bugs)", crashes)
     # 1.5.0: programs in several files (import money), the modules test's: the same output, and errors in the same file,
     # line and column, in both.
     projects = modules_projects()
