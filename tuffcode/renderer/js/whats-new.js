@@ -153,10 +153,27 @@ ${NOTES['1.3.0'].notes}`,
 ### Animated sprites
 - \`hero:frames(4)\` cuts a sprite sheet into frames, \`hero:animation("walk", [1, 2, 3, 4], 10)\` names some, and \`hero:play("walk")\` plays them. They pause with the game, and Sprite Studio's "Use in code" writes them for you.
 
-### Faster
-- Tuff programs run several times faster: a million-step loop takes a fraction of a second.
+### Your own files
+- \`import money\` loads money.tuf from the same folder (or a libs folder there). Its functions and values go after a dot: \`money.as_money(6.375)\`, \`money.rate\`.
+- Each file runs once, however many files import it. Mistakes name the file and line they're in.
 
-More is coming in the next betas: your own files with import, kinds, a debugger, tterm, tmusic and a New Project gallery.`,
+### Kinds: your own objects
+- \`kind Pet:\` with fields (\`name = "?"\`, \`hunger = 5\`) and actions (\`func feed(amount):\`). Inside an action, \`my.hunger\` is the pet's own.
+- \`rex = Pet("Rex")\` fills the fields in order. Then \`rex.hunger\`, \`rex:feed(2)\`, and \`file.save\` keeps pets for next time.
+
+### tterm: terminal games
+- \`screen = tterm.screen(40, 20)\` gives a grid of letters in colours. Draw with \`screen:put(x, y, "@", "lime")\`, \`:text\` and \`:box\`, and read keys with \`screen:pressed("space")\` and \`screen:held("left")\`.
+- \`screen:every_frame(step)\` runs a game about 20 times a second, in the Run panel (click it to play), a terminal or a Build exe.
+
+### tmusic: music from notes
+- \`tmusic.play("C4 E4 G4 C5*2", "piano")\` plays a tune.
+- \`song = tmusic.song(120)\`, then \`song:track("chip", "C4 E4 G4 E4")\` for each instrument (piano, chip, bass, pluck, bell, organ, flute and drums). \`song:play()\`, \`song:loop()\`, \`song:save("theme.wav")\`, or a game's \`game:music(song)\`.
+
+### Faster
+- Tuff programs run several times faster: a million-step loop takes a fraction of a second. Library calls are about 5 times quicker too.
+- A sum too big for a decimal (\`10 ^ 400 / 3\`) says so in plain words instead of crashing.
+
+More is coming in the next beta: a debugger, a New Project gallery and new Learn lessons.`,
   };
   // 1.4.1 fixes 1.4.0 and adds looks to input and anims.
   NOTES['1.4.1'] = {
