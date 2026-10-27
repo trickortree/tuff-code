@@ -1,6 +1,7 @@
 """Tuff - the language behind TuffCode. Run a program with: python tuff.py file.tuf"""
 import base64
 import colorsys
+import decimal
 import difflib
 import inspect
 import json
@@ -43,6 +44,10 @@ class Tok:
     def show(self):
         if self.kind == "STR":
             return f'"{self.value}"'
+        if self.kind == "FSTR":
+            return 'f"..."'
+        if self.kind == "EOF" and self.value:  # the end of the code in a text template's { }: its } or its format's ':'
+            return self.value
         if self.kind in ("NEWLINE", "EOF"):
             return "the end of the line"
         if self.kind in ("INDENT", "DEDENT"):
@@ -62,12 +67,14 @@ def source_lines(src):
     return lines
 
 
-def tokenize(src):
+def tokenize(src, first=1):
+    """The program's tokens. first: the number of src's first line (the code in a template's { } is read on its own
+    line, see template_code)."""
     toks = []
     indents = [0]
     brackets = []  # the open ( [ { a line is inside (a line only continues inside brackets)
     lines = source_lines(src)
-    for ln, raw in enumerate(lines, 1):
+    for ln, raw in enumerate(lines, first):
         stripped = raw.lstrip(" \t")
         if not brackets:
             if not stripped or stripped.startswith("#"):
@@ -108,6 +115,10 @@ def tokenize(src):
                 while j < n and (raw[j].isalnum() or raw[j] == "_"):
                     j += 1
                 word = raw[i:j]
+                if word == "f" and j < n and raw[j] in "\"'":  # a text template: f"{name} has {score} points" (1.5.0)
+                    tok, i = template(raw, j, n, ln)
+                    toks.append(tok)
+                    continue
                 toks.append(Tok("KW" if word in KEYWORDS else "NAME", word, ln, col))
                 i = j
             elif c in "\"'":
@@ -137,7 +148,7 @@ def tokenize(src):
                 i += 2
             elif c in "+-*/%^<>=()[]{},.":
                 if c == "[":  # an index's [ ] (after a value: s[1:3]) or a list's ([a, b])
-                    after_value = toks and (toks[-1].kind in ("NAME", "STR") or (toks[-1].kind == "OP" and toks[-1].value in ")]}"))
+                    after_value = toks and (toks[-1].kind in ("NAME", "STR", "FSTR") or (toks[-1].kind == "OP" and toks[-1].value in ")]}"))
                     if after_value and len(toks) >= 2 and toks[-1].kind == "NAME" and toks[-2].kind == "METHOD" and raw[i - 1] in " \t":
                         after_value = False  # pairs:add [word:upper, 1]: after a method's name and a space, [ starts its input
                     brackets.append("[i" if after_value else "[l")
@@ -154,12 +165,169 @@ def tokenize(src):
                 raise TuffError(f"I don't understand the character '{c}'.", ln, col)
         if not brackets:
             toks.append(Tok("NEWLINE", None, ln, n + 1))
-    end = len(lines) + 1
+    end = len(lines) + first
     while len(indents) > 1:
         indents.pop()
         toks.append(Tok("DEDENT", None, end, 1))
     toks.append(Tok("EOF", None, end, 1))
     return toks
+
+
+# ---- text templates (1.5.0): f"{name} has {score + 1} points", f"Total: {price * qty:money}"
+
+# The formats, by example: 0.00 (2 decimals), 000 (at least 3 digits; 000.0 both), money ($1,234.50) and a width:
+# 12 pads to 12 letters (text on the left, numbers on the right), and >12 or <12 says which side the value goes.
+TEMPLATE_FORMAT = re.compile(r"(0+)(?:\.(0+))?|money|([<>]?)([1-9][0-9]*)")
+FORMAT_HELP = "Formats look like 0.00 (2 decimals), 000 (3 digits or more), money ($12.50) or a width like 10."
+
+
+def is_template(raw, i):
+    """Is the quote at raw[i] the start of a text template, with an f of its own just before it?"""
+    return i > 0 and raw[i - 1] == "f" and (i < 2 or not (raw[i - 2].isalnum() or raw[i - 2] == "_"))
+
+
+def skip_text(raw, i, n):
+    """Just past the "text" whose quote is at raw[i], read as tokenize reads it, or None if the line ends first."""
+    quote, j = raw[i], i + 1
+    while j < n and raw[j] != quote:
+        j += 2 if raw[j] == "\\" else 1
+    return j + 1 if j < n else None
+
+
+def skip_template(raw, i, n, ln):
+    """Just past the text template whose quote is at raw[i] (one inside another's { }), or None."""
+    quote, j = raw[i], i + 1
+    while j < n and raw[j] != quote:
+        if raw[j] == "\\" and j + 1 < n and raw[j + 1] in ESCAPES:
+            j += 2
+        elif raw.startswith("{{", j) or raw.startswith("}}", j):
+            j += 2
+        elif raw[j] == "{":
+            end = code_end(raw, j + 1, n, ln)[0]
+            if end is None:
+                return None
+            j = end + 1
+        else:
+            j += 1
+    return j + 1 if j < n else None
+
+
+def code_end(raw, i, n, ln):
+    """Where the code in a template's { } that starts at raw[i] ends: the index of its own } (past any brackets and
+    text in it), or None if the line ends first. Also gives the ':'s outside its brackets and text: the last one
+    can start a format."""
+    opened, colons = [], []
+    while i < n:
+        c = raw[i]
+        if c in "\"'":
+            i = skip_template(raw, i, n, ln) if is_template(raw, i) else skip_text(raw, i, n)
+            if i is None:
+                return None, colons
+            continue
+        if c == "#":
+            raise TuffError("A # comment can't go inside the { } of a text template.", ln, i + 1)
+        if c in "([{":
+            opened.append(i)
+        elif c in ")]}":
+            if not opened:
+                if c == "}":
+                    return i, colons
+            elif raw[opened[-1]] + c in ("()", "[]", "{}"):
+                opened.pop()
+            elif c == "}":  # f"{len(name}": the ( is still open where the { } ends
+                at = opened[-1]
+                closer = ")]"["([".index(raw[at])]
+                raise TuffError(f"This {raw[at]} needs a {closer} before the }} that ends the {{ }}.", ln, at + 1)
+        elif c == ":" and not opened:
+            colons.append(i)
+        i += 1
+    return None, colons
+
+
+def template(raw, q, n, ln):
+    """Reads the text template whose quote is at raw[q], with its f just before it. Gives back its token and where
+    it ends. The token's value is its parts in order: text, and for each { } a (tokens, format, format's column)."""
+    quote, j = raw[q], q + 1
+    parts, text = [], []
+    while True:
+        if j >= n:
+            raise TuffError(f"This text is missing its closing {quote}", ln, q)
+        c = raw[j]
+        if c == quote:
+            break
+        if c == "\\" and j + 1 < n and raw[j + 1] in ESCAPES:  # "\n" and the rest, as in any text
+            text.append(ESCAPES[raw[j + 1]])
+            j += 2
+        elif raw.startswith("{{", j) or raw.startswith("}}", j):  # {{ and }} show one brace
+            text.append(c)
+            j += 2
+        elif c == "}":
+            raise TuffError("A } on its own can't go in a text template. To show one, write }}.", ln, j + 1)
+        elif c == "{":
+            end, colons = code_end(raw, j + 1, n, ln)
+            if end is None:
+                raise TuffError("This { has no } to close it. To show a { itself, write {{.", ln, j + 1)
+            if text:
+                parts.append("".join(text))
+                text = []
+            parts.append(template_code(raw, j, end, colons, ln))
+            j = end + 1
+        else:
+            text.append(c)  # (a backslash before anything else stays, as in any text: f"C:\{folder}" is C:\ and folder)
+            j += 1
+    if text or not parts:
+        parts.append("".join(text))
+    return Tok("FSTR", parts, ln, q), j + 1
+
+
+def python_format(spec, code):
+    """How Tuff writes a Python format (.2f, 05d, ,.2f), for the message about it, or ""."""
+    m = re.fullmatch(r"[<>^]?(0?)([0-9]*)(,?)(?:\.([0-9]+))?[dfs%]?", spec)
+    if not m:
+        return ""
+    zero, width, commas, places = m.groups()
+    if commas and places == "2":
+        better = "money"
+    elif places is not None:
+        better = "0." + "0" * min(int(places), 100) if int(places) else "0"
+    elif zero and width:
+        better = "0" * min(int(width), 100)
+    else:
+        return ""
+    return f" Here, write {{{code or 'x'}:{better}}}."
+
+
+def template_code(raw, brace, end, colons, ln):
+    """One { } of a template (raw[brace] is its {, raw[end] its }): the tokens of its code, ended by an EOF token,
+    and its format and the format's column (or None, None). The format starts at the last ':' outside brackets and
+    text, when what follows that ':' is a format (f"{price * qty:money}"). Otherwise it's a method's ':'
+    (f"{name:upper()}"), so f"{d:get("k")}" and f"{ {"a": 1}["a"] }" are code all through."""
+    stop, fmt, fmt_col = end, None, None
+    if colons:
+        at = colons[-1]
+        tail = raw[at + 1:end]
+        spec = tail.strip()
+        method = raw[at - 1] not in " \t" and (tail[:1].isalpha() or tail[:1] == "_")  # glued to a word: name:upper
+        m = TEMPLATE_FORMAT.fullmatch(spec)
+        if m:
+            stop, fmt, fmt_col = at, spec, at + 2 + len(tail) - len(tail.lstrip())
+            zeros, decimals, _side, width = m.groups()
+            if width and int(width) > 1000:
+                raise TuffError(f"{width} is too wide: a width can be up to 1000.", ln, fmt_col)
+            if len(zeros or "") > 100 or len(decimals or "") > 100:
+                raise TuffError("That format has too many 0s: it can show up to 100 digits on each side of the point.", ln, fmt_col)
+        elif not spec:
+            raise TuffError("Put a format after the ':', like {price:0.00}, or take the ':' away.", ln, at + 1)
+        elif not method:
+            raise TuffError(f"'{spec}' isn't a format. {FORMAT_HELP}{python_format(spec, raw[brace + 1:at].strip())}",
+                            ln, at + 2 + len(tail) - len(tail.lstrip()))
+    if not raw[brace + 1:stop].strip():
+        raise TuffError("These { } have nothing in them. Put a value in them, like {name}, or write {{ to show a {.", ln, brace + 1)
+    # The code is read by tokenize itself, as a line of its own with spaces before it, so its tokens keep their
+    # columns in the real line (and a template in it is read the same way).
+    toks = [t for t in tokenize(" " * (brace + 1) + raw[brace + 1:stop], ln) if t.kind not in ("INDENT", "DEDENT", "NEWLINE", "EOF")]
+    toks.append(Tok("EOF", ":" if fmt else "}", ln, stop + 1))
+    return toks, fmt, fmt_col
 
 
 # ---------------------------------------------------------------- parser
@@ -172,7 +340,7 @@ class N:
         self.__dict__.update(fields)
 
 
-EXPR_STARTS = {"NUM", "STR", "NAME"}
+EXPR_STARTS = {"NUM", "STR", "FSTR", "NAME"}
 EXPR_START_KWS = {"say", "input", "not", "true", "false", "nil"}
 ASSIGN_OPS = {"=", "+=", "-=", "*=", "/="}
 COMPARE_OPS = {"==", "!=", "<", ">", "<=", ">="}
@@ -570,7 +738,7 @@ class Parser:
             j += 1
         for j in found:
             before = self.toks[j - 1]
-            if j == self.i or before.kind == "NUM" or (in_dict and before.kind == "STR"):
+            if j == self.i or before.kind == "NUM" or (in_dict and before.kind in ("STR", "FSTR")):
                 return j
         for j in found:
             if self.toks[j + 1].kind == "NAME" and self.toks[j + 1].value in self.values:
@@ -645,10 +813,35 @@ class Parser:
         while len(self.converted) > mark:
             self.converted.pop().kind = "METHOD"
 
+    def template(self, tok):
+        """f"{name} has {score + 1} points" (1.5.0): its text, and the code in each { } read like any other code.
+        That code has tokens of its own (see template_code), with their own columns, so a mistake in it points
+        inside the text."""
+        parts = []
+        for piece in tok.value:
+            if isinstance(piece, str):
+                parts.append(piece)
+                continue
+            toks, fmt, fmt_col = piece
+            outer = self.toks, self.i
+            self.toks, self.i = toks, 0
+            try:
+                value = self.expr()
+                if not self.at("EOF"):
+                    extra = self.peek()
+                    raise TuffError(f"I didn't expect {extra.show()} here. The {{ }} in a text template hold one value each, "
+                                    "like {score + 1}.", extra.line, extra.col)
+            finally:
+                self.toks, self.i = outer
+            parts.append(N("fpart", Tok("FORMAT", fmt, tok.line, fmt_col) if fmt else toks[0], value=value, fmt=fmt))
+        return N("fstr", tok, parts=parts)
+
     def primary(self):
         tok = self.next()
         if tok.kind in ("NUM", "STR"):
             return N("const", tok, value=tok.value)
+        if tok.kind == "FSTR":
+            return self.template(tok)
         if tok.kind == "NAME":
             return N("var", tok, name=tok.value)
         if tok.kind == "KW" and tok.value in ("true", "false", "nil"):
@@ -814,6 +1007,37 @@ def to_text(v, nested=False, inside=()):
     if isinstance(v, Err):
         return "err"
     return str(v)
+
+
+def format_value(v, fmt):
+    """A value in a text template's format (1.5.0). 0.00 rounds to 2 decimals and 000 shows at least 3 digits, both
+    half up, the way people round (2.675 is 2.68, not Python's 2.67), and money is $1,234.50. A width (12) pads text
+    on the right and numbers on the left; >12 and <12 choose."""
+    v = plain(v)
+    zeros, decimals, side, width = TEMPLATE_FORMAT.fullmatch(fmt).groups()
+    is_number = isinstance(v, (int, float)) and not isinstance(v, bool)
+    if width:
+        shown = to_text(v)
+        return shown.rjust(int(width)) if side == ">" or (not side and is_number) else shown.ljust(int(width))
+    if isinstance(v, Err):
+        v.stop(f"The value for the format {fmt}")
+    if not is_number:
+        shown = to_text(v, True)
+        shown = f" ({shown})" if len(shown) <= 30 and shown.isprintable() else ""
+        tip = f" Turn text that holds a number into one first, like {{num(answer):{fmt}}}." \
+            if isinstance(v, str) and re.fullmatch(r"\s*-?[0-9]+(\.[0-9]+)?\s*", v) else ""
+        raise TuffError(f"The format {fmt} only works on numbers, but this is {type_name(v)}{shown}.{tip}")
+    if isinstance(v, float) and not math.isfinite(v):
+        return to_text(v)
+    places = 2 if fmt == "money" else len(decimals or "")
+    d = decimal.Decimal(v if isinstance(v, int) else repr(v))  # repr: 2.675 is the 2.675 that was written
+    room = decimal.Context(prec=max(d.adjusted() + 1, 1) + places + 2)
+    d = d.quantize(decimal.Decimal(1).scaleb(-places), rounding=decimal.ROUND_HALF_UP, context=room)
+    sign = "-" if d < 0 else ""  # -0.001 to 2 places is 0.00
+    if fmt == "money":
+        return f"{sign}${d.copy_abs():,f}"
+    whole, dot, rest = f"{d.copy_abs():f}".partition(".")
+    return sign + whole.zfill(len(zeros)) + dot + rest
 
 
 def type_name(v):
@@ -2439,6 +2663,10 @@ class Interpreter:
         if k == "slice":  # s[1:3]: positions 1 to 3, both included (like range); s[:3] from the start, s[2:] to the end
             obj = plain(self.eval(e.obj, env))
             return self.cut(e, obj, *self.part(e, env))
+        if k == "fstr":  # a text template: f"{name} has {score + 1} points" (1.5.0)
+            pieces = [p if isinstance(p, str) else self.shape(p, self.eval(p.value, env)) for p in e.parts]
+            self.room(sum(sys.getsizeof(p) for p in pieces))
+            return "".join(pieces)
         if k == "call":
             return self.call(e, env)
         if k == "method":
@@ -2489,6 +2717,17 @@ class Interpreter:
 
     def room(self, size):
         """Something about size bytes big is about to be made. Only Tuff Engine's preview keeps count."""
+
+    def shape(self, part, v):
+        """One { } of a text template, shown: as say shows the value, or in the { }'s format (0.00, money...)."""
+        if part.fmt is None:
+            return to_text(v)
+        try:
+            return format_value(v, part.fmt)
+        except TuffError as err:
+            if err.line is None:
+                err.line, err.col = part.line, part.col  # at the format
+            raise
 
     def repeat(self, text, times):
         if len(text) * times > 500_000_000:
@@ -4492,6 +4731,8 @@ class Checker:
             return "$list"
         if k == "dict":
             return "$dict"
+        if k == "fstr":
+            return "$text"
         if k == "held":  # the start of names[order:pop] (see Parser.index)
             return self.held[-1] if self.held else self.kind(e.of, seen)
         if k == "slice":  # a part of text is text, a part of a list a list
@@ -4702,6 +4943,11 @@ class Checker:
         elif k == "attr":
             self.expr(e.obj, scope)
             self.check_attr(e)
+        elif k == "fstr":  # f"{name} has {score} points": the code in each { }, and its format (1.5.0)
+            for part in e.parts:
+                if not isinstance(part, str):
+                    self.expr(part.value, scope)
+                    self.check_format(part)
         elif k == "method":
             self.expr(e.obj, scope)
             pos = self.HANDLER_POS.get(e.name)
@@ -4990,7 +5236,7 @@ class Checker:
             self.problem(e, "This turns the list into text. To add one item, use :add, or join two lists: items + [\"jam\"].")
         elif op == "+" and b == "$number" and e.left.kind == "binop" and e.left.op == "+" and self.kind(e.left) == "$text" \
                 and self.kind(e.left.right) == "$number" and not (e.left.right.kind == "const" and e.right.kind == "const"):
-            self.problem(e, "+ works left to right, and the text before has already turned the numbers into text, so they're stuck together (\"Total: \" + 10 + 2 gives \"Total: 102\"). Put the sum in brackets: \"Total: \" + (a + b)")
+            self.problem(e, "+ works left to right, and the text before has already turned the numbers into text, so they're stuck together (\"Total: \" + 10 + 2 gives \"Total: 102\"). Put the sum in brackets: \"Total: \" + (a + b), or use a text template: f\"Total: {a + b}\"")
         elif op == "+" and {a, b} == {"$text", "$number"} and typed is not None and self.describe(typed):
             self.problem(e, f"{self.describe(typed)} is typed text, so + sticks them together (\"5\" + 1 gives \"51\"). Use number({self.describe(typed)}) to add.")
         if op == "*" and "$text" in (a, b):
@@ -5173,6 +5419,21 @@ class Checker:
                     self.problem(e, f"{lib[8:]}.{fn.name}() got the wrong number of inputs ({n}).")
                 elif lib == "$module:anims" and fn.name in members:
                     self.check_anims_looks(e)
+
+    def check_format(self, part):
+        """f"{name:0.00}": a number's format (0.00, 000 or money) on something that is never a number. (A width
+        pads anything.)"""
+        if part.fmt is None or TEMPLATE_FORMAT.fullmatch(part.fmt).group(4):
+            return
+        kind = self.kind(part.value)
+        if kind not in ("$text", "$list", "$dict", "$bool", "$nil", "$line", "$func", "$builtin"):
+            return
+        name = node_text(part.value)
+        what = f"{name} is" if name and part.value.kind != "const" else "this is"
+        tip = ""
+        if kind == "$text" and self.typed(part.value):
+            tip = f" input gives text, so turn it into a number first: {{num({name or 'answer'}):{part.fmt}}}."
+        self.problem(part, f"The format {part.fmt} only works on numbers, but {what} {self.what(kind)}.{tip}")
 
     def check_number_input(self, a, name):
         """number(), num() and int() give err for text that isn't a number, but anything else that isn't text or a

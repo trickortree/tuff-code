@@ -422,7 +422,7 @@ const TARGET = {
   gameUi: 'Buttons, text boxes and menus go on the game, not in an app window: bar = game:panel("top left") pins widgets to it (bar:button("Shop", open_shop)), shop = game:screen("Shop") is a screen over it that pauses the game (shop:hide() until it\'s needed), and start = game:start_screen("Title", "Click to play") waits for a click to play.',
   intro: 'Splash screens are game:splash("logo.png", 3) or game:splash("Some text") (game:splash() is "Made with Tuff"), and a main menu is menu = game:main_menu("Title") with menu:button("Play", play), where func play(): menu:hide(). In 3D, world:lock_mouse() and world:unlock_mouse() lock and free the mouse; screens free it by themselves while they show.',
 };
-const NOT_PYTHON = 'Tuff, not Python: func (not def), true, false and nil, x is y, items:add(x) (not .append), "Hi " + name (no f-strings), and range(1, 3) gives 1, 2, 3.';
+const NOT_PYTHON = 'Tuff, not Python: func (not def), true, false and nil, x is y, items:add(x) (not .append), f"Hi {name}" or "Hi " + name (formats like {x:0.00}, not {x:.2f}), and range(1, 3) gives 1, 2, 3.';
 
 // The lines of a long file that matter: around the selection, the error's line, or the lines that share
 // the most words with the question.

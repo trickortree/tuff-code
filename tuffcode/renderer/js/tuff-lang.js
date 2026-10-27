@@ -561,6 +561,10 @@ const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'r
 // Libraries that are always there, with nothing to mention (1.4.0's file.read...). They aren't functions, and
 // import/mention doesn't offer them.
 const TUFF_READY_LIBS = ['file'];
+// The hover on a text template's f (1.5.0). It isn't in TUFF_DOCS, so a variable called f keeps no doc.
+const TUFF_TEMPLATE_DOC = ['f"{name} has {score + 1} points"', 'A text template: the code in each { } is worked out and shown the way say shows it. '
+  + 'A format can go after a \':\': {x:0.00} (2 decimals, rounded half up), {n:000} (at least 3 digits), {price:money} ($1,234.50), '
+  + 'or a width, {name:12} (text on the left, numbers on the right; >12 and <12 choose). {{ and }} show a brace.'];
 
 // try: and catch: (or catch problem:) at the start of a line, with nothing glued after the ':' (1.4.0). These always
 // start a block. try:say "hi", with the ':' glued to a word, does too unless the program gives try a value (see
@@ -585,18 +589,51 @@ function tryCatchWord(text, own) {
   return /^\s*(try|catch):[A-Za-z_]/.test(text) && own[m[1]] ? null : m[1];
 }
 
-// True when the end of `text` is inside a "string", a 'string' or a # comment.
-function insideStringOrComment(text) {
-  let quote = null;
+// How each character of a line reads: 'c' code, 's' text (in quotes) and '#' a comment, as tuff.py reads it. In a
+// text template (1.5.0) the code in each { } is code, like f"{name} has {score + 1} points"; the f, the quotes, the
+// text, {{ and }}, and the { and } around the code are text. ends: 'text' or 'comment' when the line ends inside one.
+function tuffScan(text) {
+  const kinds = [];
+  const open = []; // the templates the scan is inside: { quote, depth }, depth -1 in its text, else the brackets open in its { }
+  let quote = null; // a plain "string" being read
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
+    const t = open[open.length - 1];
     if (quote) {
-      if (c === '\\') i++;
+      kinds[i] = 's';
+      if (c === '\\') kinds[++i] = 's';
       else if (c === quote) quote = null;
-    } else if (c === '"' || c === "'") quote = c;
-    else if (c === '#') return true;
+    } else if (t && t.depth < 0) {
+      kinds[i] = 's';
+      if (c === '\\' && 'nt\\"\''.includes(text[i + 1] || '#')) kinds[++i] = 's';
+      else if (c === t.quote) open.pop();
+      else if ((c === '{' || c === '}') && text[i + 1] === c) kinds[++i] = 's'; // {{ and }} show a brace
+      else if (c === '{') t.depth = 0;
+    } else if (c === '#') {
+      for (; i < text.length; i++) kinds[i] = '#';
+      return { kinds, ends: 'comment' };
+    } else if (c === '"' || c === "'") {
+      kinds[i] = 's';
+      if (text[i - 1] === 'f' && !/\w/.test(text[i - 2] || '')) {
+        kinds[i - 1] = 's';
+        open.push({ quote: c, depth: -1 });
+      } else quote = c;
+    } else {
+      kinds[i] = 'c';
+      if (t && '([{'.includes(c)) t.depth++;
+      else if (t && (c === ')' || c === ']')) t.depth = Math.max(0, t.depth - 1);
+      else if (t && c === '}') {
+        if (t.depth) t.depth--;
+        else { kinds[i] = 's'; t.depth = -1; } // the } that ends the code
+      }
+    }
   }
-  return quote !== null;
+  return { kinds, ends: quote || (open.length && open[open.length - 1].depth < 0) ? 'text' : null };
+}
+
+// True when the end of `text` is inside a "string", a 'string' or a # comment (and not in the code of an f"{...}").
+function insideStringOrComment(text) {
+  return tuffScan(text).ends !== null;
 }
 
 // Should typing ':' or '.' just before `position` open the suggestion list?
@@ -656,6 +693,8 @@ window.registerTuff = function registerTuff(monaco, accent) {
     tokenizer: {
       root: [
         [/#.*$/, 'comment'],
+        [/f"/, 'string', '@fdq'], // a text template (1.5.0): f"{name} has {score + 1} points"
+        [/f'/, 'string', '@fsq'],
         [/(func)(\s+)([a-zA-Z_]\w*)/, ['keyword', '', 'function.decl']],
         [/(:)([a-zA-Z_]\w*)/, ['delimiter', 'method']],
         [/([a-zA-Z_]\w*)(\.)([a-zA-Z_]\w*)/, [{ cases: { '@libs': 'library', '@default': 'identifier' } }, 'delimiter', 'function']],
@@ -669,6 +708,16 @@ window.registerTuff = function registerTuff(monaco, accent) {
       ],
       dq: [[/\\./, 'string.escape'], [/"/, 'string', '@pop'], [/[^"\\]+/, 'string']],
       sq: [[/\\./, 'string.escape'], [/'/, 'string', '@pop'], [/[^'\\]+/, 'string']],
+      // A template's text: {{ and }} show a brace, and { starts code, coloured as code until its }.
+      fdq: [[/\{\{|\}\}|\\[nt\\"']/, 'string.escape'], [/\{/, 'delimiter.curly', '@fcode'], [/"/, 'string', '@pop'], [/[^"\\{}]+/, 'string'], [/./, 'string']],
+      fsq: [[/\{\{|\}\}|\\[nt\\"']/, 'string.escape'], [/\{/, 'delimiter.curly', '@fcode'], [/'/, 'string', '@pop'], [/[^'\\{}]+/, 'string'], [/./, 'string']],
+      fcode: [
+        [/:\s*(?:0+(?:\.0+)?|money|[<>]?[1-9]\d*)\s*(?=\})/, 'string.escape'], // its format: {x:0.00}, {price:money}, {name:12}
+        [/\}/, 'delimiter.curly', '@pop'],
+        [/\{/, 'delimiter.curly', '@fdict'], // a dictionary in it: f"{ {"a": 1}["a"] }"
+        { include: '@root' },
+      ],
+      fdict: [[/\}/, 'delimiter.curly', '@pop'], [/\{/, 'delimiter.curly', '@fdict'], { include: '@root' }],
     },
   });
 
@@ -696,7 +745,14 @@ window.registerTuff = function registerTuff(monaco, accent) {
     provideHover(model, position) {
       const word = model.getWordAtPosition(position);
       if (!word) return null;
-      const before = model.getLineContent(position.lineNumber).slice(0, word.startColumn - 1);
+      const line = model.getLineContent(position.lineNumber);
+      const before = line.slice(0, word.startColumn - 1);
+      if (word.word === 'f' && /^["']/.test(line.slice(word.endColumn - 1))) { // the f of a text template
+        return {
+          range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn),
+          contents: [{ value: '```tuff\n' + TUFF_TEMPLATE_DOC[0] + '\n```' }, { value: TUFF_TEMPLATE_DOC[1] }],
+        };
+      }
       const lib = before.match(/(\w+)\.$/);
       // A built-in's name the program gives a value (a 1.3.6 program's log = []) is the program's own variable.
       const own = TUFF_BUILTINS.includes(word.word) && givesValue(model, word.word);
@@ -778,6 +834,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
         { label: 'while', kind: K.Snippet, insertText: 'while ${1:condition}:\n    $0', insertTextRules: R, detail: 'While loop', range },
         { label: 'for', kind: K.Snippet, insertText: 'for ${1:i} in range(${2:1}, ${3:10}):\n    $0', insertTextRules: R, detail: 'Count loop', range },
         { label: 'line', kind: K.Snippet, insertText: '${1:line} = say "${2:text}"\n${1:line}:rewrite "${3:new text}"', insertTextRules: R, detail: 'Say, then rewrite', range },
+        { label: 'f"..."', kind: K.Snippet, insertText: 'f"${1:Hello} {${2:name}\\}$0"', insertTextRules: R, detail: 'Text template: values in { }', documentation: TUFF_TEMPLATE_DOC[1], range },
         { label: 'ask number', kind: K.Snippet, insertText: '${1:n} = num(input "${2:A number?} ")\nwhile ${1:n} is err:\n    say "Please type a number."\n    ${1:n} = num(input "${2:A number?} ")\n$0', insertTextRules: R, detail: 'Ask until they type a number (err)', range },
         { label: 'import anims', kind: K.Snippet, insertText: 'import anims\n', range, detail: 'Load the animations library' },
         { label: 'tap', kind: K.Snippet, insertText: 'mention tap\n\nres = tap.get("${1:https://api.github.com/users/octocat}")\nif res:ok:\n    info = res:json\n    say info:get("${2:name}")\nelse:\n    say "Error " + res:status\n', insertTextRules: R, range, detail: 'Get JSON from the web' },
@@ -822,16 +879,9 @@ function tuffIdents(model) {
   const own = ownTryCatch(model);
   lines.forEach((text, i) => {
     const block = tryCatchWord(text, own) ? text.search(/\S/) : -1; // where this line's try: or catch: word is
-    let quote = null;
+    const { kinds } = tuffScan(text); // names in a template's { } count too: f"{score}"
     for (let c = 0; c < text.length;) {
-      const ch = text[c];
-      if (quote) {
-        if (ch === '\\') c += 2;
-        else { if (ch === quote) quote = null; c++; }
-        continue;
-      }
-      if (ch === '"' || ch === "'") { quote = ch; c++; continue; }
-      if (ch === '#') break;
+      if (kinds[c] !== 'c') { c++; continue; }
       const m = /^[A-Za-z_]\w*/.exec(text.slice(c));
       if (m && !/\w/.test(text[c - 1] || '')) {
         const prev = text[c - 1];

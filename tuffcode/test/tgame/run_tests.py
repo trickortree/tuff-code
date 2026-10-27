@@ -5172,6 +5172,238 @@ def interp_speed(c):
     c.check(secs[0] < secs[1] and secs[0] < 2, f"with no step hook the loop takes {secs[0]:.2f} s, with a do-nothing one {secs[1]:.2f} s", secs)
 
 
+# ---------------------------------------------------------------- text templates (1.5.0)
+
+FSTRINGS_PROGRAM = r'''name = "Sam"
+score = 9
+say f"{name} has {score + 1} points"
+price = 6.375
+qty = 2
+say f"Total: {price * qty:money}"
+say f"{2.675:0.00}|{1.005:0.00}|{0.125:0.00}|{2.5:0}|{-2.5:0}|{82.25:0.0}|{-0.001:0.00}|{1 / 3:0.000}|{0.1 + 0.2:0.00}"
+say f"{7:000}|{-7:000}|{1234:000}|{7.6:000}|{5.5:000.00}|{2 ^ 70:0}"
+say f"{1234.5:money}|{-1.5:money}|{0:money}|{1000000:money}|{0.005:money}|{-0.004:money}"
+say f"[{name:6}][{score:4}][{name:>6}][{score:<4}][{"toolong":3}][{2.5:5}]"
+say f"{name:upper()} {name:lower} {{braces}} }}{{"
+ages = {"sam": 14}
+say f'{ages["sam"]}, {ages:get("ann", 0)}, { {"a": 1}["a"] }, {ages:get("sam"):000}'
+say f"{[1, "two", 3.5]} {nil} {true} {num("x")} {ages}"
+say f"tab\there \"quoted\" it's C:\{name}\files"
+say f"{f"{score:00}":>4}|{f'{name}'}|{"a:b"}|{"}"}"
+say f""
+say f"plain"
+say f"{name}"[0] + f"{score}":upper()
+say len(f"{name}{name}")
+words = ["a", "b"]
+say f"{words:join(", ")} and {words[0]:upper()}"
+func greet(who):
+    return f"Hi {who}!"
+say greet(f"{name}")
+f = 5
+say f + 1
+answer = input f"Price for {name}? "
+say f"You typed {num(answer):money}"
+'''
+FSTRINGS_OUTPUT = ["Sam has 10 points", "Total: $12.75", "2.68|1.01|0.13|3|-3|82.3|0.00|0.333|0.30",
+                   "007|-007|1234|008|005.50|1180591620717411303424", "$1,234.50|-$1.50|$0.00|$1,000,000.00|$0.01|$0.00",
+                   "[Sam   ][   9][   Sam][9   ][toolong][  2.5]", "SAM sam {braces} }{", "14, 0, 1, 014",
+                   '[1, "two", 3.5] nil true err {"sam": 14}', 'tab\there "quoted" it\'s C:\\Sam\\files', "  09|Sam|a:b|}", "",
+                   "plain", "S9", "6", "a, b and A", "Hi Sam!", "6", "Price for Sam? You typed $1,234.57"]
+# Mistakes in a template: (code, line, column, what the run says, what --check says: None for the same, "OK" when
+# only the run can tell). The column is inside the text, at the bad part, so the editor's squiggle lands there.
+FSTRINGS_ERRORS = [
+    ('name = "Sam"\nsay f"Hi {nmae}!"', 2, 11, "I don't know what 'nmae' is. Did you mean 'name'?", None),
+    ('name = "Sam"\nsay f"Hi {name"', 2, 10, "This { has no } to close it. To show a { itself, write {{.", None),
+    ('name = "Sam"\nsay f"Hi {name}', 2, 5, 'This text is missing its closing "', None),
+    ('say f"a } b"', 1, 9, "A } on its own can't go in a text template. To show one, write }}.", None),
+    ('say f"{}"', 1, 7, "These { } have nothing in them.", None),
+    ('x = 1.5\nsay f"{x:.2f}"', 2, 10, "'.2f' isn't a format. Formats look like 0.00", None),
+    ('x = 1.5\nsay f"{x:.2f}"', 2, 10, "Here, write {x:0.00}.", None),
+    ('n = 7\nsay f"{n:05d}"', 2, 10, "Here, write {n:00000}.", None),
+    ('x = 1\nsay f"{x:}"', 2, 9, "Put a format after the ':'", None),
+    ('say f"{1:2000}"', 1, 10, "2000 is too wide: a width can be up to 1000.", None),
+    ('x = "abc"\nsay f"{x:0.00}"', 2, 10, 'The format 0.00 only works on numbers, but this is text ("abc").',
+     "The format 0.00 only works on numbers, but x is text."),
+    ('x = 2\nsay f"{x + }"', 2, 12, "I expected a value here, but found }.", None),
+    ('x = 2\nsay f"{x y}"', 2, 10, "I didn't expect y here. The { } in a text template hold one value each", None),
+    ('say f"{len("ab"}"', 1, 11, "This ( needs a ) before the } that ends the { }.", None),
+    ('say f"{1 # note}"', 1, 10, "A # comment can't go inside the { } of a text template.", None),
+    ('x = 3\nsay f"{x:upper()}"', 2, 9, "A number doesn't have any :methods.", None),
+    ('say f"{f"{zz}"}"', 1, 11, "I don't know what 'zz' is.", None),
+    ('say f"ok" + f"{num("x"):0.00}"', 1, 25, "The value for the format 0.00 is err", "OK"),
+    ('func show(p):\n    say f"{p} costs {p:money}"\nshow("tea")', 2, 24, "The format money only works on numbers", "OK"),
+]
+# The checker on the code in templates: (code, part of what --check says, or "OK").
+FSTRINGS_CHECKS = [
+    ('a = input "Price? "\nsay f"{a:money}"', "a is text. input gives text, so turn it into a number first: {num(a):money}."),
+    ('func f2():\n    t = 1\nsay f"{t}"', "'t' is only set inside f2(), so it only exists there."),
+    ('x = [1]\nsay f"{x:size()}"', "A list doesn't have :size."),
+    ('say f"{len(1, 2)}"', "len() got the wrong number of inputs (2)."),
+    ('say f"{[1]:money} {true:000} {nil:0.0}"', "The format money only works on numbers, but this is a list."),
+    ('a = 1\nb = 2\nsay f"Total: " + a + b', 'or use a text template: f"Total: {a + b}"'),
+    ('x = "5"\nsay f"{num(x):0.00} {x:3} {x:>3}"', "OK"),
+    ('func g(n):\n    return f"{n:0.0}"\nsay g(2)', "OK"),
+    ('items = [1]\nfor i in items:\n    say f"{i:000}"', "OK"),
+    ('d = {}\nsay f"{d:get("k", 1):0.0} {nil:5}|{true:<6}"', "OK"),
+    ('f = 5\nsay f + 1', "OK"),
+    ('mention tgame\ngame = tgame.window("x")\nscore = 0\nlabel = game:text(f"Score: {score:000}", 300, 30)\nlabel:set f"Score: {score + 1}"', "OK"),
+]
+# The editor (renderer/js/tuff-lang.js): the code in a template's { } is code for completions and rename, its f has a
+# hover, and Monarch colours the { } as code and comes back to the root after the line.
+FSTRINGS_LANG = r"""
+const fs = require('fs'), vm = require('vm');
+const window = {}, ctx = { window };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+let monarch = null, hover = null, completion = null;
+const monaco = { Range: class { constructor(...a) { this.a = a; } }, editor: { defineTheme() {} }, languages: {
+  register() {}, setMonarchTokensProvider(_id, def) { monarch = def; }, setLanguageConfiguration() {},
+  registerHoverProvider(_id, p) { hover = hover || p; }, registerDefinitionProvider() {}, registerReferenceProvider() {},
+  registerRenameProvider() {}, registerDocumentSymbolProvider() {}, registerSignatureHelpProvider() {}, registerColorProvider() {},
+  registerCompletionItemProvider(_id, p) { completion = p; },
+  CompletionItemKind: new Proxy({}, { get: (_t, k) => k }), CompletionItemInsertTextRule: {}, IndentAction: {}, SymbolKind: {} } };
+window.defineTuffTheme = () => {};
+window.registerTuff(monaco, '#3574f0');
+const model = (src, col) => { const lines = src.split('\n'); return { getLinesContent: () => lines, getLineContent: (n) => lines[n - 1],
+  getValue: () => src, getWordUntilPosition: () => ({ startColumn: col || 1, endColumn: col || 1 }),
+  getWordAtPosition: ({ lineNumber, column }) => { for (const m of lines[lineNumber - 1].matchAll(/\w+/g))
+    if (m.index < column && column <= m.index + m[0].length) return { word: m[0], startColumn: m.index + 1, endColumn: m.index + 1 + m[0].length };
+    return null; } }; };
+const rules = (s) => monarch.tokenizer[s].flatMap((r) => (r.include ? rules(r.include.slice(1)) : [r]));
+function colours(src) { // the first rule that matches wins, as in Monarch
+  const stack = ['root'], out = [];
+  for (const line of src.split('\n')) {
+    const toks = [];
+    for (let i = 0; i < line.length;) {
+      const r = rules(stack[stack.length - 1]).find((x) => { const re = new RegExp(x[0].source.replace('@symbols', monarch.symbols.source), 'y'); re.lastIndex = i; const m = re.exec(line); return m && m[0].length && (x.m = m[0]); });
+      if (!r) { i++; continue; }
+      const a = r[1]?.cases ? r[1].cases['@default'] : r[1];
+      toks.push(`${r.m}=${Array.isArray(a) ? a.join('+') : a}`);
+      if (r[2] === '@pop') stack.pop(); else if (r[2]) stack.push(r[2].slice(1));
+      i += r.m.length;
+    }
+    out.push({ toks, state: stack.join('>') });
+  }
+  return out;
+}
+const ids = (src) => ctx.tuffIdents(model(src)).map((x) => `${x.name}@${x.start}`).join(' ');
+const c = colours('say f"Hi {name:upper()} {{x}} {score + 1:0.00} {d:get("k")}!" + "plain"\nx = 1');
+const c2 = colours(`say f'{ {"a": 1}["a"]:money}' + f"{f'{x}'}"\nx = 2`);
+const inside = completion.provideCompletionItems(model('say f"{name:', 13), { lineNumber: 1, column: 13 }).suggestions;
+console.log(JSON.stringify({
+  kinds: ctx.tuffScan('say f"a{x}b"').kinds.join(''),
+  code: ctx.insideStringOrComment('say f"Hi {name:'), text: ctx.insideStringOrComment('say f"Hi {name} '),
+  plain: ctx.insideStringOrComment('say "Hi {name:'), dict: ctx.insideStringOrComment('say f"{ {"a": 1}["a"] } '),
+  ids: ids('name = 1\nsay f"Hi {name} and {score + 1:0.00}"'), fvar: ids('f = 2\nsay f"f{f}"'), none: ids('say "{name}" + f"{{name}}"'),
+  hover: hover.provideHover(model('say f"Hi {name}"'), { lineNumber: 1, column: 5 })?.contents[0].value,
+  nohover: hover.provideHover(model('f = 1\nsay f + 1'), { lineNumber: 2, column: 5 }),
+  snippet: completion.provideCompletionItems(model(''), { lineNumber: 1, column: 1 }).suggestions.find((s) => s.label === 'f"..."')?.insertText,
+  methods: inside.some((s) => s.label === 'upper'),
+  colours: c[0].toks, states: [c[0].state, c[1].state, c2[0].state, c2[1].state], next: c2[1].toks[0],
+}));
+"""
+
+
+def t_fstrings(c):
+    """Console only, no window: 1.5.0's text templates (f"..."). A program with every format, {{ }}, quotes and
+    dictionaries in the { } and templates inside templates runs, and --check accepts it; each mistake stops the run
+    and --check with the same message, on its line and at its column inside the text; the checker walks the code in
+    the { }; Tuff Engine's --scene preview runs templates (and stops one that doubles its text); and the editor's
+    tuff-lang.js reads the { } as code (with Node)."""
+    folder = os.path.join(HERE, "out", "fstrings")
+    os.makedirs(folder, exist_ok=True)
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    env.pop("TUFF_IDE", None)
+
+    def write(name, code):
+        path = os.path.join(folder, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code + "\n")
+        return path
+
+    def where(stderr):
+        """The line, column and message of the first "Tuff error" (the column from the ^ under the line)."""
+        lines = stderr.splitlines()
+        first = next((i for i, x in enumerate(lines) if x.startswith("Tuff error on line ")), None)
+        if first is None:
+            return None, None, stderr.strip()
+        head, msg = lines[first][len("Tuff error on line "):].split(": ", 1)
+        gutter = f"  {head} | "
+        caret = lines[first + 2] if first + 2 < len(lines) and lines[first + 2].strip() == "^" else ""
+        return int(head), (caret.index("^") - len(gutter) + 1) if caret else None, msg
+
+    path = write("fstrings.tuf", FSTRINGS_PROGRAM.rstrip("\n"))
+    p = subprocess.run(tuff_cmd() + [path], input="1234.567\n", capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+    got = p.stdout.splitlines()
+    c.check(p.returncode == 0 and "Tuff error" not in p.stderr, "the templates program runs to the end", (p.stdout + p.stderr)[-600:])
+    for i, want in enumerate(FSTRINGS_OUTPUT):
+        c.check(i < len(got) and got[i] == want, f"line {i + 1}: {want}", got[i] if i < len(got) else "(missing)")
+    p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+    c.check(p.stdout.strip() == "OK", "--check accepts all of it", (p.stdout + p.stderr)[:600])
+
+    for i, (code, line, col, says, check_says) in enumerate(FSTRINGS_ERRORS):
+        bad = write(f"mistake{i}.tuf", code)
+        shown = code.splitlines()[line - 1].strip()
+        p = subprocess.run(tuff_cmd() + [bad], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env, stdin=subprocess.DEVNULL)
+        at = where(p.stderr)
+        c.check(p.returncode == 1 and at[:2] == (line, col) and says in at[2], f"running {shown!r} stops at {line}:{col}: {says[:60]!r}", at)
+        p = subprocess.run(tuff_cmd() + ["--check", bad], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+        if check_says == "OK":
+            c.check(p.stdout.strip() == "OK", f"--check can't know it before the run, and says OK: {shown!r}", (p.stdout + p.stderr)[:300])
+        else:
+            at = where(p.stderr)
+            c.check(p.returncode == 1 and at[:2] == (line, col) and (check_says or says) in at[2],
+                    f"--check on {shown!r} says it at {line}:{col} too", at)
+
+    for i, (code, want) in enumerate(FSTRINGS_CHECKS):
+        bad = write(f"check{i}.tuf", code)
+        p = subprocess.run(tuff_cmd() + ["--check", bad], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+        out = (p.stdout + p.stderr).strip()
+        shown = code.splitlines()[-1].strip()
+        if want == "OK":
+            c.check(out == "OK", f"--check accepts: {shown}", out[:300])
+        else:
+            c.check(p.returncode == 1 and want in out, f"--check on {shown!r} says {want[:50]!r}", out[:300])
+
+    # Tuff Engine's preview: a setup with templates, and one that keeps doubling its text with a template stops as too-much.
+    src = write("fstrings_scene.tuf", 'mention tgame\ngame = tgame.window("T", 300, 200)\nscore = 7\n'
+                                      'label = game:text(f"Score: {score:000}", 150, 30)\nsay f"made {score}"')
+    code, out, err, d, secs = scene(src)
+    c.check(code == 0 and d.get("error") is None and d.get("stopped") == "end" and "Score: 007" in json.dumps(d.get("batch")),
+            f"the --scene preview runs a setup with templates ({secs:.1f} s)", (d.get("error"), d.get("stopped"), err[-300:]))
+    src = write("fstrings_huge.tuf", 'mention tgame\ngame = tgame.window("Huge", 400, 300)\nfirst = game:box(10, 10)\n'
+                                     's = "ab"\nfor i in range(1, 40):\n    s = f"{s}{s}"\nlast = game:box(50, 50)')
+    code, out, err, d, secs = scene(src)
+    c.check(code == 0 and d.get("stopped") == "too-much" and [t.get("var") for t in d.get("things", [])] == ["first"] and secs < 4,
+            f"...and text doubled by a template stops it as too-much in {secs:.1f} s", (d.get("stopped"), d.get("error"), secs))
+
+    lang = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")
+    try:
+        p = subprocess.run(["node", "-e", FSTRINGS_LANG, lang], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the editor checks")
+        return
+    try:
+        t = json.loads(p.stdout)
+    except ValueError:
+        c.check(False, "the editor checks ran", (p.stdout + p.stderr)[-600:])
+        return
+    c.check(t["kinds"] == "ccccsssscsss", 'the editor reads say f"a{x}b" as code, text, then x as code', t["kinds"])
+    c.check(t["code"] is False and t["text"] is True and t["plain"] is True and t["dict"] is True,
+            "after f\"Hi {name: it's in code (so completions work), after the } it's text again", [t[k] for k in ("code", "text", "plain", "dict")])
+    c.check(t["methods"], 'typing f"{name: offers the methods', t["methods"])
+    c.check(t["ids"] == "name@1 name@11 score@22" and t["fvar"] == "f@1 f@9" and t["none"] == "",
+            "rename and find uses see the names in { } (not the f, plain text or {{ }})", [t["ids"], t["fvar"], t["none"]])
+    c.check('f"{name} has' in (t["hover"] or "") and t["nohover"] is None, "the f of a template has a hover, and a variable called f doesn't",
+            [t["hover"], t["nohover"]])
+    c.check(t["snippet"] == 'f"${1:Hello} {${2:name}\\}$0"', 'there is an f"..." snippet', t["snippet"])
+    toks = t["colours"]
+    c.check(all(x in toks for x in ('f"=string', "{=delimiter.curly", "name=identifier", ":upper=delimiter+method", "score=identifier",
+                                    ":0.00=string.escape", "{{=string.escape", "k=string", "!=string")),
+            "the colours: the code in { } as code, its format and {{ }} as escapes, a string inside as a string", toks)
+    c.check(t["states"] == ["root", "root", "root", "root"] and t["next"] == "x=identifier",
+            "after a template (with a dictionary or another template in it) the next line is code again", [t["states"], t["next"]])
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
@@ -5193,6 +5425,7 @@ TESTS.update({"net": t_net, "net_2d": t_net_2d, "net_rooms": t_net_rooms})
 TESTS.update({"car_enter": t_car_enter, "weight": t_weight, "sign_text": t_sign_text, "people_style": t_people_style})
 TESTS.update({"recursion": t_recursion, "recursion_window": t_recursion_window, "pictures_up": t_pictures_up})  # 1.4.1
 TESTS.update({"interp": t_interp})  # 1.5.0
+TESTS.update({"fstrings": t_fstrings})  # 1.5.0
 
 
 def main():
