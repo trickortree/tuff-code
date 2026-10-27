@@ -356,6 +356,7 @@ board:play("explode")                               # an animation on the line w
 - **atgui** ("advanced tgui") makes apps that look like the Claude or Codex desktop apps: sidebars, lists, chat bubbles, dashboards, menus and pop-ups, all styled from Tuff. See below.
 - **tgame** makes games, like pygame: 2D sprites, keys, the mouse, collisions and sounds, or a 3D world with a player. See below.
 - **tdraw** draws with a pen (a turtle), like Python's turtle: lines, shapes, fills, text and rainbow pens. See below.
+- **tterm** makes terminal games, like Snake or a roguelike: a grid of letters in colours, with keys read as they're pressed. They run in the Run window, a terminal or a Build exe. See below.
 
 ### tdraw
 ```tuff
@@ -384,6 +385,96 @@ tdraw.on_click(clicked)     # runs clicked(x, y) on each click
 - The window stays open after the program ends, until it's closed. `wait()` keeps it drawing while the program waits.
 - Several pens can draw at once: call `tdraw.pen()` again.
 - For big drawings, use `pen:speed "instant"`, or they take a while to animate.
+
+### tterm
+```tuff
+mention tterm
+screen = tterm.screen(30, 12)     # 30 across, 12 down (40, 20 if left out)
+x = 15
+
+func step(dt):                    # about 20 times a second; dt is the seconds since the last time
+    if screen:held("left") and x > 1:
+        x -= 1
+    if screen:held("right") and x < 28:
+        x += 1
+    screen:clear()                # draw each frame from nothing
+    screen:box(0, 0, 30, 12, "gray")
+    screen:text(2, 0, f" x is {x} ", "gold")
+    screen:put(x, 6, "@", "lime")
+    if screen:pressed("q"):
+        screen:stop()             # ends every_frame after this frame
+
+screen:every_frame(step)          # runs step until screen:stop() or Esc
+say f"You stopped at {x}."
+```
+- x goes right from 0 and y goes **down** from 0, one cell per letter. A spot off the screen draws nothing, and decimals round down.
+- **Drawing:** `screen:put(x, y, "@", "lime")` draws one character (a space rubs one out), `screen:text(x, y, "words", "gold")` writes to the right, `screen:box(x, y, width, height, "gray")` draws a border, and `screen:clear()` rubs out everything. The colour is optional, and it's any colour name or `"#rrggbb"`.
+- **Reading it:** `screen:get(x, y)` is the character there: `" "` when it's empty, `""` off the screen. It's handy for walls: `if screen:get(x, y) is "#":`.
+- **Keys:** `screen:pressed("space")` is true if the key went down since the last frame (and again as a held key repeats), and `screen:held("left")` is true while it's held. Keys are a letter, a number, `space`, `enter`, `tab`, `backspace`, `delete`, `up`, `down`, `left`, `right` or `"any"`. Esc always ends the game, and a terminal never sees Shift, Ctrl or Alt on their own.
+- **Where it runs:**
+  - **TuffCode's Run window:** the game takes the keys when it starts, and again when it's clicked. Esc ends it and lets go of the keys. Clicking somewhere else lets go too, and the game carries on.
+  - **A terminal and a Build exe:** it draws at the top of the terminal and reads the keys straight away. The terminal is always put back afterwards, even after an error or Ctrl+C.
+  - **With no one to press keys** (`tuff_run`, a pipe or a file): frames don't wait for the clock, and each one is 0.05 seconds of game time. `screen:press("right")` gives the next frame a key, and `screen:press("down", 30)` gives it to frame 30. The game stops by itself 100 frames after the last key, and only how the screen ends is shown.
+- The screen shows after each frame, while the program waits (`wait(0.1)` in a loop of its own), and when the program ends. Things said with `say` go below it.
+- One character fills one cell. Most emoji are two cells wide, so they may not line up everywhere.
+
+A small Snake. Steer with the arrow keys, and eat the `*`:
+```tuff
+mention tterm
+screen = tterm.screen(24, 12)
+snake = [[6, 6], [5, 6], [4, 6]]
+dx = 1
+dy = 0
+turn = "right"
+food = [15, 6]
+timer = 0
+alive = true
+
+func step(dt):
+    for key in ["up", "down", "left", "right"]:
+        if screen:pressed(key):
+            turn = key
+    timer += dt
+    if timer >= 0.15:
+        timer = 0
+        move()
+    screen:clear()
+    screen:box(0, 0, 24, 12, "gray")
+    screen:put(food[0], food[1], "*", "red")
+    for part in snake:
+        screen:put(part[0], part[1], "o", "lime")
+    if not alive:
+        screen:text(7, 5, "GAME OVER", "red")
+        screen:stop()
+
+func move():
+    if turn is "up" and dy is 0:
+        dx = 0
+        dy = -1
+    elif turn is "down" and dy is 0:
+        dx = 0
+        dy = 1
+    elif turn is "left" and dx is 0:
+        dx = -1
+        dy = 0
+    elif turn is "right" and dx is 0:
+        dx = 1
+        dy = 0
+    head = [snake[0][0] + dx, snake[0][1] + dy]
+    if screen:get(head[0], head[1]) is not " " and head != food:
+        alive = false
+        return
+    snake = [head] + snake
+    if head == food:
+        food = [random(1, 22), random(1, 10)]
+    else:
+        snake:pop()
+
+screen:every_frame(step)
+say f"Your snake was {len(snake)} long."
+```
+- The keys only choose the next turn, and `move()` makes it, so the snake can't double back on itself.
+- `screen:get` says what's in the cell ahead: a wall or the snake's own body ends the game.
 
 ### tap
 ```tuff
@@ -1406,6 +1497,7 @@ say "That took " + round(time() - start, 2) + " seconds"
   - **Files:** writes stay in memory for that run. `file.write`, `file.add`, `file.save` and `file.delete` work, and later reads in the same run see them, but nothing is saved and no file on disk changes. To change the user's files, edit them yourself.
   - **Folders:** with `"code"`, relative paths are in the project folder, so a snippet can read the project's files. With `"file"`, they're in that file's folder.
   - When you run Tuff another way (in a terminal), set `TUFF_NO_WRITES=1` for the same in-memory writes, and `TUFF_BASE_DIR=<folder>` to make relative paths start in that folder instead of the program's.
+  - **tterm games:** no one presses keys there, so add them with `screen:press("right")` before `screen:every_frame` (each one is the next frame's key; `screen:press("down", 30)` is frame 30's). The frames run straight away, the game stops 100 frames after the last key, and you see how the screen ended. Take the presses out afterwards.
 - **Testing a window program:** window programs open a real window, so test them with a self-test.
   1. Add `app:after(0.5, selftest)` just before the last line.
   2. Write `func selftest():` so that it calls your event functions, uses `say` to show what it finds, and ends with `app:close`.

@@ -1,0 +1,82 @@
+# Snake, in the terminal. Steer with the arrow keys and eat the stars: each one makes the snake longer and faster.
+# Don't hit the walls or your own tail. In TuffCode's Run window, click the game if it lost the keys. Esc stops it.
+mention tterm
+
+width = 32
+height = 16
+screen = tterm.screen(width, height + 1)    # one more row under the walls, for the keys
+snake = [[8, 8], [7, 8], [6, 8]]            # x, y of each part: the head first
+dx = 1
+dy = 0
+turn = "right"
+food = [20, 8]
+score = 0
+speed = 0.15                                # seconds between moves: quicker as the snake grows
+timer = 0
+alive = true
+
+func place_food():
+    food = [random(1, width - 2), random(1, height - 2)]
+    while snake:has(food):
+        food = [random(1, width - 2), random(1, height - 2)]
+
+# The keys only choose the next turn. move() makes it, so the snake can't double back on itself.
+func steer():
+    for key in ["up", "down", "left", "right"]:
+        if screen:pressed(key):
+            turn = key
+
+func move():
+    if turn is "up" and dy is 0:
+        dx = 0
+        dy = -1
+    elif turn is "down" and dy is 0:
+        dx = 0
+        dy = 1
+    elif turn is "left" and dx is 0:
+        dx = -1
+        dy = 0
+    elif turn is "right" and dx is 0:
+        dx = 1
+        dy = 0
+    head = [snake[0][0] + dx, snake[0][1] + dy]
+    hit_wall = head[0] < 1 or head[0] > width - 2 or head[1] < 1 or head[1] > height - 2
+    if hit_wall or snake:has(head):
+        alive = false
+        return
+    snake = [head] + snake
+    if head == food:
+        score += 1
+        speed = max(0.06, speed - 0.006)
+        place_food()
+    else:
+        snake:pop()
+
+func draw():
+    screen:clear()
+    screen:box(0, 0, width, height, "gray")
+    screen:text(2, 0, f" Score: {score} ", "gold")
+    screen:text(1, height, "arrows: steer   esc: stop", "gray")
+    screen:put(food[0], food[1], "*", "red")
+    for part in snake:
+        screen:put(part[0], part[1], "o", "lime")
+    screen:put(snake[0][0], snake[0][1], "@", "lime")
+    if not alive:
+        screen:text(width / 2 - 5, height / 2, " GAME OVER ", "red")
+
+func step(dt):
+    steer()
+    timer += dt
+    if timer >= speed:
+        timer = 0
+        move()
+    draw()
+    if not alive:
+        screen:stop()
+
+draw()
+screen:every_frame(step)
+if alive:
+    say f"You stopped with {score} points."
+else:
+    say f"Game over! You scored {score}."
