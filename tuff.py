@@ -372,6 +372,10 @@ class Parser:
         self.values = self.given | self.funcs | BUILTIN_NAMES | OWN_NAME_BUILTINS | {"err", "pi", "all"}
         # What this file imports or mentions: its libraries and its own files (money.rate = 2 says so, see simple_statement).
         self.imported = {nxt.value for t, nxt in zip(toks, toks[1:]) if t.kind == "KW" and t.value in ("import", "mention") and nxt.kind == "NAME"}
+        self.depth = 0  # how many blocks in the statement being read is (a kind is made at the top: depth 0)
+        self.kinds = {}  # the kinds read so far: name -> line (1.5.0)
+        self.kind_name = None  # the kind whose block is being read
+        self.in_action = None  # the kind whose action is being read: its my is that kind's object
 
     def block_word(self, ahead, catch=False):
         """Is the try or catch here (ahead tokens before the ':') the start of a block? try: and catch: with a
@@ -424,6 +428,13 @@ class Parser:
         return body
 
     def block(self, opener_optional=False):
+        self.depth += 1
+        try:
+            return self.block_lines(opener_optional)
+        finally:
+            self.depth -= 1
+
+    def block_lines(self, opener_optional):
         tok = self.peek()
         # A ':' glued to the next word (then:say "hi", else:say, func f():say) is read as a method's ':', but no
         # method call can start here, so it's this block's ':'.
@@ -485,6 +496,14 @@ class Parser:
                                                f"like: {tok.value} money").value
                 self.end_line()
                 return N("import", tok, name=name, word=tok.value)
+        # kind Pet: (1.5.0). A soft word too: kind followed by a name can't be anything else, so a program's own
+        # variable called kind (kind = "dog", kind:upper()) keeps working.
+        if tok.kind == "NAME" and tok.value == "kind" and self.toks[self.i + 1].kind == "NAME":
+            return self.kind_def()
+        if tok.kind == "NAME" and tok.value == "class" and self.toks[self.i + 1].kind == "NAME":
+            name = self.toks[self.i + 1].value
+            raise TuffError(f"Tuff has no classes. To make your own kind of object, write: kind {name}: then its fields "
+                            "and actions, indented under it.", tok.line, tok.col)
         # try: ... catch: (or catch problem:) ... (1.4.0). Soft words: they only count at the start of a line with a
         # ':' after them, and a program that gives try or catch a value (catch = [], then catch:add(fish)) keeps them.
         if tok.kind == "NAME" and tok.value == "try" and self.block_word(1):
@@ -523,7 +542,77 @@ class Parser:
                 if not self.at("OP", ")"):
                     self.expect("OP", ",", msg="Separate function inputs with commas.")
             self.next()
-        return N("func", tok, name=name, params=params, body=self.block())
+        kind = self.kind_name if self.depth == 1 else None
+        if kind is None:
+            return N("func", tok, name=name, params=params, body=self.block())
+        # One of a kind's actions (1.5.0): in it, my is the object. Its name is Pet:feed, so it's never mixed up with
+        # a function of the program's own called feed.
+        if "my" in params:
+            raise TuffError("An action's inputs can't be called my: inside an action, my is the object itself.", tok.line, tok.col)
+        outer, self.in_action = self.in_action, kind
+        try:
+            body = self.block()
+        finally:
+            self.in_action = outer
+        for x in nodes(body):
+            if (x.kind == "assign" and x.target.kind == "var" and x.target.name == "my") or \
+                    (x.kind in ("for", "try") and x.name == "my") or (x.kind == "func" and "my" in x.params):
+                raise TuffError(f"Inside an action, my is this {kind} itself, so it can't be given a value. Use another name.",
+                                x.line, x.col)
+        return N("func", tok, name=f"{kind}:{name}", params=params, body=body, action=name)
+
+    def kind_def(self):
+        """kind Pet: (1.5.0), then its fields (name = "?", each with the value a new Pet starts with) and its
+        actions (func feed():), indented under it. Only at the top of the program, like the functions should be."""
+        tok = self.next()
+        name_tok = self.next()
+        name = name_tok.value
+        if self.depth:
+            raise TuffError("Make a kind at the top of the program, not inside a function or a block.", tok.line, tok.col)
+        if name in BUILTIN_NAMES or name in OWN_NAME_BUILTINS or name in ("err", "pi", "all", "my", "kind") or name in LIBRARIES:
+            what = "library" if name in LIBRARIES or name == "file" else "word" if name in ("my", "kind") else \
+                "value" if name in ("err", "pi", "all") else "function"
+            like = f", like {name.capitalize()}" if name.capitalize() != name else ""
+            raise TuffError(f"{name} is Tuff's own {what}, so a kind can't be called that. Give it a name of its own{like}.",
+                            name_tok.line, name_tok.col)
+        if name in self.kinds:
+            raise TuffError(f"There are two kinds called {name}. This one would replace the one on line {self.kinds[name]}. "
+                            "Give them different names.", name_tok.line, name_tok.col)
+        if self.at("OP", "("):
+            nxt = self.peek()
+            raise TuffError(f"A kind can't be made from another kind: Tuff has no inheritance. Write kind {name}: and give it "
+                            "fields of its own.", nxt.line, nxt.col)
+        if not (self.at("COLON") or self.at("METHOD")):
+            nxt = self.peek()
+            raise TuffError(f"Expected ':' after the kind's name, like: kind {name}:", nxt.line, nxt.col)
+        self.kinds[name] = tok.line
+        self.kind_name = name
+        try:
+            body = self.block()
+        finally:
+            self.kind_name = None
+        fields, actions, made = [], [], {}  # made: each field's and action's name -> what it is
+        for s in body:
+            if s.kind == "assign" and s.target.kind == "var" and s.op == "=":
+                field = s.target.name
+                if field == "my":
+                    raise TuffError("A field can't be called my: inside an action, my is the object itself.", s.line, s.col)
+                if field in made:
+                    raise TuffError(f"{name} already has {made[field]} called {field}. Give each field a name of its own.", s.line, s.col)
+                made[field] = "a field"
+                fields.append(s)
+            elif s.kind == "func":
+                if s.action in made:
+                    raise TuffError(f"{name} already has {made[s.action]} called {s.action}. Give each action a name of its own.",
+                                    s.line, s.col)
+                made[s.action] = "an action"
+                actions.append(s)
+            elif s.kind == "assign" and s.target.kind == "var":
+                raise TuffError(f"A field gets the value a new {name} starts with, using =, like {s.target.name} = 0.", s.line, s.col)
+            else:
+                raise TuffError(f"A kind holds fields (like name = \"?\") and actions (like func feed():), and nothing else. "
+                                "Put other code outside the kind.", s.line, s.col)
+        return N("kind", tok, name=name, fields=fields, actions=actions)
 
     def if_stmt(self):
         tok = self.next()
@@ -571,8 +660,8 @@ class Parser:
                 raise TuffError(f"{owner}.{name} belongs to {owner}.tuf, so it can't be changed from this file. Give {owner}.tuf a "
                                 f"function that changes it, like func set_{name}(new_{name}):, then call {owner}.set_{name}(...).",
                                 tok.line, tok.col)
-            if target.kind not in ("var", "index") and not (target.kind == "slice" and target.alt is not None):
-                raise TuffError("You can only store a value in a variable or a list item.", tok.line, tok.col)
+            if target.kind not in ("var", "index", "attr") and not (target.kind == "slice" and target.alt is not None):
+                raise TuffError("You can only store a value in a variable, a list item or an object's field.", tok.line, tok.col)
             return N("assign", tok, target=target, op=op, value=self.expr())
         return N("expr", tok, expr=target)
 
@@ -858,6 +947,8 @@ class Parser:
         if tok.kind == "FSTR":
             return self.template(tok)
         if tok.kind == "NAME":
+            if tok.value == "my" and self.in_action:  # an action's my: that kind's object (the checker knows its fields)
+                return N("var", tok, name="my", of_kind=self.in_action)
             return N("var", tok, name=tok.value)
         if tok.kind == "KW" and tok.value in ("true", "false", "nil"):
             return N("const", tok, value={"true": True, "false": False, "nil": None}[tok.value])
@@ -889,6 +980,112 @@ class Func:
     def __init__(self, name, params, body, env, line=None, code=None):
         self.name, self.params, self.body, self.env, self.line = name, params, body, env, line
         self.code = code  # 1.5.0: its body compiled (Interpreter.compile_block), or None under the old tree walker
+
+
+class Kind:
+    """A kind of object the program makes (1.5.0): kind Pet:, with its fields in order, the code of each one's
+    starting value (worked out again for every new object, so two Pets never share a list), and its actions (Funcs
+    that run with my as the object). env: where the starting values are worked out and the actions run."""
+
+    def __init__(self, name, fields, defaults, actions, env, line=None):
+        self.name, self.fields, self.defaults, self.actions, self.env, self.line = name, fields, defaults, actions, env, line
+
+
+class Instance:
+    """An object made from a kind: rex = Pet("Rex"). fields holds its fields' values, in the kind's order. Two
+    objects are the same (is, ==) only when they are one object, like the same pet."""
+    __slots__ = ("kind", "fields")
+
+    def __init__(self, kind, fields):
+        self.kind, self.fields = kind, fields
+
+
+# file.save keeps an object as a dictionary with this key first: {"$kind": "Pet", "name": "Rex", "hunger": 3}. No field
+# can have this name, so it never takes one's place, and file.load knows which kind to make again.
+SAVED_KIND = "$kind"
+
+
+def an(word):
+    """'a Pet', 'an Owl'."""
+    return f"{'an' if word[:1].lower() in 'aeiou' else 'a'} {word}"
+
+
+def and_list(names):
+    """'name', 'name and hunger', 'name, hunger and age'."""
+    names = list(names)
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def kind_inputs_help(kind, fields, count):
+    """Pet("a", "b", "c") with more inputs than Pet has fields (the run and the checker say the same)."""
+    if not fields:
+        return f"{kind} has no fields, so {kind}() takes no inputs, but got {count}."
+    return (f"{kind} has {len(fields)} field{'s' if len(fields) != 1 else ''} ({and_list(fields)}), so {kind}() takes "
+            f"up to {len(fields)} input{'s' if len(fields) != 1 else ''}, one for each field in order, but got {count}.")
+
+
+def field_help(kind, fields, actions, name, owner):
+    """rex.hungr: the field isn't one of the kind's (owner: how the code names the object, or None)."""
+    owner = owner or "thing"
+    if name in actions:
+        return f"{name} is an action of {kind}, so it's called with ':', like {owner}:{name}()"
+    hint = difflib.get_close_matches(name, list(fields), n=1, cutoff=0.6)
+    if hint:
+        return f"{kind} doesn't have a field '{name}'. Did you mean '{hint[0]}'?"
+    if fields:
+        return f"{kind} doesn't have a field '{name}'. Its fields are: {', '.join(fields)}."
+    return f"{kind} doesn't have a field '{name}': it has no fields."
+
+
+def action_help(kind, fields, actions, name, owner):
+    """rex:fead(): the action isn't one of the kind's."""
+    owner = owner or "thing"
+    if name in fields:
+        return f"{name} is a field of {kind}, not an action, so it's read with a dot, like {owner}.{name}"
+    hint = difflib.get_close_matches(name, list(actions), n=1, cutoff=0.6)
+    if hint:
+        return f"{kind} doesn't have an action '{name}'. Did you mean '{hint[0]}'?"
+    if actions:
+        return f"{kind} doesn't have an action '{name}'. Its actions are: {', '.join(actions)}."
+    return f"{kind} doesn't have an action '{name}'. Give it one inside kind {kind}:, like func {name}():"
+
+
+def action_inputs_help(owner, name, want, got, bare):
+    """rex:feed(1) when feed takes no inputs (bare: rex:feed - 1, where rule 1 made "- 1" its input)."""
+    if bare and not want:
+        return f"{owner}:{name} doesn't take an input, so what comes after it was read as one. Write {owner}:{name}() instead."
+    return f"{owner}:{name}() needs {want} input{'s' if want != 1 else ''}, but got {got}."
+
+
+def kind_not_object(kind, use):
+    """Pet.name or Pet:feed(): the kind itself, not an object made from it. use is what was tried, like .name."""
+    one = kind.lower() if kind.lower() != kind else "thing"
+    return f"{kind} is a kind, not an object made from it. Make one first, like {one} = {kind}(...), then use {one}{use}."
+
+
+def own_field_help(name, kind, fields):
+    """A name that's never given a value: inside an action of kind, one of its fields written on its own (hunger,
+    not my.hunger), and my outside every action. None for any other name."""
+    if kind and name in fields:
+        return f"I don't know what '{name}' is. To use this {kind}'s field, write my.{name}"
+    if name == "my":
+        return "I don't know what 'my' is. my is the object itself, so it only works inside a kind's actions, like: " \
+               "func feed(): my.hunger -= 1"
+    return None
+
+
+def object_brackets(kind, fields, owner, key, then=""):
+    """The tip for rex["name"]: an object's fields are read (and set) with a dot. key: the key written, when known."""
+    field = key if isinstance(key, str) and key in fields else fields[0] if fields else "name"
+    return f"Use its fields with a dot, like {owner or 'thing'}.{field}{then}"
+
+
+def where_text(e):
+    """node_text, and an object's fields too: rex.owner.name (1.5.0)."""
+    if e.kind == "attr":
+        obj = where_text(e.obj)
+        return None if obj is None else f"{obj}.{e.name}"
+    return node_text(e)
 
 
 class Builtin:
@@ -1041,6 +1238,12 @@ def to_text(v, nested=False, inside=()):
         return f"<library {v.name}>"
     if isinstance(v, Native):
         return v.show(nested) if v.show else f"<{v.kind}>"
+    if isinstance(v, Instance):  # Pet(name: "Rex", hunger: 3), and Pet(...) inside itself (rex.best_friend = rex)
+        if any(v is x for x in inside):
+            return f"{v.kind.name}(...)"
+        return v.kind.name + "(" + ", ".join(f"{k}: {to_text(x, True, inside + (v,))}" for k, x in v.fields.items()) + ")"
+    if isinstance(v, Kind):
+        return f"<kind {v.name}>"
     if v is ALL:
         return "all"
     if isinstance(v, Err):
@@ -1100,6 +1303,10 @@ def type_name(v):
         return "a library"
     if isinstance(v, Native):
         return f"a {v.kind}"
+    if isinstance(v, Instance):
+        return an(v.kind.name)
+    if isinstance(v, Kind):
+        return f"the kind {v.name}"
     if v is ALL:
         return "all"
     if isinstance(v, Err):
@@ -1247,7 +1454,13 @@ def make_file_members(interp):
                 same = next(k for k in keys if keys.count(k) > 1)
                 raise TuffError(f"file.save can't keep both {same} and \"{same}\" as keys: saved, every key is text, so they'd be one.")
             return {k: to_json(x, seen) for k, x in zip(keys, v.values())}
-        raise TuffError(f"file.save keeps text, numbers, true/false, nil, lists and dictionaries, not {type_name(v)}.")
+        if isinstance(v, Instance):  # an object (1.5.0): a dictionary that starts with its kind's name, for file.load
+            if any(v is s for s in seen):
+                raise TuffError(f"file.save can't save {type_name(v)} that holds itself.")
+            seen = seen + (v,)
+            return {SAVED_KIND: v.kind.name, **{k: to_json(x, seen) for k, x in v.fields.items()}}
+        raise TuffError(f"file.save keeps text, numbers, true/false, nil, lists, dictionaries and objects made from a kind, "
+                        f"not {type_name(v)}.")
 
     def save(path, value):  # any data, as JSON
         try:
@@ -1261,8 +1474,12 @@ def make_file_members(interp):
         if not exists(path) and default is not None:
             return default
         text = read(path, "file.load")
+
+        def made(d):  # a saved object whose kind this program has comes back as that kind's object (1.5.0)
+            kind = d.get(SAVED_KIND)
+            return interp.saved_object(interp.kinds[kind], d) if isinstance(kind, str) and kind in interp.kinds else d
         try:
-            return json.loads(text)
+            return json.loads(text, object_hook=made if interp.kinds else None)
         except RecursionError:
             raise TuffError(f"{p} has lists or dictionaries inside each other too many times for file.load.")
         except ValueError:
@@ -1288,7 +1505,9 @@ def method_names(v):
         return tuple(v.methods)
     if isinstance(v, Builtin):
         return ("ascii", "color", "colour", "pen") if v.name == "print" else ()
-    if isinstance(v, (bool, Module, Func)) or v is ALL:
+    if isinstance(v, Instance):
+        return tuple(v.kind.actions)
+    if isinstance(v, (bool, Module, Func, Kind)) or v is ALL:
         return ()
     return None
 
@@ -2024,6 +2243,11 @@ class Env:
                 e = e.parent
             if name in LIBRARIES:
                 raise TuffError(f"'{name}' is a library. Add  import {name}  at the top of your file to use it.")
+            me = self.find("my")
+            me = me.vars["my"] if me is not None else None
+            msg = own_field_help(name, *((me.kind.name, me.kind.fields) if isinstance(me, Instance) else (None, ())))
+            if msg:
+                raise TuffError(msg)
             hint = difflib.get_close_matches(name, known, n=1, cutoff=0.6)
             extra = f" Did you mean '{hint[0]}'?" if hint else " Give it a value first, like: " + name + " = 5"
             raise TuffError(f"I don't know what '{name}' is.{extra}")
@@ -2363,6 +2587,8 @@ class Interpreter:
         # The debugger's hook point (1.5.0): functions run as hook(statement, env) just before each statement, in
         # both runtimes. atgui's app:closed time limit is one. While it's empty it costs one check per statement.
         self.step_hooks = []
+        self.kinds = {}  # 1.5.0: the program's kinds by name (file.load makes their objects again)
+        self.made_kinds = {}  # id(kind node): (node, its Kind), made once (see s_kind)
         if os.environ.get("TUFF_NO_WRITES") == "1":  # tuff_run for AI agents: file writes stay in memory
             self.writes = False
         takes_err = {"number", "num", "int", "text", "str", "print"}  # they hand an err back, or show it as "err"
@@ -2724,6 +2950,8 @@ class Interpreter:
                 value = self.binop(s.op[0], self.eval(t, env), value)
             env.set(t.name, value)
             return value
+        if t.kind == "attr":  # rex.hunger = 3, my.hunger -= 1 (1.5.0)
+            return self.set_field(s, self.eval(t.obj, env), value)
         obj = plain(self.eval(t.obj, env))  # the list or dictionary and the key are worked out once: votes[input()] += 1
         key = self.part_key(t, env) if t.kind == "slice" else self.eval(t.index, env)
         return self.store(s, obj, key, value)
@@ -2743,7 +2971,9 @@ class Interpreter:
             obj[dict_key(key)] = value
             return value
         if not isinstance(obj, list):
-            raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.")
+            tip = f" {object_brackets(obj.kind.name, obj.kind.fields, where_text(s.target.obj), key, ' = ...')}" \
+                if isinstance(obj, Instance) else ""
+            raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.{tip}")
         obj[self.list_index(obj, key)] = value
         return value
 
@@ -2799,6 +3029,83 @@ class Interpreter:
     def s_func(self, s, env):
         env.vars[s.name] = Func(s.name, s.params, s.body, env, s.line)
         return None
+
+    # ---- kinds (1.5.0): kind Pet:, rex = Pet("Rex"), rex.hunger, rex:feed()
+    def s_kind(self, s, env):
+        """kind Pet: makes the kind. run_file runs it before the rest of the program, like a func, and again where it's
+        written; it's made only once, so every Pet comes from the same kind."""
+        got = self.made_kinds.get(id(s))
+        if got is None or got[0] is not s:
+            actions = {f.action: Func(f.name, f.params, f.body, env, f.line, self.compile_block(f.body) if self.fast else None)
+                       for f in s.actions}
+            kind = Kind(s.name, tuple(f.target.name for f in s.fields), tuple(f.value for f in s.fields), actions, env, s.line)
+            got = self.made_kinds[id(s)] = (s, kind)
+        env.vars[s.name] = self.kinds[s.name] = got[1]
+        return None
+
+    def make_object(self, kind, args, loose=False):
+        """Pet("Rex"): a new Pet. The inputs fill its fields in order; any left over start with their kind's value,
+        worked out now, for this object. loose (a library calling back): extra inputs are dropped."""
+        fields = kind.fields
+        if len(args) > len(fields):
+            if not loose:
+                raise TuffError(kind_inputs_help(kind.name, fields, len(args)))
+            args = args[:len(fields)]
+        made = dict(zip(fields, args))
+        if len(args) < len(fields):
+            self.starting_values(kind, made, fields[len(args):], kind.defaults[len(args):])
+        return Instance(kind, made)
+
+    def starting_values(self, kind, made, names, defaults):
+        """Work out these fields' starting values, for a new object. A field that starts with a new object of its own
+        kind (kind Node: next = Node()) would make objects without end: that stops like a function calling itself."""
+        stop = f"{kind.name}() was made inside itself too many times. Does a field of {kind.name} start with a new {kind.name}()? Start it with nil."
+        if self.depth >= MAX_DEPTH:
+            raise TuffError(stop)
+        self.depth += 1
+        try:
+            for name, default in zip(names, defaults):
+                made[name] = self.eval(default, kind.env)
+        except RecursionError:
+            raise TuffError(stop)
+        finally:
+            self.depth -= 1
+
+    def saved_object(self, kind, saved):
+        """file.load's object, from the dictionary file.save made of it: a field the save doesn't have (the kind got
+        a new one since) starts with its kind's value, and a key that isn't one of the kind's fields is left out."""
+        made = {name: saved[name] for name in kind.fields if name in saved}
+        missing = [(name, default) for name, default in zip(kind.fields, kind.defaults) if name not in saved]
+        if missing:
+            self.starting_values(kind, made, *zip(*missing))
+        return Instance(kind, {name: made[name] for name in kind.fields})
+
+    def call_action(self, e, obj, args):
+        """rex:feed(): one of the object's actions, run with my as the object."""
+        kind = obj.kind
+        fn = kind.actions.get(e.name)
+        if fn is None:
+            raise TuffError(action_help(kind.name, kind.fields, kind.actions, e.name, where_text(e.obj)))
+        if len(args) != len(fn.params):
+            raise TuffError(action_inputs_help(where_text(e.obj) or kind.name, e.name, len(fn.params), len(args), getattr(e, "bare", False)))
+        return self.invoke(fn, args, me=obj)
+
+    def set_field(self, s, obj, value):
+        """rex.hunger = 3 and my.hunger -= 1 (value is already worked out): one of the object's fields. An object
+        only has its kind's fields, so a typo is an error instead of a new field."""
+        t = s.target
+        if obj.__class__ is not Instance:
+            if isinstance(obj, Kind):
+                raise TuffError(kind_not_object(obj.name, f".{t.name} = ..."))
+            tip = f" A dictionary's values are set with [ ], like {where_text(t.obj) or 'd'}[\"{t.name}\"] = ..." if isinstance(obj, dict) else ""
+            raise TuffError(f"Only objects made from a kind have fields to set with '.', and this is {type_name(obj)}.{tip}")
+        fields = obj.fields
+        if t.name not in fields:
+            raise TuffError(field_help(obj.kind.name, fields, obj.kind.actions, t.name, where_text(t.obj)))
+        if s.op != "=":
+            value = self.binop(s.op[0], fields[t.name], value)
+        fields[t.name] = value
+        return value
 
     def s_import(self, s, env):
         if s.name == "file":  # built in, so there's nothing to load
@@ -2991,7 +3298,13 @@ class Interpreter:
         return obj[a:b + 1] if a <= b else obj[0:0]
 
     def member(self, e, obj):
-        """library.name"""
+        """library.name, and an object's field: rex.hunger (1.5.0)"""
+        if obj.__class__ is Instance:
+            if e.name in obj.fields:
+                return obj.fields[e.name]
+            raise TuffError(field_help(obj.kind.name, obj.kind.fields, obj.kind.actions, e.name, where_text(e.obj)))
+        if isinstance(obj, Kind):
+            raise TuffError(kind_not_object(obj.name, f".{e.name}"))
         if isinstance(obj, Builtin) and e.obj.kind == "var" and e.obj.name in PY_NAMES:  # time.sleep(1)
             raise TuffError(f"Tuff has no {e.obj.name}.{e.name}. {PY_NAMES[e.obj.name]}")
         if not isinstance(obj, Module):
@@ -3086,7 +3399,9 @@ class Interpreter:
                 raise TuffError(f"{owner} doesn't have {shown}.{tip}")
             return obj[key]
         if not isinstance(obj, (list, str)):
-            raise TuffError(f"Can't use [ ] on {type_name(obj)}.")
+            tip = f" {object_brackets(obj.kind.name, obj.kind.fields, where_text(obj_node), plain(key))}." \
+                if isinstance(obj, Instance) else ""
+            raise TuffError(f"Can't use [ ] on {type_name(obj)}.{tip}")
         return obj[self.list_index(obj, key)]
 
     def list_index(self, obj, index):
@@ -3163,7 +3478,8 @@ class Interpreter:
     def not_builtin(self, e, fn):
         raise TuffError(f"'{e.fn.name}' was given a value ({to_text(fn, True)}), so it isn't the built-in {e.fn.name}() any more. Use another name for your variable.")
 
-    def invoke(self, fn, args, loose=False):
+    def invoke(self, fn, args, loose=False, me=None):
+        """Call fn with args. me: the object, for one of its kind's actions (my in it)."""
         if isinstance(fn, Builtin):
             if self.fast:  # how many inputs it takes is worked out once for each count (see Builtin.fits)
                 fits = fn.fits.get(len(args))
@@ -3179,6 +3495,8 @@ class Interpreter:
                 raise TuffError(f"{fn.name}() needs {want} input{'s' if want != 1 else ''}, but got {len(args)}.")
             local = Env(fn.env)
             local.vars.update(zip(fn.params, args))
+            if me is not None:
+                local.vars["my"] = me
             if self.depth >= MAX_DEPTH:  # (deep enough for real work; a runaway stops here before it eats the memory)
                 raise TuffError(f"{fn.name}() called itself too many times.")
             self.depth += 1
@@ -3204,6 +3522,8 @@ class Interpreter:
                 raise TuffError(f"The program ran out of memory inside {fn.name}(). Is something growing without end?")
             finally:
                 self.depth -= 1
+        if isinstance(fn, Kind):  # Pet("Rex"): a new object (1.5.0)
+            return self.make_object(fn, args, loose)
         raise TuffError(f"{to_text(fn, True)} isn't a function, so it can't be called with ( ).")
 
     def method(self, e, env):
@@ -3213,7 +3533,11 @@ class Interpreter:
 
     def method_call(self, e, obj, args):
         """obj:name(args), once obj and args are worked out."""
+        if obj.__class__ is Instance:  # rex:feed(), one of its kind's actions (1.5.0)
+            return self.call_action(e, obj, args)
         name = e.name
+        if isinstance(obj, Kind):
+            raise TuffError(kind_not_object(obj.name, f":{name}()"))
         if isinstance(obj, Native):  # a library's object, like game:frame() (first: a game calls these all the time)
             fn = obj.methods.get(name)
             if fn is None:
@@ -3565,7 +3889,7 @@ class Interpreter:
                 return jump
             return run
 
-        def run(env):  # import, flush: the tree walker's own (they're run once, or seldom)
+        def run(env):  # import, flush, kind: the tree walker's own (they're run once, or seldom)
             if hooks:
                 step(s, env)
             try:
@@ -3616,6 +3940,27 @@ class Interpreter:
                     raise
                 env.set(t.name, v)
                 return v
+            return run
+        if t.kind == "attr":  # rex.hunger = 3, my.hunger -= 1 (1.5.0): the value first, then the object, as set_field does
+            obj_of, set_field, name = self.compile_expr(t.obj), self.set_field, t.name
+            quick = op == "=" and self.own("set_field")
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                try:
+                    v = value(env)
+                    obj = obj_of(env)
+                    if quick and obj.__class__ is Instance:
+                        fields = obj.fields
+                        if name in fields:
+                            fields[name] = v
+                            return v
+                    return set_field(s, obj, v)
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = s.line, s.col
+                    raise
             return run
         obj_of = self.compile_expr(t.obj)  # the list or dictionary and the key are worked out once: votes[input()] += 1
         if t.kind == "slice":
@@ -3802,11 +4147,16 @@ class Interpreter:
         if k == "slice":
             return self.make_slice(e)
         if k == "attr":
-            obj_of, member = self.compile_expr(e.obj), self.member
+            obj_of, member, name, quick = self.compile_expr(e.obj), self.member, e.name, self.own("member")
 
             def attr(env):
                 try:
-                    return member(e, obj_of(env))
+                    obj = obj_of(env)
+                    if quick and obj.__class__ is Instance:  # rex.hunger (1.5.0)
+                        fields = obj.fields
+                        if name in fields:
+                            return fields[name]
+                    return member(e, obj)
                 except TuffError as err:
                     if err.line is None:
                         err.line, err.col = line, col
@@ -4020,7 +4370,7 @@ PY_NAMES = {
     "open": "Use file.read(\"notes.txt\") and file.write(\"notes.txt\", text). They work in your program's folder.",
     "datetime": "now(), today() and date() give the time and the date.",
     "length": "Use len(value) for how long some text or a list is.",
-    "self": "Tuff has no classes. Keep things in variables and functions.",
+    "self": "Tuff has no classes: make a kind (kind Pet:), and in its actions the object itself is my, like my.hunger.",
 }
 # Methods from other languages, and the Tuff method that does the same job.
 PY_METHODS = {
@@ -4826,6 +5176,7 @@ class Scope:
         self.parent, self.name = parent, name
         self.names = set()
         self.funcs = {}
+        self.kind = None  # an action's scope: the name of its kind (my is that kind's object)
 
     def chain(self):
         s = self
@@ -4959,6 +5310,7 @@ class Checker:
         self.trying = 0  # inside how many try: blocks (a wrong key there may be on purpose: catch gets its message)
         self.base_dir = base_dir
         self.flip_names = None  # the animations the program's sprites make (run() fills it in: animation_names)
+        self.kinds = {}  # the program's kinds (1.5.0): name -> its kind node, with its fields and actions
 
     # ---- what the program makes, and where
     def collect(self, body, scope, top_level=True):
@@ -5005,6 +5357,19 @@ class Checker:
                 scope.names.add(s.name)
                 self.everywhere.add(s.name)
                 self.imports.add(s.name)
+            elif k == "kind":  # kind Pet: (1.5.0): its name is the program's, and each action is like a function with my
+                scope.names.add(s.name)
+                self.everywhere.add(s.name)
+                self.kinds[s.name] = s
+                for f in s.actions:
+                    inner = Scope(scope, f.name)
+                    inner.names.update(f.params)
+                    inner.names.add("my")
+                    inner.kind = s.name
+                    self.scope_of[id(f)] = inner
+                    self.everywhere.update(f.params)
+                    self.params.update(f.params)
+                    self.collect(f.body, inner, False)
 
     def run(self):
         self.collect(self.program, self.top)
@@ -5027,11 +5392,92 @@ class Checker:
         self.problems.append((node.line, node.col, msg))
 
     def what(self, kind):
+        if kind.startswith("%"):  # an object made from a kind (1.5.0), and the kind itself
+            return an(kind[1:])
+        if kind.startswith("$kind:"):
+            return f"the kind {kind[6:]}"
+        if kind.startswith("$module:"):
+            return "a library"
         return "a function" if kind.startswith("$libfn:") else self.TYPE.get(kind) or a_kind(kind.lstrip("@"))
 
     def only_func(self, name):
         """True when name is one top-level function and never anything else."""
         return self.func_count.get(name) == 1 and name not in self.assigned and name not in self.params and name not in self.loop_vars
+
+    # ---- kinds (1.5.0)
+    def only_kind(self, name):
+        """True when name is one of the program's kinds and never anything else, so name(...) makes that kind's object."""
+        return name in self.kinds and name not in self.assigned and name not in self.params and name not in self.loop_vars \
+            and name not in self.func_count
+
+    def fields_of(self, kind):
+        return [f.target.name for f in self.kinds[kind].fields]
+
+    def actions_of(self, kind):
+        """{action's name: its inputs}"""
+        return {f.action: f.params for f in self.kinds[kind].actions}
+
+    def own_files(self):
+        """Does the program import files of its own? (Their kinds can have any fields and actions.)"""
+        return any(name not in LIBRARIES and name != "file" for name in self.imports)
+
+    def is_field(self, name):
+        """Could thing.name be an object's field? (One of the program's kinds has it, or it can't be told.)"""
+        return self.own_files() or any(name in self.fields_of(k) for k in self.kinds)
+
+    def brackets_tip(self, obj, target, index, then):
+        """The tip after "Can't use [ ] on a Pet." (as Interpreter.item and store give it), or "" for a kind itself."""
+        if not obj.startswith("%"):
+            return ""
+        key = index.value if index.kind == "const" else None
+        return f" {object_brackets(obj[1:], self.fields_of(obj[1:]), where_text(target), key, then)}" + ("" if then else ".")
+
+    def object_side(self, a, b):
+        """Is one side of a sum certainly an object (or a kind), and the other certainly a value the run can name the
+        same way (a number, text, a list...)?"""
+        sure = lambda x: x in ("$number", "$text", "$list", "$dict", "$bool", "$nil") or (x or "").startswith(("%", "$kind:"))
+        return any((x or "").startswith(("%", "$kind:")) for x in (a, b)) and sure(a) and sure(b)
+
+    def field_hint(self, name):
+        """' Did you mean 'hunger'?' with the closest field any of the program's kinds has, or ''."""
+        hint = difflib.get_close_matches(name, sorted({f for k in self.kinds for f in self.fields_of(k)}), n=1, cutoff=0.6)
+        return f" Did you mean '{hint[0]}'?" if hint else ""
+
+    def check_kind_attr(self, e, obj, store=None):
+        """rex.hunger where rex is certainly a Pet ("%Pet"), or Pet.name on the kind itself ("$kind:Pet"). store: the
+        line, when e is what it stores into (rex.hunger = 3)."""
+        if obj.startswith("$kind:"):
+            self.problem(store or e, kind_not_object(obj[6:], f".{e.name}" + (" = ..." if store else "")))
+            return
+        kind = obj[1:]
+        fields = self.fields_of(kind)
+        if e.name not in fields:
+            self.problem(store or e, field_help(kind, fields, self.actions_of(kind), e.name, where_text(e.obj)))
+
+    def check_field_store(self, s):
+        """rex.hunger = 3: rex is an object that has that field. Text, lists, dictionaries, libraries and the rest have
+        no fields to set (as set_field says)."""
+        t = s.target
+        obj = self.kind(t.obj)
+        if obj is None:
+            return
+        if obj.startswith(("%", "$kind:")):
+            self.check_kind_attr(t, obj, store=s)
+        elif obj in self.TYPE or obj.startswith(("$module:", "$libfn:")):
+            tip = f" A dictionary's values are set with [ ], like {where_text(t.obj) or 'd'}[\"{t.name}\"] = ..." if obj == "$dict" else ""
+            self.problem(s, f"Only objects made from a kind have fields to set with '.', and this is {self.what(obj)}.{tip}")
+
+    def check_action(self, e, obj):
+        """rex:feed() where rex is certainly a Pet: an action Pet has, with as many inputs as it takes."""
+        if obj.startswith("$kind:"):
+            self.problem(e, kind_not_object(obj[6:], f":{e.name}()"))
+            return
+        kind = obj[1:]
+        actions = self.actions_of(kind)
+        if e.name not in actions:
+            self.problem(e, action_help(kind, self.fields_of(kind), actions, e.name, where_text(e.obj)))
+        elif len(e.args) != len(actions[e.name]):
+            self.problem(e, action_inputs_help(where_text(e.obj) or kind, e.name, len(actions[e.name]), len(e.args), e.bare))
 
     def returns_function(self, name):
         """Does this function give back another function? (Then calling it in a handler spot is fine.)"""
@@ -5054,11 +5500,15 @@ class Checker:
             return None
         if name in OWN_NAME_BUILTINS and name in self.everywhere and name not in self.top.names:
             return None  # only functions make their own variables with this name; everywhere else it's the built-in
+        if name == "my" and self.kinds:
+            return None  # in an action, my is its object (kind reads the node's of_kind); elsewhere, can't be sure
         kinds = set()
         if name in self.imports:
             kinds.add("$module:" + name)
         if name in self.func_count:
             kinds.add("$func")
+        if name in self.kinds:
+            kinds.add("$kind:" + name)
         if name in self.params or name in self.loop_vars:
             kinds.add(None)
         for s in self.assigned.get(name, []):
@@ -5103,8 +5553,12 @@ class Checker:
             return "$builtin"
         if k == "input":
             return "$text"
+        if k == "var" and getattr(e, "of_kind", None):  # an action's my: its kind's object (1.5.0)
+            return "%" + e.of_kind
         if k == "var":
             return self.var_kind(e.name, seen)
+        if k == "call" and e.fn.kind == "var" and self.only_kind(e.fn.name):  # Pet("Rex"): a Pet
+            return "%" + e.fn.name
         if k == "not" or (k == "binop" and e.op in self.COMPARE):
             return "$bool"
         if k == "neg":
@@ -5189,6 +5643,11 @@ class Checker:
         k = s.kind
         if k == "func":
             self.body(s.body, self.scope_of[id(s)], False, True)
+        elif k == "kind":  # its fields' starting values (worked out at the top, for each new object) and its actions
+            for f in s.fields:
+                self.expr(f.value, self.top)
+            for f in s.actions:
+                self.body(f.body, self.scope_of[id(f)], False, True)
         elif k == "import":
             self.check_import(s)
         elif k == "assign":
@@ -5205,9 +5664,17 @@ class Checker:
                 self.check_store(s, s.target.obj, s.target.index)
             elif s.target.kind == "slice":  # board[moves:pop] = "X": like the read form, then stored into
                 self.check_slice(s.target, scope, store=s)
+            elif s.target.kind == "attr":  # rex.hunger = 3, my.hunger -= 1 (1.5.0)
+                self.expr(s.target.obj, scope)
+                self.check_field_store(s)
             if s.op == "=" and target in self.func_count and target not in self.params and target not in self.loop_vars \
                     and self.kind(s.value) not in ("$func", "$builtin"):
                 self.problem(s, f"{target} is a function, and giving it a value replaces it, so {target}() won't work afterwards. Use another name for the value.")
+            elif s.op == "=" and target in self.kinds and target not in self.params and target not in self.loop_vars \
+                    and s.line > self.kinds[target].line and not (self.kind(s.value) or "").startswith("$kind:") \
+                    and any(x.kind == "call" and x.fn.kind == "var" and x.fn.name == target and x.line > s.line for x in nodes(self.program)):
+                self.problem(s, f"{target} is a kind, and giving it a value replaces it, so {target}(...) won't make new objects "
+                                "afterwards. Use another name for the value.")
             self.expr(s.value, scope)
         elif k == "expr":
             self.statement_call = s.expr
@@ -5234,6 +5701,8 @@ class Checker:
             self.expr(s.items, scope)
             if self.kind(s.items) == "$number":
                 self.problem(s, f"Can't loop over a number. Try: for {s.name} in range(...):")
+            elif (self.kind(s.items) or "").startswith(("%", "$kind:")):  # for x in rex: (1.5.0)
+                self.problem(s, f"Can't loop over {self.what(self.kind(s.items))}.")
             self.check_range_len(s)
             self.body(s.body, scope, True, in_func)
         elif k == "return":
@@ -5318,6 +5787,11 @@ class Checker:
     def use(self, e, scope, func=False):
         name = e.name
         if name in self.builtins or any(name in s.names for s in scope.chain()):
+            return
+        kind = next((s.kind for s in scope.chain() if s.kind), None)  # inside an action: hunger for my.hunger (1.5.0)
+        msg = own_field_help(name, kind, self.fields_of(kind) if kind else ())
+        if msg:
+            self.problem(e, msg)
             return
         if name in self.everywhere:
             owners = sorted({f"{n}()" for n, sc in self.scope_names() if name in sc})
@@ -5541,6 +6015,9 @@ class Checker:
                 if s.name in made:
                     self.problem(s, f"There are two functions called {s.name}. This one replaces the one on line {made[s.name]}. Give them different names.")
                 made[s.name] = s.line
+                if s.name in self.kinds:  # (1.5.0)
+                    self.problem(s, f"There's a kind called {s.name} on line {self.kinds[s.name].line}, and a function with the same "
+                                    "name replaces it (or it replaces the function). Give them different names.")
 
     def loop_items(self, e, seen=frozenset()):
         """What a for loop over e gives its variable: the kinds of the items (None when that can't be told), and
@@ -5659,6 +6136,13 @@ class Checker:
             self.problem(e, "Can't multiply a list. Write the items out, like [0, 0, 0], or add them with :add in a loop.")
         elif op == "*" and a == b == "$text":
             self.problem(e, f"Can't multiply text and text.{tip}")
+        elif (op in self.MATHS or op in self.ORDER) and self.object_side(a, b) and not (op == "+" and "$text" in (a, b)):
+            # rex + 1, rex < other (1.5.0): an object is never a number (only + with text works: it joins them)
+            if op in self.ORDER:
+                self.problem(e, f"Can't compare {self.what(a)} with {self.what(b)} using {op}.")
+            else:
+                verb = {"+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "use % on", "^": "use ^ on"}[op]
+                self.problem(e, f"Can't {verb} {self.what(a)} and {self.what(b)}.")
         elif op == "+" and a == "$list" and b == "$text":
             self.problem(e, "This turns the list into text. To add one item, use :add, or join two lists: items + [\"jam\"].")
         elif op == "+" and b == "$number" and e.left.kind == "binop" and e.left.op == "+" and self.kind(e.left) == "$text" \
@@ -5779,18 +6263,20 @@ class Checker:
             self.problem(s, "You can only set items in a list, not in text. Build new text with + instead.")
         elif obj == "$dict":
             self.check_key(index)
+        elif (obj or "").startswith(("%", "$kind:")):  # rex["name"] = "Rex" (1.5.0)
+            self.problem(s, f"You can only set items in a list, not in {self.what(obj)}.{self.brackets_tip(obj, target, index, ' = ...')}")
 
     def check_key(self, key):
         """A dictionary's key is text or a number (dict_key), in { }, d[key] and d:get, :set, :has and :remove."""
         kk = self.kind(key)
-        if kk in ("$list", "$dict", "$bool", "$nil") and not self.trying:
-            self.problem(key, f"A dictionary's keys can be text or numbers, not {self.TYPE[kk]}.")
+        if (kk in ("$list", "$dict", "$bool", "$nil") or (kk or "").startswith(("%", "$kind:"))) and not self.trying:
+            self.problem(key, f"A dictionary's keys can be text or numbers, not {self.what(kk)}.")
 
     def check_part(self, e):
         """s[a:b]: the positions are whole numbers, and only text and lists have parts."""
         obj = self.kind(e.obj)
-        if obj in ("$dict", "$number", "$bool", "$nil", "$func", "$builtin") or (obj or "").startswith("$module:"):
-            self.problem(e, f"Only text and lists have parts like [1:3], not {self.TYPE.get(obj, 'a library')}.")
+        if obj in ("$dict", "$number", "$bool", "$nil", "$func", "$builtin") or (obj or "").startswith(("$module:", "%", "$kind:")):
+            self.problem(e, f"Only text and lists have parts like [1:3], not {self.what(obj)}.")
             return
         for end in (e.start, e.end):
             if end is None:
@@ -5807,6 +6293,10 @@ class Checker:
         """x[i], or 1.3.6's names[order:pop], where the method call gives i (index)."""
         index = e.index if index is None else index
         idx = self.kind(index)
+        obj = self.kind(e.obj)
+        if (obj or "").startswith(("%", "$kind:")):  # rex["name"]: an object's fields use a dot (1.5.0)
+            self.problem(e, f"Can't use [ ] on {self.what(obj)}.{self.brackets_tip(obj, e.obj, index, '')}")
+            return
         if idx == "$text" and self.kind(e.obj) in ("$list", "$text"):  # (a dictionary's keys are often text)
             who = self.describe(index)
             self.problem(e, "List positions must be whole numbers, not text." + (f" Use number({who})." if who and self.typed(index) else ""))
@@ -5825,6 +6315,8 @@ class Checker:
     def method_exists(self, name):
         gui = gui_tables()
         if gui is None:
+            return True
+        if self.own_files() or any(name in self.actions_of(k) for k in self.kinds):  # an object's action (1.5.0)
             return True
         if name in (tdraw_pen_methods() or ()):
             return True
@@ -5856,6 +6348,11 @@ class Checker:
         if fn.kind == "var":
             name = fn.name
             local = any(name in s.names for s in scope.chain() if s is not self.top)
+            if name in self.kinds:  # Pet("Rex"): at most one input for each field (1.5.0)
+                fields = self.fields_of(name)
+                if self.only_kind(name) and not local and n > len(fields):
+                    self.problem(e, kind_inputs_help(name, fields, n))
+                return
             if self.only_func(name) and not local:
                 want = len(self.funcs[name])
                 if n != want:
@@ -5876,9 +6373,11 @@ class Checker:
                             break
                 elif name in ("number", "num", "int") and n == 1:
                     self.check_number_input(e.args[0], name)
+                elif name == "len" and n == 1 and (self.kind(e.args[0]) or "").startswith(("%", "$kind:")):  # len(rex)
+                    self.problem(e, f"len() needs text, a list or a dictionary, not {self.what(self.kind(e.args[0]))}.")
             elif name not in self.builtins and not local:
                 kind = self.var_kind(name, frozenset())
-                if kind and not kind.startswith(("$module:", "$libfn:")) and kind not in ("$func", "$builtin"):
+                if kind and not kind.startswith(("$module:", "$libfn:", "$kind:")) and kind not in ("$func", "$builtin"):
                     self.problem(e, f"'{name}' is {self.what(kind)}, not a function, so it can't be called with ( ).")
         elif fn.kind == "attr":
             lib = self.kind(fn.obj)
@@ -5985,6 +6484,9 @@ class Checker:
             if members is not None and e.name not in members:
                 self.problem(e, f"{obj[8:]} doesn't have '{e.name}'. It has: {', '.join(members)}.")
             return
+        if obj is not None and obj.startswith(("%", "$kind:")):  # rex.hunger (1.5.0)
+            self.check_kind_attr(e, obj)
+            return
         if e.obj.kind == "var" and e.obj.name in PY_NAMES and obj in ("$builtin", None) and e.obj.name not in self.user:
             self.problem(e, f"Tuff has no {e.obj.name}.{e.name}. {PY_NAMES[e.obj.name]}")
             return
@@ -6000,8 +6502,11 @@ class Checker:
         gui = gui_tables()
         members = {"window"} | set(self.lib_members("anims") or {}) | set(self.lib_members("tap") or {}) | \
             set(self.lib_members("tgame") or {})
-        if gui is not None and e.name not in members and e.obj.kind == "var" and e.obj.name not in self.imports:
-            self.problem(e, dot_help("not a library", e.obj, e.name))
+        # (Since 1.5.0 an object has fields: p.name in a function given a Pet. Only a name no kind has is certain.)
+        if gui is not None and e.name not in members and e.obj.kind == "var" and e.obj.name not in self.imports and not self.is_field(e.name) \
+                and e.obj.name != "my":  # (a my outside every action is reported by use)
+            self.problem(e, dot_help("not a library", e.obj, e.name) if not self.kinds else
+                         f"Nothing in this program has a field '{e.name}'." + self.field_hint(e.name))
 
     def is_print(self, e):
         """The built-in print (or say, in say:ascii): its :methods are print:ascii, print:color and print:pen."""
@@ -6044,9 +6549,15 @@ class Checker:
         name, n = e.name, len(e.args)
         start = e.obj.of if e.obj.kind == "held" else e.obj  # names[q:pop x]: q
         owner = start.name if start.kind == "var" else "thing"
+        if obj is not None and obj.startswith(("%", "$kind:")):  # rex:feed(), one of its kind's actions (1.5.0)
+            self.check_action(e, obj)
+            return
         if obj is None:
             if not self.method_exists(name):
                 tip = PY_ONLY.get(name.lower())
+                actions = sorted({a for k in self.kinds for a in self.actions_of(k)})  # p:fead() in a function given a Pet
+                hint = difflib.get_close_matches(name, actions, n=1, cutoff=0.6)
+                tip = f"Did you mean :{hint[0]}?" if hint else tip
                 self.problem(e, f"Nothing in Tuff has :{name}." + (f" {tip}" if tip else ""))
             return
         bare_fix = f"{owner}:{name} doesn't take an input, so what comes after it was read as one. Write {owner}:{name}() instead."
@@ -7090,7 +7601,7 @@ def scene_file(game_path, source_path, out_path):
         def setup():
             program = Parser(tokenize(src)).program()
             for stmt in program:
-                if stmt.kind == "func":
+                if stmt.kind in ("func", "kind"):
                     interp.run(stmt, interp.globals)
             interp.run_block(program, interp.globals)
             for hook in interp.rt.finish_hooks:
@@ -7362,7 +7873,7 @@ def run_file(path):
         interp = Interpreter(src, base_folder(path))
         interp.path = os.path.abspath(path)
         for stmt in program:
-            if stmt.kind == "func":
+            if stmt.kind in ("func", "kind"):  # functions and kinds can be used above where they're written
                 interp.run(stmt, interp.globals)
         interp.run_block(program, interp.globals)
         for hook in interp.rt.finish_hooks:

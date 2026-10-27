@@ -27,7 +27,7 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `f"{x:.2f}"`, `f"{n:03}"`, `.format()` | formats by example: `f"{x:0.00}"`, `f"{n:000}"`, `f"{price:money}"`, `f"{name:10}"` (see "Text templates"); `text(x, 2)` also works |
 | `range(3)` gives 0, 1, 2 | `range(3)` gives 1, 2, 3, and `range(1, 3)` gives 1, 2, 3: both ends are included |
 | `for i in range(len(items)):` | `for item in items:`, or `for i in range(0, len(items) - 1):` |
-| `thing.method()` | `thing:method()`, with no spaces around the `:` (only libraries and your own files use a dot: `mtgui.window(...)`, `money.as_money(5)`) |
+| `thing.method()` | `thing:method()`, with no spaces around the `:` (a dot is only for libraries, `mtgui.window(...)`, your own files, `money.as_money(5)`, and an object's fields, `rex.hunger`) |
 | `import money` / `from money import as_money` (your own money.py) | `import money` loads your money.tuf; then `money.as_money(5)` and `money.rate` (see "Your own files") |
 | `&&`, `\|\|`, `!` | `and`, `or`, `not` |
 | `1 < x < 9` | `x > 1 and x < 9` |
@@ -40,9 +40,10 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `import random`, `import math`, `import time` | nothing to import. Built in: `random(a, b)` (and `random()` for a decimal from 0 to 1), `sqrt`, `floor`, `ceil`, `round`, `abs`, `min`, `max`, `sum`, `average`, `pi`, `sin`/`cos`/`tan` (in degrees), `log`, `now()`, `today()`, `date()`, `time()`. There's no exp, no `random.choice` (use `items[random(0, len(items) - 1)]`) and no shuffle |
 | `requests.get(url)`, `json.loads(...)` | `mention tap`, then `res = tap.get(url)` and `res:json` (see "tap") |
 | `import pygame` | `mention tgame`, then `game = tgame.window("Title", 800, 600)` (see "tgame") |
-| classes, `lambda`, `exit()` | not in Tuff (see "What Tuff can't do") |
+| `class Pet:`, `self.hunger`, `Pet("Rex")` | `kind Pet:` with fields and actions; inside an action the object is `my`: `my.hunger`. `Pet("Rex")` makes one (see "Kinds") |
+| `lambda`, `exit()` | not in Tuff (see "What Tuff can't do") |
 
-These words are keywords and can't be names: `func return if elif else then while for in break continue and or not is true false nil say input flush import mention`.
+These words are keywords and can't be names: `func return if elif else then while for in break continue and or not is true false nil say input flush import mention`. `try`, `catch`, `kind` and `my` are Tuff's words only where they start a block (`try:`, `kind Pet:`) or, for `my`, inside a kind's action, so a variable of yours called `kind` or `my` still works.
 
 ## Two rules that trip everyone up
 **Rule 1: a method's input without brackets takes the rest of the line.** When what follows a method's name could start a value (a name, a number, text, `-`, `[`, `{`, `not`, `true`, `false` or `nil`), that and the rest of the line are the method's input. `items:has x and ready` means `items:has(x and ready)`, and `say slider:value - 1` gives the slider an input of `-1`. Anything else ends the call: `stack:pop + 10` is normal maths. So whenever more of the line follows a method call, put its inputs in brackets, even empty ones:
@@ -227,6 +228,57 @@ say len(ages)                       # 2 (ages:size() is the same)
 - Written over several lines inside `{ }`, it's one line of code.
 - **Files:** save one with `file.save` (see "Files"), and load it back with `file.load`. A file keeps every key as text, so number keys come back as text: save `{1: "gold"}`, and after `file.load` read it with `d["1"]`, not `d[1]`. The error for a missing key says so.
 - `:size()`, `:get`, `:has`, `:keys` and `:set("bob", 15)` work like a tap data object's (see "tap"), so a function can take either one.
+
+## Kinds: your own objects
+A kind is your own kind of object: a pet with a name and how hungry it is, an enemy with hp and speed, a book with a title and pages. You write its **fields** (each with the value a new one starts with) and its **actions** (functions it can do), and then make as many as you like.
+```tuff
+kind Pet:
+    name = "?"
+    hunger = 5
+    toys = []                       # every new Pet gets a list of its own
+    func feed(amount):
+        my.hunger -= amount         # my is the Pet the action runs on
+        if my.hunger < 0:
+            my.hunger = 0
+    func play(toy):
+        my.toys:add(toy)
+        my:feed(-1)                 # an action can run another one: playing makes it hungrier
+rex = Pet("Rex")                    # the inputs fill the fields in order: name is "Rex", hunger stays 5
+ann = Pet("Ann", 2)
+rex:feed(3)                         # actions use ':'
+rex.hunger += 1                     # fields use '.'
+ann:play("ball")
+say rex                             # Pet(name: "Rex", hunger: 3, toys: [])
+say ann.name + " has " + ann.toys:join(", ") + ", hunger " + ann.hunger    # Ann has ball, hunger 3
+```
+- **Making one:** `Pet("Rex")` fills the fields in the order they're written. Fewer inputs is fine, and the rest start with their values from the kind. More inputs than fields is an error. Each new object works its starting values out again, so `toys = []` gives every Pet its own list.
+- **Fields** use a dot. Read one with `rex.hunger`, and change it with `rex.hunger = 3` or `rex.hunger += 1`. An object has only its kind's fields: `rex.hungr = 3` stops with "Pet doesn't have a field 'hungr'. Did you mean 'hunger'?", and `tuff_check` says so before the program runs.
+- **Actions** are functions written inside the kind, and they run with `:`, like `rex:feed(3)`. Inside one, `my` is the object itself: `my.hunger` is its field, and `my:play("ball")` runs another of its actions. Write `my.hunger`, not `hunger`, for a field. Every other name follows rule 2, as in any function.
+- **Showing one:** `say rex` shows `Pet(name: "Rex", hunger: 3, toys: [])`, and so do `text(rex)`, `f"{rex}"` and text joined with it.
+- **Same object:** objects are shared like lists. After `best = rex`, `best.hunger = 0` changes rex too. `is` (and `==`) is true only for the very same object, so `Pet("Rex") is Pet("Rex")` is false. Compare their fields instead: `a.name is b.name`. `:has`, `:find` and `:remove` on a list look for that same object.
+```tuff
+kind Book:
+    title = ""
+    pages = 0
+    done = false
+books = [Book("Holes", 272), Book("Matilda", 240), Book("Wonder", 310)]
+books[1].done = true
+func by_pages(book):
+    return book.pages
+books:sort(by_pages)                # sort by a field: give :sort a function that gives it
+for book in books:
+    say f"{book.title:8} {book.pages:>4} {book.done}"
+file.save("books.json", books)      # each one is saved with its kind's name
+again = file.load("books.json", [])
+say again[0]                        # Book(title: "Matilda", pages: 240, done: true)
+say again[0].title                  # Matilda
+```
+- **Lists, sorting and files:** objects can go in lists and be a dictionary's values (not its keys). `:sort` on a list of objects needs a function that gives what to sort by, like `by_pages`.
+- `file.save` keeps an object as a dictionary that starts with its kind's name: `{"$kind": "Book", "title": "Holes", "pages": 272, "done": false}`. `file.load` gives back a Book when the program has `kind Book:`. A field the file doesn't have (one you added to the kind later) starts with its kind's value, so old saves still load. In a program without that kind, it stays a dictionary.
+- **Where to write them:** make kinds at the top of the file, like functions. A kind can be used above the line it's written on.
+- **What a kind doesn't have:** a kind can't be made from another kind (no inheritance), and every field can be read and changed from outside (no private fields). `len()`, `[ ]` and `for` don't work on an object: use its fields.
+- An action can't be given to a button or a timer by its name. Give them a function that runs it instead: `func feed_rex():` then `rex:feed(1)`.
+- `kind` and `my` are only Tuff's words where they mean this, so a variable of yours called `kind` or `my` still works. Inside an action, `my` can't be given a value.
 
 ## Text tools and parts
 ```tuff
@@ -1432,6 +1484,7 @@ say "That took " + round(time() - start, 2) + " seconds"
     - built-ins replaced by variables;
     - functions made twice;
     - your own files: an import with no file to load, files that import each other, a file named like a library, and names or input counts another file doesn't have (`money.as_mony`).
+    - an object's fields and actions that its kind doesn't have (`rex.hungr`, `rex:fead()`), and more inputs than a kind has fields.
   - **Calls and events:**
     - wrong input counts;
     - event functions that would crash, are passed with brackets, or use `wait` or `input`;
@@ -1466,7 +1519,7 @@ say "That took " + round(time() - start, 2) + " seconds"
 ## What Tuff can't do
 Tuff has none of these:
 - the internet except through `tap`, or files outside text and JSON (`file`);
-- classes, or `lambda` (give a function's name instead, like `words:sort(by_len)`);
+- classes with inheritance or private fields (a kind has neither: see "Kinds"), or `lambda` (give a function's name instead, like `words:sort(by_len)`);
 - tuples or sets (use lists and dictionaries);
 - default or keyword inputs;
 - exp, or other maths beyond sin, cos, tan, log and sqrt;

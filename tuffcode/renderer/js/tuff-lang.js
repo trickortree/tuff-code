@@ -2,6 +2,7 @@ window.TUFF_KEYWORDS = [
   'say', 'input', 'func', 'return', 'if', 'elif', 'else', 'then', 'while', 'for', 'in',
   'break', 'continue', 'and', 'or', 'not', 'is', 'true', 'false', 'nil', 'flush', 'import', 'mention',
   'try', 'catch', // 1.4.0 (only at the start of a line with a ':' after them, so they still work as names)
+  'kind', 'my', // 1.5.0 (kind Pet: and an action's my; a program's own variable called kind or my still works)
 ];
 
 window.TUFF_METHOD_DOCS = {
@@ -347,6 +348,8 @@ window.TUFF_DOCS = {
   pi: ['pi', '3.14159...'],
   rewrite: ['line:rewrite value', 'Replaces the text of a line you already said.'],
   append: ['line:append value', 'Adds text to the end of a line you already said.'],
+  kind: ['kind Pet:', 'Makes your own kind of object (1.5.0). Under it go its fields, each with the value a new one starts with (name = "?"), and its actions (func feed():). rex = Pet("Rex") makes one: its inputs fill the fields in order. Read and change a field with a dot (rex.hunger = 3), and run an action with a colon (rex:feed()).'],
+  my: ['my.hunger', 'Inside a kind\'s action, my is the object itself: my.hunger reads or changes its field, and my:feed() runs another of its actions.'],
 };
 
 // atgui: its library entry and its methods. TUFF_METHOD_DOCS is one namespace for every library, so a name
@@ -739,7 +742,7 @@ window.tuffWantsSuggest = function tuffWantsSuggest(model, position) {
   if (insideStringOrComment(before)) return false;
   if (before.endsWith('.')) {
     const lib = before.match(/([A-Za-z_]\w*)\.$/);
-    return !!(lib && (window.TUFF_LIBS[lib[1]] || tuffOwnImports(model.getValue()).has(lib[1]))); // or one of your files
+    return !!(lib && (window.TUFF_LIBS[lib[1]] || tuffOwnImports(model.getValue()).has(lib[1]) || tuffKinds(model).length)); // one of your files, or rex. lists its fields (1.5.0)
   }
   if (!/[A-Za-z_]\w*:$/.test(before)) return false;
   const atEnd = !line.slice(position.column - 1).trim();
@@ -778,7 +781,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
   monaco.languages.register({ id: 'tuff', extensions: ['.tuf'], aliases: ['Tuff', 'tuff'] });
 
   monaco.languages.setMonarchTokensProvider('tuff', {
-    keywords: window.TUFF_KEYWORDS.filter((k) => !['true', 'false', 'nil'].includes(k)),
+    keywords: window.TUFF_KEYWORDS.filter((k) => !['true', 'false', 'nil', 'kind', 'my'].includes(k)), // kind and my: see below
     constants: ['true', 'false', 'nil', 'err', 'all', 'pi'],
     builtins: TUFF_BUILTINS,
     libs: Object.keys(window.TUFF_LIBS),
@@ -791,8 +794,14 @@ window.registerTuff = function registerTuff(monaco, accent) {
         [/f'/, 'string', '@fsq'],
         [/(import|mention)(\s+)([a-zA-Z_]\w*)/, ['keyword', '', 'library']], // a library, or one of your own files (1.5.0)
         [/(func)(\s+)([a-zA-Z_]\w*)/, ['keyword', '', 'function.decl']],
+        // kind Pet: and my.hunger (1.5.0) are Tuff's words; a variable called kind or my is the program's own
+        [/(kind)(\s+)([a-zA-Z_]\w*)(?=\s*:)/, ['keyword', '', 'function.decl']],
+        [/(my)(\.)(?=[a-zA-Z_])/, ['keyword', 'delimiter']],
+        [/my(?=:[a-zA-Z_])/, 'keyword'],
         [/(:)([a-zA-Z_]\w*)/, ['delimiter', 'method']],
-        [/([a-zA-Z_]\w*)(\.)([a-zA-Z_]\w*)/, [{ cases: { '@libs': 'library', '@default': 'identifier' } }, 'delimiter', 'function']],
+        // tgame.window is a library's function; rex.hunger an object's field
+        [/([a-zA-Z_]\w*)(\.)([a-zA-Z_]\w*)/, [{ cases: { '@libs': 'library', '@default': 'identifier' } }, 'delimiter',
+          { cases: { '$1@libs': 'function', '@default': 'identifier' } }]],
         [/[a-zA-Z_]\w*(?=\s*\()/, { cases: { '@keywords': 'keyword', '@builtins': 'predefined', '@default': 'function' } }],
         [/[a-zA-Z_]\w*/, { cases: { '@keywords': 'keyword', '@constants': 'constant', '@builtins': 'predefined', '@libs': 'library', '@default': 'identifier' } }],
         [/\d+(\.\d+)?/, 'number'],
@@ -858,8 +867,14 @@ window.registerTuff = function registerTuff(monaco, accent) {
           } : null;
         });
       }
+      const card = kindHover(model, position.lineNumber, word, before, lib);
+      if (card) {
+        return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn),
+          contents: card.map((value) => ({ value })) };
+      }
       // A built-in's name the program gives a value (a 1.3.6 program's log = []) is the program's own variable.
-      const own = TUFF_BUILTINS.includes(word.word) && givesValue(model, word.word);
+      // So is a variable called kind or my (1.5.0).
+      const own = (TUFF_BUILTINS.includes(word.word) || ['kind', 'my'].includes(word.word)) && givesValue(model, word.word);
       const doc = (lib && window.TUFF_LIBS[lib[1]]?.[word.word])
         || (/\w:$/.test(before) && window.TUFF_METHOD_DOCS[word.word])
         || (!own && window.TUFF_DOCS[word.word]);
@@ -883,6 +898,18 @@ window.registerTuff = function registerTuff(monaco, accent) {
       const before = line.slice(0, word.startColumn - 1);
       if (insideStringOrComment(line.slice(0, position.column - 1))) return { suggestions: [] };
       const libMatch = before.match(/(\w+)\.$/);
+      const kinds = tuffKinds(model);
+      if (libMatch && !window.TUFF_LIBS[libMatch[1]]) { // rex. (1.5.0): its kind's fields, or every kind's when it can't be told
+        const kind = kindOf(model, libMatch[1], position.lineNumber, kinds);
+        const seen = new Set();
+        const fields = (kind ? [kind] : kinds).flatMap((k) => k.fields.map((f) => [k, f])).filter(([, f]) => !seen.has(f.name) && seen.add(f.name));
+        return {
+          suggestions: fields.map(([k, f]) => ({
+            label: f.name, kind: K.Field, insertText: f.name, range, detail: `${k.name} field (starts as ${f.value})`,
+            documentation: `A field of ${k.name}. Read it with ${libMatch[1]}.${f.name}, and change it with ${libMatch[1]}.${f.name} = ...`,
+          })),
+        };
+      }
       if (libMatch) {
         const lib = window.TUFF_LIBS[libMatch[1]];
         if (!lib && tuffOwnImports(model.getValue()).has(libMatch[1])) { // money. (1.5.0): what money.tuf makes
@@ -934,6 +961,13 @@ window.registerTuff = function registerTuff(monaco, accent) {
         return { suggestions: [{ label: 'color', kind: K.Method, insertText: 'color', range, detail: 'input:color("Name? ", "green")',
           documentation: 'Asks like input, with the question in a look: colours (the letters\', then a bar behind them), "rainbow" and bold/dim/italic/underline. It gives back what was typed.' }] };
       }
+      const objMatch = before.match(/([A-Za-z_]\w*):$/);
+      const kind = objMatch && kindOf(model, objMatch[1], position.lineNumber, kinds);
+      const actions = (kind ? [kind] : kinds).flatMap((k) => k.actions.map((a) => ({
+        label: a.name, kind: K.Method, insertText: a.params.length ? `${a.name}($0)` : `${a.name}()`, insertTextRules: R, range,
+        detail: `${k.name}:${a.name}(${a.params.join(', ')})`, documentation: `An action of ${k.name} (line ${a.line}).`, sortText: `0${a.name}`,
+      })));
+      if (kind) return { suggestions: actions }; // rex: (1.5.0): an object has only its kind's actions
       if (/\w:$/.test(before)) {
         // atgui's, tgame's and tdraw's own methods (their docs start with "atgui", "tgame" or "tdraw") only crowd the
         // list in files that use that library. A game with a panel or a screen uses atgui's widgets too. print's
@@ -951,10 +985,10 @@ window.registerTuff = function registerTuff(monaco, accent) {
         });
         const methods = new Set([...names, 'clear', 'upper', 'lower', 'trim', 'has', 'add', 'pop']);
         return {
-          suggestions: [...methods].map((m) => ({
+          suggestions: [...actions, ...[...methods].map((m) => ({
             label: m, kind: K.Method, insertText: m, range,
             detail: window.TUFF_METHOD_DOCS[m]?.[0], documentation: window.TUFF_METHOD_DOCS[m]?.[1] || window.TUFF_DOCS[m]?.[1],
-          })),
+          }))],
         };
       }
       const snippets = [
@@ -966,6 +1000,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
         { label: 'while', kind: K.Snippet, insertText: 'while ${1:condition}:\n    $0', insertTextRules: R, detail: 'While loop', range },
         { label: 'for', kind: K.Snippet, insertText: 'for ${1:i} in range(${2:1}, ${3:10}):\n    $0', insertTextRules: R, detail: 'Count loop', range },
         { label: 'line', kind: K.Snippet, insertText: '${1:line} = say "${2:text}"\n${1:line}:rewrite "${3:new text}"', insertTextRules: R, detail: 'Say, then rewrite', range },
+        { label: 'kind', kind: K.Snippet, insertText: 'kind ${1:Pet}:\n    ${2:name} = ${3:"?"}\n    func ${4:feed}():\n        $0', insertTextRules: R, detail: 'Your own kind of object: fields and actions', documentation: window.TUFF_DOCS.kind[1], range },
         { label: 'f"..."', kind: K.Snippet, insertText: 'f"${1:Hello} {${2:name}\\}$0"', insertTextRules: R, detail: 'Text template: values in { }', documentation: TUFF_TEMPLATE_DOC[1], range },
         { label: 'ask number', kind: K.Snippet, insertText: '${1:n} = num(input "${2:A number?} ")\nwhile ${1:n} is err:\n    say "Please type a number."\n    ${1:n} = num(input "${2:A number?} ")\n$0', insertTextRules: R, detail: 'Ask until they type a number (err)', range },
         { label: 'import anims', kind: K.Snippet, insertText: 'import anims\n', range, detail: 'Load the animations library' },
@@ -984,10 +1019,15 @@ window.registerTuff = function registerTuff(monaco, accent) {
       const libs = TUFF_READY_LIBS.map((l) => ({ label: l, kind: K.Module, insertText: l, range, detail: window.TUFF_DOCS[l]?.[0], documentation: window.TUFF_DOCS[l]?.[1] }));
       const seen = new Set([...window.TUFF_KEYWORDS, ...builtins, ...TUFF_READY_LIBS]);
       const ids = [];
-      for (const f of userFuncs(model)) {
+      for (const f of funcsCalled(model)) {
         seen.add(f.name);
         ids.push({ label: f.name, kind: K.Function, insertText: `${f.name}($0)`, insertTextRules: R, range, detail: `func ${f.name}(${f.params.join(', ')})` });
       }
+      for (const k of kinds) { // Pet( makes a Pet (1.5.0)
+        seen.add(k.name);
+        ids.push({ label: k.name, kind: K.Class, insertText: `${k.name}($0)`, insertTextRules: R, range, detail: `kind ${k.name}(${k.fields.map((f) => f.name).join(', ')})`, documentation: kindCard(k)[1] });
+      }
+      for (const k of kinds) for (const a of k.actions) seen.add(a.name); // (an action isn't called on its own)
       for (const m of src.matchAll(/[A-Za-z_]\w{1,}/g)) {
         if (!seen.has(m[0]) && m[0] !== word.word) {
           seen.add(m[0]);
@@ -1009,16 +1049,24 @@ function tuffIdents(model) {
   const out = [];
   const lines = model.getLinesContent();
   const own = ownTryCatch(model);
+  const made = tuffKinds(model);
   lines.forEach((text, i) => {
     const block = tryCatchWord(text, own) ? text.search(/\S/) : -1; // where this line's try: or catch: word is
+    // kind is Tuff's word in kind Pet:, and my inside a kind (1.5.0); anywhere else they're the program's own names
+    const soft = { kind: /^kind\s+[A-Za-z_]\w*\s*:/.test(text) ? 0 : -1, my: made.some((k) => k.line < i + 1 && i + 1 <= k.end) };
+    // A kind's field (name = "?") and action (func feed():) aren't variables or functions: they're used as rex.name
+    // and rex:feed(), so renaming a variable called name leaves them alone.
+    const member = made.find((k) => k.fields.some((f) => f.line === i + 1) || k.actions.some((a) => a.line === i + 1));
+    const skip = member ? text.search(/\S/) + (/^\s*func\s/.test(text) ? text.trimStart().match(/^func\s+/)[0].length : 0) : -1;
     const { kinds } = tuffScan(text); // names in a template's { } count too: f"{score}"
     for (let c = 0; c < text.length;) {
       if (kinds[c] !== 'c') { c++; continue; }
       const m = /^[A-Za-z_]\w*/.exec(text.slice(c));
       if (m && !/\w/.test(text[c - 1] || '')) {
         const prev = text[c - 1];
-        const word = window.TUFF_KEYWORDS.includes(m[0]) && (!['try', 'catch'].includes(m[0]) || c === block);
-        if (prev !== '.' && prev !== ':' && !word) {
+        const word = window.TUFF_KEYWORDS.includes(m[0]) && (!['try', 'catch', 'kind', 'my'].includes(m[0]) || c === block
+          || (m[0] === 'kind' && c === soft.kind) || (m[0] === 'my' && soft.my));
+        if (prev !== '.' && prev !== ':' && !word && c !== skip) {
           out.push({ name: m[0], line: i + 1, start: c + 1, end: c + 1 + m[0].length });
         }
         c += m[0].length;
@@ -1030,13 +1078,95 @@ function tuffIdents(model) {
   return out;
 }
 
+// The file's functions. A kind's actions (1.5.0) come too, with `kind` set to their kind's name: they're called as
+// rex:feed(), never as feed(), so callers that look a name up leave them out (see funcsCalled).
 function userFuncs(model) {
   const out = [];
+  const kinds = tuffKinds(model);
   model.getLinesContent().forEach((text, i) => {
     const m = text.match(/^(\s*)func\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?/);
-    if (m) out.push({ name: m[2], line: i + 1, col: m[1].length + text.slice(m[1].length).indexOf(m[2]) + 1, indent: m[1].length, params: (m[3] || '').split(',').map((s) => s.trim()).filter(Boolean) });
+    const kind = kinds.find((k) => k.line < i + 1 && i + 1 <= k.end && k.actions.some((a) => a.line === i + 1));
+    if (m) out.push({ name: m[2], line: i + 1, col: m[1].length + text.slice(m[1].length).indexOf(m[2]) + 1, indent: m[1].length, params: (m[3] || '').split(',').map((s) => s.trim()).filter(Boolean), kind: kind ? kind.name : null });
   });
   return out;
+}
+
+// The functions a name can call: the file's own, without the kinds' actions.
+function funcsCalled(model) {
+  return userFuncs(model).filter((f) => !f.kind);
+}
+
+// The kinds the file makes (1.5.0): kind Pet: at the start of a line, then its fields (name = "?") and actions
+// (func feed():), indented under it. [{ name, line, end, fields: [{ name, value, line }], actions: [{ name, params, line }] }]
+function tuffKinds(model) {
+  const lines = model.getLinesContent();
+  const out = [];
+  lines.forEach((text, i) => {
+    const m = /^kind\s+([A-Za-z_]\w*)\s*:/.exec(text);
+    if (!m) return;
+    const kind = { name: m[1], line: i + 1, end: blockEnd(model, i + 1), fields: [], actions: [] };
+    let inner = null; // the indent of the kind's own lines
+    for (let j = i + 1; j < kind.end; j++) {
+      const t = lines[j];
+      if (!t.trim() || /^\s*#/.test(t)) continue;
+      const indent = t.length - t.trimStart().length;
+      if (inner === null) inner = indent;
+      if (indent !== inner) continue;
+      let f;
+      if ((f = /^\s*func\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?/.exec(t))) {
+        kind.actions.push({ name: f[1], params: (f[2] || '').split(',').map((x) => x.trim()).filter(Boolean), line: j + 1 });
+      } else if ((f = /^\s*([A-Za-z_]\w*)\s*=(?!=)\s*(.*?)\s*(#.*)?$/.exec(t))) {
+        kind.fields.push({ name: f[1], value: f[2], line: j + 1 });
+      }
+    }
+    out.push(kind);
+  });
+  return out;
+}
+
+// Which kind `name` holds an object of on line `atLine`, when the file says: my inside a kind's action, or a name
+// given Pet(...) (rex = Pet("Rex")). Else null.
+function kindOf(model, name, atLine, kinds = tuffKinds(model)) {
+  if (name === 'my') return kinds.find((k) => k.line < atLine && atLine <= k.end) || null;
+  const made = new RegExp(`^\\s*${name}\\s*=\\s*([A-Za-z_]\\w*)\\s*\\(`);
+  for (const text of model.getLinesContent()) {
+    const m = made.exec(text);
+    const kind = m && kinds.find((k) => k.name === m[1]);
+    if (kind) return kind;
+  }
+  return null;
+}
+
+// The hover for kinds (1.5.0), or null: on a kind's name (Pet, or kind Pet:), on a field after rex. or an action
+// after rex: when rex's kind is known, and on my inside a kind.
+function kindHover(model, lineNumber, word, before, lib) {
+  const kinds = tuffKinds(model);
+  if (!kinds.length) return null;
+  const owner = before.match(/([A-Za-z_]\w*)[.:]$/);
+  if (owner && !(lib && window.TUFF_LIBS[lib[1]])) {
+    const kind = kindOf(model, owner[1], lineNumber, kinds);
+    const f = kind && before.endsWith('.') && kind.fields.find((x) => x.name === word.word);
+    if (f) return ['```tuff\n' + `${owner[1]}.${f.name}` + '\n```', `A field of ${kind.name}. A new ${kind.name} starts with ${f.name} = ${f.value} (line ${f.line}).`];
+    const a = kind && before.endsWith(':') && kind.actions.find((x) => x.name === word.word);
+    if (a) return ['```tuff\n' + `${owner[1]}:${a.name}(${a.params.join(', ')})` + '\n```', `An action of ${kind.name} (line ${a.line}). In it, my is ${owner[1] === 'my' ? 'this' : owner[1]}.`];
+    return null;
+  }
+  if (word.word === 'my' && kindOf(model, 'my', lineNumber, kinds)) {
+    const kind = kindOf(model, 'my', lineNumber, kinds);
+    return ['```tuff\nmy\n```', `This ${kind.name} itself: my.${kind.fields[0]?.name || 'name'} is one of its fields, and my:${kind.actions[0]?.name || 'feed'}() runs one of its actions.`];
+  }
+  const kind = kinds.find((k) => k.name === word.word);
+  return kind ? kindCard(kind) : null;
+}
+
+// What hovering a kind's name shows: the kind as it's written, its fields' starting values and its actions.
+function kindCard(kind) {
+  const lines = [`kind ${kind.name}:`, ...kind.fields.map((f) => `    ${f.name} = ${f.value}`),
+    ...kind.actions.map((a) => `    func ${a.name}(${a.params.join(', ')})`)];
+  const fields = kind.fields.map((f) => f.name);
+  const how = fields.length ? `${kind.name}(...) makes one: its inputs fill ${fields.join(', ')}, in that order (fewer is fine).`
+    : `${kind.name}() makes one.`;
+  return ['```tuff\n' + lines.join('\n') + '\n```', `Your own kind of object, made on line ${kind.line}. ${how}`];
 }
 
 // Last line of the indented block that starts on `line`.
@@ -1055,8 +1185,10 @@ function blockEnd(model, line) {
 
 function definitionOf(model, name, atLine) {
   const funcs = userFuncs(model);
-  const fn = funcs.find((f) => f.name === name);
+  const fn = funcs.find((f) => f.name === name && !f.kind);
   if (fn) return { line: fn.line, start: fn.col, end: fn.col + name.length };
+  const kind = tuffKinds(model).find((k) => k.name === name); // kind Pet: (1.5.0)
+  if (kind) return { line: kind.line, start: 6, end: 6 + name.length };
   // An input of the function we're inside.
   const inside = funcs.filter((f) => f.line <= atLine && blockEnd(model, f.line) >= atLine).pop();
   if (inside && inside.params.includes(name)) {
@@ -1161,12 +1293,18 @@ function registerTuffNavigation(monaco) {
       const K = L.SymbolKind;
       const symbols = [];
       const seen = new Set();
+      const kinds = tuffKinds(model);
       model.getLinesContent().forEach((text, i) => {
         const line = i + 1;
+        const of = kinds.find((k) => k.line < line && line <= k.end);
         let m;
-        if ((m = text.match(/^\s*func\s+([A-Za-z_]\w*)\s*(\([^)]*\))?/))) {
+        if ((m = text.match(/^kind\s+([A-Za-z_]\w*)/))) { // kind Pet: (1.5.0)
           const end = blockEnd(model, line);
-          symbols.push({ name: m[1], detail: m[2] || '()', kind: K.Function, range: new monaco.Range(line, 1, end, model.getLineMaxColumn(end)), selectionRange: range(line, 1, model.getLineMaxColumn(line)), tags: [] });
+          symbols.push({ name: m[1], detail: 'kind', kind: K.Class, range: new monaco.Range(line, 1, end, model.getLineMaxColumn(end)), selectionRange: range(line, 1, model.getLineMaxColumn(line)), tags: [] });
+        } else if ((m = text.match(/^\s*func\s+([A-Za-z_]\w*)\s*(\([^)]*\))?/))) {
+          const end = blockEnd(model, line);
+          const action = of && of.actions.some((a) => a.line === line);
+          symbols.push({ name: action ? `${of.name}:${m[1]}` : m[1], detail: m[2] || '()', kind: action ? K.Method : K.Function, range: new monaco.Range(line, 1, end, model.getLineMaxColumn(end)), selectionRange: range(line, 1, model.getLineMaxColumn(line)), tags: [] });
         } else if ((m = text.match(/^([A-Za-z_]\w*)\s*=\s*(m?tgui|atgui|tgame)\.(window|world)/))) {
           symbols.push({ name: m[1], detail: `${m[2]} ${m[3]}`, kind: K.Class, range: range(line, 1, model.getLineMaxColumn(line)), selectionRange: range(line, 1, m[1].length + 1), tags: [] });
           seen.add(m[1]);
@@ -1206,10 +1344,16 @@ function registerTuffNavigation(monaco) {
       let sig = null;
       let doc = '';
       if (call.how === 'lib') [sig, doc] = window.TUFF_LIBS[call.lib]?.[call.name] || [];
-      else if (call.how === 'method') [sig, doc] = window.TUFF_METHOD_DOCS[call.name] || [];
-      else {
-        const f = userFuncs(model).find((x) => x.name === call.name);
+      else if (call.how === 'method') {
+        [sig, doc] = window.TUFF_METHOD_DOCS[call.name] || [];
+        const kind = !sig && tuffKinds(model).find((k) => k.actions.some((a) => a.name === call.name)); // rex:eat( (1.5.0)
+        const a = kind && kind.actions.find((x) => x.name === call.name);
+        if (a) { sig = `${kind.name}:${a.name}(${a.params.join(', ')})`; doc = `An action of ${kind.name} (line ${a.line}).`; }
+      } else {
+        const f = funcsCalled(model).find((x) => x.name === call.name);
+        const kind = tuffKinds(model).find((k) => k.name === call.name); // Pet( (1.5.0): one input for each field
         if (f) { sig = `${f.name}(${f.params.join(', ')})`; doc = 'A function in this file.'; }
+        else if (kind && kind.fields.length) { sig = `${kind.name}(${kind.fields.map((x) => x.name).join(', ')})`; doc = kindCard(kind)[1]; }
         else [sig, doc] = window.TUFF_DOCS[call.name] || [];
       }
       const inner = sig && sig.match(/\(([^)]*)\)/);
@@ -1248,7 +1392,7 @@ function registerTuffNavigation(monaco) {
     provideHover(model, position) {
       const w = wordAt(model, position);
       if (!w) return null;
-      const f = userFuncs(model).find((x) => x.name === w.word);
+      const f = funcsCalled(model).find((x) => x.name === w.word) || userFuncs(model).find((x) => x.name === w.word);
       if (!f) return null;
       const above = f.line > 1 ? model.getLineContent(f.line - 1).match(/^\s*#\s*↳\s*(.*)$/) : null;
       return {
