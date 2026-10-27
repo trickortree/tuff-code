@@ -4970,10 +4970,11 @@ def interp_corpus():
         for lesson in s["lessons"]:
             for part in ("example", "starter", "solution"):
                 add(f"learn {lesson['id']} {part}", lesson.get(part))
-    for name in ("TOOLBOX_PROGRAM", "TOOLBOX_FIXES", "LOOKS_PROGRAM", "DEEP_PROGRAM", "DEEP_RUNAWAY", "DEEP_SCENE"):
+    for name in ("TOOLBOX_PROGRAM", "TOOLBOX_FIXES", "LOOKS_PROGRAM", "DEEP_PROGRAM", "DEEP_RUNAWAY", "DEEP_SCENE", "KINDS_PROGRAM",
+                 "KINDS_SAVE", "KINDS_HOOKS", "KINDS_SCENE"):
         add(name.lower(), globals()[name])
-    for name in ("TOOLBOX_MISTAKES", "TOOLBOX_FIXES_CHECKS", "LOOKS_CHECKS"):
-        for i, (code, _) in enumerate(globals()[name]):
+    for name in ("TOOLBOX_MISTAKES", "TOOLBOX_FIXES_CHECKS", "LOOKS_CHECKS", "KINDS_ERRORS", "KINDS_CHECKS"):
+        for i, (code, *_) in enumerate(globals()[name]):
             add(f"{name.lower()} {i}", code + "\n")
     for i, code in enumerate(INTERP_CASES):
         add(f"case {i}", code + "\n")
@@ -5822,6 +5823,448 @@ def t_frames_window(c):
             "after the jump it stays on frame 8 (pink), in Python, in the page and on screen", jumped)
 
 
+# ---------------------------------------------------------------- 1.5.0: kinds, your own objects (kind Pet:)
+
+KINDS_PROGRAM = '''say Pet("Early")
+kind Pet:
+    name = "?"
+    hunger = 5
+    toys = []
+    friend = nil
+    func feed(amount):
+        my.hunger -= amount
+        if my.hunger < 0:
+            my.hunger = 0
+        return my.hunger
+    func play(toy):
+        my.toys:add(toy)
+        my:feed(-1)
+    func hello():
+        if my.friend is nil:
+            return f"{my.name} has no friend yet"
+        return f"{my.name} and {my.friend.name} are friends"
+    func later():
+        func shout():
+            return my.name:upper()
+        return shout()
+kind Counter:
+    func count_to(n):
+        total = 0
+        for i in range(1, n):
+            if i == 3:
+                continue
+            if i > 5:
+                break
+            total += i
+        return total
+    func risky():
+        try:
+            return 1 / 0
+        catch problem:
+            return "caught: " + problem
+rex = Pet("Rex")
+ann = Pet("Ann", 2)
+say rex:feed(3)
+rex.hunger += 1
+ann:play("ball")
+ann:play("rope")
+say rex
+say ann
+say rex.toys
+rex.friend = ann
+say rex:hello()
+say ann:hello()
+say rex.friend.toys:join(", ")
+rex.friend.hunger = 9
+say ann.hunger
+best = rex
+best.name = "Rexy"
+say rex.name
+say rex is best
+say rex is Pet("Rexy")
+say [rex, ann]:has(ann)
+say [ann, rex]:find(rex)
+say Counter():count_to(10)
+say Counter():risky()
+say rex:later()
+pets = [Pet("Cat", 7), rex, Pet("Bo", 1)]
+func by_hunger(p):
+    return p.hunger
+pets:sort(by_hunger)
+say pets[0].name + " " + pets[-1].name
+say f"{rex.name:6}|{rex.hunger:>3}|{ann}"
+say "Pet: " + Pet("Z")
+say text(Pet("Y", 0))
+rex.friend = rex
+say rex
+kind = "dog"
+say kind:upper()
+my = [4]
+my:add(5)
+say my
+func check(p):
+    p.name = p.name + "!"
+    return p.name
+say check(ann)
+groups = {"pets": [Pet("Q")]}
+say groups["pets"][0].name
+groups["pets"][0].toys:add("bone")
+say groups["pets"][0].toys[0]
+say Pet("A") != Pet("A")
+say Counter()
+'''
+KINDS_OUTPUT = ['Pet(name: "Early", hunger: 5, toys: [], friend: nil)', "2", 'Pet(name: "Rex", hunger: 3, toys: [], friend: nil)',
+                'Pet(name: "Ann", hunger: 4, toys: ["ball", "rope"], friend: nil)', "[]", "Rex and Ann are friends",
+                "Ann has no friend yet", "ball, rope", "9", "Rexy", "true", "false", "true", "1", "12",
+                "caught: You can't divide by zero.", "REXY", "Bo Cat",
+                'Rexy  |  3|Pet(name: "Ann", hunger: 9, toys: ["ball", "rope"], friend: nil)', 'Pet: Pet(name: "Z", hunger: 5, toys: [], friend: nil)',
+                'Pet(name: "Y", hunger: 0, toys: [], friend: nil)', 'Pet(name: "Rexy", hunger: 3, toys: [], friend: Pet(...))', "DOG",
+                "[4, 5]", "Ann!", "Q", "bone", "true", "Counter()"]
+# Mistakes: (code, line, column, what the run says, what --check says: None for the same, "OK" when only the run can tell).
+KINDS_PET = 'kind Pet:\n    name = "?"\n    hunger = 5\n    func feed():\n        my.hunger -= 1\n    func eat(food):\n        my.hunger -= food\n'
+KINDS_ERRORS = [
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex.hungr', 9, 8, "Pet doesn't have a field 'hungr'. Did you mean 'hunger'?", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nrex.hungr = 3', 9, 1, "Pet doesn't have a field 'hungr'. Did you mean 'hunger'?", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nrex:fead()', 9, 4, "Pet doesn't have an action 'fead'. Did you mean 'feed'?", None),
+    (KINDS_PET + 'rex = Pet("Rex", 2, 3)', 8, 10, "Pet has 2 fields (name and hunger), so Pet() takes up to 2 inputs, one for each field in order, but got 3.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nrex:feed(1)', 9, 4, "rex:feed() needs 0 inputs, but got 1.", None),
+    (KINDS_PET + 'pets = [Pet()]\npets[0]:eat()', 9, 8, "pets[0]:eat() needs 1 input, but got 0.", "OK"),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex:feed - 1', 9, 8, "rex:feed doesn't take an input, so what comes after it was read as one. Write rex:feed() instead.", None),
+    ('kind Node:\n    value = 0\n    next = Node()\nsay Node(1, nil)\nsay Node()', 3, 16, "Node() was made inside itself too many times. Does a field of Node start with a new Node()?", "OK"),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex:hunger()', 9, 8, "hunger is a field of Pet, not an action, so it's read with a dot, like rex.hunger", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex.feed', 9, 8, "feed is an action of Pet, so it's called with ':', like rex:feed()", None),
+    (KINDS_PET + 'say Pet.name', 8, 8, "Pet is a kind, not an object made from it. Make one first, like pet = Pet(...), then use pet.name.", None),
+    (KINDS_PET + 'Pet:feed()', 8, 4, "Pet is a kind, not an object made from it.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay len(rex)', 9, 8, "len() needs text, a list or a dictionary, not a Pet.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex["name"]', 9, 8, "Can't use [ ] on a Pet. Use its fields with a dot, like rex.name.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nrex["hunger"] = 1', 9, 1, "You can only set items in a list, not in a Pet. Use its fields with a dot, like rex.hunger = ...", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex + 1', 9, 9, "Can't add a Pet and a number.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex < 1', 9, 9, "Can't compare a Pet with a number using <.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nfor x in rex:\n    say x', 9, 1, "Can't loop over a Pet.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex[0:1]', 9, 8, "Only text and lists have parts like [1:3], not a Pet.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nd = {"best": rex}\nd[rex] = 1', 10, 1, "A dictionary's keys can be text or numbers, not a Pet.",
+     "A dictionary's keys can be text or numbers, not a Pet."),  # (--check points at the key, as for any key)
+    (KINDS_PET + 'say [Pet("a"), Pet("b")]:sort()', 8, 25, "The list has a Pet, which can't be sorted.", "OK"),
+    ('kind Pet:\n    name = "?"\n    func f():\n        say name\nPet():f()', 4, 13, "I don't know what 'name' is. To use this Pet's field, write my.name", None),
+    ('say my.x', 1, 5, "I don't know what 'my' is. my is the object itself, so it only works inside a kind's actions", None),
+    ('func f(p):\n    return p.nmae\nkind Pet:\n    name = "?"\nsay f(Pet())', 2, 13, "Pet doesn't have a field 'nmae'. Did you mean 'name'?",
+     "Nothing in this program has a field 'nmae'. Did you mean 'name'?"),
+    ('func f(p):\n    p:fead()\nkind Pet:\n    func feed():\n        say 1\nf(Pet())', 2, 6, "Pet doesn't have an action 'fead'. Did you mean 'feed'?",
+     "Nothing in Tuff has :fead. Did you mean :feed?"),
+    ('kind Pet:\n    func f():\n        return my:g()\nPet():f()', 3, 18, "Pet doesn't have an action 'g'. Its actions are: f.", None),
+    ('kind Box:\n    func f():\n        return 1\nsay Box(1)', 4, 8, "Box has no fields, so Box() takes no inputs, but got 1.", None),
+    ('kind Owl:\n    n = 1\nsay Owl() - 1', 3, 11, "Can't subtract an Owl and a number.", None),
+    ('kind Pet:\n    items = nope\nPet()', 2, 13, "I don't know what 'nope' is.", None),
+    ('x = 5\nx.y = 3', 2, 1, "Only objects made from a kind have fields to set with '.', and this is a number.", None),
+    ('d = {}\nd.y = 3', 2, 1, 'A dictionary\'s values are set with [ ], like d["y"] = ...', None),
+    ('kind Owl:\n    n = 1\no = Owl()\no.n = o\nfile.save("o.json", o)', 5, 10, "file.save can't save an Owl that holds itself.", "OK"),
+    ('kind Owl:\n    n = 1\nfile.save("o.json", Owl)', 3, 10, "file.save keeps text, numbers, true/false, nil, lists, dictionaries and objects made from a kind, not the kind Owl.", "OK"),
+    ('kind Pet:\n    name = "?"\nrex = Pet()\nsay rex()', 4, 8, "isn't a function, so it can't be called with ( ).", "'rex' is a Pet, not a function"),
+    # what the parser says (the run and --check alike)
+    ('kind Pet:\n    name = "?"\nkind Pet:\n    age = 1', 3, 6, "There are two kinds called Pet. This one would replace the one on line 1.", None),
+    ('func f():\n    kind Pet:\n        name = "?"', 2, 5, "Make a kind at the top of the program, not inside a function or a block.", None),
+    ('kind Pet:\n    say "hi"', 2, 5, "A kind holds fields (like name = \"?\") and actions (like func feed():), and nothing else.", None),
+    ('kind Pet:\n    hunger += 1', 2, 5, "A field gets the value a new Pet starts with, using =, like hunger = 0.", None),
+    ('kind Pet:\n    name = 1\n    name = 2', 3, 5, "Pet already has a field called name.", None),
+    ('kind Pet:\n    name = 1\n    func name():\n        return 1', 3, 5, "Pet already has a field called name.", None),
+    ('kind Pet:\n    func f():\n        my = 3', 3, 9, "Inside an action, my is this Pet itself, so it can't be given a value.", None),
+    ('kind Pet:\n    func f(my):\n        say 1', 2, 5, "An action's inputs can't be called my", None),
+    ('kind Pet:\n    func f():\n        for my in [1]:\n            say my', 3, 9, "Inside an action, my is this Pet itself", None),
+    ('kind Pet(Animal):\n    name = 1', 1, 9, "A kind can't be made from another kind: Tuff has no inheritance.", None),
+    ('kind text:\n    name = 1', 1, 6, "text is Tuff's own function, so a kind can't be called that. Give it a name of its own, like Text.", None),
+    ('kind tgame:\n    name = 1', 1, 6, "tgame is Tuff's own library", None),
+    ('class Pet:\n    name = 1', 1, 1, "Tuff has no classes. To make your own kind of object, write: kind Pet:", None),
+    ('kind Pet\n    name = 1', 1, 9, "Expected ':' after the kind's name, like: kind Pet:", None),
+]
+# The checker: (code, part of what --check says, or "OK": correct code it must never flag).
+KINDS_CHECKS = [
+    ('kind Pet:\n    name = "?"\nfunc show(p):\n    say p.name\n    p.name = "x"\nshow(Pet())', "OK"),
+    ('kind Pet:\n    name = "?"\nfor p in [Pet()]:\n    say p.name', "OK"),
+    ('kind Pet:\n    func feed():\n        say 1\nfunc f(p):\n    p:feed()\nf(Pet())', "OK"),
+    ('rex = Pet("Rex")\nsay rex.name\nkind Pet:\n    name = "?"', "OK"),
+    ('kind Bag:\n    items = []\n    func add(x):\n        my.items:add(x)\n    func play(x):\n        return my.items:has(x)\nb = Bag()\nb:add(1)\nsay b:play(1)', "OK"),
+    ('kind Note:\n    text = ""\n    len = 0\nn = Note("hi", 2)\nsay n.text + n.len\nsay len(n.text)', "OK"),
+    ('kind Pet:\n    name = "?"\nx = Pet()\nx = {"name": 1}\nsay x["name"]', "OK"),
+    ('kind Pet:\n    name = "?"\n    toys = []\nrex = Pet()\nrex.toys:add(1)\nsay rex.toys[0] + 1\nsay f"{rex}" + rex', "OK"),
+    ('kind Pet:\n    name = "?"\n    func later():\n        func shout():\n            return my.name:upper()\n        return shout()\nsay Pet():later()', "OK"),
+    ('kind = "dog"\nsay kind:upper()\nmy = [1]\nmy:add(2)\nsay my', "OK"),
+    ('kind = {"a": 1}\nsay kind["a"]\nfunc f(my):\n    return my + 1\nsay f(1)', "OK"),
+    ('kind Pet:\n    name = "?"\nsay Pet() is nil\nsay [Pet()]:has(Pet())', "OK"),
+    ('mention tgame\ngame = tgame.window("x")\nkind Enemy:\n    x = 0\n    body = nil\n    func spawn():\n        my.body = game:box(my.x, 10, 5, 5)\n'
+     '        my.body:move(1, 0)\ne = Enemy(5)\ne:spawn()', "OK"),
+    ('kind Pet:\n    name = "?"\nd = file.load("x.json", {})\nsay d.name', "OK"),
+    ('kind Pet:\n    hunger = 5\n    func feed():\n        my.hunger -= 1\n        hunger = 2\n        return hunger', "OK"),
+    ('kind Pet:\n    name = "?"\nrex = Pet()\nrex.name = 5\nsay rex.name - 1', "OK"),
+    # mistakes only --check finds this way
+    ('kind Pet:\n    name = "?"\nPet = 5\nsay Pet("x")', "Pet is a kind, and giving it a value replaces it"),
+    ('kind Pet:\n    name = "?"\nfunc Pet():\n    return 1', "There's a kind called Pet on line 1, and a function with the same name"),
+    ('kind Pet:\n    name = "?"\nsay self.name', "Tuff has no classes: make a kind (kind Pet:), and in its actions the object itself is my"),
+    ('kind Pet:\n    name = "?"\nrex = Pet()\nsay number(rex)', "number() needs text or a number, not a Pet."),
+    ('kind Pet:\n    name = "?"\nsay feed()', "I don't know what 'feed' is."),
+]
+# Saved objects: a program with the kind gets objects back (a field the file doesn't have starts with its kind's
+# value), one without it gets the dictionary.
+KINDS_SAVE = '''kind Pet:
+    name = "?"
+    hunger = 5
+    toys = []
+pets = [Pet("Rex", 2), Pet("Ann")]
+pets[1].toys:add("ball")
+file.save("pets.json", {"pets": pets, "count": 2})
+data = file.load("pets.json")
+say data["pets"][1]
+say data["pets"][0].hunger + 1
+say data["count"]
+'''
+KINDS_SAVE_FILE = {"pets": [{"$kind": "Pet", "name": "Rex", "hunger": 2, "toys": []}, {"$kind": "Pet", "name": "Ann", "hunger": 5, "toys": ["ball"]}],
+                   "count": 2}
+KINDS_LOAD_NEWER = 'kind Pet:\n    name = "?"\n    age = 1\nsay file.load("pets.json")["pets"][0]\nsay file.load("pets.json")["pets"][1].age + 1\n'
+KINDS_LOAD_NONE = 'd = file.load("pets.json")\nsay d["pets"][0]\nsay d["pets"][0]["$kind"]\nfile.save("again.json", d)\n'
+KINDS_HOOKS = 'kind Pet:\n    hunger = 5\n    func feed():\n        my.hunger -= 1\n        return my.hunger\nrex = Pet()\nrex:feed()\n'
+KINDS_SCENE = '''mention tgame
+game = tgame.window("Kinds", 400, 300)
+kind Enemy:
+    x = 0
+    hp = 3
+    body = nil
+    func spawn():
+        my.body = game:box(my.x, 100, 20, 20, "red")
+        return my
+enemies = []
+for i in range(1, 3):
+    enemies:add(Enemy(i * 100):spawn())
+say len(enemies)
+'''
+# The editor (renderer/js/tuff-lang.js), with Node: rex. offers Pet's fields and rex: its actions, a kind's name has
+# a hover with its fields, kind and my are Tuff's words only where they mean that, and (when monaco-editor is
+# installed) Monaco's own Monarch tokenizer accepts the colours and gives them.
+KINDS_LANG = r"""
+const fs = require('fs'), vm = require('vm'), path = require('path'), url = require('url');
+const window = {}, ctx = { window };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+let monarch = null, hovers = [], completion = null, signature = null, symbols = null, definition = null;
+const monaco = { Range: class { constructor(...a) { this.a = a; } }, editor: { defineTheme() {} }, languages: {
+  register() {}, setMonarchTokensProvider(_id, def) { monarch = def; }, setLanguageConfiguration() {},
+  registerHoverProvider(_id, p) { hovers.push(p); }, registerDefinitionProvider(_id, p) { definition = p; }, registerReferenceProvider() {},
+  registerRenameProvider() {}, registerDocumentSymbolProvider(_id, p) { symbols = p; }, registerSignatureHelpProvider(_id, p) { signature = p; },
+  registerColorProvider() {}, registerCompletionItemProvider(_id, p) { completion = p; },
+  CompletionItemKind: new Proxy({}, { get: (_t, k) => k }), CompletionItemInsertTextRule: {}, IndentAction: {}, SymbolKind: new Proxy({}, { get: (_t, k) => k }) } };
+window.defineTuffTheme = () => {};
+window.registerTuff(monaco, '#3574f0');
+const model = (src, col) => { const lines = src.split('\n'); return { getLinesContent: () => lines, getLineContent: (n) => lines[n - 1],
+  getValue: () => src, getLineMaxColumn: (n) => lines[n - 1].length + 1, uri: 'x', getWordUntilPosition: () => ({ startColumn: col || 1, endColumn: col || 1 }),
+  getWordAtPosition: ({ lineNumber, column }) => { for (const m of lines[lineNumber - 1].matchAll(/\w+/g))
+    if (m.index < column && column <= m.index + m[0].length) return { word: m[0], startColumn: m.index + 1, endColumn: m.index + 1 + m[0].length };
+    return null; } }; };
+const SRC = 'kind Pet:\n    name = "?"\n    hunger = 5\n    func feed():\n        my.hunger -= 1\n    func eat(food):\n        my.hunger -= food\n'
+  + 'kind Owl:\n    wise = true\nrex = Pet("Rex")\nrex:feed()\nsay rex.hunger\nfunc show(p):\n    say p.name\n';
+const n = SRC.split('\n').length; // the line after SRC
+const labels = (src, line, col) => completion.provideCompletionItems(model(src, col), { lineNumber: line, column: col }).suggestions.map((s) => s.label);
+const hover = (src, line, col) => { for (const h of hovers) { const r = h.provideHover(model(src), { lineNumber: line, column: col }); if (r) return r.contents.map((c) => c.value).join('\n'); } return null; };
+const ids = (src) => ctx.tuffIdents(model(src)).map((x) => `${x.name}@${x.line}:${x.start}`).join(' ');
+const sig = (src, line, col) => signature.provideSignatureHelp(model(src), { lineNumber: line, column: col })?.value.signatures[0].label;
+const out = {
+  kinds: ctx.tuffKinds(model(SRC)).map((k) => `${k.name}[${k.fields.map((f) => f.name + '=' + f.value)}|${k.actions.map((a) => a.name + '(' + a.params + ')')}]${k.line}-${k.end}`),
+  fieldsRex: labels(SRC + 'say rex.', n, 9), fieldsMy: labels(SRC.replace('my.hunger -= 1', 'my.'), 5, 12),
+  fieldsAny: labels(SRC + 'say p.', n, 7), actionsRex: labels(SRC + 'rex:', n, 5),
+  actionsAny: labels(SRC + 'p:', n, 3).filter((l) => ['feed', 'eat', 'upper', 'add'].includes(l)),
+  top: labels(SRC, n, 1).filter((l) => ['Pet', 'Owl', 'feed', 'eat', 'show'].includes(l)),
+  hoverKind: hover(SRC, 10, 8), hoverField: hover(SRC, 12, 10), hoverAction: hover(SRC, 11, 6), hoverMy: hover(SRC, 5, 9),
+  hoverWord: hover('kind Pet:\n    x = 1', 1, 2), hoverOwnKind: hover('kind = "dog"\nsay kind', 2, 6),
+  ids: ids(SRC), own: ids('kind = "dog"\nsay kind\nmy = 2\nsay my'), rename: ids('name = 1\nkind Pet:\n    name = name\nsay name'),
+  wants: [window.tuffWantsSuggest(model(SRC + 'say rex.'), { lineNumber: n, column: 9 }), window.tuffWantsSuggest(model('say rex.'), { lineNumber: 1, column: 9 })],
+  sigKind: sig(SRC + 'x = Pet(', n, 9), sigAction: sig(SRC + 'rex:eat(', n, 9),
+  def: definition.provideDefinition(model(SRC), { lineNumber: 10, column: 8 })?.range.a,
+  symbols: symbols.provideDocumentSymbols(model(SRC)).map((s) => `${s.name}:${s.kind}`),
+  snippet: completion.provideCompletionItems(model(''), { lineNumber: 1, column: 1 }).suggestions.find((s) => s.label === 'kind')?.insertText,
+  words: [!!window.TUFF_DOCS.kind, !!window.TUFF_DOCS.my, window.TUFF_KEYWORDS.includes('kind'), window.TUFF_KEYWORDS.includes('my')],
+};
+async function real() { // Monaco's own Monarch: the tokenizer compiles, and colours these lines
+  const dir = process.argv[2];
+  if (!dir || !fs.existsSync(path.join(dir, 'esm'))) return null;
+  const base = path.join(dir, 'esm', 'vs', 'editor', 'standalone', 'common', 'monarch');
+  const { compile } = await import(url.pathToFileURL(path.join(base, 'monarchCompile.js')).href);
+  const { MonarchTokenizer } = await import(url.pathToFileURL(path.join(base, 'monarchLexer.js')).href);
+  const here = (x) => (x && x.constructor && x.constructor.name === 'RegExp' ? new RegExp(x.source, x.flags) // (made in the vm's realm)
+    : Array.isArray(x) ? x.map(here) : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, here(v)])) : x);
+  const t = new MonarchTokenizer({}, {}, 'tuff', compile('tuff', here(monarch)), { getValue: () => 20000, onDidChangeConfiguration: () => ({ dispose() {} }) });
+  let state = t.getInitialState();
+  const lines = [];
+  for (const line of ['kind Pet:', '        my.hunger -= 1', 'rex = Pet("Rex")', 'say rex.hunger', 'w = tgame.window("x")', 'kind = "dog"',
+    'say kind:upper()', 'my = 3', 'say f"{my.name}"']) {
+    const r = t.tokenize(line, true, state);
+    state = r.endState;
+    lines.push(r.tokens.map((tok, i) => `${line.slice(tok.offset, r.tokens[i + 1]?.offset ?? line.length)}=${tok.type.replace(/\.tuff$/, '')}`)
+      .filter((x) => !/^\s*=/.test(x)).join(' '));
+  }
+  return lines;
+}
+real().then((r) => { out.real = r; console.log(JSON.stringify(out)); }, (e) => { out.real = 'ERROR ' + e.message; console.log(JSON.stringify(out)); });
+"""
+
+
+def t_kinds(c):
+    """Console only, no window: 1.5.0's kinds (kind Pet:, Pet("Rex"), rex.hunger, rex:feed(), my). A program with
+    fields, actions, my, objects in lists, sorting and the soft words used as variables runs the same in both
+    runtimes and --check accepts it; each mistake stops the run and --check with the same message at the same place;
+    correct code the checker can't see the kind of is never flagged; objects save and load (a program with the kind
+    gets objects back, one without it a dictionary); the step hooks see actions; Tuff Engine's --scene preview runs a
+    kind's actions; and the editor's tuff-lang.js knows kinds (with Node)."""
+    folder = os.path.join(HERE, "out", "kinds")
+    os.makedirs(folder, exist_ok=True)
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    for k in ("TUFF_IDE", "TUFF_SLOW", "TUFF_NO_WRITES"):
+        env.pop(k, None)
+
+    def write(name, code):
+        path = os.path.join(folder, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code if code.endswith("\n") else code + "\n")
+        return path
+
+    def run(path, slow=False, extra=None, check=False):
+        e = {**env, **({"TUFF_SLOW": "1"} if slow else {}), **(extra or {})}
+        return subprocess.run(tuff_cmd() + (["--check"] if check else []) + [path], capture_output=True, text=True, encoding="utf-8",
+                              timeout=60, env=e, cwd=folder, stdin=subprocess.DEVNULL)
+
+    def where(stderr):
+        """The line, column and message of the first "Tuff error" (the column from the ^ under the line)."""
+        lines = stderr.splitlines()
+        first = next((i for i, x in enumerate(lines) if x.startswith("Tuff error on line ")), None)
+        if first is None:
+            return None, None, stderr.strip()
+        head, msg = lines[first][len("Tuff error on line "):].split(": ", 1)
+        caret = lines[first + 2] if first + 2 < len(lines) and lines[first + 2].strip() == "^" else ""
+        return int(head), (caret.index("^") - len(f"  {head} | ") + 1) if caret else None, msg
+
+    path = write("kinds.tuf", KINDS_PROGRAM)
+    for slow in (False, True):
+        p = run(path, slow)
+        got = p.stdout.splitlines()
+        mode = "the tree walker" if slow else "the compiled runtime"
+        c.check(p.returncode == 0 and got == KINDS_OUTPUT, f"{mode} runs the kinds program: {len(KINDS_OUTPUT)} lines as expected",
+                [(i + 1, a, b) for i, (a, b) in enumerate(zip(got + [None] * 40, KINDS_OUTPUT)) if a != b][:4] or (p.stdout + p.stderr)[-500:])
+    p = run(path, check=True)
+    c.check(p.stdout.strip() == "OK", "--check accepts all of it", (p.stdout + p.stderr)[:600])
+
+    for i, (code, line, col, says, check_says) in enumerate(KINDS_ERRORS):
+        bad = write(f"mistake{i}.tuf", code)
+        shown = code.splitlines()[line - 1].strip()
+        runs = [where(run(bad, slow).stderr) for slow in (False, True)]
+        c.check(runs[0] == runs[1] and runs[0][:2] == (line, col) and says in runs[0][2],
+                f"running {shown!r} stops at {line}:{col} in both runtimes: {says[:60]!r}", runs)
+        p = run(bad, check=True)
+        if check_says == "OK":
+            c.check(p.stdout.strip() == "OK", f"--check can't know it before the run, and says OK: {shown!r}", (p.stdout + p.stderr)[:300])
+        else:
+            at = where(p.stderr)
+            c.check(p.returncode == 1 and at[0] == line and (check_says or says) in at[2] and (check_says is not None or at[1] == col),
+                    f"--check on {shown!r} says it on line {line} too" + ("" if check_says else f" (at {line}:{col})"), at)
+
+    for i, (code, want) in enumerate(KINDS_CHECKS):
+        p = run(write(f"check{i}.tuf", code), check=True)
+        out = (p.stdout + p.stderr).strip()
+        shown = code.splitlines()[-1].strip()
+        if want == "OK":
+            c.check(out == "OK", f"--check accepts: {shown}", out[:300])
+        else:
+            c.check(p.returncode == 1 and want in out, f"--check on {shown!r} says {want[:50]!r}", out[:300])
+
+    # Saving and loading objects, with writes on and in memory (TUFF_NO_WRITES, like tuff_run).
+    for name in ("pets.json", "again.json"):
+        if os.path.exists(os.path.join(folder, name)):
+            os.remove(os.path.join(folder, name))
+    p = run(write("save.tuf", KINDS_SAVE))
+    c.check(p.stdout.splitlines() == ['Pet(name: "Ann", hunger: 5, toys: ["ball"])', "3", "2"],
+            "file.load gives back Pet objects in a program that has kind Pet", (p.stdout + p.stderr)[-400:])
+    c.check(same_json(read_json(os.path.join(folder, "pets.json")), KINDS_SAVE_FILE),
+            'file.save keeps each object as a dictionary that starts with "$kind"', read_json(os.path.join(folder, "pets.json")))
+    p = run(write("newer.tuf", KINDS_LOAD_NEWER))
+    c.check(p.stdout.splitlines() == ['Pet(name: "Rex", age: 1)', "2"],
+            "a kind that changed since (a new field, one gone) loads old saves: the new field starts with its value", (p.stdout + p.stderr)[-400:])
+    p = run(write("nokind.tuf", KINDS_LOAD_NONE))
+    c.check(p.stdout.splitlines() == ['{"$kind": "Pet", "name": "Rex", "hunger": 2, "toys": []}', "Pet"]
+            and same_json(read_json(os.path.join(folder, "again.json")), KINDS_SAVE_FILE),
+            "in a program without the kind it's a dictionary, and saving it again keeps it the same", (p.stdout + p.stderr)[-400:])
+    os.remove(os.path.join(folder, "pets.json"))
+    for slow in (False, True):
+        p = run(os.path.join(folder, "save.tuf"), slow, {"TUFF_NO_WRITES": "1"})
+        c.check(p.stdout.splitlines() == ['Pet(name: "Ann", hunger: 5, toys: ["ball"])', "3", "2"] and not os.path.exists(os.path.join(folder, "pets.json")),
+                f"with writes kept in memory (TUFF_NO_WRITES=1, {'the tree walker' if slow else 'compiled'}) objects save and load too",
+                (p.stdout + p.stderr)[-300:])
+
+    # The debugger's hook point sees the statements in an action, in both runtimes.
+    import tuff
+    for slow in (True, False):
+        old = os.environ.pop("TUFF_SLOW", None)
+        if slow:
+            os.environ["TUFF_SLOW"] = "1"
+        try:
+            interp = tuff.Interpreter(KINDS_HOOKS, folder)
+        finally:
+            os.environ.pop("TUFF_SLOW", None)
+            if old is not None:
+                os.environ["TUFF_SLOW"] = old
+        seen = []
+        interp.step_hooks.append(lambda s, env: seen.append(s.line))
+        interp.run_block(tuff.Parser(tuff.tokenize(KINDS_HOOKS)).program(), interp.globals)
+        rex = interp.globals.vars["rex"]
+        c.check(seen == [1, 6, 7, 4, 5] and rex.fields == {"hunger": 4},
+                f"{'the tree walker' if slow else 'the compiled runtime'}: a step hook sees the action's statements as they run", (seen, rex.fields))
+
+    # Tuff Engine's preview runs a kind's actions, which make the game's things.
+    code, out, err, d, secs = scene(write("kinds_scene.tuf", KINDS_SCENE))
+    c.check(code == 0 and d.get("error") is None and d.get("stopped") == "end" and len(d.get("things", [])) == 3,
+            f"the --scene preview runs actions that make boxes ({secs:.1f} s)", (d.get("error"), d.get("stopped"), len(d.get("things", [])), err[-300:]))
+
+    lang = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")
+    monaco_dir = os.environ.get("TUFF_MONACO") or os.path.join(REPO, "tuffcode", "node_modules", "monaco-editor")
+    try:
+        p = subprocess.run(["node", "-e", KINDS_LANG, lang, monaco_dir], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the editor checks")
+        return
+    try:
+        t = json.loads(p.stdout)
+    except ValueError:
+        c.check(False, "the editor checks ran", (p.stdout + p.stderr)[-600:])
+        return
+    c.check(t["kinds"] == ['Pet[name="?",hunger=5|feed(),eat(food)]1-7', "Owl[wise=true|]8-9"],
+            "tuffKinds reads each kind's fields (with their starting values) and actions", t["kinds"])
+    c.check(t["fieldsRex"] == ["name", "hunger"] and t["fieldsMy"] == ["name", "hunger"] and t["fieldsAny"] == ["name", "hunger", "wise"],
+            "after rex. (and my. in an action) come Pet's fields; after p. every kind's", [t["fieldsRex"], t["fieldsMy"], t["fieldsAny"]])
+    c.check(t["actionsRex"] == ["feed", "eat"] and t["actionsAny"][:2] == ["feed", "eat"] and {"upper", "add"} <= set(t["actionsAny"]),
+            "after rex: come only Pet's actions; after p: the actions first, then the other methods", [t["actionsRex"], t["actionsAny"]])
+    c.check(t["top"] == ["show", "Pet", "Owl"], "a line's completions offer the kinds (Pet(...)) and functions, not the actions", t["top"])
+    c.check("kind Pet:" in (t["hoverKind"] or "") and "hunger = 5" in t["hoverKind"] and "func eat(food)" in t["hoverKind"],
+            "hovering a kind's name shows its fields and actions", t["hoverKind"])
+    c.check("A field of Pet" in (t["hoverField"] or "") and "rex:feed()" in (t["hoverAction"] or "") and "This Pet itself" in (t["hoverMy"] or ""),
+            "hovering rex.hunger, rex:feed and my says what they are", [t["hoverField"], t["hoverAction"], t["hoverMy"]])
+    c.check("kind Pet:" in (t["hoverWord"] or "") and t["hoverOwnKind"] is None,
+            "the word kind has a hover, and a variable called kind doesn't", [t["hoverWord"], t["hoverOwnKind"]])
+    c.check(t["ids"] == "Pet@1:6 food@6:14 food@7:22 Owl@8:6 rex@10:1 Pet@10:7 rex@11:1 rex@12:5 show@13:6 p@13:11 p@14:9"
+            and t["own"] == "kind@1:1 kind@2:5 my@3:1 my@4:5" and t["rename"] == "name@1:1 Pet@2:6 name@3:12 name@4:5",
+            "rename and find uses: kind and my are names only outside kinds, and a field isn't the variable with its name",
+            [t["ids"], t["own"], t["rename"]])
+    c.check(t["wants"] == [True, False], "typing rex. opens the list in a file with kinds (and not in one without)", t["wants"])
+    c.check(t["sigKind"] == "Pet(name, hunger)" and t["sigAction"] == "Pet:eat(food)", "Pet( and rex:eat( show their inputs",
+            [t["sigKind"], t["sigAction"]])
+    c.check(t["def"] == [1, 6, 1, 9] and t["symbols"] == ["Pet:Class", "Pet:feed:Method", "Pet:eat:Method", "Owl:Class", "rex:Variable", "show:Function"],
+            "go to definition finds kind Pet:, and the outline lists kinds and their actions", [t["def"], t["symbols"]])
+    c.check(t["snippet"] == 'kind ${1:Pet}:\n    ${2:name} = ${3:"?"}\n    func ${4:feed}():\n        $0' and t["words"] == [True, True, True, True],
+            "there is a kind snippet, and kind and my are Tuff's words with docs", [t["snippet"], t["words"]])
+    if t["real"] is None:
+        c.check(True, "monaco-editor isn't installed here: skipped the Monarch check")
+        return
+    want = ["kind=keyword Pet=function.decl :=source", "my=keyword .=delimiter hunger=identifier -==operator 1=number",
+            'rex=identifier Pet=function (=delimiter.parenthesis "Rex"=string )=delimiter.parenthesis', "say=keyword rex=identifier .=delimiter hunger=identifier",
+            'w=identifier tgame=library .=delimiter window=function (=delimiter.parenthesis "x"=string )=delimiter.parenthesis',
+            'kind=identifier "dog"=string', "say=keyword kind=identifier :=delimiter upper=method ()=delimiter.parenthesis", "my=identifier 3=number",
+            'say=keyword f"=string {=delimiter.curly my=keyword .=delimiter name=identifier }=delimiter.curly "=string']
+    c.check(t["real"] == want, "Monaco's Monarch colours kind Pet: and my.hunger as Tuff's words, a field as a name, and a variable called kind as a variable",
+            [(a, b) for a, b in zip(t["real"] if isinstance(t["real"], list) else [t["real"]], want) if a != b])
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
@@ -5845,6 +6288,7 @@ TESTS.update({"recursion": t_recursion, "recursion_window": t_recursion_window, 
 TESTS.update({"interp": t_interp})  # 1.5.0
 TESTS.update({"fstrings": t_fstrings})  # 1.5.0
 TESTS.update({"frames": t_frames, "frames_window": t_frames_window})  # 1.5.0: sprite sheets
+TESTS.update({"kinds": t_kinds})  # 1.5.0: your own objects
 
 
 def main():
