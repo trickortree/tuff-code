@@ -329,13 +329,13 @@ window.TUFF_DOCS = {
   flush: ['flush', 'Wipes everything in the Run window. Same as clear(all).'],
   clear: ['clear(lines)', 'Removes the last few lines from the Run window, like clear(2). clear(all) removes everything. (line:clear empties one line you already said.)'],
   all: ['all', 'Means every line, as in clear(all).'],
-  import: ['import library', 'Loads a library of extra functions, like: import anims'],
+  import: ['import name', 'Loads a library of extra functions, like: import anims. It also loads your own files (1.5.0): import money loads money.tuf from this file\'s folder (or a libs folder there), and its functions and top-level values go after a dot: money.as_money(6.375), money.rate.'],
   anims: ['import anims', 'Ready-made animations: loading, bar, type, countdown.'],
   tgui: ['import tgui', 'Tuff GUI: make real app windows with buttons, text boxes, toggles and more.'],
   mtgui: ['mention mtgui', 'Modern Tuff GUI: like tgui with gradients, gloss, shine and glow.'],
   tap: ['mention tap', 'Get and send things on the web (HTTP), like Python\'s requests: tap.get, post, put, delete. JSON comes back as dictionaries and lists.'],
   tgame: ['mention tgame', 'Make games, like pygame: tgame.window for 2D (sprites, keys, the mouse, collisions, sounds) and tgame.world for 3D (a sky, trees, a first-person player).'],
-  mention: ['mention library', 'Loads a library. Works exactly like import.'],
+  mention: ['mention name', 'Loads a library, or one of your own files (mention money loads money.tuf). Works exactly like import.'],
   sqrt: ['sqrt(number)', 'Square root: sqrt(81) is 9.'],
   abs: ['abs(number)', 'Removes the minus sign: abs(-5) is 5.'],
   floor: ['floor(number)', 'Rounds down: floor(3.7) is 3.'],
@@ -654,6 +654,82 @@ function insideStringOrComment(text) {
   return tuffScan(text).ends !== null;
 }
 
+// ---------------------------------------------------------------- your own files as libraries (1.5.0)
+// import money loads money.tuf from the file's own folder, or the libs folder there (a library's name is always the
+// library), and its functions and top-level values go after a dot: money.as_money(6.375), money.rate. Completions,
+// hovers and signature help after money. read that file through TuffIDE (an open tab's text, unsaved too).
+const TUFF_MODULE_FOLDER = 'libs';
+
+// The names this file imports that aren't libraries: import money, mention tax.
+function tuffOwnImports(src) {
+  const out = new Set();
+  for (const m of src.matchAll(/^[ \t]*(?:import|mention)[ \t]+([A-Za-z_]\w*)/gm)) {
+    if (!Object.hasOwn(window.TUFF_LIBS, m[1]) && m[1] !== 'file') out.add(m[1]);
+  }
+  return out;
+}
+
+// What a .tuf file makes at its top level: its functions (with their inputs) and values, each with the # comment
+// lines right above it (or the one at the end of its line) as its doc.
+function tuffFileParts(text) {
+  const lines = text.split(/\r?\n/);
+  const funcs = [];
+  const values = [];
+  const seen = new Set();
+  const docOf = (i) => {
+    const doc = [];
+    for (let j = i - 1; j >= 0 && /^\s*#/.test(lines[j]); j--) doc.unshift(lines[j].replace(/^\s*#\s?/, '').replace(/^↳\s*/, ''));
+    const kinds = tuffScan(lines[i]).kinds;
+    const hash = kinds.indexOf('#');
+    if (!doc.length && hash >= 0) doc.push(lines[i].slice(hash + 1).trim());
+    return doc.join('\n').trim();
+  };
+  lines.forEach((line, i) => {
+    let m = line.match(/^func\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?/);
+    if (m && !seen.has(m[1])) {
+      seen.add(m[1]);
+      funcs.push({ name: m[1], params: (m[2] || '').split(',').map((s) => s.trim()).filter(Boolean), doc: docOf(i), line: i + 1 });
+    } else if ((m = line.match(/^([A-Za-z_]\w*)\s*=(?!=)/)) && !seen.has(m[1]) && !window.TUFF_KEYWORDS.includes(m[1])) {
+      seen.add(m[1]);
+      values.push({ name: m[1], doc: docOf(i), line: i + 1 });
+    }
+  });
+  return { funcs, values };
+}
+
+// The file `import name` loads for this model, read (a few seconds' cache): { name, rel, path, funcs, values }, or
+// null when there's no such file or the editor can't read files here (no TuffIDE, or a model that isn't a file).
+const tuffFileCache = new Map();
+async function tuffOwnFile(model, name) {
+  const ide = window.TuffIDE;
+  const file = model.uri && model.uri.scheme === 'file' ? model.uri.fsPath : null;
+  if (!ide || !ide.readText || !file) return null;
+  const sep = file.includes('\\') ? '\\' : '/';
+  const folder = file.slice(0, file.lastIndexOf(sep));
+  for (const [dir, rel] of [[folder, `${name}.tuf`], [folder + sep + TUFF_MODULE_FOLDER, `${TUFF_MODULE_FOLDER}/${name}.tuf`]]) {
+    const path = dir + sep + `${name}.tuf`;
+    const hit = tuffFileCache.get(path);
+    if (hit && Date.now() - hit.at < 3000) {
+      if (hit.parts) return hit.parts;
+      continue;
+    }
+    const text = await ide.readText(path);
+    const parts = text == null ? null : { name, rel, path, ...tuffFileParts(text) };
+    tuffFileCache.set(path, { at: Date.now(), parts });
+    if (parts) return parts;
+  }
+  return null;
+}
+
+// money.as_money's doc (for the hover and the signature help): [how to call it, its doc], or null.
+function tuffOwnDoc(mod, word) {
+  const f = mod.funcs.find((x) => x.name === word);
+  if (f) return [`${mod.name}.${f.name}(${f.params.join(', ')})`, f.doc || `A function in ${mod.rel}.`];
+  const v = mod.values.find((x) => x.name === word);
+  if (v) return [`${mod.name}.${v.name}`, v.doc || `A value in ${mod.rel}. Change it with a function in ${mod.rel}.`];
+  return null;
+}
+
 // Should typing ':' or '.' just before `position` open the suggestion list?
 // Yes for a method call (app:) or a library (tgui.); no for the colon that opens a block
 // (func greet():, if x is 1:, else:), numbers (3.) and anything inside a string or comment.
@@ -663,7 +739,7 @@ window.tuffWantsSuggest = function tuffWantsSuggest(model, position) {
   if (insideStringOrComment(before)) return false;
   if (before.endsWith('.')) {
     const lib = before.match(/([A-Za-z_]\w*)\.$/);
-    return !!(lib && window.TUFF_LIBS[lib[1]]);
+    return !!(lib && (window.TUFF_LIBS[lib[1]] || tuffOwnImports(model.getValue()).has(lib[1]))); // or one of your files
   }
   if (!/[A-Za-z_]\w*:$/.test(before)) return false;
   const atEnd = !line.slice(position.column - 1).trim();
@@ -713,6 +789,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
         [/#.*$/, 'comment'],
         [/f"/, 'string', '@fdq'], // a text template (1.5.0): f"{name} has {score + 1} points"
         [/f'/, 'string', '@fsq'],
+        [/(import|mention)(\s+)([a-zA-Z_]\w*)/, ['keyword', '', 'library']], // a library, or one of your own files (1.5.0)
         [/(func)(\s+)([a-zA-Z_]\w*)/, ['keyword', '', 'function.decl']],
         [/(:)([a-zA-Z_]\w*)/, ['delimiter', 'method']],
         [/([a-zA-Z_]\w*)(\.)([a-zA-Z_]\w*)/, [{ cases: { '@libs': 'library', '@default': 'identifier' } }, 'delimiter', 'function']],
@@ -772,6 +849,15 @@ window.registerTuff = function registerTuff(monaco, accent) {
         };
       }
       const lib = before.match(/(\w+)\.$/);
+      if (lib && !window.TUFF_LIBS[lib[1]] && tuffOwnImports(model.getValue()).has(lib[1])) { // money.as_money (1.5.0)
+        return tuffOwnFile(model, lib[1]).then((mod) => {
+          const doc = mod && tuffOwnDoc(mod, word.word);
+          return doc ? {
+            range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn),
+            contents: [{ value: '```tuff\n' + doc[0] + '\n```' }, { value: `${doc[1]}\n\n*${mod.rel}, line ${(mod.funcs.find((f) => f.name === word.word) || mod.values.find((v) => v.name === word.word)).line}*` }],
+          } : null;
+        });
+      }
       // A built-in's name the program gives a value (a 1.3.6 program's log = []) is the program's own variable.
       const own = TUFF_BUILTINS.includes(word.word) && givesValue(model, word.word);
       const doc = (lib && window.TUFF_LIBS[lib[1]]?.[word.word])
@@ -799,6 +885,16 @@ window.registerTuff = function registerTuff(monaco, accent) {
       const libMatch = before.match(/(\w+)\.$/);
       if (libMatch) {
         const lib = window.TUFF_LIBS[libMatch[1]];
+        if (!lib && tuffOwnImports(model.getValue()).has(libMatch[1])) { // money. (1.5.0): what money.tuf makes
+          return tuffOwnFile(model, libMatch[1]).then((mod) => ({
+            suggestions: mod ? [
+              ...mod.funcs.map((f) => ({ label: f.name, kind: K.Function, insertText: `${f.name}($0)`, insertTextRules: R, range,
+                detail: `${mod.name}.${f.name}(${f.params.join(', ')})`, documentation: f.doc || `A function in ${mod.rel}.` })),
+              ...mod.values.map((v) => ({ label: v.name, kind: K.Variable, insertText: v.name, range,
+                detail: `${mod.name}.${v.name}`, documentation: v.doc || `A value in ${mod.rel}.` })),
+            ] : [],
+          }));
+        }
         if (!lib) return { suggestions: [] };
         return {
           suggestions: Object.entries(lib).map(([name, [sig, docText]]) => ({
@@ -807,7 +903,25 @@ window.registerTuff = function registerTuff(monaco, accent) {
         };
       }
       if (/^\s*(import|mention)\s+$/.test(before)) {
-        return { suggestions: Object.keys(window.TUFF_LIBS).filter((l) => !TUFF_READY_LIBS.includes(l)).map((l) => ({ label: l, kind: K.Module, insertText: l, range, documentation: window.TUFF_DOCS[l]?.[1] })) };
+        const libs = Object.keys(window.TUFF_LIBS).filter((l) => !TUFF_READY_LIBS.includes(l)).map((l) => ({ label: l, kind: K.Module, insertText: l, range, documentation: window.TUFF_DOCS[l]?.[1] }));
+        // ...and the .tuf files next to this one and in its libs folder (1.5.0), but not this file or a library's name
+        const file = model.uri && model.uri.scheme === 'file' ? model.uri.fsPath : null;
+        if (!file || !window.TuffIDE?.readDir) return { suggestions: libs };
+        const sep = file.includes('\\') ? '\\' : '/';
+        const folder = file.slice(0, file.lastIndexOf(sep));
+        const me = file.slice(file.lastIndexOf(sep) + 1);
+        return Promise.all([window.TuffIDE.readDir(folder), window.TuffIDE.readDir(folder + sep + TUFF_MODULE_FOLDER)]).then(([here, libsDir]) => {
+          const own = [];
+          for (const [entries, rel] of [[here, ''], [libsDir, `${TUFF_MODULE_FOLDER}/`]]) {
+            for (const e of entries || []) {
+              const name = e.name.replace(/\.tuf$/i, '');
+              if (e.isDir || !/\.tuf$/.test(e.name) || !/^[A-Za-z_]\w*$/.test(name) || (!rel && e.name === me)) continue;
+              if (Object.hasOwn(window.TUFF_LIBS, name) || TUFF_BUILTINS.includes(name) || own.some((x) => x.label === name)) continue;
+              own.push({ label: name, kind: K.File, insertText: name, range, detail: `${rel}${e.name}`, documentation: `Your own file ${rel}${e.name}: its functions and values go after ${name}.` });
+            }
+          }
+          return { suggestions: [...own, ...libs] };
+        });
       }
       if (/\b(say|print):$/.test(before)) { // say:ascii, say:color, say:pen (1.3.5)
         return {
@@ -1078,6 +1192,17 @@ function registerTuffNavigation(monaco) {
       if (insideStringOrComment(before)) return null;
       const call = callAt(before);
       if (!call) return null;
+      if (call.how === 'lib' && !window.TUFF_LIBS[call.lib] && tuffOwnImports(model.getValue()).has(call.lib)) { // money.as_money( (1.5.0)
+        return tuffOwnFile(model, call.lib).then((mod) => {
+          const f = mod && mod.funcs.find((x) => x.name === call.name);
+          if (!f) return null;
+          const label = `${call.lib}.${f.name}(${f.params.join(', ')})`;
+          return {
+            value: { signatures: [{ label, documentation: f.doc || `A function in ${mod.rel}.`, parameters: f.params.map((p) => ({ label: p })) }], activeSignature: 0, activeParameter: Math.min(call.active, Math.max(0, f.params.length - 1)) },
+            dispose() {},
+          };
+        });
+      }
       let sig = null;
       let doc = '';
       if (call.how === 'lib') [sig, doc] = window.TUFF_LIBS[call.lib]?.[call.name] || [];

@@ -4980,10 +4980,15 @@ def interp_corpus():
     return console, games, sections is not None
 
 
-def interp_run(folder, code, slow, env=None, timeout=60):
-    """Runs a program with INTERP_DRIVER in its own folder: (exit code, stdout, stderr), with the folder's path taken out."""
+def interp_run(folder, code, slow, env=None, timeout=60, files=None, main="program.tuf"):
+    """Runs a program with INTERP_DRIVER in its own folder: (exit code, stdout, stderr), with the folder's path taken out.
+    files: more files to write there first (1.5.0: the program's own files it imports), and main: the program's name."""
     os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, "program.tuf")
+    for rel, text in (files or {}).items():
+        os.makedirs(os.path.dirname(os.path.join(folder, rel)), exist_ok=True)
+        with open(os.path.join(folder, rel), "w", encoding="utf-8") as f:
+            f.write(text)
+    path = os.path.join(folder, main)
     with open(path, "w", encoding="utf-8") as f:
         f.write(code)
     full = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW", "TUFF_NO_WRITES", "TUFF_BASE_DIR")}
@@ -5036,6 +5041,16 @@ def t_interp(c):
     c.check(errors >= 100, f"...{errors} of them stop with a Tuff error, which is on the same line and column in both", errors)
     crashes = [name for name, (slow, fast) in results if "Traceback" in slow[2] + fast[2]]
     c.check(not crashes, "...and none of them crash in Python (10 ^ 400 / 3 and 2 ^ 99999 * 1.5 did, before 1.5.0's numbers fix)", crashes)
+    crashes = [name for name, (slow, _f) in results if "Traceback" in slow[2]]
+    c.check(len(crashes) <= 2, f"...and only {len(crashes)} crash in Python (the same way in both: 1.4.1's own bugs)", crashes)
+    # 1.5.0: programs in several files (import money), the modules test's: the same output, and errors in the same file,
+    # line and column, in both.
+    projects = modules_projects()
+    runs = [(name, [interp_run(os.path.join(folder, "files_" + mode, str(i)), files["shop.tuf"], mode == "slow", files=files, main="shop.tuf")
+                    for mode in ("slow", "fast")]) for i, (name, files) in enumerate(projects)]
+    differ = [(name, slow, fast) for name, (slow, fast) in runs if slow != fast]
+    c.check(not differ and len(runs) >= 20, f"{len(runs)} programs in several files give the same output, errors and exit code in both runtimes",
+            "\n".join(f"{name}:\n  slow {slow!r}\n  fast {fast!r}"[:700] for name, slow, fast in differ[:2]))
     # In TuffCode's Run panel (TUFF_IDE=1): the lines, rewrites, looks and prompts it's sent are the same too.
     ide = [(n, code) for n, code in console if n in ("looks_program", "toolbox_program") or "rewrite" in code or "print:pen" in code][:40]
     same = [n for i, (n, code) in enumerate(ide) if interp_run(os.path.join(folder, "ide_slow", str(i)), code, True, env={"TUFF_IDE": "1"})
@@ -6103,6 +6118,461 @@ def types_method(fn):
     return types.MethodType(fn, object())
 
 
+# ---------------------------------------------------------------- 1.5.0: your own files as libraries (import money)
+
+# A shop in five files: money.tuf and tax.tuf next to it, and fmt.tuf and table.tuf in libs/ (table.tuf imports fmt.tuf
+# from there). (A library's name winning over a file is in MODULES_ERRORS: --check says so.)
+MODULES_FILES = {
+    "shop.tuf": '''import money
+mention tax
+import fmt
+import table
+import anims
+say money.as_money(6.375)
+say money.rate
+say tax.total(10)
+money.set_rate(0.5)
+say money.rate
+say tax.total(10)
+rate = 99
+say money.with_tax(10)
+say money
+say anims
+say tax.money is money
+say fmt.stars(3) + " " + table.row(["a", "b"])
+prices = [3, 10, 7]
+prices:sort(money.biggest_first)
+say prices
+func shout(t):
+    return t:upper() + "!"
+say money.apply(shout, "hi")
+func later():
+    import fmt
+    return fmt.stars(2)
+say later()
+try:
+    import extras
+catch problem:
+    say problem
+say money.counter()
+say money.counter()
+say money.count
+say f"{money.rate:0.00} and {rate}"
+''',
+    "money.tuf": '''# Money helpers for the shop
+say "money.tuf starts"
+rate = 0.2
+count = 0
+
+# 6.375 -> "$6.38"
+func as_money(x):
+    return f"{x:money}"
+
+func with_tax(price):
+    scratch = price * rate
+    return price + scratch
+
+func set_rate(new_rate):
+    rate = new_rate
+
+func biggest_first(n):
+    return -n
+
+func apply(f, x):
+    return f(x)
+
+func counter():
+    count += 1
+    return count
+''',
+    "tax.tuf": 'import money\nsay "tax.tuf starts"\nfunc total(x):\n    return money.as_money(money.with_tax(x))\n',
+    "libs/fmt.tuf": 'func stars(n):\n    return "*" * n\n',
+    "libs/table.tuf": 'import fmt\nfunc row(cells):\n    return fmt.stars(1) + " " + cells:join(" | ")\n',
+}
+MODULES_OUTPUT = ["money.tuf starts", "tax.tuf starts", "$6.38", "0.2", "$12.00", "0.5", "$15.00", "15", "<file money.tuf>",
+                  "<library anims>", "true", "*** * a | b", "[10, 7, 3]", "HI!", "**",
+                  "There's no extras.tuf next to shop.tuf (or in a libs folder there), and extras isn't one of Tuff's libraries "
+                  "(anims, tgui, mtgui, tap, atgui, tgame, tdraw).", "1", "2", "2", "0.50 and 99"]
+MONEY = 'rate = 0.2\nfunc as_money(x):\n    return f"{x:money}"\nfunc show():\n    secret = 1\n    return secret\n'
+# Mistakes: (the files, where the run stops: (the file it names, line, column, part of the message), or "OK", and part of
+# what --check on shop.tuf says, or "OK" when only the run can know). shop.tuf is the program.
+MODULES_ERRORS = [
+    ({"shop.tuf": 'say 1\nimport nothere\n'}, ("", 2, 1, "There's no nothere.tuf next to shop.tuf (or in a libs folder there), and "
+                                                         "nothere isn't one of Tuff's libraries"), None),
+    ({"shop.tuf": 'import mony\n', "money.tuf": MONEY}, ("", 1, 1, "There's no mony.tuf next to shop.tuf (or in a libs folder there). "
+                                                                   "Did you mean money (money.tuf)?"), None),
+    ({"shop.tuf": 'import Money\n', "money.tuf": MONEY}, ("", 1, 1, "There's no Money.tuf next to shop.tuf (or in a libs folder there). "
+                                                                    "Did you mean money (money.tuf)?"), None),
+    ({"shop.tuf": 'import tgaem\n'}, ("", 1, 1, "Did you mean Tuff's library tgame?"), None),
+    ({"shop.tuf": 'import random\n', "random.tuf": 'x = 1\n'}, ("", 1, 1, "random is one of Tuff's built-in functions, so a file called "
+                                                                          "random.tuf can't be imported by that name."), None),
+    ({"shop.tuf": 'import random\n'}, ("", 1, 1, "random is built into Tuff, so there's nothing to import: use it straight away, like random()."), None),
+    ({"shop.tuf": 'import math\n'}, ("", 1, 1, "and Tuff doesn't need math: sqrt, floor"), None),
+    ({"shop.tuf": 'import money\nsay 1\n', "money.tuf": 'import shop\n'},
+     ("money.tuf", 1, 1, "shop.tuf and money.tuf import each other (shop.tuf → money.tuf → shop.tuf), so neither can finish loading."), None),
+    ({"shop.tuf": 'import shop\n'}, ("", 1, 1, "shop.tuf imports itself."), None),
+    ({"shop.tuf": 'import money\n', "money.tuf": 'x = 1\nimport tax\n', "tax.tuf": 'import money\n'},
+     ("tax.tuf", 1, 1, "money.tuf and tax.tuf import each other (money.tuf → tax.tuf → money.tuf)"), None),
+    ({"shop.tuf": 'import money\nimport tax\n', "money.tuf": 'import tax\n', "tax.tuf": 'import fmt\n', "fmt.tuf": 'import money\n'},
+     ("fmt.tuf", 1, 1, "These files import each other in a circle (money.tuf → tax.tuf → fmt.tuf → money.tuf)"), None),
+    ({"shop.tuf": 'import money\nmoney.go()\n', "money.tuf": 'func go():\n    import shop\n'},
+     ("money.tuf", 2, 5, "shop.tuf and money.tuf import each other (shop.tuf → money.tuf → shop.tuf)"), "OK"),
+    ({"shop.tuf": 'import money\n', "money.tuf": 'x = 1\nfunc f(:\n'},
+     ("money.tuf", 2, 8, "Function inputs must be simple names."), "money.tuf has a mistake on line 2, so import money stops the program there: "
+                                                                    "Function inputs must be simple names."),
+    ({"shop.tuf": 'say 1\nimport money\n', "money.tuf": 'x = 1\ny = x / 0\n'}, ("money.tuf", 2, 7, "You can't divide by zero."), "OK"),
+    ({"shop.tuf": 'import money\nsay money.half("a")\n', "money.tuf": 'func half(n):\n    return n / 2\n'},
+     ("money.tuf", 2, 14, "Can't divide text and a number."), "OK"),
+    ({"shop.tuf": 'import money\nfunc bad(x):\n    return x + nope\nsay money.apply(bad, 1)\n', "money.tuf": 'func apply(f, x):\n    return f(x)\n'},
+     ("", 3, 16, "I don't know what 'nope' is."), None),
+    ({"shop.tuf": 'import money\nsay money.as_mony(1)\n', "money.tuf": MONEY}, ("", 2, 10, "money.tuf doesn't have 'as_mony'. Did you mean 'as_money'?"), None),
+    ({"shop.tuf": 'import money\nsay money.secret\n', "money.tuf": MONEY}, ("", 2, 10, "money.tuf doesn't have 'secret'. It has: as_money, rate, show."), None),
+    ({"shop.tuf": 'import money\nsay money.as_money(1, 2)\n', "money.tuf": MONEY},
+     ("", 2, 19, "as_money() needs 1 input, but got 2."), "money.as_money() needs 1 input, but got 2."),
+    ({"shop.tuf": 'import money\nsay money.rate()\n', "money.tuf": MONEY},
+     ("", 2, 15, "0.2 isn't a function, so it can't be called with ( )."), "money.rate is a number in money.tuf, not a function, so it can't be called"),
+    ({"shop.tuf": 'import money\nmoney.rate = 2\n', "money.tuf": MONEY},
+     ("", 2, 1, "money.rate belongs to money.tuf, so it can't be changed from this file. Give money.tuf a function that changes it, "
+                "like func set_rate(new_rate):"), None),
+    ({"shop.tuf": 'import money\nsay rate\n', "money.tuf": MONEY}, ("", 2, 5, "I don't know what 'rate' is."), None),
+    ({"shop.tuf": 'total = 5\nimport money\nsay money.show_total()\n', "money.tuf": 'func show_total():\n    return total\n'},
+     ("money.tuf", 2, 12, "I don't know what 'total' is."), "OK"),
+    ({"shop.tuf": 'import money\n', "money.tuf": 'say "in money"\nreturn 5\n'},
+     ("money.tuf", 2, 1, "'return' can only be used inside a function."), "OK"),
+    ({"shop.tuf": 'import anims\nsay anims\n', "anims.tuf": 'say "mine"\n'},
+     "OK", "There's a file anims.tuf here, but anims is Tuff's own library, so import anims loads the library, not your file."),
+    ({"shop.tuf": 'mention file\nsay file.exists("x.txt")\n', "file.tuf": 'say "mine"\n'},
+     "OK", "There's a file file.tuf here, but file is Tuff's own file library, so mention file loads the library"),
+    ({"shop.tuf": 'try:\n    import extras\ncatch:\n    say "no extras"\n'}, "OK", "OK"),
+]
+# What --check accepts in a program that uses its files (with MODULES_FILES' money.tuf and libs/fmt.tuf).
+MODULES_GOOD = [
+    'import money\nsay money.as_money(1) + money.as_money(money.rate)\n',
+    'import money\nx = money.with_tax(2) + 1\nsay x\n',
+    'import money\nf = money.as_money\nsay f(2)\n',
+    'import money\nfunc go():\n    return money.counter()\nsay go()\n',
+    'import fmt\nsay fmt.stars(2)\n',
+    'import money\nsay "Rate: " + (money.rate + 1)\n',
+    'import money\nprices = [1, 2]\nprices:sort(money.biggest_first)\nsay prices\n',
+    'mention tax\nsay tax.money.rate\n',
+]
+
+# The editor: tuff-lang.js with a stand-in TuffIDE that reads a project's files (shop.tuf open, money.tuf on disk).
+MODULES_LANG = r"""
+const fs = require('fs'), vm = require('vm');
+const files = JSON.parse(process.argv[2]);
+const window = { TuffIDE: {
+  readText: async (p) => (Object.hasOwn(files, p) ? files[p] : null),
+  readDir: async (dir) => Object.keys(files).filter((p) => p.slice(0, p.lastIndexOf('\\')) === dir).map((p) => ({ name: p.slice(p.lastIndexOf('\\') + 1), isDir: false }))
+    .concat(Object.keys(files).some((p) => p.startsWith(dir + '\\libs\\')) && !dir.endsWith('libs') ? [{ name: 'libs', isDir: true }] : []),
+} }, ctx = { window };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+let monarch = null, hover = null, completion = null, signature = null;
+const monaco = { Range: class { constructor(...a) { this.a = a; } }, editor: { defineTheme() {} }, languages: {
+  register() {}, setMonarchTokensProvider(_id, def) { monarch = def; }, setLanguageConfiguration() {},
+  registerHoverProvider(_id, p) { hover = hover || p; }, registerDefinitionProvider() {}, registerReferenceProvider() {},
+  registerRenameProvider() {}, registerDocumentSymbolProvider() {}, registerSignatureHelpProvider(_id, p) { signature = p; }, registerColorProvider() {},
+  registerCompletionItemProvider(_id, p) { completion = p; },
+  CompletionItemKind: new Proxy({}, { get: (_t, k) => k }), CompletionItemInsertTextRule: {}, IndentAction: {}, SymbolKind: {} } };
+window.defineTuffTheme = () => {};
+window.registerTuff(monaco, '#3574f0');
+const SHOP = 'C:\\proj\\shop.tuf';
+const model = (src, col) => { const lines = src.split('\n'); return { uri: { scheme: 'file', fsPath: SHOP }, getLinesContent: () => lines,
+  getLineContent: (n) => lines[n - 1], getValue: () => src, getWordUntilPosition: () => ({ startColumn: col || 1, endColumn: col || 1 }),
+  getWordAtPosition: ({ lineNumber, column }) => { for (const m of lines[lineNumber - 1].matchAll(/\w+/g))
+    if (m.index < column && column <= m.index + m[0].length) return { word: m[0], startColumn: m.index + 1, endColumn: m.index + 1 + m[0].length };
+    return null; } }; };
+(async () => {
+  const src = 'import money\nimport fmt\nsay money.';
+  const after = await completion.provideCompletionItems(model(src, 11), { lineNumber: 3, column: 11 });
+  const asMoney = after.suggestions.find((s) => s.label === 'as_money');
+  const libs = await completion.provideCompletionItems(model('import fmt\nsay fmt.', 9), { lineNumber: 2, column: 9 });
+  const imports = await completion.provideCompletionItems(model('import ', 8), { lineNumber: 1, column: 8 });
+  const onHover = await hover.provideHover(model('import money\nsay money.as_money(1)'), { lineNumber: 2, column: 12 });
+  const valueHover = await hover.provideHover(model('import money\nsay money.rate'), { lineNumber: 2, column: 12 });
+  const sig = await signature.provideSignatureHelp(model('import money\nsay money.as_money('), { lineNumber: 2, column: 20 });
+  const plain = await completion.provideCompletionItems(model('say nothing.', 13), { lineNumber: 1, column: 13 });
+  const toks = [];
+  const rule = monarch.tokenizer.root.find((r) => String(r[0]) === String(/(import|mention)(\s+)([a-zA-Z_]\w*)/));
+  console.log(JSON.stringify({
+    labels: after.suggestions.map((s) => s.label), doc: asMoney && asMoney.documentation, detail: asMoney && asMoney.detail,
+    insert: asMoney && asMoney.insertText, libs: libs.suggestions.map((s) => s.label + '|' + s.detail),
+    imports: imports.suggestions.map((s) => s.label), hover: onHover && onHover.contents.map((c) => c.value).join(' / '),
+    valueHover: valueHover && valueHover.contents.map((c) => c.value).join(' / '),
+    sig: sig && sig.value.signatures[0].label, sigDoc: sig && sig.value.signatures[0].documentation, plain: plain.suggestions.length,
+    wants: [window.tuffWantsSuggest(model('import money\nmoney.'), { lineNumber: 2, column: 7 }), window.tuffWantsSuggest(model('x = 1\nx.'), { lineNumber: 2, column: 3 })],
+    rule: rule ? rule[1] : null, importDoc: window.TUFF_DOCS.import[1],
+  }));
+})();
+"""
+
+
+def modules_project(name, files):
+    """Writes a project's files into out/modules/<name> (a fresh folder): its full path."""
+    import shutil
+    folder = os.path.join(HERE, "out", "modules", name)
+    shutil.rmtree(folder, ignore_errors=True)
+    for rel, code in files.items():
+        path = os.path.join(folder, *rel.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code)
+    return folder
+
+
+def modules_projects():
+    """(name, files) for every project above, for the interp test's differential runs."""
+    return [("modules shop", MODULES_FILES)] + [(f"modules mistake {i}", files) for i, (files, _r, _c) in enumerate(MODULES_ERRORS)]
+
+
+def first_error(stderr):
+    """The first "Tuff error ...": (the file it names, or "" for the program, line, column from the ^, message)."""
+    lines = stderr.splitlines()
+    first = next((i for i, x in enumerate(lines) if x.startswith("Tuff error")), None)
+    if first is None:
+        return None
+    m = re.match(r"Tuff error(?: in (.+?))? on line (\d+): (.*)$", lines[first])
+    if not m:
+        return ("", None, None, lines[first])
+    gutter = f"  {m.group(2)} | "
+    caret = lines[first + 2] if first + 2 < len(lines) and lines[first + 2].strip() == "^" else ""
+    return (m.group(1) or "", int(m.group(2)), (caret.index("^") - len(gutter) + 1) if caret else None, m.group(3))
+
+
+def t_modules(c):
+    """Console only, no window: 1.5.0's own files as libraries. A shop in five files runs the same in both runtimes (each
+    file has its own top level and runs once, values are read live, libs/ works, a library's name wins); every mistake
+    (no file, a built-in's name, files that import each other, errors inside an imported file, names it doesn't have,
+    money.rate = 2) stops the run on the right file, line and column, and --check says what it can be sure of (and --as
+    checks a copy as if it were the real file); TuffCode's error protocol names the file; TUFF_BASE_DIR, tuff_check and
+    tuff_run through the MCP server, Tuff Engine's --scene preview, with_imports, the editor (Node) and Build exe
+    (build_exe_pack_test.mjs, no PyInstaller and no windows)."""
+    env = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW", "TUFF_BASE_DIR", "TUFF_NO_WRITES")}
+    env["PYTHONIOENCODING"] = "utf-8"
+
+    def run(folder, file="shop.tuf", slow=False, more=None, args=()):
+        e = {**env, **({"TUFF_SLOW": "1"} if slow else {}), **(more or {})}
+        return subprocess.run(tuff_cmd() + list(args) + [os.path.join(folder, file)], cwd=folder, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=60, env=e, stdin=subprocess.DEVNULL)
+
+    def check_out(folder, file="shop.tuf", args=None):
+        """--check on a file of the folder (or with these inputs): (exit code, what it says)."""
+        p = subprocess.run(tuff_cmd() + ["--check"] + (list(args) if args else [os.path.join(folder, file)]), cwd=folder, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=60, env=env)
+        return p.returncode, (p.stdout + p.stderr).strip()
+
+    shop = modules_project("shop", MODULES_FILES)
+    for slow in (False, True):
+        p = run(shop, slow=slow)
+        got = p.stdout.splitlines()
+        c.check(p.returncode == 0 and got == MODULES_OUTPUT, f"the shop in five files runs ({'tree walker' if slow else 'compiled'}): "
+                "money.tuf starts once, money.rate is read live, shop.tuf's rate is its own, libs/ and a library's name win",
+                [x for x in got if x not in MODULES_OUTPUT] or (p.stdout + p.stderr)[-800:])
+    for rel in MODULES_FILES:
+        code, out = check_out(os.path.dirname(os.path.join(shop, *rel.split("/"))), os.path.basename(rel))
+        c.check(code == 0 and out == "OK", f"--check accepts {rel}, checked on its own", out[:400])
+    for i, code_text in enumerate(MODULES_GOOD):
+        folder = modules_project(f"good{i}", {**{k: v for k, v in MODULES_FILES.items() if k != "shop.tuf"}, "shop.tuf": code_text})
+        code, out = check_out(folder)
+        c.check(code == 0 and out == "OK", f"--check accepts: {code_text.splitlines()[-1]}", out[:300])
+
+    for i, (files, ran, checks) in enumerate(MODULES_ERRORS):
+        folder = modules_project(f"mistake{i}", files)
+        shown = files["shop.tuf"].strip().splitlines()[-1]
+        both = [run(folder, slow=slow) for slow in (False, True)]
+        if ran == "OK":
+            c.check(all(p.returncode == 0 and "Tuff error" not in p.stderr for p in both), f"{shown!r} runs (in both runtimes)",
+                    both[0].stderr[-300:])
+        else:
+            at = [first_error(p.stderr) for p in both]
+            ok = all(a is not None and a[:3] == ran[:3] and ran[3] in a[3] for a in at) and at[0] == at[1]
+            c.check(ok and all(p.returncode == 1 for p in both),
+                    f"{shown!r} stops in {ran[0] or 'shop.tuf'} at {ran[1]}:{ran[2]}: {ran[3][:70].replace('→', '->')!r} (the same in both runtimes)", at)
+        code, out = check_out(folder)
+        if checks == "OK":
+            c.check(code == 0 and out == "OK", f"...and --check can't be sure of it, so it says OK", out[:300])
+        else:
+            want = checks or ran[3]
+            c.check(code == 1 and want in out, f"...and --check says {want[:70].replace('→', '->')!r}", out[:400])
+
+    # --as: TuffCode checks a copy of the editor's text (a temp file) as if it were the real file, so imports resolve.
+    folder = modules_project("as", {"shop.tuf": "", "money.tuf": MONEY})
+    copy = os.path.join(OUT, "modules_copy.tuf")
+    with open(copy, "w", encoding="utf-8") as f:
+        f.write('import money\nsay money.as_mony(1)\n')
+    code, out = check_out(folder, args=(copy, "--as", os.path.join(folder, "shop.tuf")))
+    c.check(code == 1 and "money.tuf doesn't have 'as_mony'. Did you mean 'as_money'?" in out, "--check copy --as shop.tuf finds money.tuf next to shop.tuf", out[:300])
+    tmp = tempfile.mkdtemp(prefix="tuff-modules-")
+    try:
+        lone = os.path.join(tmp, "check.tuf")
+        with open(lone, "w", encoding="utf-8") as f:
+            f.write('import money\nsay money.as_mony(1)\nimport random\n')
+        code, out = check_out(tmp, args=(lone,))
+        c.check(code == 1 and "random is built into Tuff" in out and "money" not in out,
+                "a temp file with no --as can't know its folder: only a built-in's name is flagged", out[:300])
+        # TUFF_BASE_DIR (tuff_run's snippets): a program in a temp folder imports the project's files.
+        with open(lone, "w", encoding="utf-8") as f:
+            f.write('import money\nsay money.as_money(2)\n')
+        p = run(tmp, "check.tuf", more={"TUFF_BASE_DIR": shop})
+        c.check(p.returncode == 0 and p.stdout.splitlines() == ["money.tuf starts", "$2.00"], "with TUFF_BASE_DIR, a snippet imports the project's money.tuf",
+                (p.stdout + p.stderr)[-300:])
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # TuffCode's Run panel (TUFF_IDE=1): an error in money.tuf adds money.tuf's full path to the error message's escape
+    # code (ide.js marks that file); one in the program has no path, exactly as before.
+    folder = modules_project("ide", MODULES_ERRORS[14][0])
+    p = run(folder, more={"TUFF_IDE": "1"})
+    m = re.search(r"\x1b\]tuff;error;([^\x07]*)\x07", p.stdout)
+    parts = m.group(1).split(";") if m else []
+    c.check(len(parts) == 4 and parts[:2] == ["2", "14"] and base64.b64decode(parts[3]).decode() == os.path.join(folder, "money.tuf")
+            and base64.b64decode(parts[2]).decode() == "Can't divide text and a number.",
+            "TUFF_IDE=1: the error's escape code has its line, column, message and money.tuf's path", parts)
+    folder = modules_project("ide_main", MODULES_ERRORS[15][0])
+    p = run(folder, more={"TUFF_IDE": "1"})
+    m = re.search(r"\x1b\]tuff;error;([^\x07]*)\x07", p.stdout)
+    c.check(m and len(m.group(1).split(";")) == 3 and m.group(1).startswith("3;16;"), "...and one in the program itself has no path (as in 1.4)",
+            m and m.group(1))
+
+    # In this process: with_imports (what decides whether a program needs the window engine's thread) reads the files a
+    # program imports, and the ones they import; the debugger's step hooks see each file's statements, and file_of names the file.
+    import tuff
+    folder = modules_project("threads", {"game.tuf": "import level\nsay 1\n", "level.tuf": "import libs_too\nmention tgame\n",
+                                         "libs/libs_too.tuf": "import tgui\n", "other.tuf": "mention atgui\n"})
+    every = tuff.with_imports(os.path.join(folder, "game.tuf"), "import level\nsay 1\n")
+    c.check(tuff.VIEW_IMPORT.search(every) and tuff.TK_IMPORT.search(every) and "atgui" not in every,
+            "with_imports: a tgame or tgui import in a file the program imports (or that file imports) counts, and others don't", every)
+    old = os.environ.pop("TUFF_SLOW", None)
+    try:
+        for slow in (False, True):
+            if slow:
+                os.environ["TUFF_SLOW"] = "1"
+            path = os.path.join(shop, "shop.tuf")
+            src = 'import money\nsay money.with_tax(1)\n'
+            interp = tuff.Interpreter(src, shop)
+            interp.path = path
+            seen = []
+            interp.step_hooks.append(lambda s, e: seen.append((os.path.basename(tuff.file_of(e)) or "shop.tuf", s.line)))
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()):
+                interp.run_block(tuff.Parser(tuff.tokenize(src)).program(), interp.globals)
+            c.check(("money.tuf", 11) in seen and ("money.tuf", 12) in seen and seen[0] == ("shop.tuf", 1) and seen[-1][0] == "money.tuf",
+                    f"{'the tree walker' if slow else 'compiled'}: a step hook sees money.tuf's statements, and file_of says they're money.tuf's", seen[:8])
+            os.environ.pop("TUFF_SLOW", None)
+    finally:
+        if old is not None:
+            os.environ["TUFF_SLOW"] = old
+
+    # Tuff Engine's --scene preview: a game whose things are made by a function in its own level.tuf; an error in that
+    # file names it; and a file it imports that opens another kind of window stops the preview before anything runs.
+    folder = modules_project("scene", {"mods_game.tuf": 'mention tgame\nimport level\ngame = tgame.window("Mods", 400, 300)\nlevel.build(game)\nsay "made"\n',
+                                       "level.tuf": 'func build(game):\n    game:box(10, 10)\n    game:box(50, 50)\n'})
+    code, out, err, d, secs = scene(os.path.join(folder, "mods_game.tuf"))
+    things = [(t.get("kind"), t.get("made")) for t in d.get("things", [])]
+    c.check(code == 0 and d.get("error") is None and d.get("stopped") == "end" and things == [("box", [4, 2]), ("box", [4, 3])],
+            f"--scene runs a game whose level.tuf makes its things, made by the game's line 4 ({secs:.1f} s)", (things, d.get("error"), d.get("stopped"), err[-300:]))
+    folder = modules_project("scene_error", {"mods_error.tuf": 'mention tgame\nimport level\ngame = tgame.window("Mods", 400, 300)\nlevel.build(game)\n',
+                                             "level.tuf": 'func build(game):\n    game:box(10, 10)\n    x = nope\n'})
+    code, out, err, d, secs = scene(os.path.join(folder, "mods_error.tuf"))
+    c.check((d.get("error") or {}).get("message", "").startswith("In level.tuf, line 3: I don't know what 'nope' is.") and (d.get("error") or {}).get("line") is None,
+            "...an error in level.tuf says it's in level.tuf (and gives no line of the game's own)", d.get("error"))
+    folder = modules_project("scene_window", {"mods_window.tuf": 'mention tgame\nimport menus\ngame = tgame.window("Mods", 400, 300)\n',
+                                              "menus.tuf": 'import tgui\nwin = tgui.window("Not in a preview")\n'})
+    code, out, err, d, secs = scene(os.path.join(folder, "mods_window.tuf"))
+    c.check(d.get("stopped") == "other-window", "...and a file it imports that uses tgui stops the preview before it runs (no window)", d.get("stopped"))
+
+    # The MCP server (agents): tuff_check of a "code" snippet checks its imports in the project, and tuff_run runs one.
+    mcp = os.path.join(REPO, "tuffcode", "mcp", "tuff-mcp.js")
+    calls = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
+             {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "tuff_check", "arguments": {"code": "import money\nsay money.as_mony(1)\n"}}},
+             {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "tuff_run", "arguments": {"code": "import money\nsay money.as_money(3)\n"}}}]
+    try:
+        p = subprocess.Popen(["node", mcp], stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=shop, text=True, encoding="utf-8",
+                             env={**env, "TUFF_CMD": json.dumps(tuff_cmd())})
+    except FileNotFoundError:
+        p = None
+        c.check(True, "Node isn't installed: skipped the MCP checks")
+    if p is not None:
+        replies = {}
+        try:
+            for x in calls:
+                p.stdin.write(json.dumps(x) + "\n")
+            p.stdin.flush()
+            deadline = time.time() + 90
+            while time.time() < deadline and not (2 in replies and 3 in replies):  # the server quits when its input ends
+                line = p.stdout.readline()
+                if not line:
+                    break
+                reply = json.loads(line)
+                replies[reply.get("id")] = reply
+        finally:
+            p.stdin.close()
+            p.wait(10)
+        text = lambda i: (((replies.get(i) or {}).get("result") or {}).get("content") or [{}])[0].get("text", "")
+        c.check("money.tuf doesn't have 'as_mony'. Did you mean 'as_money'?" in text(2), "MCP tuff_check: a snippet's imports are checked in the project", text(2)[:300])
+        c.check("money.tuf starts\n$3.00" in text(3), "MCP tuff_run: a snippet imports the project's money.tuf", text(3)[:300])
+
+    # The editor (renderer/js/tuff-lang.js, in Node): money. offers money.tuf's functions (their comments as the docs)
+    # and values, import offers the project's files, and the hover and signature help know them too.
+    lang = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")
+    project = {"C:\\proj\\shop.tuf": "import money\n", "C:\\proj\\money.tuf": MODULES_FILES["money.tuf"],
+               "C:\\proj\\libs\\fmt.tuf": "# Stars in a row\nfunc stars(n):\n    return \"*\" * n\n", "C:\\proj\\notes.txt": "",
+               "C:\\proj\\random.tuf": "", "C:\\proj\\tgame.tuf": ""}
+    try:
+        p = subprocess.run(["node", "-e", MODULES_LANG, lang, json.dumps(project)], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        t = json.loads(p.stdout)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the editor checks")
+        t = None
+    except ValueError:
+        c.check(False, "the editor checks ran", (p.stdout + p.stderr)[-600:])
+        t = None
+    if t:
+        c.check(t["labels"] == ["as_money", "with_tax", "set_rate", "biggest_first", "apply", "counter", "rate", "count"],
+                "money. offers money.tuf's functions, then its values", t["labels"])
+        c.check(t["doc"] == '6.375 -> "$6.38"' and t["detail"] == "money.as_money(x)" and t["insert"] == "as_money($0)",
+                "...with the comment above each function as its doc", [t["doc"], t["detail"], t["insert"]])
+        c.check(t["libs"] == ["stars|fmt.stars(n)"], "fmt. finds libs/fmt.tuf", t["libs"])
+        c.check(t["imports"][:2] == ["money", "fmt"] and "shop" not in t["imports"] and "random" not in t["imports"] and t["imports"].count("tgame") == 1
+                and "anims" in t["imports"], "import offers money and fmt (from libs/), not shop.tuf itself or a built-in's or library's name, then the libraries",
+                t["imports"])
+        c.check("money.as_money(x)" in (t["hover"] or "") and '6.375 -> "$6.38"' in t["hover"] and "money.tuf, line 7" in t["hover"],
+                "hovering money.as_money shows how to call it, its doc and where it is", t["hover"])
+        c.check("money.rate" in (t["valueHover"] or ""), "...and money.rate is a value", t["valueHover"])
+        c.check(t["sig"] == "money.as_money(x)" and t["sigDoc"] == '6.375 -> "$6.38"', "typing money.as_money( shows its inputs", [t["sig"], t["sigDoc"]])
+        c.check(t["plain"] == 0 and t["wants"] == [True, False], "money. opens the list (x. doesn't, and nothing. offers nothing)", [t["plain"], t["wants"]])
+        c.check(t["rule"] == ["keyword", "", "library"] and "money.tuf" in t["importDoc"], "import money colours money like a library, and import's doc tells of files",
+                [t["rule"], t["importDoc"][:120]])
+
+    # The guide's example (money.tuf and shop.tuf, written to their own files) runs and gives what its comments say.
+    guide = open(os.path.join(REPO, "tuffcode", "mcp", "tuff-guide.md"), encoding="utf-8").read()
+    start = guide.find("\n## Your own files")
+    section = guide[start:guide.find("\n## ", start + 1)] if start >= 0 else ""
+    blocks = re.findall(r"```tuff\n(.*?)```", section, re.S)
+    named = {re.match(r"# (\w+\.tuf)", b).group(1): b for b in blocks if re.match(r"# (\w+\.tuf)", b)}
+    folder = modules_project("guide", named)
+    p = run(folder) if "shop.tuf" in named else None
+    want = [x.split("#")[1].strip() for x in named.get("shop.tuf", "").splitlines() if x.startswith("say") and "#" in x]
+    c.check(p is not None and p.returncode == 0 and p.stdout.splitlines() == want and len(want) >= 4,
+            f"the guide's money.tuf and shop.tuf run and say what their comments say ({len(want)} lines)", p and (p.stdout + p.stderr)[-400:])
+    code, out = check_out(folder) if named else (1, "")
+    c.check(code == 0 and out == "OK", "...and --check accepts them", out[:300])
+
+    # Build exe: build_exe_pack_test.mjs packs a program that imports its files (no PyInstaller, nothing opens).
+    try:
+        p = subprocess.run(["node", os.path.join(HERE, "build_exe_pack_test.mjs")], capture_output=True, text=True, encoding="utf-8", timeout=300,
+                           env={k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_BASE_DIR")})
+        section = p.stdout[p.stdout.find("== Build exe: a program that imports its own files"):]
+        section = section[:section.find("build_exe_pack:")]
+        c.check(p.returncode == 0 and section.count("  ok  ") >= 6 and "FAIL" not in section,
+                "Build exe packs the files a program imports, runs it in the app, and stops on a mistake in one (build_exe_pack_test.mjs)",
+                (section or p.stdout)[-900:] + p.stderr[-300:])
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped Build exe")
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
@@ -6127,6 +6597,7 @@ TESTS.update({"interp": t_interp})  # 1.5.0
 TESTS.update({"fstrings": t_fstrings})  # 1.5.0
 TESTS.update({"frames": t_frames, "frames_window": t_frames_window})  # 1.5.0: sprite sheets
 TESTS.update({"numbers": t_numbers})  # 1.5.0: too-big numbers, quicker library calls
+TESTS.update({"modules": t_modules})  # 1.5.0: your own files as libraries (import money)
 
 
 def main():

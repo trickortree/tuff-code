@@ -1183,6 +1183,8 @@ class Lib:
         except self.error_type as err:
             if err.line is None and getattr(fn, "line", None):
                 err.line = fn.line
+                if hasattr(self.tuff, "file_of"):  # (1.5.0) the file it's written in: one of the program's own, maybe
+                    err.file = self.tuff.file_of(fn.env)
             self.report(err)
         except RecursionError:
             self.report(self.error_type(f"{getattr(fn, 'name', 'This function')}() called itself too many times.", getattr(fn, "line", None)))

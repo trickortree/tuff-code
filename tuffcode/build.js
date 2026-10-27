@@ -16,6 +16,39 @@ const VIEW_ASSET_EXTS = new Set(['.mp3', '.ogg', '.m4a', '.webp', '.bmp', '.svg'
 const SKIP_DIRS = new Set(['dist', 'build', 'node_modules', '__pycache__', 'venv']);
 const usesLib = (src, lib) => new RegExp(`^\\s*(import|mention)\\s+${lib}\\b`, 'm').test(src);
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Tuff's own libraries (and the built-in file one): import with one of these names always loads the library.
+const LIBRARY_NAMES = new Set(['anims', 'tgui', 'mtgui', 'tap', 'atgui', 'tgame', 'tdraw', 'file']);
+const tufText = (buf) => (buf[0] === 0xff && buf[1] === 0xfe ? buf.toString('utf16le', 2) : buf.toString('utf8').replace(/^﻿/, ''));
+
+// 1.5.0: name.tuf where import name finds it, as tuff.py does: in the importing file's folder, or the libs folder
+// there, spelled as the import spells it. null when it isn't there.
+async function moduleFile(folder, name) {
+  for (const where of [folder, path.join(folder, 'libs')]) {
+    let names;
+    try { names = await fsp.readdir(where); } catch { continue; }
+    const full = path.join(where, `${name}.tuf`);
+    if (names.includes(`${name}.tuf`) && (await fsp.stat(full)).isFile()) return full;
+  }
+  return null;
+}
+// The program's own .tuf files it imports (import money), and the ones they import, as [{ full, src }]. They're
+// packed beside the program, in the folders they're in, so the app finds them the way the program does here.
+async function ownImports(program, src) {
+  const found = new Map();
+  const walk = async (file, text) => {
+    for (const m of text.matchAll(/^[ \t]*(?:import|mention)[ \t]+([A-Za-z_]\w*)/gm)) {
+      if (LIBRARY_NAMES.has(m[1])) continue;
+      const full = await moduleFile(path.dirname(file), m[1]);
+      if (!full || found.has(full) || path.resolve(full) === path.resolve(program)) continue;
+      let more;
+      try { more = tufText(await fsp.readFile(full)); } catch { continue; }
+      found.set(full, more);
+      await walk(full, more);
+    }
+  };
+  await walk(program, src);
+  return [...found].map(([full, text]) => ({ full, src: text }));
+}
 
 // The files a program can use: the ones next to it, and everything in a folder its code names in a
 // path (like "sprites/hero.png", or "sounds/" + name) or on its own ("sprites"), where Sprite Studio
@@ -210,7 +243,17 @@ async function build(opts, emit) {
     emit({ type: 'tuff-error', text: r.out });
     return fail('check', 'Checking your code for mistakes', `Your code has a mistake, so it can't be built yet.\n${msg}\nFix it (the Run window shows the same message), then build again.`);
   }
-  step('check', 'done', 'Your code looks good');
+  // 1.5.0: the program's own files it imports go in the app too, and each is checked on its own.
+  const ownFiles = await ownImports(program, tufText(await fsp.readFile(program)));
+  for (const f of ownFiles) {
+    r = await run(PY.cmd, [...PY.args, path.join(RUNTIME_DIR, 'tuff.py'), '--check', f.full], { onLine: log });
+    if (r.code !== 0) {
+      const msg = (r.out.match(/Tuff error[^\n]*/) || [r.out.trim()])[0];
+      emit({ type: 'tuff-error', text: r.out, file: f.full });
+      return fail('check', 'Checking your code for mistakes', `${path.basename(f.full)} has a mistake, so your program can't be built yet.\n${msg}\nFix it, then build again.`);
+    }
+  }
+  step('check', 'done', ownFiles.length ? `Your code looks good (with ${ownFiles.map((f) => path.basename(f.full)).join(', ')})` : 'Your code looks good');
 
   step('tools', 'running', 'Getting the build tools ready');
   // Mac and Linux: Homebrew's Python (and many Linux ones) refuse `pip install --user`, so the build
@@ -256,7 +299,8 @@ async function build(opts, emit) {
   const pyinstallerVersion = r.out.trim().split(/\s+/).pop();
   // A web view program (atgui, tgame) needs pywebview in the Python that builds it, like PyInstaller.
   const programSrc = await fsp.readFile(program, 'utf8');
-  const viewLibs = VIEW_LIBS.filter((lib) => usesLib(programSrc, lib) || (lib === 'atgui' && usesLib(programSrc, 'tgame')));  // a game's menus are atgui's widgets
+  const allSrc = [programSrc, ...ownFiles.map((f) => f.src)].join('\n'); // a library one of its own files imports counts too
+  const viewLibs = VIEW_LIBS.filter((lib) => usesLib(allSrc, lib) || (lib === 'atgui' && usesLib(allSrc, 'tgame')));  // a game's menus are atgui's widgets
   if (viewLibs.length && (await run(py.cmd, [...py.args, '-c', 'import webview'], { onLine: log })).code !== 0) {
     step('tools', 'running', 'Installing the window engine', 'First time only: pywebview, for game and app windows.');
     r = await run(py.cmd, [...py.args, '-m', 'pip', 'install', ...(py === PY ? ['--user'] : []), '--disable-pip-version-check', 'pywebview'], { onLine: log });
@@ -268,7 +312,7 @@ async function build(opts, emit) {
 
   // A window app needs tkinter in the Python that builds it. Without it the app would build fine
   // and then close straight away when opened, so check first.
-  const usesGuiEarly = /^\s*(import|mention)\s+m?tgui\b/m.test(await fsp.readFile(program, 'utf8'));
+  const usesGuiEarly = /^\s*(import|mention)\s+m?tgui\b/m.test(allSrc);
   if (usesGuiEarly && (await run(py.cmd, [...py.args, '-c', 'import tkinter, _tkinter; tkinter.Tcl()'], { onLine: log })).code !== 0) {
     const ver = (await run(PY.cmd, [...PY.args, '-c', 'import sys; print("%d.%d" % sys.version_info[:2])'])).out.trim().split(/\s+/).pop() || '3';
     return fail('tools', 'Getting the build tools ready', WIN
@@ -279,7 +323,7 @@ async function build(opts, emit) {
   step('pack', 'running', 'Packing your program');
   const wantedFile = (ext) => ASSET_EXTS.has(ext) || (viewLibs.length > 0 && VIEW_ASSET_EXTS.has(ext));
   // "../" files too, which an mtgui or tgui app can use (tgame and atgui can't, and --check says so).
-  const pack = await packList(path.dirname(program), programSrc, wantedFile);
+  const pack = await packList(path.dirname(program), allSrc, wantedFile);
   const work = path.join(app.getPath('temp'), 'tuffcode-build', `${name.replace(/\s/g, '_')}-${Date.now()}`);
   await fsp.mkdir(work, { recursive: true });
   for (const f of RUNTIME_FILES) await fsp.copyFile(path.join(RUNTIME_DIR, f), path.join(work, f));
@@ -289,10 +333,13 @@ async function build(opts, emit) {
     for (const f of ['tuff_view.py', ...viewModules.map((m) => `${m}.py`)]) await fsp.copyFile(path.join(RUNTIME_DIR, f), path.join(work, f));
     await fsp.cp(path.join(RUNTIME_DIR, 'tuff_view_web'), path.join(work, 'tuff_view_web'), { recursive: true });
   }
-  const programCopy = path.join(work, 'program.tuf');
+  // The program is program.tuf in the app (tuff_main.tuf when one of its own files is called program.tuf).
+  const ownRel = ownFiles.map((f) => path.relative(path.dirname(program), f.full).split(path.sep).join('/'));
+  const mainName = ownRel.some((rel) => rel.toLowerCase() === 'program.tuf') ? 'tuff_main.tuf' : 'program.tuf';
+  const programCopy = path.join(work, mainName);
   await fsp.copyFile(program, programCopy);
   const launcher = path.join(work, 'tuff_app.py');
-  const programInApp = [...pack.at.split('/').filter((p) => p !== '.'), 'program.tuf'].map((p) => JSON.stringify(p)).join(', ');
+  const programInApp = [...pack.at.split('/').filter((p) => p !== '.'), mainName].map((p) => JSON.stringify(p)).join(', ');
   // The app's windows use the same icon as the app file: the launcher tells the window library
   // where the packed PNG copy is (Tk shows PNGs; its .ico reader can't read modern .ico files).
   await fsp.writeFile(launcher, [
@@ -318,10 +365,8 @@ async function build(opts, emit) {
       '    _report(err, src)',
       '    if not tuff.WINDOWED:',
       '        return',
-      '    lines = tuff.source_lines(src)  # numbered as the error\'s line is: only a newline ends a line',
-      '    text = f"Tuff error on line {err.line}: {err.msg}" if err.line else f"Tuff error: {err.msg}"',
-      '    if err.line and 0 < err.line <= len(lines):',
-      '        text += f"\\n  {err.line} | {lines[err.line - 1]}"',
+      // The message and its line of code, from the file it's in (one the program imports, 1.5.0), as the Run window shows them.
+      '    text = "\\n".join(tuff.error_lines(err, src)[:2])',
       '    if text not in _shown:  # the same error again (a key pressed over and over) is shown once',
       '        _shown.add(text)',
       '        tuff.SHOWING_BOX.set()  # a window\'s close time limit waits while it\'s up',
@@ -396,8 +441,10 @@ async function build(opts, emit) {
   if (fs.existsSync(iconPng)) addData.push(`${iconPng}${sep}_tuffcode`);
   if (viewLibs.length) addData.push(`${path.join(work, 'tuff_view_web')}${sep}tuff_view_web`);
   // Each file keeps its folder inside the app, so "sprites/hero.png" works there as it does here.
-  const assets = pack.files.map((f) => f.shown);
+  const assets = [...ownRel, ...pack.files.map((f) => f.shown)];
   for (const f of pack.files) addData.push(`${f.full}${sep}${f.to}`);
+  // The program's own files it imports: beside it, in the folders they're in (libs/money.tuf stays in libs).
+  ownRel.forEach((rel, i) => addData.push(`${ownFiles[i].full}${sep}${path.posix.join(pack.at, path.posix.dirname(rel))}`));
   // On a Mac the app's icon has to be .icns; macOS's own sips tool makes one from the PNG.
   let macIcon = null;
   if (process.platform === 'darwin') {
@@ -409,8 +456,8 @@ async function build(opts, emit) {
       if ((await run('sips', ['-s', 'format', 'icns', big, '--out', icns])).code === 0 && fs.existsSync(icns)) macIcon = icns;
     }
   }
-  const src = await fsp.readFile(program, 'utf8');
-  const usesGui = /^\s*(import|mention)\s+m?tgui\b/m.test(src);
+  const src = allSrc;
+  const usesGui =/^\s*(import|mention)\s+m?tgui\b/m.test(src);
   const usesDraw = /^\s*(import|mention)\s+tdraw\b/m.test(src); // tdraw draws with tkinter's turtle, like tgui's windows
   // tap needs Python's ssl (and certifi, where installed, for a Mac app's https:// certificates).
   const usesTap = /^\s*(import|mention)\s+tap\b/m.test(src);
