@@ -1285,6 +1285,22 @@ func remove_at(items, position):
 ```
 In a window app, check a text box before using it: `if num(bill:value()) is err: status:set "Type a number"`.
 
+## How fast Tuff is
+- Since 1.5.0, Tuff turns each part of a program into quick code once, before it runs it, instead of working out what every line means each time it runs. Loops are 3 to 6 times faster than in 1.4: a million steps take about half a second.
+- Everything else is the same: the answers, the error messages, and the line and column each error points at.
+- A function can call itself about 10,000 calls deep (see "Functions").
+- To build a long text in a loop, add the pieces to a list and join them at the end (`parts:add(word)`, then `parts:join(" ")`). Adding to the text itself copies all of it every time.
+- When you run Tuff in a terminal, `TUFF_SLOW=1` runs a program with the old way instead, for 1.5 only. Use it to check whether something that changed is the new speed-up's fault.
+```tuff
+# A million steps, and how long they took
+start = time()
+total = 0
+for i in range(1, 1000000):
+    total += i % 7
+say total
+say "That took " + round(time() - start, 2) + " seconds"
+```
+
 ## Making a good program
 - Keep the program's state in a few top-level variables (`score`, `tasks`), each set near the top, and write one small function per action.
 - A `refresh()` function that rewrites every label from that state keeps the screen right. Call it after each change.

@@ -4773,6 +4773,405 @@ def t_pictures_up(c):
         c.check(got == want, f"running it, atgui's image_url gives {want[:44]!r}... for {label}", got)
 
 
+# ---------------------------------------------------------------- the compiled interpreter (1.5.0)
+
+# Runs one program for the differential test: random numbers start the same, now(), today(), date() and time() give
+# fixed answers, and wait() and animations take no time, so a program gives the same output every time. The rest is
+# tuff.py's own main(): TUFF_SLOW=1 (in the environment) runs the old tree walker, and without it the compiled runtime.
+INTERP_DRIVER = r'''import os, random, sys, time
+sys.path.insert(0, sys.argv[1])
+import tuff
+random.seed(5)
+time.sleep = lambda seconds: None
+init = tuff.Interpreter.__init__
+def fixed(self, *args, **kwargs):
+    init(self, *args, **kwargs)
+    when = {"now": lambda: "10:30:00", "today": lambda: "2026-10-26", "time": lambda: 1.25,
+            "date": lambda: {"year": 2026, "month": 10, "day": 26, "weekday": "Monday", "hour": 10, "minute": 30, "second": 0}}
+    for name, fn in when.items():
+        (self.own_names if name in tuff.OWN_NAME_BUILTINS else self.globals).vars[name].fn = fn
+def no_wait(self, seconds):
+    sys.stdout.flush()
+    max(0, float(seconds))
+    for hook in self.rt.wait_hooks:
+        hook()
+tuff.Interpreter.__init__ = fixed
+tuff.Interpreter.b_wait = no_wait
+sys.argv = ["tuff.py"] + sys.argv[2:]
+sys.exit(tuff.main())
+'''
+INTERP_ANSWERS = "Sam\n7\nyes\n3\nno\n12\n5\nquit\n"
+WINDOW_LIBRARY = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|atgui|tgame|tdraw|tap)\b", re.M)  # tap: the internet
+# Small programs for the corners: where an error is reported (line and column), try/catch, return, break and continue
+# in and out of loops and functions, what a function gives back, live lines, own-name built-ins, the two readings of
+# x[a:b], dictionaries, numbers and text. Most stop at an error at the end, so each one checks one more message.
+INTERP_CASES = [
+    'say nope', 'x = 1\nsay x + nope', 'func f(a):\n    return a + missing\nsay f(1)', 'func f(a):\n    return a * 2\nsay f(1, 2)',
+    'say len(1, 2)', 'say len(5)', 'items = [1, 2]\nsay items[5]', 'items = [1, 2]\nitems[2] = 3', 's = "hi"\ns[0] = "H"',
+    'd = {"a": 1}\nsay d["b"]', 'd = {"1": "one"}\nsay d[1]', 'say 1 / 0', 'x = 5 % 0', 'say (-8) ^ (1 / 3)', 'say 2 ^ 0.5',
+    'say "a" - 1', 'say true + 1', 'say [1] < [2]', 'x = 5\nx += "a"\nsay x\nx -= 1', 'for i in 5:\n    say i',
+    'for i in nil:\n    say i', 'x = 5\nx()', 'len = 3\nsay len("abc")', 'say num("x") + 1', 'n = int("abc")\nsay n * 2',
+    'say -"a"', 'say -[1]', 'say {[1]: 2}', 'k = {}\nk[true] = 1', 'x = nil\nsay "abc"[1:x]', 'say "abc"["a":2]',
+    'n = 5\nsay n[1:2]', 'x = 5\nsay x.y', 'say anims.loading', 'import nothing', 'mention anims\nsay anims.nope',
+    'items = [1]\nitems:append(2)', 'say "abc":nope()', 'x = 5\nsay x:upper()', 'say [[1], 2]:sort()',
+    'func by(x):\n    return [x]\nitems = [2, 1]\nitems:sort(by)', 'func by(a, b):\n    return a\nitems = [2, 1]\nitems:sort(by)',
+    'say [1, 2]:pop(0)', 'say []:pop()', 'x = [1]\nx:remove(5)', 'd = {}\nd:remove("a")', 'clear(-1)', 'say random(5, 1)',
+    'say sqrt(-1)', 'say tan(90)', 'say log(0)', 'say round("a")', 'say min()', 'say text(1, 200)', 'say range(1, 10, 0)',
+    'break', 'continue', 'return 5', 'say "before"\nfunc f():\n    break\nf()',
+    'func f():\n    continue\nfor i in range(1, 3):\n    say i\n    f()\n    say "never"',
+    'func forever(n):\n    return forever(n + 1)\nforever(1)', 'func a(n):\n    return b(n + 1)\nfunc b(n):\n    return a(n + 1)\nsay a(1)',
+    'x = 1\nif x:\n    y = 2\nsay y + z', 'say "a" * "b"', 'say "ab" * 3 + 3 * "c"', 'say "x" * 600000000',
+    'items = [1, 2, 3]\nsay items[1.5]', 'items = [1, 2, 3]\nsay items["a"]', 'say err + 1', 'x = err\nsay x:upper()',
+    'say input:color("Name? ", "gren")', 'say:color("hi", "nocolor")', 'print:pen("bogus")', 'l = say "hi"\nl:play("nothing")',
+    'l = say "hi"\nl:rewrite()', 'say 1 < "a"', 'x = [1, 2]\nx += 3', 'x = 4\nx /= 0', 'items = [1]\nitems[0] /= 0',
+    'd = {"a": 1}\nd["b"] += 1', 'd = {"a": 1}\nd[[1]] = 2', 'x = nil\nsay x + 1', 'say [1, 2] + [3]\nsay [1] + 2',
+    'say 1 < 2 < 3', 'func f():\n    for x in 5:\n        say x\nf()', 'x = 0\nwhile x < nope:\n    x += 1',
+    'if false:\n    say 1\nelif nil:\n    say 2\nelse:\n    say 3 + nil', 'func f(print):\n    print(1)\nf(5)',
+    'items = [1, 2]\nsay items[0] + items[1] * items[-1] - items[-2] / 2\nsay items[2 - 5]',
+    'try:\n    say 1 / 0\ncatch p:\n    say p\n    say nope', 'for i in range(1, 3):\n    say i\n    return',
+    'if true:\n    break', 'try:\n    break\ncatch:\n    say "no"', 'say 10 ^ 400 / 3', 'say 2 ^ 99999 * 1.5',
+    'func f():\n    return 1\nsay f()\nfunc f():\n    return 2\nsay f()', 'say later(2)\nfunc later(x):\n    return x * 3',
+    'if true:\n    func inner():\n        return 1\nsay inner()', 'x = 1\nsay x:nope', 'say {"a": 1}:sort()',
+    # what a function gives back
+    'func a():\n    x = 5\nfunc b():\n    if true:\n        7\nfunc c():\n    for i in range(1, 2):\n        i\nfunc d():\n    say "d"\n'
+    'func e():\n    return\nfunc g():\n    while false:\n        say 1\nfunc h():\n    try:\n        8\n    catch:\n        9\n'
+    'say a()\nsay b()\nsay c()\nsay d()\nsay e()\nsay g()\nsay h()',
+    'func f(n):\n    while true:\n        n += 1\n        if n > 5:\n            return n\nsay f(1)',
+    'func grade(s):\n    if s >= 90:\n        return "A"\n    elif s >= 80:\n        return "B"\n    else:\n        for i in range(1, 3):\n'
+    '            if i == 2:\n                return "C" + i\nsay grade(95)\nsay grade(85)\nsay grade(10)',
+    'func f():\n    try:\n        return 1 / 0\n    catch p:\n        return "caught " + p\nsay f()',
+    'func f(n):\n    for i in range(1, 10):\n        for j in range(1, 10):\n            if i * j == n:\n                return [i, j]\n    return nil\n'
+    'say f(12)\nsay f(97)',
+    # loops: break, continue, and the ones that come from a function called inside the loop (as before)
+    'for i in range(1, 3):\n    for j in range(1, 3):\n        if j == 2:\n            break\n        say i + " " + j',
+    'for i in range(1, 5):\n    try:\n        if i == 3:\n            break\n        say 10 / (i - 2)\n    catch p:\n        say "caught " + p',
+    'for i in range(1, 4):\n    try:\n        x = 1 / (i - 2)\n    catch:\n        continue\n    say i',
+    'n = 0\nfunc skip():\n    continue\nwhile n < 3:\n    n += 1\n    if n == 2:\n        skip()\n    say n',
+    'func by(x):\n    break\nfor i in range(1, 3):\n    say i\n    [2, 1]:sort(by)\nsay "out"',
+    'func stop():\n    break\nfor i in range(1, 5):\n    say "loop " + i\n    if i == 2:\n        stop()\nsay "after"',
+    'n = 0\nwhile true:\n    n += 1\n    if n % 2 == 0:\n        continue\n    if n > 9:\n        break\n    say n',
+    'items = [1, 2, 3]\nfor x in items:\n    items:add(x)\nsay items', 'for k in {"a": 1, "b": 2}:\n    say k',
+    'for ch in "hey":\n    say ch', 'for i in range(10, 1, -3):\n    say i\nfor i in range(3, 1):\n    say i\nsay range(5)',
+    'i = 100\nfunc f():\n    for i in range(1, 3):\n        say i\nf()\nsay i',
+    'x = 0\nwhile x < 3 and true:\n    x += 1\nsay x\nsay (nil or "default")\nsay (0 and 5)\nsay not ""\nsay not [1]\nsay 1 is not 2',
+    'total = 0\nfor i in range(1, 100000):\n    if i % 3 == 0 or i % 5 == 0:\n        total += i\nsay total',
+    's = ""\nfor i in range(1, 200):\n    s += text(i % 10)\nsay len(s)\nsay s[0:20]',
+    'if 1 < 2 then say "yes"\nwhile false: say "no"\nfor i in [1]: say i',
+    # names: rule 2, functions inside functions, own-name built-ins, try and catch as names
+    'total = 0\nfunc add(n):\n    total += n\nadd(5)\nadd(2)\nsay total',
+    'func make():\n    count = 0\n    func inc():\n        count += 1\n        return count\n    return inc\nc = make()\nsay c()\nsay c()',
+    'func f():\n    num = 5\n    return num\nsay f()\nsay num("3") + 1\nnum = 2\nsay num',
+    'func t():\n    time = 3\n    return time\nsay t()\nsay time()\ntime = 5\nsay time', 'err = "custom"\nsay err',
+    'problem = "old"\nfunc f():\n    try:\n        x = 1 / 0\n    catch problem:\n        say problem\nf()\nsay problem',
+    'func f(len):\n    return len\nsay f(3)\nsay len("ab")', 'func greet:\n    say "hi"\ngreet()',
+    'func perms(items):\n    if len(items) <= 1:\n        return [items]\n    out = []\n    for i in range(0, len(items) - 1):\n'
+    '        rest = []\n        for j in range(0, len(items) - 1):\n            if j != i:\n                rest:add(items[j])\n'
+    '        for p in perms(rest):\n            out:add([items[i]] + p)\n    return out\nsay perms([1, 2, 3])',
+    # values: numbers, text, lists, dictionaries, err, live lines
+    'say 1 == 1.0\nsay 1 is true\nsay "a" < "b"\nsay [1] == [1]\nsay {"a": 1} == {"a": 1}\nsay nil == nil\nsay 0.1 + 0.2\n'
+    'say 7 / 2\nsay 7 % 3\nsay -7 % 3\nsay 2 ^ 10\nsay 10 / 4 * 2\nsay 5 is 5.0\nsay "5" is 5\nsay true is 1\nsay nil is false',
+    'say 3.0\nsay 2 ^ 100\nsay 1 / 3\nsay round(2.5)\nsay round(3.14159, 2)\nsay floor(-2.5)\nsay 10 - 0.1\nsay 2 ^ -1\n'
+    'say (-2) ^ 2\nsay -2 ^ 2\nsay 0.1 * 3\nsay 1 - 1 - 1\nsay 2 * 3 + 4 * 5 - 6 / 3 % 4',
+    'x = 3\nx *= 2\nx /= 4\nx -= 0.5\nsay x\ns = "a"\ns += "b"\ns += 1\nsay s\ns *= 2\nsay s\nn = 7\nn -= 10\nsay n',
+    'say "a" + 1 + 2\nsay 1 + 2 + "a"\nsay "x" * 3\nsay "abc":upper()\nsay "  hi ":trim()\nsay "a,b":split(",")\n'
+    'say ["a", "b"]:join("-")\nsay "hello":find("l")\nsay "hello":count("l")\nsay "7":pad_left(3, "0")\nsay "a" * 0\nsay "ab" * -1',
+    's = "hello world"\nsay s[0:4]\nsay s[:4]\nsay s[6:]\nsay s[-5:]\nsay s[3:1]\nitems = [1, 2, 3, 4]\nsay items[1:2]\nsay items[-2:]\n'
+    'i = 1\nsay s[i + 1:i + 3]\nsay s[:s:find(" ") - 1]',
+    'board = ["", "", ""]\nmoves = [0, 2]\nboard[moves:pop] = "X"\nsay board\norder = [1]\nsay board[order:pop]\nstack = [nil]\nsay board[stack:pop]',
+    'd = {}\nd["a"] = 1\nd["a"] += 1\nd:set("b", 2)\nsay d\nsay d:get("c", 0)\nsay d:has("a")\nsay d:keys()\nsay d:values()\nsay len(d)\n'
+    'd:remove("a")\nsay d\ncounts = {}\nfor w in ["a", "b", "a"]:\n    if counts:has(w):\n        counts[w] += 1\n    else:\n'
+    '        counts[w] = 1\nsay counts\nsay counts:size()',
+    'd = {1: "one", 2.5: "x"}\nsay d[1]\nsay d[2.5]\nd[1.0] = "uno"\nsay d\nsay {"a": [1, {"b": nil}]}',
+    'items = [1, 2, 3]\nitems[-1] = 9\nitems[0] += 5\nsay items\ngrid = [[0, 0], [0, 0]]\ngrid[1][0] = 5\nsay grid\nsay grid[1][0] + 1',
+    'say [1, 2]:join(", ")\nsay [1, [2, 3]]\nl = [1]\nl:add(l)\nsay l\nx = [1, 2]\nsay x:add(3):add(4)',
+    'func by_len(w):\n    return len(w)\nwords = ["ccc", "a", "bb"]\nwords:sort(by_len)\nsay words\nwords:reverse()\nsay words\n'
+    'nums = [3, 1, 2]\nsay nums:sort()\nsay nums:find(2)\nsay nums:has(5)\nsay [true, 2, "b", "A"]:sort()',
+    'x = num("hi")\nif x is err:\n    say "not a number"\nsay x == err\nsay x != 5\nsay text(x)\nsay [x]\nsay int("4.7")\nsay number(" 8 ")',
+    'bar = say "Loading"\nfor i in range(1, 3):\n    bar:rewrite "Loading" + "." * i\nbar:append "!"\nsay bar\nsay bar:text()\n'
+    'x = bar + " ok"\nsay x\nbar:clear\nsay len(bar:text())\nbar:rewrite("Done", "lime")',
+    'l = say "hi"\nsay l == "hi"\nsay l is "hi"\nsay "hi" == l\nsay l < "z"\nn = say 5\nsay n + 1\nsay n * 2\nsay l[1]\nsay l[0:0]\n'
+    'say len(l)\nfor ch in l:\n    say ch\nd = {l: 1}\nsay d["hi"]\nsay -n',
+    'items = []\nitems:add say "added"\nsay items\nprint("a", 1, true, nil, [1, "b"])\nprint()',
+    'print:pen("red")\nsay "pen"\nx = input "With pen? "\nprint:pen()\nsay "plain"\nsay:color("c", "blue")\nsay:ascii("Hi")\nprint:ascii("Yo", "small")',
+    'name = input "Name? "\nage = number(input("Age? "))\nsay name + " " + age\nok = input\nsay ok\nx = input:color("Q? ", "green")\nsay x',
+    'say "a"\nsay "b"\nclear(1)\nsay "c"\nflush\nsay "d"\nclear(all)\nsay pi',
+    'mention anims\nanims.loading("Hi", 0.2)\nanims.bar("B", 0.1)\nl = anims.type("typed", 0)\nanims.countdown(2, "Go")\nsay l:text()',
+    'file.write("a.txt", "one")\nfile.add("a.txt", "two")\nsay file.read("a.txt")\nsay file.lines("a.txt")\nsay file.exists("a.txt")\n'
+    'file.save("d.json", {"x": [1, 2]})\nsay file.load("d.json")\nfile.delete("a.txt")\nsay file.exists("a.txt")\nsay file.read("a.txt")',
+    'say random(1, 6)\nsay random()\nsay random(0.5, 2.5)\nsay random(3)\nsay now()\nsay today()\nsay time()\nsay date()',
+    'say sin(30)\nsay cos(60)\nsay log(100, 10)\nsay log(8, 2)\nsay sqrt(2)\nsay abs(-3)\nsay ceil(2.1)\nsay min(3, 1, 2)\n'
+    'say max([4, 9])\nsay sum([1, 2])\nsay average(1, 2)\nwait(0)\nwait("x")',
+    'func d(n):\n    if n == 0:\n        return 0\n    return d(n - 1) + 1\nsay d(9000)\ntry:\n    say d(20000)\ncatch p:\n    say p',
+    'say ' + ' + '.join(['1'] * 400), 'say ' + '(' * 120 + '1' + ')' * 120, 'x = [' + ', '.join(str(i) for i in range(300)) + ']\nsay len(x)',
+    'catch = []\ncatch:add("trout")\nsay catch\ntry = [3]\ntry:add(4)\nsay try',
+    # the quick paths' edges: a number or text written in the program on either side, x += with each kind of value
+    'say 5 == "a"\nsay "a" == 5\nsay "5" != 5\nsay "a" < "b"\nsay "b" >= "a"\nsay "x" + 1\nsay 1 + "x"\nsay "a" + "b"\nsay nil == "a"\nsay "a" + nil',
+    'say "5" < 3', 'say 3 < "5"', 'say nil < 1', 'say 2 - "a"', 'say "a" * 2.5', 'say 7 % 0.0', 'say 0 / 0', 'x = 0\nsay 5 / x',
+    'n = 5\nn += "x"\nsay n\ns = "a"\ns += 1\nsay s\ns += nil\nsay s\ns -= 1', 'x = 2\nx /= 0', 'x = "a"\nx *= 3\nsay x\nx *= "b"',
+    'total = 0\nfunc add():\n    total += 1\n    total += "!"\nadd()\nsay total\nfunc more():\n    missing += 1\nmore()',
+    'x = true\nx += 1', 'l = say "hi"\nl += "!"\nsay l\nm = say 4\nm += 1\nsay m',
+    'say 5:has(1)', 'say [1]:upper()', 'say {"a": 1}:find("a")', 'd = {}\nsay d:has([1])', 'say "abc":has(1)\nsay "a1c":has(1)',
+    'l = say "hi"\nsay l:upper()', 'd = {"a": 1}\nsay d:get([1])', 'd = {"a": 1}\nsay d:get("b", 5)\nsay d:get("b")\nd:set("c", 3)\nsay d\nd:set([1], 2)',
+    'd = {"a": 1}\nsay d:keys(1)', 'say "Hi":lower()\nsay " x ":trim()\nsay "abc":starts("a")\nsay "abc":ends(1)\nsay "banana":count("a")\nsay "abc":find("z")',
+    'say len("a")\nsay len("a", "b")', 'say len()\nsay len("ab")', 'say random(1, 1)\nsay random(1, 2, 3)',
+    'func f(a):\n    return a\nsay f(1)\nsay f()', 'func f():\n    return 1\nx = f\nsay x()\nsay x(1)',
+    'items = [1, 2, 3]\nitems[1] = "b"\nitems[-3] = "a"\nsay items\nitems[3] = 0', 'd = {}\nd[1] = "one"\nd["1"] = "text"\nd[1.5] = "x"\nsay d',
+    's = "abc"\nsay s[0] + s[-1]\nsay s[3]', 'items = [[1, 2], [3, 4]]\nsay items[1][-1]\nsay items[2][0]',
+    'func outer():\n    for i in range(1, 3):\n        func inner():\n            return i * 10\n        say inner()\n    return "end"\nsay outer()',
+    'func f(n):\n    while true:\n        try:\n            if n > 2:\n                break\n            n += 1\n        catch:\n            say "no"\n    return n\nsay f(0)',
+    'func f():\n    for i in range(1, 3):\n        try:\n            return i / 0\n        catch p:\n            continue\n    return "after"\nsay f()',
+]
+# The quick check for speed: generous limits, and the compiled runtime at least twice as fast as the tree walker.
+INTERP_PERF = {
+    "while": "i = 0\ntotal = 0\nwhile i < 300000:\n    total += i % 7\n    i += 1\nsay total\n",
+    "for": "total = 0\nfor i in range(1, 1000000):\n    total += i % 7\nsay total\n",
+    "calls": "func fib(n):\n    if n < 2:\n        return n\n    return fib(n - 1) + fib(n - 2)\nsay fib(25)\n",
+}
+
+
+def interp_corpus():
+    """(name, program) for every console program there is: the repo's .tuf files, the guide's examples, Learn's lessons
+    (example, starter and solution), the toolbox, looks and recursion tests' programs and INTERP_CASES. tgame programs
+    come back separately, for the --scene preview. Programs that open a window or use the internet are left out."""
+    console, games = [], []
+
+    def add(name, code):
+        if not code or not code.strip():
+            return
+        if re.search(r"^[ \t]*(?:import|mention)[ \t]+tgame\b", code, re.M) and not re.search(
+                r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|atgui|tdraw|tap)\b", code, re.M):
+            games.append((name, code))
+        elif not WINDOW_LIBRARY.search(code):
+            console.append((name, code))
+
+    for root, dirs, files in os.walk(REPO):
+        dirs[:] = [d for d in dirs if d not in ("node_modules", "out", ".git", "dist", "build", ".claude")]
+        for n in sorted(files):
+            if n.endswith(".tuf"):
+                with open(os.path.join(root, n), encoding="utf-8") as f:
+                    add(os.path.relpath(os.path.join(root, n), REPO).replace(os.sep, "/"), f.read())
+    guide = open(os.path.join(REPO, "tuffcode", "mcp", "tuff-guide.md"), encoding="utf-8").read()
+    for i, code in enumerate(re.findall(r"```tuff\n(.*?)```", guide, re.S), 1):
+        add(f"guide {i}", code)
+    learn = os.path.join(REPO, "tuffcode", "renderer", "js", "learn.js")
+    load = ("const vm = require('vm'), fs = require('fs'); const el = {addEventListener() {}, querySelector: () => null, "
+            "querySelectorAll: () => [], classList: {add() {}, remove() {}, toggle() {}}, style: {}, appendChild() {}};"
+            "const window = {tuff: {}, addEventListener() {}};"
+            "const document = {querySelector: () => null, querySelectorAll: () => [], createElement: () => el, body: el, addEventListener() {}};"
+            "vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), {window, document, console, setTimeout, clearTimeout,"
+            " TuffIcon: () => '', localStorage: {getItem: () => null, setItem() {}}});"
+            "console.log(JSON.stringify(window.TuffLearn.sections()))")
+    try:
+        sections = json.loads(subprocess.run(["node", "-e", load, learn], capture_output=True, text=True, encoding="utf-8",
+                                             timeout=60).stdout)
+    except (FileNotFoundError, ValueError):
+        sections = None
+    for s in sections or []:
+        for lesson in s["lessons"]:
+            for part in ("example", "starter", "solution"):
+                add(f"learn {lesson['id']} {part}", lesson.get(part))
+    for name in ("TOOLBOX_PROGRAM", "TOOLBOX_FIXES", "LOOKS_PROGRAM", "DEEP_PROGRAM", "DEEP_RUNAWAY", "DEEP_SCENE"):
+        add(name.lower(), globals()[name])
+    for name in ("TOOLBOX_MISTAKES", "TOOLBOX_FIXES_CHECKS", "LOOKS_CHECKS"):
+        for i, (code, _) in enumerate(globals()[name]):
+            add(f"{name.lower()} {i}", code + "\n")
+    for i, code in enumerate(INTERP_CASES):
+        add(f"case {i}", code + "\n")
+    return console, games, sections is not None
+
+
+def interp_run(folder, code, slow, env=None, timeout=60):
+    """Runs a program with INTERP_DRIVER in its own folder: (exit code, stdout, stderr), with the folder's path taken out."""
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "program.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(code)
+    full = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW", "TUFF_NO_WRITES", "TUFF_BASE_DIR")}
+    full.update({"PYTHONIOENCODING": "utf-8", **(env or {})})
+    if slow:
+        full["TUFF_SLOW"] = "1"
+    try:
+        p = subprocess.run([sys.executable, "-c", INTERP_DRIVER, REPO, path], input=INTERP_ANSWERS, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=timeout, env=full, cwd=folder)
+        out = (p.returncode, p.stdout, p.stderr)
+    except subprocess.TimeoutExpired:
+        out = ("timeout", "", "")
+
+    def tidy(text):
+        if not isinstance(text, str):
+            return text
+        text = text.replace(folder, "<folder>").replace(folder.replace("\\", "/"), "<folder>")
+        # A Python crash (a bug in Tuff, like 10 ^ 400 / 3's OverflowError in 1.4.1) lists Python's own calls, which
+        # are different in each runtime: what matters is that both crash with the same error.
+        return re.sub(r"Traceback \(most recent call last\):\n(?:[ \t].*\n)*", "Traceback: ", text)
+    return tuple(tidy(x) for x in out)
+
+
+def t_interp(c):
+    """1.5.0's compiled interpreter: every console program there is (the repo's .tuf files, the guide's and Learn's
+    examples, the toolbox, looks and recursion tests' programs and the corner cases above) gives exactly the same
+    output, errors (line and column) and exit code as the old tree walker (TUFF_SLOW=1); so does Tuff Engine's --scene
+    preview of every tgame program (its line tracking too). Then the step hooks the debugger will use, atgui's
+    app:closed time limit, library callbacks (Runtime.call), and a quick check that it's faster."""
+    from concurrent.futures import ThreadPoolExecutor
+    console, games, learned = interp_corpus()
+    c.check(learned, "Learn's lessons were read from learn.js (with Node)")
+    c.check(len(console) >= 150 and len(games) >= 60, f"the corpus: {len(console)} console programs and {len(games)} tgame programs",
+            (len(console), len(games)))
+    folder = os.path.join(HERE, "out", "interp")
+
+    def both(job):
+        i, (name, code) = job
+        return name, [interp_run(os.path.join(folder, mode, str(i)), code, mode == "slow") for mode in ("slow", "fast")]
+
+    with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 2)) as pool:
+        results = list(pool.map(both, enumerate(console)))
+    differ = [(name, slow, fast) for name, (slow, fast) in results if slow != fast]
+    timeouts = [name for name, (slow, fast) in results if "timeout" in (slow[0], fast[0])]
+    c.check(not differ, f"{len(results)} console programs give the same output, errors and exit code in both runtimes",
+            ", ".join(name for name, _s, _f in differ) + "\n" + "\n".join(f"{name}:\n  slow {slow!r}\n  fast {fast!r}"[:700]
+                                                                     for name, slow, fast in differ[:2]))
+    c.check(not timeouts, "...and none of them hangs", timeouts)
+    errors = sum(1 for _, (slow, _f) in results if "Tuff error" in slow[2])
+    c.check(errors >= 100, f"...{errors} of them stop with a Tuff error, which is on the same line and column in both", errors)
+    crashes = [name for name, (slow, _f) in results if "Traceback" in slow[2]]
+    c.check(len(crashes) <= 2, f"...and only {len(crashes)} crash in Python (the same way in both: 1.4.1's own bugs)", crashes)
+    # In TuffCode's Run panel (TUFF_IDE=1): the lines, rewrites, looks and prompts it's sent are the same too.
+    ide = [(n, code) for n, code in console if n in ("looks_program", "toolbox_program") or "rewrite" in code or "print:pen" in code][:40]
+    same = [n for i, (n, code) in enumerate(ide) if interp_run(os.path.join(folder, "ide_slow", str(i)), code, True, env={"TUFF_IDE": "1"})
+            != interp_run(os.path.join(folder, "ide_fast", str(i)), code, False, env={"TUFF_IDE": "1"})]
+    c.check(len(ide) >= 10 and not same, f"with TUFF_IDE=1, {len(ide)} programs send TuffCode the same lines in both", same[:5])
+
+    def preview(job):
+        i, (name, code) = job
+        dumps = []
+        for mode in ("slow", "fast"):
+            where = os.path.join(folder, "scene_" + mode, str(i))
+            os.makedirs(where, exist_ok=True)
+            for pic in ("star.png", "blip.wav"):
+                if os.path.exists(os.path.join(GAMES, pic)) and not os.path.exists(os.path.join(where, pic)):
+                    with open(os.path.join(GAMES, pic), "rb") as f, open(os.path.join(where, pic), "wb") as g:
+                        g.write(f.read())
+            path, out = os.path.join(where, "game.tuf"), os.path.join(where, "scene.json")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(code)
+            if os.path.exists(out):
+                os.remove(out)
+            env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+            env.pop("TUFF_TGAME_AUTOPILOT", None)
+            env.pop("TUFF_SLOW", None)
+            if mode == "slow":
+                env["TUFF_SLOW"] = "1"
+            p = subprocess.run([sys.executable, TUFF, "--scene", path, path, out], cwd=where, env=env, capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=60, stdin=subprocess.DEVNULL)
+            try:
+                with open(out, encoding="utf-8") as f:
+                    dumps.append((p.returncode, f.read().replace(where.replace("\\", "\\\\"), "<folder>").replace(where.replace("\\", "/"), "<folder>")))
+            except OSError:
+                dumps.append((p.returncode, None))
+        return name, dumps
+
+    with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 2)) as pool:
+        previews = list(pool.map(preview, enumerate(games)))
+    differ = [(name, d) for name, d in previews if d[0] != d[1] or d[0][1] is None]
+    c.check(not differ, f"Tuff Engine's --scene preview of {len(previews)} tgame programs makes the same things, from the same lines, in both",
+            "\n".join(f"{name}: {str(d[0])[:300]} / {str(d[1])[:300]}" for name, d in differ[:3]))
+    made = sum(1 for _, d in previews if d[1][1] and '"made"' in d[1][1])
+    c.check(made >= 30, f"...{made} of them say which line made each thing", made)
+    interp_hooks(c)
+    interp_speed(c)
+
+
+def interp_hooks(c):
+    """In this process: the step hooks (the debugger's hook point), atgui's app:closed limit, Runtime.call."""
+    import contextlib
+    import io
+    import tuff
+    import tuff_atgui
+    src = ("total = 0\nfunc add(n):\n    total += n\n    return total\nfor i in range(1, 3):\n    add(i)\n"
+           "func stuck():\n    n = 0\n    while true:\n        n += 1\nfunc two(a, b):\n    return a + b\nfunc bad():\n    return nope\n")
+    for slow in (True, False):
+        mode = "the tree walker" if slow else "the compiled runtime"
+        old = os.environ.pop("TUFF_SLOW", None)
+        if slow:
+            os.environ["TUFF_SLOW"] = "1"
+        try:
+            interp = tuff.Interpreter(src, HERE)
+        finally:
+            os.environ.pop("TUFF_SLOW", None)
+            if old is not None:
+                os.environ["TUFF_SLOW"] = old
+        c.check(interp.fast is not slow, f"TUFF_SLOW={'1' if slow else '(none)'} gives {mode}")
+        program = tuff.Parser(tuff.tokenize(src)).program()
+        seen = []
+        interp.step_hooks.append(lambda s, env: seen.append(s.line))
+        interp.run_block(program, interp.globals)
+        c.check(seen == [1, 2, 5, 6, 3, 4, 6, 3, 4, 6, 3, 4, 7, 11, 13] and interp.globals.vars["total"] == 6,
+                f"{mode}: a step hook sees every statement, in the order they run", seen)
+        interp.step_hooks.clear()
+
+        def stop_at_4(s, env):
+            if s.line == 4:
+                raise tuff.TuffError("Stopped by the debugger.")
+        interp.step_hooks.append(stop_at_4)
+        try:
+            interp.invoke(interp.globals.vars["add"], [1])
+            got = None
+        except tuff.TuffError as err:
+            got = (err.line, err.col, err.msg)
+        interp.step_hooks.remove(stop_at_4)
+        c.check(got == (4, 5, "Stopped by the debugger."), f"{mode}: a hook's error stops the program on the statement's line", got)
+        lib = tuff_atgui.Lib(interp.rt)
+        err = io.StringIO()
+        t0 = time.perf_counter()
+        with contextlib.redirect_stderr(err):
+            ok = lib.fire_by(interp.globals.vars["stuck"], 0.3, "app:closed's function took too long.")
+        secs = time.perf_counter() - t0
+        c.check(ok is False and secs < 5 and "app:closed's function took too long." in err.getvalue() and "line 10" in err.getvalue()
+                and not interp.step_hooks, f"{mode}: atgui stops app:closed's function after its time limit ({secs:.1f} s)", err.getvalue()[-300:])
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            calls = (interp.rt.call(interp.globals.vars["two"], 2, 3, 99), interp.rt.call(interp.globals.vars["bad"]))
+        c.check(calls == ((True, 5), (False, None)) and "Tuff error on line 14: I don't know what 'nope' is." in err.getvalue(),
+                f"{mode}: Runtime.call (library callbacks) drops extra inputs and reports errors", (calls, err.getvalue()[-200:]))
+
+
+def interp_speed(c):
+    folder = os.path.join(HERE, "out", "interp", "speed")
+    os.makedirs(folder, exist_ok=True)
+    for name, code in INTERP_PERF.items():
+        path = os.path.join(folder, f"{name}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code)
+        times, outs = {}, {}
+        for mode in ("slow", "fast"):
+            env = {**os.environ}
+            env.pop("TUFF_SLOW", None)
+            if mode == "slow":
+                env["TUFF_SLOW"] = "1"
+            t0 = time.perf_counter()
+            p = subprocess.run(tuff_cmd() + [path], capture_output=True, text=True, encoding="utf-8", timeout=120, env=env,
+                               stdin=subprocess.DEVNULL)
+            times[mode], outs[mode] = time.perf_counter() - t0, p.stdout.strip().splitlines()[:1]
+        c.check(outs["fast"] == outs["slow"] and times["fast"] < 5 and times["fast"] * 2 < times["slow"],
+                f"{name}: {times['slow']:.2f} s with the tree walker, {times['fast']:.2f} s compiled ({times['slow'] / max(times['fast'], 0.001):.1f}x)",
+                (outs, times))
+    # The debugger's hook point, off and on: in this process, the while loop without a step hook, then with one that
+    # does nothing (each of its 600,000 statements calls it).
+    import tuff
+    os.environ.pop("TUFF_SLOW", None)
+    src = INTERP_PERF["while"].replace("say total\n", "")
+    program = tuff.Parser(tuff.tokenize(src)).program()
+    secs = []
+    for hooked in (False, True):
+        interp = tuff.Interpreter(src, folder)
+        if hooked:
+            interp.step_hooks.append(lambda s, env: None)
+        t0 = time.perf_counter()
+        interp.run_block(program, interp.globals)
+        secs.append(time.perf_counter() - t0)
+    c.check(secs[0] < secs[1] and secs[0] < 2, f"with no step hook the loop takes {secs[0]:.2f} s, with a do-nothing one {secs[1]:.2f} s", secs)
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
@@ -4793,6 +5192,7 @@ TESTS.update({"hud_health_3d": t_hud_health_3d, "hud_health_2d": t_hud_health_2d
 TESTS.update({"net": t_net, "net_2d": t_net_2d, "net_rooms": t_net_rooms})
 TESTS.update({"car_enter": t_car_enter, "weight": t_weight, "sign_text": t_sign_text, "people_style": t_people_style})
 TESTS.update({"recursion": t_recursion, "recursion_window": t_recursion_window, "pictures_up": t_pictures_up})  # 1.4.1
+TESTS.update({"interp": t_interp})  # 1.5.0
 
 
 def main():

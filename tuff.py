@@ -678,14 +678,16 @@ class Parser:
 # ---------------------------------------------------------------- runtime
 
 class Func:
-    def __init__(self, name, params, body, env, line=None):
+    def __init__(self, name, params, body, env, line=None, code=None):
         self.name, self.params, self.body, self.env, self.line = name, params, body, env, line
+        self.code = code  # 1.5.0: its body compiled (Interpreter.compile_block), or None under the old tree walker
 
 
 class Builtin:
     def __init__(self, name, fn, takes_err=False):
         self.name, self.fn = name, fn
         self.takes_err = takes_err  # number(), text(), print()...: an err given to them doesn't stop the program
+        self.fits = {}  # 1.5.0: whether fn takes this many inputs, worked out once for each count (see call_python)
 
 
 class Line:
@@ -727,6 +729,7 @@ class Err:
 
 
 ERR = Err()
+TOO_BIG = "That's too big to work out: a number or text this large doesn't fit in memory."  # inside a method
 LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame", "tdraw")
 # Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
 # second thread, because the web view needs the main thread.
@@ -760,6 +763,21 @@ class BreakSignal(Exception):
 class ContinueSignal(Exception):
     def __init__(self, line=None, col=None):
         self.line, self.col = line, col
+
+
+# 1.5.0: return, break and continue in compiled code (see Interpreter.compile_stmt). The statement gives back its Jump
+# instead of raising a signal, and each block hands it straight up to the loop or the function call it's for, which
+# is many times quicker than an exception. Where one would leave compiled code it becomes the signal again
+# (Interpreter.unjump), so everything outside sees what it always did.
+J_RETURN, J_BREAK, J_CONTINUE = "return", "break", "continue"
+
+
+class Jump:
+    __slots__ = ("kind", "line", "col", "value")
+
+    def __init__(self, kind, line, col):
+        self.kind, self.line, self.col = kind, line, col
+        self.value = None  # what a return gives back: set just before, and taken (and cleared) at once
 
 
 def b64(text):
@@ -1037,14 +1055,18 @@ def plain(v):
     return v.text if isinstance(v, Line) else v
 
 
-def call_python(label, fn, args, takes_err=False):
-    """Call a built-in written in Python, turning Python problems into friendly Tuff errors."""
-    try:
-        inspect.signature(fn).bind(*args)
-    except TypeError:
+def call_python(label, fn, args, takes_err=False, fits=None):
+    """Call a built-in written in Python, turning Python problems into friendly Tuff errors. fits: whether fn takes
+    this many inputs, when that's known already (a Builtin keeps it: inspect.signature is slow to ask every time)."""
+    if fits is None:
+        try:
+            inspect.signature(fn).bind(*args)
+        except TypeError:
+            raise TuffError(f"{label} got the wrong number of inputs ({len(args)}).")
+        except ValueError:
+            pass
+    elif not fits:
         raise TuffError(f"{label} got the wrong number of inputs ({len(args)}).")
-    except ValueError:
-        pass
     if not takes_err:  # an err stops here with the reason it's an err, before Python can say something confusing
         for a in args:
             if isinstance(plain(a), Err):
@@ -1659,7 +1681,7 @@ class Console:
 
 
 class Env:
-    def __init__(self, parent=None, own_names=False):
+    def __init__(self, parent=None, own_names=False):  # (a function call's is made without this: see make_call)
         self.vars = {}
         self.parent = parent
         self.own_names = own_names  # holds OWN_NAME_BUILTINS: giving one of them a value makes a new variable
@@ -1759,6 +1781,114 @@ class Runtime:
         return False, None
 
 
+# ---------------------------------------------------------------- for the compiled runtime (1.5.0)
+
+def jumps_out(s):
+    """The returns, breaks and continues that can come out of statement s (a loop keeps its own break and continue,
+    and a function's own are its own)."""
+    k = s.kind
+    if k in (J_RETURN, J_BREAK, J_CONTINUE):
+        return {k}
+    if k == "if":
+        out = set()
+        for _, body in s.branches:
+            out |= block_jumps(body)
+        return out | block_jumps(s.else_body or [])
+    if k == "try":
+        return block_jumps(s.body) | block_jumps(s.handler)
+    if k in ("while", "for"):
+        return block_jumps(s.body) - {J_BREAK, J_CONTINUE}
+    return set()
+
+
+def block_jumps(body):
+    out = set()
+    for s in body:
+        out |= jumps_out(s)
+    return out
+
+
+# The quick sums: for each operator, the functions that make a sum's function (a + b, and a + 5, 5 + a, a == "yes"
+# with a number or text written in the program) and a += statement's. Numbers (and two texts, for + and the
+# comparisons) are worked out right there, the way Interpreter.binop would; anything else goes to binop itself
+# (slow), which gives the same answers and the same messages. A / or % by 0 goes there too. They're written once
+# below and made for each operator, so each one has its operator in it.
+QUICK_SUM = '''
+def @NAME@(@ARGS@, slow, line, col):
+    def binop(env):
+@GET@        if @QUICK@:
+            return a @OP@ b
+@TEXTS@        try:
+            return slow("@OP@", a, b)
+        except TuffError as err:
+            if err.line is None:
+                err.line, err.col = line, col
+            raise
+    return binop
+'''
+QUICK_STORE = '''
+def @NAME@(s, get, @ARGS@, slow, hooks, step):
+    name, line, col = s.target.name, s.line, s.col
+
+    def assign(env):
+        if hooks:
+            step(s, env)
+@GET@        names = env.vars
+        if name in names:
+            a = names[name]
+        else:
+            a = get(env)
+            names = None
+        ta = a.__class__
+        if @QUICK@:
+            a = a @OP@ b
+@TEXTS@        else:
+            try:
+                a = slow("@OP@", a, b)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        if names is None:
+            env.set(name, a)
+        else:
+            names[name] = a
+        return a
+    return assign
+'''
+QUICK_TEXTS = ("+", "<", ">", "<=", ">=", "==", "!=")  # text with text works the same as in Python
+NUMBER_A, NUMBER_B = "(ta is int or ta is float)", "(tb is int or tb is float)"
+
+
+def quick_makers(op):
+    """One operator's makers: both, number_right, number_left, text_right and text_left (where text is quick), and
+    for +, -, * and /: store, store_number and store_text (+= only)."""
+    nonzero = " and b" if op in ("/", "%") else ""
+    texts = op in QUICK_TEXTS
+    get_a, get_b = "        a = left(env)\n        ta = a.__class__\n", "        b = right(env)\n        tb = b.__class__\n"
+    kinds = [("both", "left, right", get_a + get_b, f"{NUMBER_A} and {NUMBER_B}{nonzero}",
+              "        if ta is str and tb is str:\n            return a @OP@ b\n" if texts else ""),
+             ("number_right", "left, b", get_a, NUMBER_A, ""), ("number_left", "a, right", get_b, NUMBER_B + nonzero, "")]
+    if texts:
+        kinds += [("text_right", "left, b", get_a, "ta is str", ""), ("text_left", "a, right", get_b, "tb is str", "")]
+    src = "".join(QUICK_SUM.replace("@NAME@", n).replace("@ARGS@", a).replace("@GET@", g).replace("@QUICK@", q)
+                  .replace("@TEXTS@", t) for n, a, g, q, t in kinds)
+    if op in ("+", "-", "*", "/"):  # x += 1 and the rest: the value is worked out first, then x, as the tree walker does
+        kinds = [("store", "value", "        b = value(env)\n        tb = b.__class__\n", f"{NUMBER_A} and {NUMBER_B}{nonzero}",
+                  "        elif ta is str and tb is str:\n            a = a @OP@ b\n" if op == "+" else ""),
+                 ("store_number", "b", "", NUMBER_A, "")]
+        if op == "+":
+            kinds.append(("store_text", "b", "", "ta is str", ""))
+        src += "".join(QUICK_STORE.replace("@NAME@", n).replace("@ARGS@", a).replace("@GET@", g).replace("@QUICK@", q)
+                       .replace("@TEXTS@", t) for n, a, g, q, t in kinds)
+    made = {"TuffError": TuffError}
+    exec(compile(src.replace("@OP@", op), f"<tuff quick {op}>", "exec"), made)
+    return made
+
+
+QUICK = {op: quick_makers(op) for op in ("+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==", "!=")}
+
+
 class Interpreter:
     writes = True  # file.write and the rest (Tuff Engine's preview writes nothing)
 
@@ -1804,6 +1934,16 @@ class Interpreter:
         self.started = time.perf_counter()
         self.held = []  # the starts of the names[order:pop] being worked out (see eval "slice")
         self.depth = 0  # Tuff functions running inside each other (see MAX_DEPTH)
+        # 1.5.0: each statement and expression is compiled once into a Python function (see compile_stmt), several
+        # times quicker than walking the tree. TUFF_SLOW=1 runs the old tree walker instead, for one release.
+        self.fast = os.environ.get("TUFF_SLOW") != "1"
+        self.codes = {}  # id(node): (node, its compiled function)
+        # A subclass that runs each statement itself (Tuff Engine's preview keeps the line it's on) gets every
+        # statement through its run(), and one with its own binop gets every sum through it (see own).
+        self.routed = type(self).run is not Interpreter.run
+        # The debugger's hook point (1.5.0): functions run as hook(statement, env) just before each statement, in
+        # both runtimes. atgui's app:closed time limit is one. While it's empty it costs one check per statement.
+        self.step_hooks = []
         if os.environ.get("TUFF_NO_WRITES") == "1":  # tuff_run for AI agents: file writes stay in memory
             self.writes = False
         takes_err = {"number", "num", "int", "text", "str", "print"}  # they hand an err back, or show it as "err"
@@ -2111,17 +2251,33 @@ class Interpreter:
 
     # statements
     def run_block(self, body, env):
+        if self.fast:
+            return self.unjump(self.compile_block(body)(env))
         result = None
         for stmt in body:
             result = self.run(stmt, env)
         return result
 
     def run(self, s, env):
+        if self.fast:
+            return self.unjump(self.compile_stmt(s)(env))
+        if self.step_hooks:
+            self.step(s, env)
         try:
             return getattr(self, "s_" + s.kind)(s, env)
         except TuffError as e:
             if e.line is None:
                 e.line, e.col = s.line, s.col
+            raise
+
+    def step(self, s, env):
+        """The step hooks, just before statement s runs (see step_hooks)."""
+        try:
+            for hook in tuple(self.step_hooks):
+                hook(s, env)
+        except TuffError as err:
+            if err.line is None:
+                err.line, err.col = s.line, s.col
             raise
 
     def s_expr(self, s, env):
@@ -2136,15 +2292,20 @@ class Interpreter:
             env.set(t.name, value)
             return value
         obj = plain(self.eval(t.obj, env))  # the list or dictionary and the key are worked out once: votes[input()] += 1
-        index = getattr(t, "index", None)
-        if t.kind == "slice":  # board[moves:pop] = "X": only 1.3.6's method reading can be stored into
-            which, key, _ = self.part(t, env)
-            if which != "key":
-                raise TuffError("A part like [1:3] can't be changed with =. Make the new text or list with + instead.")
-        else:
-            key = self.eval(index, env)
+        key = self.part_key(t, env) if t.kind == "slice" else self.eval(t.index, env)
+        return self.store(s, obj, key, value)
+
+    def part_key(self, t, env):
+        """board[moves:pop] = "X": only 1.3.6's method reading of a part can be stored into."""
+        which, key, _ = self.part(t, env)
+        if which != "key":
+            raise TuffError("A part like [1:3] can't be changed with =. Make the new text or list with + instead.")
+        return key
+
+    def store(self, s, obj, key, value):
+        """obj[key] = value, +=, -=...: a list's item, or a dictionary's key."""
         if s.op != "=":
-            value = self.binop(s.op[0], self.item(obj, key, t.obj), value)
+            value = self.binop(s.op[0], self.item(obj, key, s.target.obj), value)
         if isinstance(obj, dict):  # ages["sam"] = 15 sets (or adds) a key
             obj[dict_key(key)] = value
             return value
@@ -2182,14 +2343,7 @@ class Interpreter:
         return None
 
     def s_for(self, s, env):
-        items = plain(self.eval(s.items, env))
-        if isinstance(items, bool) or isinstance(items, (int, float)):
-            raise TuffError(f"Can't loop over a number. Try: for {s.name} in range({to_text(items)}):")
-        if isinstance(items, dict):  # a dictionary: its keys
-            items = list(items)
-        if not isinstance(items, (list, str)):
-            raise TuffError(f"Can't loop over {type_name(items)}.")
-        for item in list(items):
+        for item in self.for_items(s, plain(self.eval(s.items, env))):
             env.set(s.name, item)
             try:
                 self.run_block(s.body, env)
@@ -2198,6 +2352,16 @@ class Interpreter:
             except ContinueSignal:
                 continue
         return None
+
+    def for_items(self, s, items):
+        """What a for loop goes through: a copy of the list or text (so the loop can change it), or a dictionary's keys."""
+        if isinstance(items, bool) or isinstance(items, (int, float)):
+            raise TuffError(f"Can't loop over a number. Try: for {s.name} in range({to_text(items)}):")
+        if isinstance(items, dict):  # a dictionary: its keys
+            items = list(items)
+        if not isinstance(items, (list, str)):
+            raise TuffError(f"Can't loop over {type_name(items)}.")
+        return list(items)
 
     def s_func(self, s, env):
         env.vars[s.name] = Func(s.name, s.params, s.body, env, s.line)
@@ -2228,6 +2392,8 @@ class Interpreter:
 
     # expressions
     def eval(self, e, env):
+        if self.fast:
+            return self.compile_expr(e)(env)
         try:
             return self.eval_node(e, env)
         except TuffError as err:
@@ -2247,12 +2413,8 @@ class Interpreter:
             return self.print_builtin
         if k == "input":
             prompt = "" if e.prompt is None else to_text(self.eval(e.prompt, env))
-            look = None
-            if getattr(e, "looks", None) is not None:  # input:color("Name? ", "green")
-                look = read_look("input:color", [self.eval(a, env) for a in e.looks], pen=True)  # (no animations)
-            if look is not None or self.pen:  # with print:pen on, the question has the pen's look too
-                look = (look or Look()).with_pen(self.pen)
-            return self.console.input(prompt, look)
+            looks = getattr(e, "looks", None)  # input:color("Name? ", "green")
+            return self.ask(prompt, None if looks is None else [self.eval(a, env) for a in looks])
         if k == "binop":
             return self.binop(e.op, self.eval(e.left, env), self.eval(e.right, env))
         if k == "and":
@@ -2264,10 +2426,7 @@ class Interpreter:
         if k == "not":
             return not truthy(self.eval(e.value, env))
         if k == "neg":
-            v = plain(self.eval(e.value, env))
-            if not isinstance(v, (int, float)) or isinstance(v, bool):
-                raise TuffError(f"Can't make {type_name(v)} negative.")
-            return -v
+            return self.negative(self.eval(e.value, env))
         if k == "list":
             return [self.eval(x, env) for x in e.items]
         if k == "dict":
@@ -2279,32 +2438,54 @@ class Interpreter:
             return self.held[-1]
         if k == "slice":  # s[1:3]: positions 1 to 3, both included (like range); s[:3] from the start, s[2:] to the end
             obj = plain(self.eval(e.obj, env))
-            which, first, last = self.part(e, env)
-            if which == "key":  # names[order:pop]: 1.3.6's method call gave the position or key
-                return self.item(obj, first, e.obj)
-            if not isinstance(obj, (list, str)):
-                raise TuffError(f"Only text and lists have parts like [1:3], not {type_name(obj)}.")
-            size = len(obj)
-            a, b = max(0, self.spot(e, first, 0, size)), min(size - 1, self.spot(e, last, size - 1, size))
-            return obj[a:b + 1] if a <= b else obj[0:0]
+            return self.cut(e, obj, *self.part(e, env))
         if k == "call":
             return self.call(e, env)
         if k == "method":
             try:
                 return self.method(e, env)
             except (OverflowError, MemoryError):  # a number or text too big for the computer, inside a method
-                raise TuffError("That's too big to work out: a number or text this large doesn't fit in memory.")
+                raise TuffError(TOO_BIG)
         if k == "attr":
-            obj = self.eval(e.obj, env)
-            if isinstance(obj, Builtin) and e.obj.kind == "var" and e.obj.name in PY_NAMES:  # time.sleep(1)
-                raise TuffError(f"Tuff has no {e.obj.name}.{e.name}. {PY_NAMES[e.obj.name]}")
-            if not isinstance(obj, Module):
-                kind = "list" if isinstance(obj, list) else "text" if isinstance(obj, str) else "dict" if isinstance(obj, dict) else None
-                raise TuffError(dot_help(type_name(obj), e.obj, e.name, kind))
-            if e.name not in obj.members:
-                raise TuffError(f"{obj.name} doesn't have '{e.name}'. It has: {', '.join(obj.members)}.")
-            return obj.members[e.name]
+            return self.member(e, self.eval(e.obj, env))
         raise TuffError(f"Internal error: unknown expression '{k}'.")
+
+    # what the expressions above do once their parts are worked out (the compiled runtime uses them too)
+    def ask(self, prompt, looks):
+        """input's question (with input:color's look words, already worked out), then the answer."""
+        look = None
+        if looks is not None:
+            look = read_look("input:color", looks, pen=True)  # (no animations)
+        if look is not None or self.pen:  # with print:pen on, the question has the pen's look too
+            look = (look or Look()).with_pen(self.pen)
+        return self.console.input(prompt, look)
+
+    def negative(self, v):
+        v = plain(v)
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            raise TuffError(f"Can't make {type_name(v)} negative.")
+        return -v
+
+    def cut(self, e, obj, which, first, last):
+        """x[a:b] once x and part(e) are worked out."""
+        if which == "key":  # names[order:pop]: 1.3.6's method call gave the position or key
+            return self.item(obj, first, e.obj)
+        if not isinstance(obj, (list, str)):
+            raise TuffError(f"Only text and lists have parts like [1:3], not {type_name(obj)}.")
+        size = len(obj)
+        a, b = max(0, self.spot(e, first, 0, size)), min(size - 1, self.spot(e, last, size - 1, size))
+        return obj[a:b + 1] if a <= b else obj[0:0]
+
+    def member(self, e, obj):
+        """library.name"""
+        if isinstance(obj, Builtin) and e.obj.kind == "var" and e.obj.name in PY_NAMES:  # time.sleep(1)
+            raise TuffError(f"Tuff has no {e.obj.name}.{e.name}. {PY_NAMES[e.obj.name]}")
+        if not isinstance(obj, Module):
+            kind = "list" if isinstance(obj, list) else "text" if isinstance(obj, str) else "dict" if isinstance(obj, dict) else None
+            raise TuffError(dot_help(type_name(obj), e.obj, e.name, kind))
+        if e.name not in obj.members:
+            raise TuffError(f"{obj.name} doesn't have '{e.name}'. It has: {', '.join(obj.members)}.")
+        return obj.members[e.name]
 
     def room(self, size):
         """Something about size bytes big is about to be made. Only Tuff Engine's preview keeps count."""
@@ -2437,12 +2618,20 @@ class Interpreter:
     def call(self, e, env):
         fn = self.eval(e.fn, env)
         if e.fn.kind == "var" and e.fn.name in BUILTIN_NAMES and not isinstance(fn, (Builtin, Func)):
-            raise TuffError(f"'{e.fn.name}' was given a value ({to_text(fn, True)}), so it isn't the built-in {e.fn.name}() any more. Use another name for your variable.")
+            self.not_builtin(e, fn)
         args = [self.eval(a, env) for a in e.args]
         return self.invoke(fn, args)
 
+    def not_builtin(self, e, fn):
+        raise TuffError(f"'{e.fn.name}' was given a value ({to_text(fn, True)}), so it isn't the built-in {e.fn.name}() any more. Use another name for your variable.")
+
     def invoke(self, fn, args, loose=False):
         if isinstance(fn, Builtin):
+            if self.fast:  # how many inputs it takes is worked out once for each count (see Builtin.fits)
+                fits = fn.fits.get(len(args))
+                if fits is None:
+                    fits = fn.fits[len(args)] = accepts(fn.fn, len(args))
+                return call_python(fn.name + "()", fn.fn, args, fn.takes_err, fits)
             return call_python(fn.name + "()", fn.fn, args, fn.takes_err)
         if isinstance(fn, Func):
             if loose and len(args) > len(fn.params):
@@ -2456,7 +2645,15 @@ class Interpreter:
                 raise TuffError(f"{fn.name}() called itself too many times.")
             self.depth += 1
             try:
-                return self.run_block(fn.body, local)
+                if fn.code is None:
+                    return self.run_block(fn.body, local)
+                out = fn.code(local)
+                if out.__class__ is Jump:
+                    if out.kind is J_RETURN:
+                        value, out.value = out.value, None
+                        return value
+                    self.unjump(out)  # a break or continue outside any loop in it: on to a loop around the call, as before
+                return out
             except ReturnSignal as r:
                 return r.value
             except RecursionError:
@@ -2470,6 +2667,10 @@ class Interpreter:
     def method(self, e, env):
         obj = self.eval(e.obj, env)
         args = [self.eval(a.value if a.kind == "say" else a, env) for a in e.args]
+        return self.method_call(e, obj, args)
+
+    def method_call(self, e, obj, args):
+        """obj:name(args), once obj and args are worked out."""
         name = e.name
 
         def need(count):
@@ -2647,6 +2848,618 @@ class Interpreter:
         tip = PY_ONLY.get(name.lower())
         raise TuffError(msg + (f" {tip}" if tip and "instead" not in msg else ""))
 
+    # ---------------------------------------------------------------- the compiled runtime (1.5.0)
+    # compile_stmt and compile_expr turn a node, once, into a Python function of the env it runs in. It does just that
+    # node's job and calls its parts' functions straight away: nothing works out what kind of node it is each time,
+    # and numbers, names, comparisons and loops have quick paths. Everything else goes through the helpers the tree
+    # walker uses (binop, item, store, method_call...), so the answers and messages are the same, and each function
+    # puts its node's line and column on an error that has none, just where eval and run do. return, break and
+    # continue give back a Jump. A subclass keeps its hooks: with its own run() (Tuff Engine's preview), every
+    # statement goes through it, and with its own binop, item, store or method_call, there's no quick path past it.
+
+    def compile_stmt(self, s):
+        """Statement s as a function of env, made once: it gives back what the statement gives, or a Jump."""
+        got = self.codes.get(id(s))
+        if got is None or got[0] is not s:
+            got = self.codes[id(s)] = (s, self.make_stmt(s))
+        return got[1]
+
+    def compile_expr(self, e):
+        """Expression e as a function of env, made once."""
+        got = self.codes.get(id(e))
+        if got is None or got[0] is not e:
+            got = self.codes[id(e)] = (e, self.make_expr(e))
+        return got[1]
+
+    def compile_block(self, body):
+        """A block as one function of env: it gives back its last statement's value (a function with no return gives
+        that back), or the Jump on its way out."""
+        if self.routed:  # each statement through the subclass's run(), which gives back no Jumps (see unjump)
+            run, stmts = self.run, tuple(body)
+
+            def block(env):
+                result = None
+                for s in stmts:
+                    result = run(s, env)
+                return result
+            return block
+        fns = tuple(self.compile_stmt(s) for s in body)
+        jumps = bool(block_jumps(body))
+        if not fns:
+            return lambda env: None
+        if len(fns) == 1:
+            return fns[0]
+        if len(fns) == 2:
+            first, second = fns
+            if jumps:
+                def block(env):
+                    out = first(env)
+                    if out.__class__ is Jump:
+                        return out
+                    return second(env)
+            else:
+                def block(env):
+                    first(env)
+                    return second(env)
+            return block
+        if jumps:
+            def block(env):
+                result = None
+                for fn in fns:
+                    result = fn(env)
+                    if result.__class__ is Jump:
+                        return result
+                return result
+        else:
+            def block(env):
+                result = None
+                for fn in fns:
+                    result = fn(env)
+                return result
+        return block
+
+    def unjump(self, out):
+        """Where a Jump would leave compiled code, it becomes the signal the tree walker raises."""
+        if out.__class__ is Jump:
+            value, out.value = out.value, None
+            if out.kind is J_RETURN:
+                raise ReturnSignal(value, out.line, out.col)
+            raise (BreakSignal if out.kind is J_BREAK else ContinueSignal)(out.line, out.col)
+        return out
+
+    def own(self, name):
+        """Does this interpreter use Interpreter's own helper called name? (Then a quick path can skip it.)"""
+        return getattr(type(self), name) is getattr(Interpreter, name)
+
+    def make_stmt(self, s):
+        k = s.kind
+        hooks, step = self.step_hooks, self.step
+        if k == "expr":
+            value = self.compile_expr(s.expr)
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                return value(env)
+            return run
+        if k == "assign":
+            return self.make_assign(s)
+        if k == "if":
+            tests = tuple((self.compile_expr(c), self.compile_block(b)) for c, b in s.branches)
+            other = None if s.else_body is None else self.compile_block(s.else_body)
+            if len(tests) == 1:
+                ((test, then),) = tests
+
+                def run(env):
+                    if hooks:
+                        step(s, env)
+                    v = test(env)
+                    if v is True or (v is not False and truthy(v)):
+                        return then(env)
+                    return None if other is None else other(env)
+                return run
+            if len(tests) == 2:  # if, elif
+                (test, then), (test2, then2) = tests
+
+                def run(env):
+                    if hooks:
+                        step(s, env)
+                    v = test(env)
+                    if v is True or (v is not False and truthy(v)):
+                        return then(env)
+                    v = test2(env)
+                    if v is True or (v is not False and truthy(v)):
+                        return then2(env)
+                    return None if other is None else other(env)
+                return run
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                for test, then in tests:
+                    v = test(env)
+                    if v is True or (v is not False and truthy(v)):
+                        return then(env)
+                return None if other is None else other(env)
+            return run
+        if k in ("while", "for"):
+            return self.make_loop(s)
+        if k == "try":
+            body, handler, name = self.compile_block(s.body), self.compile_block(s.handler), s.name
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                try:
+                    return body(env)
+                except TuffError as err:
+                    if name:
+                        env.set(name, err.msg)
+                    return handler(env)
+            return run
+        if k == "func":
+            name, params, body, line = s.name, s.params, s.body, s.line
+            code = self.compile_block(body)
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                env.vars[name] = Func(name, params, body, env, line, code)
+                return None
+            return run
+        if k in (J_RETURN, J_BREAK, J_CONTINUE):
+            jump = Jump(J_RETURN if k == J_RETURN else J_BREAK if k == J_BREAK else J_CONTINUE, s.line, s.col)  # (kinds are checked with is)
+            value = self.compile_expr(s.value) if k == J_RETURN and s.value is not None else None
+            if value is None:
+                def run(env):
+                    if hooks:
+                        step(s, env)
+                    return jump
+                return run
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                jump.value = value(env)
+                return jump
+            return run
+
+        def run(env):  # import, flush: the tree walker's own (they're run once, or seldom)
+            if hooks:
+                step(s, env)
+            try:
+                return getattr(self, "s_" + k)(s, env)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = s.line, s.col
+                raise
+        return run
+
+    def make_assign(self, s):
+        hooks, step = self.step_hooks, self.step
+        t, op = s.target, s.op
+        value = self.compile_expr(s.value)
+        if t.kind == "var" and op == "=":
+            name = t.name
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                v = value(env)
+                names = env.vars
+                if name in names:
+                    names[name] = v
+                else:
+                    env.set(name, v)
+                return v
+            return run
+        if t.kind == "var":  # x += 1 (the value first, then x, as the tree walker does)
+            get, binop, sign = self.compile_expr(t), self.binop, op[0]
+            if self.own("binop"):
+                make, b = QUICK[sign], s.value
+                if b.kind == "const" and b.value.__class__ in (int, float) and (b.value != 0 or sign != "/"):
+                    return make["store_number"](s, get, b.value, binop, hooks, step)  # x += 1
+                if b.kind == "const" and b.value.__class__ is str and "store_text" in make:
+                    return make["store_text"](s, get, b.value, binop, hooks, step)  # s += "!"
+                return make["store"](s, get, value, binop, hooks, step)
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                v = value(env)
+                try:
+                    v = binop(sign, get(env), v)
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = s.line, s.col
+                    raise
+                env.set(t.name, v)
+                return v
+            return run
+        obj_of = self.compile_expr(t.obj)  # the list or dictionary and the key are worked out once: votes[input()] += 1
+        if t.kind == "slice":
+            part_key = self.part_key
+
+            def key_of(env):
+                return part_key(t, env)
+        else:
+            key_of = self.compile_expr(t.index)
+        store = self.store
+        quick = op == "=" and t.kind == "index" and self.own("store")
+
+        def run(env):
+            if hooks:
+                step(s, env)
+            try:
+                v = value(env)
+                obj = plain(obj_of(env))
+                key = key_of(env)
+                if quick:  # (what store does for a list's position or a dictionary's text or whole-number key)
+                    if obj.__class__ is list:
+                        if key.__class__ is int and -len(obj) <= key < len(obj):
+                            obj[key] = v
+                            return v
+                    elif obj.__class__ is dict and (key.__class__ is str or key.__class__ is int):
+                        obj[key] = v
+                        return v
+                return store(s, obj, key, v)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = s.line, s.col
+                raise
+        return run
+
+    def make_loop(self, s):
+        hooks, step = self.step_hooks, self.step
+        body = self.compile_block(s.body)
+        jumps = bool(block_jumps(s.body))  # a return in it can come out (its own break and continue stop here)
+        if s.kind == "while":
+            test = self.compile_expr(s.cond)
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                while True:
+                    v = test(env)
+                    if not (v is True or (v is not False and truthy(v))):
+                        return None
+                    try:
+                        out = body(env)
+                    except BreakSignal:  # from a function called in the loop, as with the tree walker
+                        return None
+                    except ContinueSignal:
+                        continue
+                    if jumps and out.__class__ is Jump:
+                        if out.kind is J_BREAK:
+                            return None
+                        if out.kind is J_RETURN:
+                            return out
+            return run
+        items_of, for_items, name = self.compile_expr(s.items), self.for_items, s.name
+
+        def run(env):
+            if hooks:
+                step(s, env)
+            try:
+                items = for_items(s, plain(items_of(env)))
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = s.line, s.col
+                raise
+            names = env.vars
+            for item in items:
+                if name in names:
+                    names[name] = item
+                else:
+                    env.set(name, item)
+                try:
+                    out = body(env)
+                except BreakSignal:
+                    return None
+                except ContinueSignal:
+                    continue
+                if jumps and out.__class__ is Jump:
+                    if out.kind is J_BREAK:
+                        return None
+                    if out.kind is J_RETURN:
+                        return out
+            return None
+        return run
+
+    def make_expr(self, e):
+        k = e.kind
+        line, col = e.line, e.col
+        if k == "const":
+            value = e.value
+            return lambda env: value
+        if k == "var":
+            name = e.name
+
+            def var(env):
+                names = env.vars
+                if name in names:
+                    return names[name]
+                up = env.parent
+                while up is not None:
+                    names = up.vars
+                    if name in names:
+                        return names[name]
+                    up = up.parent
+                try:
+                    return env.get(name)  # it isn't anywhere: Env.get says so, with a "did you mean"
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return var
+        if k == "binop":
+            return self.make_binop(e)
+        if k in ("and", "or"):
+            left, right = self.compile_expr(e.left), self.compile_expr(e.right)
+            if k == "and":
+                def both(env):
+                    v = left(env)
+                    return right(env) if v is True or (v is not False and truthy(v)) else v
+                return both
+
+            def either(env):
+                v = left(env)
+                return v if v is True or (v is not False and truthy(v)) else right(env)
+            return either
+        if k == "not":
+            value = self.compile_expr(e.value)
+
+            def opposite(env):
+                v = value(env)
+                return not (v is True or (v is not False and truthy(v)))
+            return opposite
+        if k == "list":
+            items = tuple(self.compile_expr(x) for x in e.items)
+            return lambda env: [item(env) for item in items]
+        if k == "index":
+            return self.make_index(e)
+        if k == "call":
+            return self.make_call(e)
+        if k == "method":
+            return self.make_method(e)
+        if k == "neg":
+            value, negative = self.compile_expr(e.value), self.negative
+
+            def neg(env):
+                v = value(env)
+                if v.__class__ is int or v.__class__ is float:
+                    return -v
+                try:
+                    return negative(v)
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return neg
+        if k == "say":
+            value, say_text = self.compile_expr(e.value), self.say_text
+
+            def say(env):
+                try:
+                    return say_text(to_text(value(env)))
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return say
+        if k == "dict":
+            pairs = tuple((self.compile_expr(key), self.compile_expr(v)) for key, v in zip(e.keys, e.values))
+
+            def table(env):
+                try:
+                    return {dict_key(key(env)): value(env) for key, value in pairs}
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return table
+        if k == "slice":
+            return self.make_slice(e)
+        if k == "attr":
+            obj_of, member = self.compile_expr(e.obj), self.member
+
+            def attr(env):
+                try:
+                    return member(e, obj_of(env))
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return attr
+        if k == "input":
+            prompt = None if e.prompt is None else self.compile_expr(e.prompt)
+            looks = getattr(e, "looks", None)
+            looks = None if looks is None else tuple(self.compile_expr(a) for a in looks)
+            ask = self.ask
+
+            def answer(env):
+                try:
+                    shown = "" if prompt is None else to_text(prompt(env))
+                    return ask(shown, None if looks is None else [look(env) for look in looks])
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return answer
+        if k == "held":  # the start of names[order:pop], already worked out (see part)
+            held = self.held
+            return lambda env: held[-1]
+
+        def other(env):  # sayfn, and anything new: the tree walker's own
+            try:
+                return self.eval_node(e, env)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        return other
+
+    def make_binop(self, e):
+        op, line, col = e.op, e.line, e.col
+        left, right, binop = self.compile_expr(e.left), self.compile_expr(e.right), self.binop
+        if op in QUICK and self.own("binop"):
+            make = QUICK[op]
+            kind = lambda x: x.kind == "const" and {int: "number", float: "number", str: "text"}.get(x.value.__class__)
+            right_kind, left_kind = kind(e.right), kind(e.left)  # a number or text written in the program
+            if right_kind and right_kind + "_right" in make and (e.right.value != 0 or op not in ("/", "%")):
+                return make[right_kind + "_right"](left, e.right.value, binop, line, col)
+            if left_kind and left_kind + "_left" in make:
+                return make[left_kind + "_left"](e.left.value, right, binop, line, col)
+            return make["both"](left, right, binop, line, col)
+
+        def sums(env):  # ^, or a subclass's own binop
+            a = left(env)
+            b = right(env)
+            try:
+                return binop(op, a, b)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        return sums
+
+    def make_index(self, e):
+        line, col = e.line, e.col
+        obj_of, key_of, item = self.compile_expr(e.obj), self.compile_expr(e.index), self.item
+        quick = self.own("item") and self.own("list_index")
+
+        def index(env):
+            try:
+                obj = plain(obj_of(env))
+                key = key_of(env)
+                if quick:  # (what item does for a list's or a text's position, or a dictionary's key that's there)
+                    if obj.__class__ is list or obj.__class__ is str:
+                        if key.__class__ is int and -len(obj) <= key < len(obj):
+                            return obj[key]
+                    elif obj.__class__ is dict and (key.__class__ is str or key.__class__ is int) and key in obj:
+                        return obj[key]
+                return item(obj, key, e.obj)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        return index
+
+    def make_slice(self, e):
+        line, col = e.line, e.col
+        obj_of, cut, part = self.compile_expr(e.obj), self.cut, self.part
+        if e.alt is None and self.own("part"):  # s[1:3], s[:n]: what part works out, without looking anything up
+            start = None if e.start is None else self.compile_expr(e.start)
+            end = None if e.end is None else self.compile_expr(e.end)
+            left_out = self.LEFT_OUT
+
+            def piece(env):
+                try:
+                    obj = plain(obj_of(env))
+                    first = left_out if start is None else plain(start(env))
+                    return cut(e, obj, "part", first, left_out if end is None else plain(end(env)))
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return piece
+
+        def piece(env):  # names[order:pop]: both readings (part works it out)
+            try:
+                obj = plain(obj_of(env))
+                return cut(e, obj, *part(e, env))
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        return piece
+
+    def make_call(self, e):
+        line, col = e.line, e.col
+        fn_of, args = self.compile_expr(e.fn), tuple(self.compile_expr(a) for a in e.args)
+        shadowable = e.fn.kind == "var" and e.fn.name in BUILTIN_NAMES  # len = 5, then len(x)
+        not_builtin, invoke, interp = self.not_builtin, self.invoke, self
+        quick = self.own("invoke")
+        new_env = object.__new__
+
+        def call(env):
+            try:
+                fn = fn_of(env)
+                kind = fn.__class__
+                if shadowable and kind is not Builtin and not isinstance(fn, (Builtin, Func)):
+                    not_builtin(e, fn)
+                values = [arg(env) for arg in args]
+                if quick and kind is Func:  # what invoke does, once its checks pass, without the call to it
+                    names, code = fn.params, fn.code
+                    if code is not None and len(values) == len(names) and interp.depth < MAX_DEPTH:
+                        local = new_env(Env)
+                        local.vars = {names[0]: values[0]} if len(names) == 1 else dict(zip(names, values))
+                        local.parent, local.own_names = fn.env, False
+                        interp.depth += 1
+                        try:
+                            out = code(local)
+                        except ReturnSignal as r:
+                            return r.value
+                        except RecursionError:
+                            raise TuffError(f"{fn.name}() called itself too many times.")
+                        except MemoryError:
+                            raise TuffError(f"The program ran out of memory inside {fn.name}(). Is something growing without end?")
+                        finally:
+                            interp.depth -= 1
+                        if out.__class__ is Jump:
+                            if out.kind is J_RETURN:
+                                value, out.value = out.value, None
+                                return value
+                            interp.unjump(out)  # a break or continue outside any loop in it: on to a loop around the call
+                        return out
+                elif quick and kind is Builtin:
+                    fits = fn.fits.get(len(values))
+                    if fits is not None:
+                        return call_python(fn.name + "()", fn.fn, values, fn.takes_err, fits)
+                return invoke(fn, values)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        return call
+
+    def make_method(self, e):
+        line, col = e.line, e.col
+        obj_of = self.compile_expr(e.obj)
+        args = tuple(self.compile_expr(a.value if a.kind == "say" else a) for a in e.args)
+        method_call = self.method_call
+        quick = QUICK_METHODS.get((e.name, len(args))) if self.own("method_call") else None
+        if quick is not None:  # items:add(x), d:has(k), name:upper()...: done here for a list, a dictionary or text
+            def method(env):
+                try:
+                    try:
+                        obj = obj_of(env)
+                        values = [arg(env) for arg in args]
+                        fn = quick.get(obj.__class__)
+                        if fn is not None:
+                            return fn(obj, *values)
+                        return method_call(e, obj, values)
+                    except (OverflowError, MemoryError):
+                        raise TuffError(TOO_BIG)
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return method
+
+        def method(env):
+            try:
+                try:
+                    obj = obj_of(env)
+                    return method_call(e, obj, [arg(env) for arg in args])
+                except (OverflowError, MemoryError):  # a number or text too big for the computer, inside a method
+                    raise TuffError(TOO_BIG)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        return method
+
 
 # ---------------------------------------------------------------- checking without running
 
@@ -2677,6 +3490,31 @@ SIMPLE_METHODS = {"text": ("upper", "lower", "trim", "has", "split", "replace", 
                   "list": ("add", "remove", "pop", "has", "sort", "reverse", "join", "find"),
                   "dict": ("has", "get", "set", "remove", "keys", "values", "size"),
                   "line": ("rewrite", "append", "clear", "text", "play")}
+
+
+def _added(items, x):
+    items.append(x)
+    return items
+
+
+def _set(d, k, v):
+    d[dict_key(k)] = v
+    return d
+
+
+# 1.5.0: the methods the compiled runtime does itself, by (name, how many inputs): {the kind of value: what
+# method_call would do for it}. Anything else (another kind, a Line, a library's object) goes to method_call.
+QUICK_METHODS = {
+    ("add", 1): {list: _added},
+    ("has", 1): {dict: lambda d, k: dict_key(k) in d, str: lambda s, x: to_text(x) in s},
+    ("get", 1): {dict: lambda d, k: d.get(dict_key(k), None)},
+    ("get", 2): {dict: lambda d, k, default: d.get(dict_key(k), default)},
+    ("set", 2): {dict: _set},
+    ("upper", 0): {str: str.upper}, ("lower", 0): {str: str.lower}, ("trim", 0): {str: str.strip},
+    ("keys", 0): {dict: list}, ("values", 0): {dict: lambda d: list(d.values())}, ("size", 0): {dict: len},
+    ("starts", 1): {str: lambda s, x: s.startswith(to_text(x))}, ("ends", 1): {str: lambda s, x: s.endswith(to_text(x))},
+    ("find", 1): {str: lambda s, x: s.find(to_text(x))}, ("count", 1): {str: lambda s, x: s.count(to_text(x))},
+}
 ONE_INPUT = {"has", "add", "remove", "play"}
 INPUTS = {"replace": (2, 2), "set": (2, 2), "get": (1, 2), "pad_left": (1, 2), "pad_right": (1, 2), "split": (0, 1), "join": (0, 1),
           "sort": (0, 1), "starts": (1, 1), "ends": (1, 1), "find": (1, 1), "count": (1, 1)}  # 1.4.0's: (fewest, most) inputs

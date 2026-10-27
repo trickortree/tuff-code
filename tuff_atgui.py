@@ -1196,23 +1196,17 @@ class Lib:
         """fire(fn), for a function that has to finish within `seconds`: each Tuff statement it starts after then raises
         the error `why`, which stops it (reported once, with its line). For app:closed's function, which runs once the
         window has gone, so one that's stuck can't keep the program running where nobody can see it."""
-        interp = self.rt.interp
-        own = vars(interp).get("run")  # (normally none: the interpreter's own run runs each statement)
-        run = interp.run
+        hooks = self.rt.interp.step_hooks  # (1.5.0: run before each statement, by both of tuff.py's runtimes)
         deadline = time.monotonic() + seconds
 
         def timed(s, env):
             if time.monotonic() > deadline:
                 raise self.error_type(why, s.line, s.col)
-            return run(s, env)
-        interp.run = timed
+        hooks.append(timed)
         try:
             return self.fire(fn)
         finally:
-            if own is None:
-                del interp.run
-            else:
-                interp.run = own
+            hooks.remove(timed)
 
     def report(self, err):
         key = (err.line, err.col, err.msg)
