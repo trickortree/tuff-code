@@ -4970,14 +4970,10 @@ def interp_corpus():
         for lesson in s["lessons"]:
             for part in ("example", "starter", "solution"):
                 add(f"learn {lesson['id']} {part}", lesson.get(part))
-    for name in ("TOOLBOX_PROGRAM", "TOOLBOX_FIXES", "LOOKS_PROGRAM", "DEEP_PROGRAM", "DEEP_RUNAWAY", "DEEP_SCENE", "NUMBERS_PROGRAM"):
+    for name in ("TOOLBOX_PROGRAM", "TOOLBOX_FIXES", "LOOKS_PROGRAM", "DEEP_PROGRAM", "DEEP_RUNAWAY", "DEEP_SCENE", "NUMBERS_PROGRAM",
+                 "KINDS_PROGRAM", "KINDS_SAVE", "KINDS_HOOKS", "KINDS_SCENE"):
         add(name.lower(), globals()[name])
-    for name in ("TOOLBOX_MISTAKES", "TOOLBOX_FIXES_CHECKS", "LOOKS_CHECKS", "NUMBERS_ERRORS", "NUMBERS_CHECKS"):
-        for i, (code, _) in enumerate(globals()[name]):
-    for name in ("TOOLBOX_PROGRAM", "TOOLBOX_FIXES", "LOOKS_PROGRAM", "DEEP_PROGRAM", "DEEP_RUNAWAY", "DEEP_SCENE", "KINDS_PROGRAM",
-                 "KINDS_SAVE", "KINDS_HOOKS", "KINDS_SCENE"):
-        add(name.lower(), globals()[name])
-    for name in ("TOOLBOX_MISTAKES", "TOOLBOX_FIXES_CHECKS", "LOOKS_CHECKS", "KINDS_ERRORS", "KINDS_CHECKS"):
+    for name in ("TOOLBOX_MISTAKES", "TOOLBOX_FIXES_CHECKS", "LOOKS_CHECKS", "NUMBERS_ERRORS", "NUMBERS_CHECKS", "KINDS_ERRORS", "KINDS_CHECKS"):
         for i, (code, *_) in enumerate(globals()[name]):
             add(f"{name.lower()} {i}", code + "\n")
     for i, code in enumerate(INTERP_CASES):
