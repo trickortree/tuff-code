@@ -799,6 +799,7 @@
     try {
       await api.fs.writeFile(t.path, t.model.getValue());
       t.saved = version;
+      if (ext(t.path) === 'tuf') recheckImporters(t);
     } catch (err) {
       toast(`Could not save ${basename(t.path)}: ${cleanErr(err)}`, 'error');
     }
@@ -918,10 +919,18 @@
     live.timers.set(t.path, setTimeout(() => runCheck(t), 650));
   }
 
+  // A .tuf file was saved (1.5.0): the open files that import it (import money) are checked again, because a check
+  // reads the files a file imports from the disk.
+  function recheckImporters(saved) {
+    const name = basename(saved.path).replace(/\.tuf$/i, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const uses = new RegExp(`^[ \\t]*(import|mention)[ \\t]+${name}\\b`, 'm');
+    for (const t of state.tabs) if (t !== saved && ext(t.path) === 'tuf' && uses.test(t.model.getValue())) scheduleCheck(t);
+  }
+
   async function runCheck(t) {
     if (!state.tabs.includes(t) || t.model.isDisposed()) return;
     const version = t.model.getVersionId();
-    const r = await api.checkSource(t.model.getValue());
+    const r = await api.checkSource(t.model.getValue(), t.path); // its imports are found next to the real file
     if (!state.tabs.includes(t) || t.model.isDisposed() || t.model.getVersionId() !== version) return;
     const monaco = window.monaco;
     if (r.ok || r.unknown || !r.line) {
@@ -1242,7 +1251,9 @@
       if (look) richLine(span, text, look);
       if (c.who === 1 && runInput) runInput.focus();
     } else if (kind === 'error') {
-      markError(state.lastRunFile, +args[0], +args[1], decode64(args[2] || ''));
+      // error;<line>;<col>;<message>[;<file>] (base64): the file is there when it's another of the program's own, one
+      // it imports (1.5.0); the line is that file's.
+      markError(args[3] ? decode64(args[3]) : state.lastRunFile, +args[0], +args[1], decode64(args[2] || ''));
     } else if (kind === 'clear') {
       clearOutput(args[0] === 'all' ? Infinity : +args[0], c);
     }
@@ -1298,12 +1309,18 @@
 
   function handleStderr(text, c = copies[1]) {
     const span = appendOut(text, 'err', c);
-    const m = text.match(/Tuff error on line (\d+)/);
+    // "Tuff error in libs/money.tuf on line 4: ..." (1.5.0) is in one of the files the program imports, named from
+    // the program's folder.
+    const m = text.match(/Tuff error (?:in (.+?) )?on line (\d+)/);
     if (m && state.lastRunFile) {
-      const file = state.lastRunFile;
+      const file = m[1] ? join(dirname(state.lastRunFile), m[1].replace(/[\\/]/g, SEP)) : state.lastRunFile;
       span.classList.add('clickable');
       span.title = 'Jump to this line';
-      span.onclick = () => goToLine(file, +m[1]);
+      span.onclick = async () => {
+        await goToLine(file, +m[2]);
+        const p = pendingMark; // its error mark, now that it's open
+        if (m[1] && p && samePath(p.file, file)) markError(file, +m[2], p.col, p.message);
+      };
       // Tuff Agents sets this when it's on: ask the chosen agent what the error means.
       if (window.tuffExplainError) {
         const b = document.createElement('button');
@@ -1323,8 +1340,14 @@
     editor.focus();
   }
 
+  // The last run error in a file that wasn't open (one the program imports, 1.5.0): marked when its line is clicked.
+  let pendingMark = null;
+  const samePath = (a, b) => (api.platform === 'win32' ? a.replace(/\//g, '\\').toLowerCase() === b.replace(/\//g, '\\').toLowerCase() : a === b);
+
   function markError(file, line, col, message) {
-    const t = state.tabs.find((x) => x.path === file);
+    if (!file) return;
+    const t = state.tabs.find((x) => x.path === file) || state.tabs.find((x) => samePath(x.path, file));
+    if (!t && line) pendingMark = { file, col, message };
     if (!t || !line) return;
     const monaco = window.monaco;
     const word = t.model.getWordAtPosition({ lineNumber: line, column: col });
@@ -1383,7 +1406,8 @@
     $('#run-output').classList.remove('two');
     setBottomTab('run');
     createRunInput();
-    clearMarkers(file);
+    for (const t of state.tabs) clearMarkers(t.path); // the last run's error may be in a file it imports (1.5.0)
+    pendingMark = null;
     $('#run-tab-name').innerHTML = `${fileIcon(basename(file))}<span>${esc(basename(file))}</span>`;
     setRunning(true);
     updateChrome();
@@ -1436,7 +1460,7 @@
       if (!quiet) toast('Your code is already nice and tidy.', 'ok');
       return;
     }
-    const [was, now] = await Promise.all([api.checkSource(before), api.checkSource(result.code)]);
+    const [was, now] = await Promise.all([api.checkSource(before, t.path), api.checkSource(result.code, t.path)]);
     if (was.ok && !now.ok) {
       toast('Auto code sort stopped: tidying this file would break it, so nothing was changed.', 'error', 6000);
       return;
@@ -1630,7 +1654,7 @@
       if (stick) log.scrollTop = log.scrollHeight;
     } else if (ev.type === 'tuff-error') {
       const m = ev.text.match(/Tuff error on line (\d+): ([^\n]*)/);
-      if (m && bd.last) markError(bd.last.file, +m[1], 1, m[2]);
+      if (m && bd.last) markError(ev.file || bd.last.file, +m[1], 1, m[2]); // ev.file: one of the files it imports (1.5.0)
     } else if (ev.type === 'done') {
       finishBuild(ev);
     }
@@ -2260,6 +2284,14 @@
     editor: () => editor,
     getModel: async (p) => (await openFile(p, { background: true, quiet: true }))?.model,
     listFiles: () => api.fs.listAll(state.root),
+    // A file's text without opening it: an open tab's (unsaved changes too), else the file's, or null when it isn't
+    // there. The editor reads the files a .tuf file imports with it (1.5.0, tuff-lang.js), and readDir finds them.
+    readText: async (p) => {
+      const t = state.tabs.find((x) => x.path === p) || state.tabs.find((x) => samePath(x.path, p));
+      if (t) return t.model.getValue();
+      try { return (await api.fs.exists(p)) ? await api.fs.readFile(p) : null; } catch { return null; }
+    },
+    readDir: async (dir) => { try { return await api.fs.readDir(dir); } catch { return []; } },
     rel,
     basename,
     goToLine,

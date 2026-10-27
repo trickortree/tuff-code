@@ -435,13 +435,16 @@ ipcMain.handle('update:reschedule', () => updater.reschedule());
 // Checks Tuff source with tuff.py --check. Used by live error checking and by Tuff AI.
 // Every check gets its own temp file: checks that start in the same millisecond (several tabs at startup, Auto
 // code sort's before and after) used to share one, so a file could be shown another's mistakes.
+// realFile (1.5.0): the .tuf file the source is from. The check reads the editor's text from the temp file but
+// looks for the files it imports (import money) next to the real one (tuff.py --check temp --as real).
 let checkSeq = 0;
-async function checkSource(source) {
+async function checkSource(source, realFile) {
   const dir = path.join(app.getPath('temp'), 'tuffcode-check');
   await fsp.mkdir(dir, { recursive: true });
   const file = path.join(dir, `check-${process.pid}-${++checkSeq}-${Date.now()}.tuf`);
   await fsp.writeFile(file, source, 'utf8');
-  const { cmd, args } = tuffCommand(['--check', file]);
+  const real = typeof realFile === 'string' && /\.tuf$/i.test(realFile) && path.isAbsolute(realFile) && fs.existsSync(path.dirname(realFile)) ? realFile : null;
+  const { cmd, args } = tuffCommand(['--check', file, ...(real ? ['--as', real] : [])]);
   const result = await new Promise((resolve) => {
     let out = '';
     const proc = spawn(cmd, args, { windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
@@ -462,7 +465,7 @@ async function checkSource(source) {
   fsp.rm(file, { force: true }).catch(() => {});
   return result;
 }
-ipcMain.handle('tuff:check', (_e, source) => checkSource(source));
+ipcMain.handle('tuff:check', (_e, source, realFile) => checkSource(source, realFile));
 
 // Tuff Engine's preview: tuff.py --scene runs a tgame program's setup with no window (the editor's text, which may
 // not be saved, with the game file's folder for its pictures) and gives back what it made as JSON. A newer request

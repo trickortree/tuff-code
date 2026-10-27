@@ -209,6 +209,34 @@ if (plain.app) {
   'with a console there\'s no box: the problem and its traceback are printed', s);
 }
 
+// 1.5.0: a program in several files (import money). The files it imports go in the app beside it, in the folders they're
+// in (libs/ too), and only those: a .tuf file it doesn't import stays out.
+console.log('== Build exe: a program that imports its own files');
+const modsDir = path.join(scratch, 'Own Files');
+write(path.join(modsDir, 'shop.tuf'), 'import money\nimport fmt\nsay money.as_money(6.375)\nsay fmt.stars(3)\nsay money.half("a")\n');
+write(path.join(modsDir, 'money.tuf'), 'import tax\nfunc as_money(x):\n    return f"{tax.add(x):money}"\nfunc half(n):\n    return n / 2\n');
+write(path.join(modsDir, 'tax.tuf'), 'func add(x):\n    return x * 2\n');
+write(path.join(modsDir, 'libs', 'fmt.tuf'), 'func stars(n):\n    return "*" * n\n');
+write(path.join(modsDir, 'unused.tuf'), 'say "never imported"\n');
+const mods = await buildApp(path.join(modsDir, 'shop.tuf'), 'Own Files Pack Test');
+check(mods.ok && mods.app, 'it builds', mods.message);
+if (mods.app) {
+  check(['program.tuf', 'money.tuf', 'tax.tuf', 'libs/fmt.tuf'].every((f) => inApp(mods.app, f)) && !inApp(mods.app, 'unused.tuf') && !inApp(mods.app, 'shop.tuf'),
+    'program.tuf, money.tuf, tax.tuf (money.tuf imports it) and libs/fmt.tuf are in the app, unused.tuf isn\'t', fs.readdirSync(mods.app.bundle));
+  const checkStep = mods.steps.filter((s) => s.id === 'check').pop() || {};
+  check(/money\.tuf/.test(checkStep.label || '') && /fmt\.tuf/.test(checkStep.label || ''), `each file is checked: ${checkStep.label}`, checkStep);
+  const r = runApp(mods.app);
+  check(r.status === 1 && said(r) === '$12.75|***' && /Tuff error in money\.tuf on line 5: Can't divide text and a number\./.test(r.stderr),
+    'and the program runs in the app, with an error in money.tuf reported there', { status: r.status, stdout: r.stdout, stderr: r.stderr });
+  const s = windowed(mods.app, 'none');
+  check(s.code === 1 && s.boxes.length === 1 && texts(s)[0] === "Something went wrong: Tuff error in money.tuf on line 5: Can't divide text and a number.\n  5 |     return n / 2",
+    "with no console, the box names money.tuf and shows its line", s);
+}
+write(path.join(modsDir, 'tax.tuf'), 'func add(x:\n    return x * 2\n');
+const broken = await buildApp(path.join(modsDir, 'shop.tuf'), 'Own Files Broken Test');
+check(!broken.ok && /tax\.tuf has a mistake/.test(broken.message || '') && /Tuff error on line 1/.test(broken.message || ''),
+  'a mistake in a file it imports stops the build and names the file', broken.message);
+
 console.log(`build_exe_pack: ${passed} passed, ${failed} failed`);
 if (process.argv.includes('--keep')) console.log(`kept ${scratch}`);
 else fs.rmSync(scratch, { recursive: true, force: true });

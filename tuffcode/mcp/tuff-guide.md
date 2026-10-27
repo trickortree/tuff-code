@@ -27,7 +27,8 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `f"{x:.2f}"`, `f"{n:03}"`, `.format()` | formats by example: `f"{x:0.00}"`, `f"{n:000}"`, `f"{price:money}"`, `f"{name:10}"` (see "Text templates"); `text(x, 2)` also works |
 | `range(3)` gives 0, 1, 2 | `range(3)` gives 1, 2, 3, and `range(1, 3)` gives 1, 2, 3: both ends are included |
 | `for i in range(len(items)):` | `for item in items:`, or `for i in range(0, len(items) - 1):` |
-| `thing.method()` | `thing:method()`, with no spaces around the `:` (only libraries use a dot: `mtgui.window(...)`) |
+| `thing.method()` | `thing:method()`, with no spaces around the `:` (only libraries and your own files use a dot: `mtgui.window(...)`, `money.as_money(5)`) |
+| `import money` / `from money import as_money` (your own money.py) | `import money` loads your money.tuf; then `money.as_money(5)` and `money.rate` (see "Your own files") |
 | `&&`, `\|\|`, `!` | `and`, `or`, `not` |
 | `1 < x < 9` | `x > 1 and x < 9` |
 | `a, b = 1, 2` | one per line: `a = 1`, then `b = 2` |
@@ -57,7 +58,7 @@ say level - 1
 - Brackets are only optional when the method call ends the line, like `app:heading "Hi"` or `box:set "Done"`.
 - An input that *starts* with a bracket counts as the method's own brackets: `label:set (score) + " points"` means `label:set(score) + " points"`. Wrap the whole input instead: `label:set(text(score) + " points")`.
 
-**Rule 2: names are shared.** A variable made at the top of the program can be changed by any function. Inside a function, `x = 5` (or `for x in ...`) changes the top-level `x` if that already exists when the function runs. Otherwise `x` is a scratch name that only lives inside the function, and disappears when it ends. So:
+**Rule 2: names are shared (within a file).** A variable made at the top of the program can be changed by any function in the same file. (Each of your own files has a top level of its own: see "Your own files".) Inside a function, `x = 5` (or `for x in ...`) changes the top-level `x` if that already exists when the function runs. Otherwise `x` is a scratch name that only lives inside the function, and disappears when it ends. So:
 - give every top-level variable its starting value near the top of the program (`score = 0`), before calling functions that use it;
 - give each function's scratch values names that aren't used anywhere else (`total_count`, not `i`, if the top level has an `i`);
 - never use a built-in's name for your own variable: `sum = 0` replaces `sum()` everywhere. The built-ins are `print`, `text`, `str`, `number`, `num`, `int`, `len`, `round`, `random`, `wait`, `range`, `clear`, `sqrt`, `abs`, `floor`, `ceil`, `min`, `max`, `sum`, `average`, `pi`, `sin`, `cos`, `tan`, `log`, `now`, `today`, `time`, `date`, `file`, `err` and `all`.
@@ -343,6 +344,43 @@ board:play("explode")                               # an animation on the line w
   - **A real terminal** (and a Build exe console app): ANSI colours, and animations play. Rainbow doesn't flow there.
   - **A file or pipe** (agents' tuff_run): plain text, and an animation shows only how it ends.
 - Unknown words are mistakes, with a "did you mean": `say:color("x", "redd")`.
+
+## Your own files (import money)
+A program can be split into files. `import money` (or `mention money`) loads money.tuf, from the folder of the file that imports it, or from a folder called `libs` there. Then its functions and top-level values go after a dot, like a library's:
+```tuff
+# money.tuf
+rate = 0.2
+
+# 6.375 -> "$6.38" (the comment above a func is its help when you type money.)
+func as_money(x):
+    return f"{x:money}"
+
+func with_tax(price):
+    return price + price * rate
+
+func set_rate(new_rate):
+    rate = new_rate
+```
+```tuff
+# shop.tuf, next to money.tuf
+import money
+say money.as_money(6.375)       # $6.38
+say money.with_tax(10)          # 12
+money.set_rate(0.5)
+say money.rate                  # 0.5
+rate = 1                        # shop.tuf's own rate: money.tuf's doesn't change
+say money.with_tax(10)          # 15
+```
+- **Each file has its own top level.** Rule 2 works inside each file: a function in money.tuf uses and changes money.tuf's names, never shop.tuf's, so the same name in two files never clashes.
+- **What other files see:** a file's functions, its top-level values and what it imports. The scratch names inside its functions only live there.
+- **Changing a value:** `money.rate = 2` is an error. Change it with a function in money.tuf, like `set_rate` above.
+- **Once:** a file's top-level code (like a `say` that isn't in a function) runs the first time it's imported. Importing it again, from any file, gives the same one.
+- **Where:** the importing file's folder, then the `libs` folder there. A file in libs imports the other files in libs. The name is spelled exactly as the file is, capitals too, and must be a name Tuff can use (letters, numbers and _).
+- **Libraries win:** `import tgame` is always Tuff's tgame, even with a tgame.tuf in the folder (`tuff_check` says so), so give your files other names. A built-in's name can't be one either: `import random` says random() is built in.
+- **Two files can't import each other.** If shop.tuf imports money.tuf and money.tuf imports shop.tuf, neither can finish loading, and the error names them. Put what both need in a third file.
+- **Mistakes in money.tuf** are reported there, with its own line: "Tuff error in money.tuf on line 4: ...", and in TuffCode that line jumps to money.tuf.
+- **Files:** `file.read("prices.txt")` in money.tuf reads from the program's folder, like everywhere else.
+- `tuff_check` on shop.tuf knows what money.tuf has: `money.as_mony` gives "money.tuf doesn't have 'as_mony'. Did you mean 'as_money'?", and wrong input counts are caught. Each file is checked on its own, so check money.tuf too. Build exe takes the files a program imports along with it.
 
 ## Libraries
 `import x` and `mention x` mean the same thing. Put them at the top. Library functions use a dot and always need brackets, even with no inputs: `anims.loading()`. On its own, `anims.loading` does nothing.
@@ -1373,6 +1411,7 @@ say "That took " + round(time() - start, 2) + " seconds"
 - A `refresh()` function that rewrites every label from that state keeps the screen right. Call it after each change.
 - Check what people type, and show a friendly message instead of letting the program stop with an error.
 - Use clear names, keep functions short, and follow the two rules above.
+- When a program grows to a few hundred lines, move each group of functions that belong together into a file of its own, like money.tuf (see "Your own files").
 
 ## Using the tools
 - **`tuff_check`** checks code without running it. Run it on every file you write or change. It catches:
@@ -1380,7 +1419,8 @@ say "That took " + round(time() - start, 2) + " seconds"
     - syntax mistakes;
     - names that are never set, or only set inside another function;
     - built-ins replaced by variables;
-    - functions made twice.
+    - functions made twice;
+    - your own files: an import with no file to load, files that import each other, a file named like a library, and names or input counts another file doesn't have (`money.as_mony`).
   - **Calls and events:**
     - wrong input counts;
     - event functions that would crash, are passed with brackets, or use `wait` or `input`;
@@ -1404,7 +1444,7 @@ say "That took " + round(time() - start, 2) + " seconds"
   - widgets that don't fit the window.
 - **`tuff_run`** runs a console program with your answers. It shows the final Run window, with each answer after its question; lines changed with `:rewrite` or `clear` show their final state. If the program asks more questions than there are answers, it stops with an error saying so.
   - **Files:** writes stay in memory for that run. `file.write`, `file.add`, `file.save` and `file.delete` work, and later reads in the same run see them, but nothing is saved and no file on disk changes. To change the user's files, edit them yourself.
-  - **Folders:** with `"code"`, relative paths are in the project folder, so a snippet can read the project's files. With `"file"`, they're in that file's folder.
+  - **Folders:** with `"code"`, relative paths are in the project folder, so a snippet can read the project's files and import its own .tuf files (`import money`). With `"file"`, they're in that file's folder.
   - When you run Tuff another way (in a terminal), set `TUFF_NO_WRITES=1` for the same in-memory writes, and `TUFF_BASE_DIR=<folder>` to make relative paths start in that folder instead of the program's.
 - **Testing a window program:** window programs open a real window, so test them with a self-test.
   1. Add `app:after(0.5, selftest)` just before the last line.
