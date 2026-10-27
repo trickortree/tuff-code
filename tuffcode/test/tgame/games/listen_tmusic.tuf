@@ -1,0 +1,23 @@
+mention tmusic
+# tmusic's listening test (1.5.0), for a person with the sound on: run it in TuffCode's Run panel, then in a terminal.
+# Every instrument plays the same tune and a chord, then the drums, a loop with a bell tune over it, quiet, and a
+# last tune that plays to its end. (In a pipe, like the tests, it plays nothing and doesn't wait.)
+for name in ["piano", "chip", "bass", "pluck", "bell", "organ", "flute"]:
+    say name
+    tmusic.play("C4 E4 G4 C5*2 | C4+E4+G4*2", name, 140)
+say "drums"
+tmusic.play("kick hat snare hat | kick+crash clap tom hat/2 hat/2", "drums")
+song = tmusic.song(120)
+song:track("pluck", "C4 E4 G4 E4 | F4 A4 C5 . | G4 B4 D5 B4 | C5*4")
+song:track("bass", "C3*4 | F3*4 | G2*4 | C3*4", 70)
+song:track("drums", "kick hat snare hat | kick hat snare hat | kick hat snare hat | kick kick snare .")
+say "a loop, and a bell tune over it after 3 seconds"
+song:loop()
+wait(3)
+tmusic.play("C6 G5 E5 C5", "bell", 240)
+wait(4)
+song:stop()
+say "stopped: quiet now"
+wait(1)
+say "the last tune plays to its end"
+tmusic.play("G4 C5*2", "flute")

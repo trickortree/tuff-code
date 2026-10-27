@@ -1245,6 +1245,30 @@
       markError(state.lastRunFile, +args[0], +args[1], decode64(args[2] || ''));
     } else if (kind === 'clear') {
       clearOutput(args[0] === 'all' ? Infinity : +args[0], c);
+    } else if (kind === 'music') {
+      // music;play;<id>;<b64 file>;<1 to loop> and music;stop;<id or all> (1.5.0): a tmusic song, as the .wav it made.
+      // The second player leaves it out: the first copy plays it.
+      if (c.who === 2) return;
+      if (args[0] === 'play') playMusic(args[1], decode64(args[2] || ''), args[3] === '1');
+      else if (args[0] === 'stop') stopMusic(args[1] === 'all' ? null : args[1]);
+    }
+  }
+
+  // tmusic's songs (1.5.0) play here while the program runs. A new run or a program stopped early (Stop, or an error)
+  // stops them all; at a program's usual end the loops stop, and a tune played once plays to its end.
+  const music = new Map(); // id -> its Audio
+  const fileUrl = (p) => (/^[A-Za-z]:/.test(p) ? 'file:///' : 'file://') + encodeURI(p.replace(/\\/g, '/')).replace(/[?#]/g, encodeURIComponent);
+  function playMusic(id, file, loop) {
+    stopMusic(id);
+    const el = new Audio(fileUrl(file));
+    el.loop = loop;
+    el.onended = () => { if (music.get(id) === el) music.delete(id); };
+    music.set(id, el);
+    el.play().catch(() => { if (music.get(id) === el) music.delete(id); });
+  }
+  function stopMusic(id = null, loopsOnly = false) {
+    for (const [key, el] of [...music]) {
+      if ((id == null || key === id) && (!loopsOnly || el.loop)) { el.pause(); music.delete(key); }
     }
   }
 
@@ -1371,6 +1395,7 @@
   function startRun(file) {
     state.lastRunFile = file;
     state.runId += 1;
+    stopMusic();
     if (state.running2) {
       state.run2Id += 1; // what it says on its way out isn't shown
       setRunning2(false);
@@ -1469,6 +1494,7 @@
   });
   api.run.onExit(({ id, code }) => {
     if (id !== state.runId) return;
+    stopMusic(null, code === 0);
     const output = runOutputText();
     runInput?.remove();
     runInput = null;

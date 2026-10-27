@@ -356,6 +356,7 @@ board:play("explode")                               # an animation on the line w
 - **atgui** ("advanced tgui") makes apps that look like the Claude or Codex desktop apps: sidebars, lists, chat bubbles, dashboards, menus and pop-ups, all styled from Tuff. See below.
 - **tgame** makes games, like pygame: 2D sprites, keys, the mouse, collisions and sounds, or a 3D world with a player. See below.
 - **tdraw** draws with a pen (a turtle), like Python's turtle: lines, shapes, fills, text and rainbow pens. See below.
+- **tmusic** plays music written as notes, like `"C4 E4 G4 C5*2"`: tunes, songs with several instruments and drums, .wav files and a game's music. See below.
 
 ### tdraw
 ```tuff
@@ -407,6 +408,59 @@ say sent:status
 - **What :json gives is an ordinary dictionary** (see "Dictionaries"): `user["name"]`, `user:get("name")` (nil if it's missing), `user:has("name")`, `user:keys()`, `len(user)`, and `user["name"] = value`. Objects inside are dictionaries too: `user["address"]["city"]`. `for name in user:` goes through its names. JSON's names are always text, so a name like `"1"` is read with `user["1"]`.
 - **tap.data()** is an empty dictionary, the same as `{}`. Older programs used it with `:set` to build what they send, and they still work.
 - **Waiting:** each call waits for the answer, and a window freezes while it waits.
+
+### tmusic
+Music from notes: write a tune as text, and tmusic plays it, repeats it, saves it as a .wav file or makes it a game's music. Its sounds are made by Tuff itself, so there's nothing to install.
+```tuff
+mention tmusic
+
+tmusic.play("C4 E4 G4 C5*2", "piano")     # plays the notes, then the program goes on
+
+song = tmusic.song(120)                   # a song at 120 beats a minute
+song:track("piano", "C4 E4 G4 E4 | F4 A4 C5 . | G4 B4 D5 B4 | C5*4")
+song:track("bass", "C3*4 | F3*4 | G2*4 | C3*4", 70)    # 70: a volume from 0 to 100
+song:track("drums", "kick hat snare hat | kick hat snare hat | kick hat snare hat | kick kick snare .")
+say song:length()                         # 8 (seconds)
+song:play()                               # plays it once, and waits until it ends
+song:save("theme.wav")                    # a .wav file in your project folder
+```
+- **Notes:** a letter from `C D E F G A B`, then `#` (sharp) or `b` (flat) if it needs one, then its octave from 0 to 8. `C4` is middle C, `A4` is 440 Hz and `C5` is one octave higher than `C4`. Upper or lower case both work (`c#4`), and spaces go between notes, not commas.
+- **Rests and lengths:** `.` is a rest. Every note and rest is one beat. `*2` makes it twice as long and `/2` half as long: `C4*2`, `E4/2`, `.*4` (4 beats of quiet), and also `*1.5`, `/3` and `*3/2`.
+- **Chords and bars:** `C4+E4+G4` plays notes together. `|` is a bar line: it changes nothing, it only makes the notes easier to read.
+- **Instruments:** `piano`, `chip` (like old game consoles), `bass`, `pluck` (a plucked string, like a guitar), `bell`, `organ`, `flute` and `drums`. In `song:track` the instrument comes first, and in `tmusic.play` it comes after the notes (piano if you leave it out).
+- **Drums** are a track of their own, with `kick`, `snare`, `hat`, `clap`, `tom` and `crash` in place of notes: `song:track("drums", "kick hat snare hat")`. They take `.`, `*2`, `/2` and `+` too (`kick+crash`).
+- **A song:** `tmusic.song(speed)` makes one (the speed is beats a minute, from 20 to 400; 120 if you leave it out). `song:track(instrument, notes, volume)` adds a track: every track starts at the beginning and they play together, and the song is as long as its longest track.
+- **Playing:**
+  - `tmusic.play(notes, instrument, speed)` and `song:play()` play once and **wait until the music ends**, like `wait`.
+  - `song:loop()` plays the song over and over while the program goes on (a quiz with music, say), until `song:stop()`.
+  - Music stops when the program ends, but a tune played once plays to its end first.
+  - `song:length()` is how long the song is in seconds, and `song:save("theme.wav")` saves it in your project folder (only as .wav).
+- **Where you hear it:** in TuffCode's Run panel, in a terminal and in an app made with Build exe (Windows and Mac). **In a file or a pipe** (an agent's `tuff_run`, or `> out.txt`) there's no sound, and `tmusic.play` and `song:play()` go on at once. Tuff Engine's preview plays no music either.
+- **The first time** a song plays or saves, tmusic makes its sound, which takes a moment for a long song. It keeps it, so the same notes play at once after that, even in the next run.
+- **Mistakes** stop the program with what's wrong and which note it is, like `"C9#" (note 3) has its # after the octave`, and `--check` finds them before the run in notes written in quotes.
+
+In a tgame game, `game:music(song)` plays a song over and over in the game itself, and `game:sound(song)` plays one once while the game goes on. Don't use `tmusic.play` or `song:play()` in a game: they wait until the music ends, and the game freezes while they wait.
+```tuff
+mention tgame
+mention tmusic
+
+game = tgame.window("Music Game", 600, 400)
+theme = tmusic.song(140)
+theme:track("chip", "E5 G5 A5 G5 | E5 D5 C5 . | D5 F5 G5 F5 | D5 C5 B4 .")
+theme:track("drums", "kick hat snare hat | kick hat snare hat | kick hat snare hat | kick kick snare hat")
+ding = tmusic.song(240)
+ding:track("bell", "E6 B6*2")
+game:music(theme)                 # over and over, until game:stop_music()
+star = game:circle(300, 200, 30, "gold")
+
+func picked(thing):
+    game:sound(ding)              # once, and the game goes on
+    thing:move(40, 0)
+
+star:clicked picked
+while game:open():
+    game:frame()
+```
 
 ### atgui
 Modern app windows made of real HTML and CSS, without writing any HTML. Most of mtgui works the same (`heading`, `text`, `button`, `input`, `:set`, `:value`, `:change`, `app:every`, `app:ask`...; see "App windows" below), plus everything here.
@@ -528,7 +582,7 @@ while game:open():                            # until the window is closed
 - **Keys and the mouse:** `game:held("left")` is true while a key is down, and `game:pressed("space")` only in the frame it went down. Keys are letters, numbers, space, enter, escape, shift, up, down, left and right; `"mouse"` is the mouse button. `game:mouse_x()` and `game:mouse_y()`.
 - **Values on things:** `tree:set("hp", 3)` and `tree:get("hp")` (nil if it was never set).
 - **More:** `hud = game:hud()` is a layer on top for drawn scores (real buttons and menus go on a panel or a screen: see "Menus, buttons and screens in games" below), `game:group()` holds things that move together (`:add`, `:move`, `:count`, `:clear`), `game:random_spot(20)` keeps to a grid of 20, `game:camera(x, y)` scrolls, `game:time()` and `game:fps()`.
-- **Sound:** `game:sound "coin"` plays beep, coin, jump, hit, boom, chop, laser, pop, click, step, powerup, win or lose, or a .wav, .mp3 or .ogg file. `game:music "song.mp3"` repeats, and `game:stop_music()`.
+- **Sound:** `game:sound "coin"` plays beep, coin, jump, hit, boom, chop, laser, pop, click, step, powerup, win or lose, or a .wav, .mp3 or .ogg file. `game:music "song.mp3"` repeats, and `game:stop_music()`. Both play a song made with tmusic too: `game:music(theme)` (see "tmusic").
 - **Pause and game over:** `game:pause("Paused")`, `game:resume()` and `game:paused()`. `game:game_over("Score: 5", start)` stops the game and shows the message; pressing space then runs `start`, which should put everything back.
 
 **The callback style.** Instead of a loop, give tgame functions to run. The program then keeps going until its window closes.

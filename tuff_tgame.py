@@ -397,6 +397,11 @@ def thing_of(v):
     return getattr(v, "tg", None)
 
 
+def song_of(v):
+    """The tmusic song behind a Tuff value (tmusic.song: game:music(song) and game:sound(song) play it), or None."""
+    return getattr(v, "song", None)
+
+
 # ---------------------------------------------------------------- the library
 
 class Lib:
@@ -858,6 +863,13 @@ class Game:
 
     # ---- sound
     def sound(self, name):
+        song = song_of(name)
+        if song is not None:  # tmusic's song (1.5.0): it plays once, and the game goes on
+            url = self.song_url(song)
+            if url is not None:
+                self.sound_count += 1
+                self.view.call(0, "sound", f"s{self.sound_count}", url, 1, False)
+            return None
         n = self.rt.text(name).strip()
         low = n.lower()
         if low in SOUNDS:
@@ -877,9 +889,23 @@ class Game:
         self.view.call(0, "tones", [[pitch, 0, seconds, "square", 1]], 0.25)
 
     def music(self, file):
-        url, _ = self.file_url(file, "music", SOUND_FILES)
+        song = song_of(file)  # a sound file, or tmusic's song (1.5.0)
+        url = self.song_url(song) if song is not None else self.file_url(file, "music", SOUND_FILES)[0]
+        if url is None:
+            return
         self.view.call(0, "sound_stop", "music")
         self.view.call(0, "sound", "music", url, 0.6, True)
+
+    def song_url(self, song):
+        """The page's address for a tmusic song's .wav, which tmusic makes once and keeps in a folder of its own: the
+        window shares that folder with its page. None in Tuff Engine's preview, which plays no sound (so it doesn't
+        spend the time making it)."""
+        song.ready()
+        if SCENE is not None:
+            return None
+        folder, name = os.path.split(song.wav())
+        self.tv.share("music", folder)
+        return self.view.shared_url("music", name)
 
     def stop_music(self):
         self.view.call(0, "sound_stop", "music")

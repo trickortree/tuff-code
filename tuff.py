@@ -923,7 +923,7 @@ class Err:
 
 ERR = Err()
 TOO_BIG = "That's too big to work out: a number or text this large doesn't fit in memory."  # inside a method
-LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame", "tdraw")
+LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame", "tdraw", "tmusic")
 # Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
@@ -2286,6 +2286,13 @@ class Interpreter:
         except ImportError as exc:
             raise TuffError(f"tgame couldn't load ({exc}). Reinstall TuffCode.")
         return tuff_tgame.make_library(self.rt)
+
+    def lib_tmusic(self):  # 1.5.0: music from notes
+        try:
+            import tuff_tmusic
+        except ImportError as exc:
+            raise TuffError(f"tmusic couldn't load ({exc}). Reinstall TuffCode.")
+        return tuff_tmusic.make_library(self.rt)
 
     def lib_anims(self):
         con = self.console
@@ -3902,6 +3909,22 @@ def tap_tables():
     return _TAP or None
 
 
+_TMUSIC = None
+
+
+def tmusic_tables():
+    """tmusic's functions ("lib"), a song's methods ("kinds") and the library itself ("module": its note reader and the
+    rest of the checks the run makes too), without making or playing a sound. None when it can't be loaded."""
+    global _TMUSIC
+    if _TMUSIC is None:
+        try:
+            import tuff_tmusic
+            _TMUSIC = {**tuff_tmusic.tables(), "module": tuff_tmusic}
+        except Exception:
+            _TMUSIC = {}
+    return _TMUSIC or None
+
+
 _ATGUI = None
 
 
@@ -4778,6 +4801,8 @@ class Checker:
                 return "window"
             if lib == "$module:tap":
                 return self.TAP_MAKES.get(e.fn.name)
+            if lib == "$module:tmusic":
+                return "song" if e.fn.name == "song" else None
             if lib == "$module:atgui":
                 return "@window" if e.fn.name == "window" else None
             if lib == "$module:tgame":
@@ -4793,6 +4818,8 @@ class Checker:
                 return self.atgui_kind(obj[1:], e)
             if obj in self.TAP_GIVES:
                 return self.TAP_GIVES[obj].get(e.name)
+            if obj == "song":  # tmusic's (1.5.0): song:track gives the song back
+                return {"track": "song", "length": "$number"}.get(e.name)
             if self.is_tgame(obj):
                 tg = tgame_tables()
                 return tg["gives"].get(obj, {}).get(e.name) if tg else None
@@ -5007,6 +5034,9 @@ class Checker:
         if lib == "tap":
             tap = tap_tables()
             return tap["lib"] if tap else None
+        if lib == "tmusic":
+            tm = tmusic_tables()
+            return tm["lib"] if tm else None
         if lib == "atgui":
             at = atgui_tables()
             return at["lib"] if at else None
@@ -5367,6 +5397,9 @@ class Checker:
         at = atgui_tables()
         if at is not None and any(name in m for m in at["kinds"].values()):
             return True
+        tm = tmusic_tables()
+        if tm is None or any(name in m for m in tm["kinds"].values()):
+            return True
         tap = tap_tables()
         tg = tgame_tables()
         return name in SIMPLE_METHODS["text"] or name in SIMPLE_METHODS["list"] or name in SIMPLE_METHODS["line"] or name in SIMPLE_METHODS["dict"] or \
@@ -5386,6 +5419,105 @@ class Checker:
                 except TuffError as err:
                     self.problem(a, err.msg)
                     return
+
+    # ---- tmusic (1.5.0): notes, instruments, speeds and volumes written in the code, checked the way the run checks them
+    def check_tmusic(self, e):
+        """tmusic.play(notes, instrument, speed) and tmusic.song(speed). (Not in a try: block, whose catch may be there
+        for that mistake, like a program that shows what tmusic says about a bad note.)"""
+        tm = tmusic_tables()
+        if tm is None or self.trying:
+            return
+        args = e.args
+        if e.fn.name == "song":
+            self.check_music_number(args[0] if args else None, "tmusic.song", "speed")
+            return
+        if e.fn.name != "play" or not args or self.kind(args[0]) == "song":  # tmusic.play(song) plays the song
+            return
+        notes, instrument = self.fixed_text(args[0]), self.fixed_text(args[1]) if len(args) > 1 else "piano"
+        lib = tm["module"]
+        if lib.is_instrument(notes) and len(args) > 1 and instrument is not None and not lib.is_instrument(instrument):
+            self.problem(e, 'tmusic.play takes the notes first, then the instrument, like tmusic.play("C4 E4 G4", "piano").')
+            return
+        self.check_notes(args[0], args[1] if len(args) > 1 else None, "tmusic.play")
+        if len(args) > 2:
+            self.check_music_number(args[2], "tmusic.play", "speed")
+
+    def check_song(self, e, bare_fix):
+        """A song's methods (tmusic.song), how many inputs they got, and what's written in them."""
+        tm = tmusic_tables()
+        methods = tm["kinds"]["song"] if tm else None
+        if methods is None:
+            return
+        name, n, args = e.name, len(e.args), e.args
+        if name not in methods:
+            self.problem(e, method_help("A song", name, list(methods)))
+        elif not accepts(methods[name], n):
+            self.problem(e, bare_fix if e.bare and accepts(methods[name], 0) else f"song:{name} got the wrong number of inputs ({n}).")
+        elif self.trying:  # (what's written in it: see check_tmusic)
+            return
+        elif name == "track":
+            lib = tm["module"]
+            first, second = self.fixed_text(args[0]), self.fixed_text(args[1])
+            if lib.is_instrument(second) and first is not None and not lib.is_instrument(first):
+                self.problem(e, 'song:track takes the instrument first, then the notes, like song:track("piano", "C4 E4 G4").')
+                return
+            self.check_notes(args[1], args[0], "song:track")
+            if n > 2:
+                self.check_music_number(args[2], "song:track", "volume")
+        elif name == "save":
+            path = self.fixed_text(args[0])
+            if path is not None and tm["module"].save_problem(path):
+                self.problem(args[0], tm["module"].save_problem(path))
+            elif path is None and self.kind(args[0]) in ("$number", "$list", "$dict", "$bool", "$nil"):
+                self.problem(args[0], 'song:save needs a file name, like song:save("theme.wav").')
+
+    def check_notes(self, notes_arg, instrument_arg, who):
+        """Notes in quotes (or in a name given them once) for an instrument the checker knows (piano when it's left out):
+        the mistake the run would stop at, shown on the note itself when it can tell where that is in the line."""
+        lib = tmusic_tables()["module"]
+        instrument = "piano" if instrument_arg is None else self.fixed_text(instrument_arg)
+        if instrument is None:
+            if self.kind(instrument_arg) in ("$number", "$list", "$dict", "$bool", "$nil"):
+                self.problem(instrument_arg, lib.not_an_instrument(who, self.what(self.kind(instrument_arg))))
+            return  # (a name the checker can't know: it could be the drums)
+        try:
+            instrument = lib.find_instrument(instrument)
+        except lib.MusicError as err:
+            self.problem(instrument_arg, err.msg)
+            return
+        text = self.fixed_text(notes_arg)
+        if text is None:
+            if self.kind(notes_arg) in ("$number", "$list", "$dict", "$bool", "$nil"):
+                self.problem(notes_arg, lib.not_notes(who, self.what(self.kind(notes_arg))))
+            return
+        try:
+            lib.read_notes(text, instrument == "drums", who)
+        except lib.MusicError as err:
+            where = notes_arg
+            # written right here, with nothing a \ makes in it (a \n or a \" would move the note): the note's own column
+            if notes_arg.kind == "const" and err.at is not None and not any(c in text for c in "\n\t\\\"'"):
+                where = Tok("STR", text, notes_arg.line, notes_arg.col + 1 + err.at)
+            self.problem(where, err.msg)
+
+    def check_music_number(self, arg, who, what):
+        """A speed (beats a minute) or a volume (0 to 100) written in the code that can't be right."""
+        if arg is None:
+            return
+        lib = tmusic_tables()["module"]
+        if arg.kind == "const" and isinstance(arg.value, (int, float)) and not isinstance(arg.value, bool):
+            problem = lib.speed_problem(arg.value, who) if what == "speed" else lib.volume_problem(arg.value)
+            if problem:
+                self.problem(arg, problem)
+        elif self.kind(arg) in ("$text", "$list", "$dict", "$bool", "$nil"):
+            self.problem(arg, lib.not_a_number(who, what, self.what(self.kind(arg))))
+
+    def plays_and_waits(self, x):
+        """tmusic.play(...) or song:play(): they wait until the music ends."""
+        if x.kind == "call" and x.fn.kind == "attr" and x.fn.name == "play" and self.kind(x.fn.obj) == "$module:tmusic":
+            return "tmusic.play"
+        if x.kind == "method" and x.name == "play" and self.kind(x.obj) == "song":
+            return f"{x.obj.name if x.obj.kind == 'var' else 'song'}:play"
+        return None
 
     def check_call(self, e, scope):
         fn, n = e.fn, len(e.args)
@@ -5424,6 +5556,8 @@ class Checker:
                     self.problem(e, f"{lib[8:]}.{fn.name}() got the wrong number of inputs ({n}).")
                 elif lib == "$module:anims" and fn.name in members:
                     self.check_anims_looks(e)
+                elif lib == "$module:tmusic" and fn.name in members:
+                    self.check_tmusic(e)
 
     def check_format(self, part):
         """f"{name:0.00}": a number's format (0.00, 000 or money) on something that is never a number. (A width
@@ -5513,7 +5647,7 @@ class Checker:
         # Unknown value: only a library can use '.', and libraries only have these.
         gui = gui_tables()
         members = {"window"} | set(self.lib_members("anims") or {}) | set(self.lib_members("tap") or {}) | \
-            set(self.lib_members("tgame") or {})
+            set(self.lib_members("tgame") or {})  # (not tmusic's play: hero.play("walk") is a sprite's :play)
         if gui is not None and e.name not in members and e.obj.kind == "var" and e.obj.name not in self.imports:
             self.problem(e, dot_help("not a library", e.obj, e.name))
 
@@ -5631,6 +5765,9 @@ class Checker:
             names = tdraw_pen_methods()
             if names and name not in names:
                 self.problem(e, method_help("A pen", name, names))
+            return
+        if obj == "song":  # tmusic's song (1.5.0)
+            self.check_song(e, bare_fix)
             return
         gui = gui_tables()
         tap = tap_tables() if obj in self.TAP_GIVES else None
@@ -5848,6 +5985,9 @@ class Checker:
                             self.problem(x, f"wait() freezes the game: nothing moves or redraws until it's over. To do something later, use {owner}:after(seconds, fn).")
                         elif x.kind == "input":
                             self.problem(x, "input reads from the console and freezes the game while it waits.")
+                        elif self.plays_and_waits(x):
+                            self.problem(x, f"{self.plays_and_waits(x)} waits until the music ends, so the game freezes until then. "
+                                            f"Play a song in a game with {owner}:sound(song), or {owner}:music(song) for music that repeats.")
         base = self.base_dir
         if base and os.path.abspath(base).lower().startswith(os.path.abspath(tempfile.gettempdir()).lower()):
             base = None  # a snippet in a temporary folder: its files aren't next to it

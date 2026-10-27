@@ -574,6 +574,9 @@ class _FileHandler(http.server.BaseHTTPRequestHandler):
         base = web
         if rel.startswith("assets/"):
             base, rel = assets, rel[len("assets/"):]
+        elif rel.startswith("shared/"):  # a folder shared by name (SHARED)
+            name, _, rel = rel[len("shared/"):].partition("/")
+            base = SHARED.get(name)
         if not base:
             return self.send_error(404)
         full = os.path.abspath(os.path.join(base, *rel.split("/")))
@@ -592,6 +595,14 @@ class _FileHandler(http.server.BaseHTTPRequestHandler):
 
 _files = None
 _files_lock = threading.Lock()
+# Folders besides a window's assets folder that every window's page can load files from, each by a name (1.5.0:
+# "music", tmusic's songs, made in a folder of their own). The page asks for <its address>shared/<name>/<file>.
+SHARED = {}
+
+
+def share(name, folder):
+    """Lets every window's page load the files in folder, at view.shared_url(name, file)."""
+    SHARED[name] = os.path.abspath(folder)
 
 
 def _file_server():
@@ -1025,6 +1036,14 @@ class View:
             raise ViewError(f"Couldn't find '{path}'. Put the file in {self._assets}.")
         return self._base + "assets/" + urllib.parse.quote(os.path.relpath(full, self._assets).replace(os.sep, "/"))
 
+    def shared_url(self, name, file):
+        """The address the page uses for a file in a folder shared by name (share), like tmusic's songs."""
+        folder = SHARED.get(name)
+        full = os.path.abspath(os.path.join(folder, file)) if folder else ""
+        if not folder or not _inside(full, folder) or not os.path.isfile(full):
+            raise ViewError(f"Couldn't find '{file}' in the shared folder '{name}'.")
+        return self._base + f"shared/{urllib.parse.quote(name)}/" + urllib.parse.quote(os.path.relpath(full, folder).replace(os.sep, "/"))
+
     def _move_sets(self):
         cmds = self._cmds
         for i, p in self._sets.items():
@@ -1434,6 +1453,9 @@ class Recorder(View):
         if not _inside(full, self._assets) or not os.path.isfile(full):
             raise ViewError(f"Couldn't find '{path}'. Put the file in {self._assets}.")
         return "asset:" + os.path.relpath(full, self._assets).replace(os.sep, "/")
+
+    def shared_url(self, name, file):
+        return f"shared:{name}/{file}"
 
     def flush(self): pass
     def frame(self): return 0.0

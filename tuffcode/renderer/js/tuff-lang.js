@@ -574,7 +574,77 @@ window.TUFF_DOCS = {
   for (const [name, text] of Object.entries(also)) docs[name] = [docs[name][0], `${docs[name][1]} ${text}`];
 })();
 
-const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average',
+// 1.5.0: tmusic, music from notes. play, stop, save, music and sound are other names' too (line:play, spinner:stop,
+// game:save, game:music...): this use goes at the end of their docs, and a file that mentions tmusic is offered a
+// song's methods after ':' (TMUSIC_METHODS). A note in a tmusic string has a hover too (tmusicNoteAt).
+const TMUSIC_METHODS = ['track', 'play', 'loop', 'stop', 'save', 'length'];
+const TMUSIC_DRUMS = ['kick', 'snare', 'hat', 'clap', 'tom', 'crash'];
+(() => {
+  window.TUFF_LIBS.tmusic = {
+    play: ['tmusic.play("C4 E4 G4 C5*2", "piano")', 'Plays some notes and waits until they end. The instrument is optional (piano), and so is a speed in beats a minute after it (120). A note is a letter from A to G, # or b if it needs one, then its octave: C4 is middle C. . is a rest, *2 twice as long, /2 half, C4+E4+G4 a chord, and | a bar line (only to read). In a pipe (an agent\'s tuff_run) it makes no sound and goes on at once.'],
+    song: ['song = tmusic.song(120)', 'A song, at a speed in beats a minute (120 if you leave it out). Add tracks of notes with song:track("piano", "C4 E4 G4"), then song:play(), song:loop(), song:save("theme.wav") or a game\'s game:music(song).'],
+  };
+  window.TUFF_DOCS.tmusic = ['mention tmusic', 'Music from notes: tmusic.play("C4 E4 G4 C5*2", "piano"), or a song with tracks (piano, chip, bass, pluck, bell, organ, flute and drums) that plays, loops, saves as a .wav or is a tgame game\'s music.'];
+  const docs = window.TUFF_METHOD_DOCS;
+  Object.assign(docs, {
+    track: ['song:track("chip", "C4 E4 G4 E4 | F4 A4 C5 .")', 'tmusic: adds a track to a song: an instrument (piano, chip, bass, pluck, bell, organ, flute or drums), its notes, and a volume from 0 to 100 if you like (100). Tracks play together, all from the start. Drums are kick, snare, hat, clap, tom and crash: song:track("drums", "kick hat snare hat").'],
+    loop: ['song:loop()', 'tmusic: plays the song over and over while the program goes on, until song:stop() or the end of the program.'],
+    length: ['song:length()', 'tmusic: how long the song plays, in seconds.'],
+  });
+  const also = {
+    play: 'In tmusic, song:play() plays a song once and waits until it ends.',
+    stop: 'In tmusic, song:stop() stops a song that is playing.',
+    save: 'In tmusic, song:save("theme.wav") saves a song as a .wav file in your project folder.',
+    music: 'It can play a tmusic song too: game:music(song).',
+    sound: 'It can play a tmusic song once too: game:sound(jingle).',
+  };
+  for (const [name, text] of Object.entries(also)) docs[name] = [docs[name][0], `${docs[name][1]} ${text}`];
+})();
+
+// What a note (or a rest, a chord, a drum) in a tmusic string is, for its hover: "C sharp in octave 4 (277.2 Hz), 1
+// beat." null when it isn't one.
+function tmusicNoteDoc(word) {
+  const m = word.match(/^([^*/]*)((?:[*/]\d+(?:\.\d+)?)*)$/);
+  if (!m || !m[1]) return null;
+  let beats = 1;
+  for (const [, op, n] of m[2].matchAll(/([*/])(\d+(?:\.\d+)?)/g)) beats = op === '*' ? beats * +n : beats / +n;
+  if (!(beats > 0)) return null;
+  const long = `${+beats.toFixed(3)} beat${beats === 1 ? '' : 's'}`;
+  if (m[1] === '.') return `A rest: ${long} of quiet.`;
+  const parts = m[1].split('+').map((p) => {
+    if (TMUSIC_DRUMS.includes(p.toLowerCase())) return `the ${p.toLowerCase()} drum`;
+    const n = p.match(/^([A-Ga-g])([#b]?)([0-8])$/);
+    if (!n) return null;
+    const midi = 12 * (+n[3] + 1) + { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 }[n[1].toLowerCase()] + (n[2] === '#' ? 1 : n[2] === 'b' ? -1 : 0);
+    const hz = 440 * 2 ** ((midi - 69) / 12);
+    return `${n[1].toUpperCase()}${n[2] === '#' ? ' sharp' : n[2] === 'b' ? ' flat' : ''} in octave ${n[3]} (${hz.toFixed(1)} Hz${midi === 60 ? ', middle C' : ''})`;
+  });
+  if (parts.some((p) => !p)) return null;
+  const what = parts.length > 1 ? `A chord: ${parts.join(', ')}` : parts[0][0].toUpperCase() + parts[0].slice(1);
+  return `${what}, ${long}.`;
+}
+
+// The note under the mouse (column, from 1) in a tmusic string: the notes of tmusic.play("...") or song:track(..., "...").
+// { word, doc, start, end } (its columns, end not included), or null.
+function tmusicNoteAt(line, column) {
+  const at = column - 1;
+  for (const s of line.matchAll(/"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/g)) {
+    const from = s.index + 1;
+    if (at < from || at >= s.index + s[0].length - 1) continue;
+    if (!/(\btmusic\.play\s*\(\s*|:track\s*\(\s*("[^"]*"|'[^']*')\s*,\s*)$/.test(line.slice(0, s.index))) return null;
+    for (const w of (s[1] ?? s[2]).matchAll(/[^\s|]+/g)) {
+      const start = from + w.index;
+      if (at >= start && at < start + w[0].length) {
+        const doc = tmusicNoteDoc(w[0]);
+        return doc && { word: w[0], doc, start: start + 1, end: start + 1 + w[0].length };
+      }
+    }
+    return null;
+  }
+  return null;
+}
+
+const TUFF_BUILTINS =['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average',
   'now', 'today', 'time', 'date', 'sin', 'cos', 'tan', 'log'];
 // Libraries that are always there, with nothing to mention (1.4.0's file.read...). They aren't functions, and
 // import/mention doesn't offer them.
@@ -761,6 +831,13 @@ window.registerTuff = function registerTuff(monaco, accent) {
 
   monaco.languages.registerHoverProvider('tuff', {
     provideHover(model, position) {
+      const note = tmusicNoteAt(model.getLineContent(position.lineNumber), position.column); // in a tmusic string (1.5.0)
+      if (note) {
+        return {
+          range: new monaco.Range(position.lineNumber, note.start, position.lineNumber, note.end),
+          contents: [{ value: '```tuff\n' + note.word + '\n```' }, { value: note.doc }],
+        };
+      }
       const word = model.getWordAtPosition(position);
       if (!word) return null;
       const line = model.getLineContent(position.lineNumber);
@@ -828,9 +905,12 @@ window.registerTuff = function registerTuff(monaco, accent) {
         const games = /^\s*(import|mention)\s+tgame\b/m.test(src);
         const modern = /^\s*(import|mention)\s+atgui\b/m.test(src) || (games && /:\s*(panel|screen|start_screen|main_menu)\b/.test(src));
         const drawing = /^\s*(import|mention)\s+tdraw\b/m.test(src);
+        const music = /^\s*(import|mention)\s+tmusic\b/m.test(src);
         const names = Object.keys(window.TUFF_METHOD_DOCS).filter((m) => {
           const doc = window.TUFF_METHOD_DOCS[m][1] || '';
           if (m === 'ascii' || m === 'pen') return false;
+          if (music && TMUSIC_METHODS.includes(m)) return true; // a song's (1.5.0), whichever library the doc starts with
+          if (/^tmusic\b/.test(doc)) return music;
           if (/^tdraw\b/.test(doc)) return drawing;
           if (/^In tgame:/.test(doc)) return games || modern;  // a name both have (align, animate...): in either's files
           return (games || !/^tgame\b/.test(doc)) && (modern || !/^atgui\b/.test(doc));
@@ -856,6 +936,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
         { label: 'ask number', kind: K.Snippet, insertText: '${1:n} = num(input "${2:A number?} ")\nwhile ${1:n} is err:\n    say "Please type a number."\n    ${1:n} = num(input "${2:A number?} ")\n$0', insertTextRules: R, detail: 'Ask until they type a number (err)', range },
         { label: 'import anims', kind: K.Snippet, insertText: 'import anims\n', range, detail: 'Load the animations library' },
         { label: 'tap', kind: K.Snippet, insertText: 'mention tap\n\nres = tap.get("${1:https://api.github.com/users/octocat}")\nif res:ok:\n    info = res:json\n    say info:get("${2:name}")\nelse:\n    say "Error " + res:status\n', insertTextRules: R, range, detail: 'Get JSON from the web' },
+        { label: 'tmusic', kind: K.Snippet, insertText: 'mention tmusic\n\nsong = tmusic.song(${1:120})\nsong:track("${2:piano}", "${3:C4 E4 G4 E4 | F4 A4 C5 .}")\nsong:track("drums", "${4:kick hat snare hat | kick hat snare hat}")\nsong:play()\n$0', insertTextRules: R, range, detail: 'A song from notes' },
         { label: 'tgame 2D', kind: K.Snippet, insertText: 'mention tgame\n\ngame = tgame.window("${1:My Game}", 600, 400)\nplayer = game:box(300, 200, 40, 40, "${2:teal}")\nscore = game:text("Score: 0", 300, 30)\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        player:move(-300 * dt, 0)\n    if game:held("right"):\n        player:move(300 * dt, 0)\n    $0\n', insertTextRules: R, range, detail: 'A starter 2D game' },
         { label: 'tgame 3D', kind: K.Snippet, insertText: 'mention tgame\n\ngame = tgame.world("${1:My World}")\ngame:sky "${2:day}"\ngame:island(80)\nplayer = game:player("first person")\nfor i in range(1, 20):\n    tree = game:spawn("tree")\n    tree:clicked ${3:chop}\n\nfunc ${3:chop}(tree):\n    tree:shake()\n    $0\n\nwhile game:open():\n    game:frame()\n', insertTextRules: R, range, detail: 'A starter 3D world' },
         { label: 'tgui app', kind: K.Snippet, insertText: 'import tgui\n\napp = tgui.window("${1:My App}")\napp:heading "${2:Hello!}"\n\nfunc ${3:clicked}():\n    $0\n\napp:button("${4:Click me}", ${3:clicked})\n', insertTextRules: R, range, detail: 'A starter app window' },

@@ -4970,8 +4970,13 @@ def interp_corpus():
         for lesson in s["lessons"]:
             for part in ("example", "starter", "solution"):
                 add(f"learn {lesson['id']} {part}", lesson.get(part))
-    for name in ("TOOLBOX_PROGRAM", "TOOLBOX_FIXES", "LOOKS_PROGRAM", "DEEP_PROGRAM", "DEEP_RUNAWAY", "DEEP_SCENE"):
+    for name in ("TOOLBOX_PROGRAM", "TOOLBOX_FIXES", "LOOKS_PROGRAM", "DEEP_PROGRAM", "DEEP_RUNAWAY", "DEEP_SCENE", "TMUSIC_PROGRAM",
+                 "TMUSIC_GAME"):
         add(name.lower(), globals()[name])
+    for i, mistake in enumerate(TMUSIC_MISTAKES):
+        add(f"tmusic_mistakes {i}", "mention tmusic\n" + mistake[0] + "\n")
+    for i, code in enumerate(TMUSIC_GOOD):
+        add(f"tmusic_good {i}", "mention tmusic\n" + code + "\n")
     for name in ("TOOLBOX_MISTAKES", "TOOLBOX_FIXES_CHECKS", "LOOKS_CHECKS"):
         for i, (code, _) in enumerate(globals()[name]):
             add(f"{name.lower()} {i}", code + "\n")
@@ -5822,6 +5827,582 @@ def t_frames_window(c):
             "after the jump it stays on frame 8 (pink), in Python, in the page and on screen", jumped)
 
 
+# ---------------------------------------------------------------- tmusic, music from notes (1.5.0)
+
+# No test here makes a sound: TUFF_NO_SOUND=1 for everything these tests run, and a program's output goes to a pipe,
+# where tmusic plays nothing anyway. Songs are made in out/music, not in the temporary folder's tuff-music.
+os.environ.setdefault("TUFF_NO_SOUND", "1")
+os.environ.setdefault("TUFF_MUSIC_DIR", os.path.join(OUT, "music"))
+
+TMUSIC_PROGRAM = '''mention tmusic
+song = tmusic.song(120)
+say song
+song:track("piano", "C4 E4 G4 E4 | F4 A4 C5 .")
+song:track("bass", "C2*4 | F2*4", 60)
+song:track("drums", "kick hat snare hat | kick+crash hat snare hat")
+say song
+say song:length()
+say tmusic.song(90):track("pluck", "C4 D4/2 E4/2 F4*1.5 G4*3/2"):length()
+fast = tmusic.song(400)
+fast:track("chip", "c#5 Eb5 b4+d5")
+say fast:length()
+tmusic.play("C4 E4 G4")
+tmusic.play("A3 . A3*2", "organ", 200)
+tmusic.play(fast)
+song:play()
+song:loop()
+song:stop()
+song:save("theme.wav")
+say file.exists("theme.wav")
+quiet = tmusic.song(60)
+quiet:track("flute", ". . .")
+say quiet:length()
+try:
+    tmusic.play("C4 C9# G4")
+catch problem:
+    say problem
+try:
+    empty = tmusic.song()
+    empty:play()
+catch problem:
+    say problem
+say "end"
+'''
+TMUSIC_OUTPUT = ["<song: 0 tracks, 0 seconds>", "<song: 3 tracks, 4 seconds>", "4", "3.333", "0.45", "true", "3",
+                 "\"C9#\" (note 2) has its # after the octave (it goes before, like C#4), and there's no octave 9: octaves go "
+                 "from 0 to 8 (C4 is middle C).",
+                 'This song has no tracks yet. Add one first, like song:track("piano", "C4 E4 G4").', "end"]
+# The note reader: (notes, drums?, how many beats, the notes as (start, beats, pitches)), with fractions as text.
+TMUSIC_NOTES = [
+    ("C4 D4 E4 F4 G4 A4 B4 C5", False, "8", [(str(i), "1", (p,)) for i, p in enumerate([60, 62, 64, 65, 67, 69, 71, 72])]),
+    ("c#4 Db4 e#4 Fb4 B#3 Cb5", False, "6", [(str(i), "1", (p,)) for i, p in enumerate([61, 61, 65, 64, 60, 71])]),
+    ("A0 C8 A4", False, "3", [("0", "1", (21,)), ("1", "1", (108,)), ("2", "1", (69,))]),
+    ("C4 E4/2 .*2 G4+B4*3/2", False, "5", [("0", "1", (60,)), ("1", "1/2", (64,)), ("7/2", "3/2", (67, 71))]),
+    ("| C4*1.5 | . |\n E4/4 |", False, "11/4", [("0", "3/2", (60,)), ("5/2", "1/4", (64,))]),
+    ("kick+hat snare/2 . CRASH*2", True, "9/2", [("0", "1", ("kick", "hat")), ("1", "1/2", ("snare",)), ("5/2", "2", ("crash",))]),
+    (". . .", False, "3", []),
+]
+# Mistakes in notes: (notes, drums?, who, what tmusic says, where in the text the note starts).
+TMUSIC_NOTE_ERRORS = [
+    ("C4 E4 C9# G4", False, "tmusic.play", "\"C9#\" (note 3) has its # after the octave (it goes before, like C#4), and there's no "
+                                           "octave 9: octaves go from 0 to 8 (C4 is middle C).", 6),
+    ("C4#", False, "tmusic.play", '"C4#" has its # after the octave: write C#4.', 0),
+    ("C9", False, "tmusic.play", "\"C9\": octaves go from 0 to 8 (C4 is middle C), so there's no C9.", 0),
+    ("E4 G", False, "tmusic.play", '"G" (note 2) needs its octave after it, like G4 (C4 is middle C).', 3),
+    ("H4", False, "tmusic.play", '"H4" isn\'t a note. A note is a letter from A to G, then # (sharp) or b (flat) if it needs one', 0),
+    ("C4, E4", False, "tmusic.play", '"C4," (note 1): put spaces between notes, not commas, like "C4 E4 G4".', 0),
+    ("C4*", False, "tmusic.play", '"C4*": put a number after the *, like C4*2 (twice as long) or C4/2 (half as long).', 0),
+    ("C4/0", False, "tmusic.play", '"C4/0" would last 0 beats.', 0),
+    ("C4 *2", False, "tmusic.play", '"*2" (note 2) needs a note before the *, like C4*2 (or .*2 for a rest).', 3),
+    ("C4+", False, "tmusic.play", '"C4+": a chord needs a note on each side of its +, like C4+E4+G4.', 0),
+    ("C4+.", False, "tmusic.play", "\"C4+.\": a rest (.) can't be part of a chord.", 0),
+    ("C##4", False, "tmusic.play", '"C##4" has more than one # or b. A note has one at most, like C#4 or Db4.', 0),
+    ("C4.", False, "tmusic.play", '"C4." isn\'t a note. For a note one and a half times as long, write C4*1.5.', 0),
+    ("C4*2E4", False, "tmusic.play", '"C4*2E4": put a space between two notes, like "C4*2 E4".', 0),
+    ("C4 kick", False, "tmusic.play", '"kick" (note 2) is a drum. Drums go in a track of their own, like tmusic.play("kick hat snare hat", "drums").', 3),
+    ("C4 snare", False, "song:track", 'like song:track("drums", "kick hat snare hat").', 3),
+    ("", False, "tmusic.play", 'tmusic.play needs some notes, like tmusic.play("C4 E4 G4").', 0),
+    (" | | ", False, "song:track", 'song:track needs some notes, like song:track("piano", "C4 E4 G4").', 0),
+    ("kick C4", True, "song:track", '"C4" (note 2) is a note, but this is a drums track. Drums are kick, snare, hat, clap, tom and crash', 5),
+    ("kick kik", True, "song:track", '"kik" (note 2) isn\'t a drum. Did you mean "kick"?', 5),
+]
+# The test song for the .wav: every instrument and every drum, 9 beats at 150 beats a minute (3.6 seconds). Its
+# SHA-256 only changes when the synth does (then tuff_tmusic.SYNTH goes up too).
+TMUSIC_SONG = [("piano", "C4 E4 G4 E4 | F4+A4 C5/2 B4/2 . C5*2", 100), ("chip", "c#5/2 Eb5/2 G5 . b4*1.5 D5/2", 60),
+               ("bass", "C2*2 F2*2 | G1*3/2 C2*5/2", 80), ("pluck", "G3 . B3 D4 | G4*4", 90),
+               ("bell", "E6 . B5*2 | .*2 E6/3 G6/3 B6/3", 50), ("organ", "C4+E4+G4*4 | B3+D4+G4*4", 40),
+               ("flute", ". . G5*2 | A5 G5 E5*2", 70), ("drums", "kick hat snare hat | kick+crash clap tom hat/2 hat/2", 100)]
+TMUSIC_SONG_HASH = "02effbde46c073972ec66059a4580f9ce40b7deaf1de2460c51efd0f355150a9"
+# Mistakes in a program: (code after "mention tmusic", line, column, what the run and --check say, whether the run can
+# be tried here (a game's can't: it opens a window), whether --check finds it too).
+TMUSIC_MISTAKES = [
+    ('tmusic.play("C4 E4 C9# G4")', 2, 20, '"C9#" (note 3) has its # after the octave', True, True),
+    ('tmusic.play("C4 E4 G")', 2, 20, '"G" (note 3) needs its octave after it, like G4', True, True),
+    ('tmusic.play("C4 E4", "guitar")', 2, 22, 'tmusic doesn\'t have the instrument "guitar". Did you mean "pluck"?', True, True),
+    ('tmusic.play("piano", "C4 E4")', 2, 12, 'tmusic.play takes the notes first, then the instrument', True, True),
+    ('tmusic.play("C4", "piano", 900)', 2, 28, "tmusic.play can be from 20 to 400 beats a minute (120 is a usual speed), so 900 is too fast.", True, True),
+    ('tmusic.play(5)', 2, 13, 'tmusic.play needs the notes as text, like tmusic.play("C4 E4 G4"), not a number.', True, True),
+    ('tmusic.song("fast")', 2, 13, "tmusic.song needs a speed in beats a minute, as a number, like tmusic.song(120), not text.", True, True),
+    ('tmusic.song(5)', 2, 13, "tmusic.song can be from 20 to 400 beats a minute (120 is a usual speed), so 5 is too slow.", True, True),
+    ('song = tmusic.song(120)\nsong:track("drums", "kick snare C4")', 3, 33, '"C4" (note 3) is a note, but this is a drums track.', True, True),
+    ('song = tmusic.song(120)\nsong:track("piano", "C4 E4", 150)', 3, 30, "A track's volume goes from 0 to 100 (100 if you leave it out), not 150.", True, True),
+    ('song = tmusic.song(120)\nsong:track("piano", "C4", "loud")', 3, 27, "A track's volume is a number from 0 to 100", True, True),
+    ('song = tmusic.song(120)\nsong:track("C4 E4", "piano")', 3, 5, "song:track takes the instrument first, then the notes", True, True),
+    ('song = tmusic.song(120)\nsong:track(5, "C4")', 3, 12, "song:track needs the instrument's name as text first", True, True),
+    ('song = tmusic.song(120)\nsong:save("theme.mp3")', 3, 11, 'song:save makes a .wav file, like song:save("theme.wav"), not "theme.mp3".', True, True),
+    ('song = tmusic.song(120)\nsong:shuffle()', 3, 5, "A song doesn't have :shuffle. Try one of: track, play, loop, stop, save, length.", True, True),
+    ('song = tmusic.song(120)\nsong:lop()', 3, 5, "A song doesn't have :lop. Did you mean :loop?", True, True),
+    ('song = tmusic.song(120)\nsong:track("piano")', 3, 5, "song:track got the wrong number of inputs (1).", True, True),
+    ('tune = "C4 E4 G#9"\ntmusic.play(tune, "bell")', 3, 13, "\"G#9\" (note 3): octaves go from 0 to 8 (C4 is middle C), so there's no G#9.", True, True),
+    ('tmusic.plya("C4")', 2, 7, "tmusic doesn't have 'plya'. It has: play, song.", True, True),
+    ('song = tmusic.song(120)\nsong:track("piano", "C4*1000 C4*1000")', 3, 1,
+     "These notes would play for 16 minutes 40 seconds: song:track makes songs up to 5 minutes long.", True, False),
+    ('song = tmusic.song()\nsong:play()', 3, 1, 'This song has no tracks yet. Add one first, like song:track("piano", "C4 E4 G4").', True, False),
+    ('mention tgame\ngame = tgame.window("x")\nsong = tmusic.song()\nsong:track("chip", "C5")\nfunc step(dt):\n    song:play()\ngame:every_frame(step)',
+     7, 9, "song:play waits until the music ends, so the game freezes until then. Play a song in a game with game:sound(song)", False, True),
+    ('mention tgame\ngame = tgame.window("x")\nfunc hit(x, y):\n    tmusic.play("C5 G5")\ngame:clicked(hit)',
+     5, 16, "tmusic.play waits until the music ends, so the game freezes until then.", False, True),
+]
+# Programs --check has to accept (each after "mention tmusic").
+TMUSIC_GOOD = [
+    'func jam(s, notes):\n    s:track("piano", notes)\n    s:loop()\nsong = tmusic.song(100)\njam(song, "C4 E4")\nsong:stop()',
+    'kit = "drums"\nbeat = tmusic.song()\nbeat:track(kit, "kick snare")\nbeat:track("Drums", "kick+hat . clap/2 tom/2")',
+    'for name in ["piano", "chip"]:\n    tmusic.play("C4 E4", name)',
+    'song = tmusic.song(120):track("bell", "C5 E5")\nsay song:length() + 1\ntmusic.play(song)\ntmusic.play(song:track("bass", "C2"))',
+    'notes = "C4"\nnotes += " Z9"\ntmusic.play(notes)',
+    'try:\n    tmusic.play("C9#")\n    song = tmusic.song(999)\ncatch problem:\n    say problem',
+    'mention tgame\ngame = tgame.window("x")\nsong = tmusic.song()\nsong:track("chip", "C5")\ngame:music(song)\ngame:sound(song)\nsong:save("a.wav")\n'
+    'func step(dt):\n    game:sound(song)\ngame:every_frame(step)',
+    'speed = 90\nsong = tmusic.song(speed)\nsong:track("organ", "c4 e4 g4", speed - 40)\nsong:save("Out.WAV")',
+]
+# Tuff Engine's preview and a run with no window (headless.py) of a game with a song.
+TMUSIC_GAME = '''mention tgame
+mention tmusic
+game = tgame.window("Tune", 300, 200)
+theme = tmusic.song(140)
+theme:track("chip", "E5 G5 A5 G5 | E5 D5 C5 .")
+theme:track("drums", "kick hat snare hat | kick hat snare hat")
+ding = tmusic.song(240)
+ding:track("bell", "E6 B6*2")
+game:music(theme)
+count = 0
+while game:open():
+    game:frame()
+    count += 1
+    if count == 3:
+        game:sound(ding)
+    if count == 5:
+        game:close()
+say "frames " + count
+'''
+# The editor (renderer/js/tuff-lang.js): tmusic's functions, a song's methods in a file that mentions tmusic, the
+# snippet, and the hover on a note in a tmusic string.
+TMUSIC_LANG = r"""
+const fs = require('fs'), vm = require('vm');
+const window = {}, ctx = { window };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+let monarch = null, hover = null, completion = null;
+const monaco = { Range: class { constructor(...a) { this.a = a; } }, editor: { defineTheme() {} }, languages: {
+  register() {}, setMonarchTokensProvider(_id, def) { monarch = def; }, setLanguageConfiguration() {},
+  registerHoverProvider(_id, p) { hover = hover || p; }, registerDefinitionProvider() {}, registerReferenceProvider() {},
+  registerRenameProvider() {}, registerDocumentSymbolProvider() {}, registerSignatureHelpProvider() {}, registerColorProvider() {},
+  registerCompletionItemProvider(_id, p) { completion = p; },
+  CompletionItemKind: new Proxy({}, { get: (_t, k) => k }), CompletionItemInsertTextRule: {}, IndentAction: {}, SymbolKind: {} } };
+window.defineTuffTheme = () => {};
+window.registerTuff(monaco, '#3574f0');
+const model = (src, col) => { const lines = src.split('\n'); return { getLinesContent: () => lines, getLineContent: (n) => lines[n - 1],
+  getValue: () => src, getWordUntilPosition: () => ({ startColumn: col || 1, endColumn: col || 1 }),
+  getWordAtPosition: ({ lineNumber, column }) => { for (const m of lines[lineNumber - 1].matchAll(/\w+/g))
+    if (m.index < column && column <= m.index + m[0].length) return { word: m[0], startColumn: m.index + 1, endColumn: m.index + 1 + m[0].length };
+    return null; } }; };
+const line = 'song:track("piano", "C#4 Bb3*2 | . C4+E4+G4/2 kick")';
+const at = (s) => line.indexOf(s) + 1;
+const tip = (src, col) => { const h = hover.provideHover(model(src), { lineNumber: 1, column: col }); return h ? [h.contents[1].value, h.range.a] : null; };
+const labels = (src, col, ln = 1) => completion.provideCompletionItems(model(src, col), { lineNumber: ln, column: col }).suggestions.map((s) => s.label);
+console.log(JSON.stringify({
+  sharp: tip(line, at('#4')), flat: tip(line, at('Bb3') + 3), rest: tip(line, at('. C4')), chord: tip(line, at('E4+')),
+  drum: tip(line, at('kick')), instrument: tip(line, at('piano')), play: tip('tmusic.play("C4 E4")', 14), plain: tip('say "C4 E4"', 7),
+  lib: tip('mention tmusic', 10), fn: tip('tmusic.play("C4")', 9),
+  song: labels('mention tmusic\nsong = tmusic.song(120)\nsong:', 6, 3), other: labels('x = [1]\nx:', 3, 2),
+  funcs: labels('mention tmusic\ntmusic.', 8, 2), mention: labels('mention ', 9),
+  snippet: completion.provideCompletionItems(model(''), { lineNumber: 1, column: 1 }).suggestions.find((s) => s.label === 'tmusic')?.insertText,
+  libs: monarch.libs,
+}));
+"""
+
+
+def tmusic_run(folder, name, code, env=None, args=(), timeout=60):
+    """Runs a program (or --check) through a pipe, so no sound: (exit code, stdout, stderr, seconds)."""
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, name)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(code)
+    full = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW", "TUFF_NO_WRITES")}
+    full.update({"PYTHONIOENCODING": "utf-8", **(env or {})})
+    full = {k: v for k, v in full.items() if v is not None}
+    t0 = time.perf_counter()
+    p = subprocess.run(tuff_cmd() + [*args, path], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                       env=full, cwd=folder, stdin=subprocess.DEVNULL)
+    return p.returncode, p.stdout, p.stderr, time.perf_counter() - t0
+
+
+def tuff_error_at(stderr):
+    """The first Tuff error's (line, column, message): the column from the ^ under the line, or None."""
+    lines = stderr.splitlines()
+    first = next((i for i, x in enumerate(lines) if x.startswith("Tuff error on line ")), None)
+    if first is None:
+        return None, None, stderr.strip()
+    head, msg = lines[first][len("Tuff error on line "):].split(": ", 1)
+    caret = lines[first + 2] if first + 2 < len(lines) and lines[first + 2].strip() == "^" else ""
+    return int(head), (caret.index("^") - len(f"  {head} | ") + 1) if caret else None, msg
+
+
+def tmusic_players(c, tm):
+    """A terminal's players, with stand-ins for winsound and afplay, so nothing plays: winsound's one sound at a time
+    (a tune cuts a loop off, and the loop comes back after it), the loops stopping at the program's end (after a game's
+    window), and afplay on a thread of its own. Then where the sound goes for a pipe, TUFF_NO_SOUND and the preview."""
+    import threading
+    import types
+    calls, waits, hooks = [], [], []
+    rt = types.SimpleNamespace(finish_hooks=hooks, on_finish=hooks.append,
+                               interp=types.SimpleNamespace(b_wait=waits.append, console=types.SimpleNamespace(write=calls.append)))
+    fake = types.ModuleType("winsound")
+    fake.SND_FILENAME, fake.SND_ASYNC, fake.SND_NODEFAULT, fake.SND_LOOP = 0x20000, 1, 2, 8
+    fake.PlaySound = lambda path, flags: calls.append((path, flags & 8 and "loop"))
+    real = sys.modules.get("winsound")
+    old_where = tm.Player.where
+    sys.modules["winsound"] = fake
+    try:
+        tm.Player.where = lambda self: "winsound"
+        p = tm.Player(rt)
+        p.play("s1", "loop.wav", 2, loop=True)
+        p.play("s2", "tune.wav", 1.5)
+        c.check(calls == [("loop.wav", "loop"), ("tune.wav", 0), ("loop.wav", "loop")] and waits == [1.5],
+                "winsound: a loop, then a tune played once (waiting 1.5 s), then the loop comes back", (calls, waits))
+        del calls[:]
+        p.stop("s1")
+        p.play("s2", "tune.wav", 1)
+        c.check(calls == [(None, 0), ("tune.wav", 0)] and not p.loops, "...and once the loop is stopped, it doesn't come back", calls)
+        p.play("s1", "loop.wav", 2, loop=True)
+        del calls[:]
+        later = lambda: calls.append("the game's window ran")
+        hooks.append(later)
+        for hook in hooks:  # the program's end, as run_file goes through them
+            hook()
+        c.check(calls == ["the game's window ran", (None, 0)] and not p.loops,
+                "at the program's end the loop stops, after a game's window that was added after it", calls)
+        procs = []
+
+        class Proc:
+            def __init__(self, args, **_kw):
+                self.args, self.done = args, threading.Event()
+                procs.append(self)
+
+            def wait(self):
+                self.done.wait(5)
+
+            def poll(self):
+                return 0 if self.done.is_set() else None
+
+            def terminate(self):
+                self.done.set()
+        old_popen = tm.subprocess.Popen
+        tm.subprocess.Popen = Proc
+        try:
+            tm.Player.where = lambda self: "afplay"
+            q = tm.Player(rt)
+            q.play("s1", "loop.wav", 2, loop=True)
+            for _ in range(100):
+                if procs:
+                    break
+                time.sleep(0.01)
+            q.stop("s1")
+            time.sleep(0.1)
+            c.check(len(procs) == 1 and procs[0].args == ["afplay", "loop.wav"] and procs[0].done.is_set() and not q.running,
+                    "afplay plays a loop on a thread of its own, and song:stop() stops it", [x.args for x in procs])
+        finally:
+            tm.subprocess.Popen = old_popen
+    finally:
+        tm.Player.where = old_where
+        if real is not None:
+            sys.modules["winsound"] = real
+        else:
+            sys.modules.pop("winsound", None)
+    saved = {k: os.environ.get(k) for k in ("TUFF_NO_SOUND", "TUFF_SCENE")}
+    try:
+        modes = []
+        for env in ({"TUFF_NO_SOUND": "1"}, {"TUFF_SCENE": "1"}, {}):
+            for k in saved:
+                os.environ.pop(k, None)
+            os.environ.update(env)
+            modes.append(tm.Player(rt).mode if not sys.stdout.isatty() or env else None)
+        c.check(modes == [None, None, None], "no sound with TUFF_NO_SOUND=1, in Tuff Engine's preview, or in a pipe", modes)
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+
+def t_tmusic(c):
+    """1.5.0, console only (no window and no sound: a pipe and TUFF_NO_SOUND=1): tmusic. The note reader, its mistakes
+    and a fuzz of it; the synth's .wav (its format, its length and a hash that stays the same); songs kept by their
+    notes; a program in both runtimes; the mistakes the run and --check find (at the note itself) and programs --check
+    accepts; a pipe doesn't wait; the Run panel's music messages (TUFF_IDE=1, still a pipe); a game's music (headless.py
+    and --scene); the window's shared folder; the editor's docs and hovers (Node); and the guide's examples."""
+    import fractions
+    import hashlib
+    import random as rnd
+    import shutil
+    import urllib.request
+    import wave
+    import tuff_tmusic as tm
+    folder = os.path.join(OUT, "tmusic")
+    shutil.rmtree(folder, ignore_errors=True)
+    os.makedirs(folder)
+    music = os.path.join(folder, "music")
+    F = fractions.Fraction
+
+    # ---- the notes
+    for text, drums, beats, want in TMUSIC_NOTES:
+        events, total = tm.read_notes(text, drums)
+        got = [(str(s), str(b), p) for s, b, p in events]
+        c.check(got == want and total == F(beats), f"the notes {text!r} read as they should ({beats} beats)", (got, total))
+    for text, drums, who, says, at in TMUSIC_NOTE_ERRORS:
+        try:
+            tm.read_notes(text, drums, who)
+            got = None
+        except tm.MusicError as err:
+            got = (err.msg, err.at)
+        c.check(got is not None and says in got[0] and got[1] == at, f"{text!r} stops with: {says[:70]}", got)
+    c.check(tm.find_instrument(" Piano ") == "piano" and tm.find_instrument("DRUMS") == "drums", "instruments in any case, with spaces around")
+    try:
+        tm.find_instrument("guitar")
+        got = None
+    except tm.MusicError as err:
+        got = err.msg
+    c.check(got == 'tmusic doesn\'t have the instrument "guitar". Did you mean "pluck"? Instruments: piano, chip, bass, pluck, bell, organ, flute and drums.',
+            "an instrument it doesn't have: the closest one, and all of them", got)
+    # A fuzz: anything typed gives notes or a MusicError (never a crash), and notes made at random read back as made.
+    rng = rnd.Random(15)
+    crashes = []
+    for i in range(3000):
+        text = "".join(rng.choice("ABCDEFGabcdefg#b0123456789*/.+|, x-kh") for _ in range(rng.randint(0, 14)))
+        for drums in (False, True):
+            try:
+                tm.read_notes(text, drums)
+            except tm.MusicError as err:
+                if err.at is None or not 0 <= err.at <= len(text):
+                    crashes.append((text, "at", err.at))
+            except Exception as exc:
+                crashes.append((text, repr(exc)))
+    c.check(not crashes, "a fuzz of 6,000 random note texts: notes or a clear mistake, never a crash", crashes[:5])
+    wrong = []
+    for i in range(400):
+        words, beats, pitches = [], F(0), []
+        for _ in range(rng.randint(1, 12)):
+            if rng.random() < 0.15:
+                word, ps = ".", []
+            else:
+                ps = [(rng.choice("CDEFGAB"), rng.choice(["", "#", "b"]), rng.randint(0, 8)) for _ in range(rng.choice([1, 1, 1, 3]))]
+                word = "+".join(f"{l}{a}{o}" for l, a, o in ps)
+            k = rng.choice(["", "*2", "/2", "*1.5", "/3", "*3/2"])
+            words.append(word + k)
+            beats += {"": F(1), "*2": F(2), "/2": F(1, 2), "*1.5": F(3, 2), "/3": F(1, 3), "*3/2": F(3, 2)}[k]
+            pitches += [12 * (o + 1) + "C D EF G A B".index(l) + {"#": 1, "b": -1, "": 0}[a] for l, a, o in ps]
+        text = rng.choice([" ", "  ", " | "]).join(words)
+        events, total = tm.read_notes(text)
+        if total != beats or [p for _s, _b, ps in events for p in ps] != pitches:
+            wrong.append(text)
+    c.check(not wrong, "400 random tunes (notes, chords, rests, lengths) read back exactly as they were made", wrong[:3])
+
+    # ---- the synth's .wav
+    tracks = []
+    for instrument, notes, volume in TMUSIC_SONG:
+        events, beats = tm.read_notes(notes, instrument == "drums", "song:track")
+        tracks.append((instrument, volume / 100, events, beats))
+    t0 = time.perf_counter()
+    data = tm.wav_bytes(tm.render(tracks, 150))
+    secs = time.perf_counter() - t0
+    with wave.open(io.BytesIO(data)) as w:
+        shape = (w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes(), w.getcomptype())
+    c.check(data[:4] == b"RIFF" and data[8:16] == b"WAVEfmt " and shape == (1, 2, 22050, 79380, "NONE"),
+            "the test song is a .wav: mono, 16-bit, 22,050 a second, 3.6 seconds (9 beats at 150)", shape)
+    c.check(hashlib.sha256(data).hexdigest() == TMUSIC_SONG_HASH, "...and it's the same sound as always (its SHA-256)", hashlib.sha256(data).hexdigest())
+    c.check(tm.wav_bytes(tm.render(tracks, 150)) == data and secs < 5, f"...and the same again when it's made again ({secs:.2f} s)", secs)
+    peak = max(abs(v) for v in tm.render(tracks, 150))
+    c.check(27000 < peak <= 27852, "the loudest moment is turned down to 85% of the most a .wav holds", peak)
+    long_song = [("piano", 1.0, *tm.read_notes("C4 E4 G4 C5 | F4 A4 C5 . " * 15, False)),
+                 ("drums", 1.0, *tm.read_notes("kick hat snare hat " * 30, True)),
+                 ("bass", 0.8, *tm.read_notes("C2*4 F2*4 " * 15, False))]
+    t0 = time.perf_counter()
+    pcm = tm.render(long_song, 120)
+    secs = time.perf_counter() - t0
+    c.check(len(pcm) == 60 * 22050 and secs < 10, f"a minute of music with three tracks takes {secs:.2f} s to make", (len(pcm), secs))
+
+    # ---- a program, in both runtimes, through a pipe
+    outs = {}
+    for slow in (True, False):
+        where = os.path.join(folder, "slow" if slow else "fast")
+        code, out, err, secs = tmusic_run(where, "song.tuf", TMUSIC_PROGRAM, {"TUFF_SLOW": "1" if slow else None, "TUFF_MUSIC_DIR": music})
+        outs[slow] = (code, out, err)
+        if slow:
+            continue
+        c.check(code == 0 and out.splitlines() == TMUSIC_OUTPUT, f"the tmusic program runs and says what it should ({secs:.1f} s)", (out + err)[-800:])
+        saved = os.path.join(where, "theme.wav")
+        made = sorted(os.listdir(music)) if os.path.isdir(music) else []
+        c.check(os.path.isfile(saved) and len(made) == 1 and open(saved, "rb").read() == open(os.path.join(music, made[0]), "rb").read(),
+                "song:save wrote theme.wav, the song tmusic made once and keeps (only that one: in a pipe, play makes nothing)", made)
+    c.check(outs[True] == outs[False], "the tree walker (TUFF_SLOW=1) gives exactly the same", outs[True][1:])
+    code, out, err, _s = tmusic_run(folder, "song.tuf", TMUSIC_PROGRAM, args=["--check"])
+    c.check(code == 0 and out.strip() == "OK", "--check accepts the program (its mistakes are inside try: blocks)", (out + err)[:400])
+    # The same notes again make no new file; the file's name is the notes', and the folder keeps the newest songs.
+    again = 'mention tmusic\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4 E4 | F4 A4 C5 .")\nsong:track("bass", "C2*4 | F2*4", 60)\n' \
+            'song:track("drums", "kick  hat snare hat | kick+crash hat snare hat")\nsong:save("again.wav")\n'
+    tmusic_run(folder, "again.tuf", again, {"TUFF_MUSIC_DIR": music})
+    c.check(len(os.listdir(music)) == 1 and os.path.isfile(os.path.join(folder, "again.wav")),
+            "the same notes in another run (spaced differently) use the song tmusic made before", os.listdir(music))
+    crowd = os.path.join(folder, "crowd")
+    os.makedirs(crowd)
+    for i in range(tm.KEEP + 5):
+        with open(os.path.join(crowd, f"song-{i:02}.wav"), "wb") as f:
+            f.write(b"x")
+        os.utime(os.path.join(crowd, f"song-{i:02}.wav"), (1_000_000 + i, 1_000_000 + i))
+    with open(os.path.join(crowd, "mine.wav"), "wb") as f:
+        f.write(b"x")
+    tm.tidy(crowd, os.path.join(crowd, "song-44.wav"))
+    left = sorted(os.listdir(crowd))
+    c.check(len(left) == tm.KEEP + 1 and "mine.wav" in left and "song-04.wav" not in left and "song-05.wav" in left,
+            f"the songs' folder keeps the newest {tm.KEEP} songs (and nothing that isn't one of tmusic's)", left[:3])
+    # Agents' tuff_run (TUFF_NO_WRITES=1) and Tuff Engine's preview write nothing.
+    tmusic_run(folder, "nowrite.tuf", 'mention tmusic\ns = tmusic.song()\ns:track("bell", "C5")\ns:save("never.wav")\n',
+               {"TUFF_NO_WRITES": "1", "TUFF_MUSIC_DIR": os.path.join(folder, "music_nowrite")})
+    c.check(not os.path.exists(os.path.join(folder, "never.wav")) and not os.path.exists(os.path.join(folder, "music_nowrite")),
+            "with TUFF_NO_WRITES=1 (tuff_run), song:save writes nothing and makes nothing")
+
+    # ---- mistakes: the run and --check say the same
+    for i, (code_text, line, col, says, run_it, check_it) in enumerate(TMUSIC_MISTAKES):
+        src = "mention tmusic\n" + code_text + "\n"
+        shown = code_text.splitlines()[line - 2].strip()
+        if run_it:
+            code, out, err, _s = tmusic_run(folder, f"bad{i}.tuf", src, {"TUFF_MUSIC_DIR": music})
+            at = tuff_error_at(err)
+            c.check(code == 1 and at[0] == line and says in at[2], f"running {shown!r} stops on line {line}: {says[:60]!r}", at)
+        code, out, err, _s = tmusic_run(folder, f"bad{i}.tuf", src, args=["--check"])
+        at = tuff_error_at(err)
+        if check_it:
+            c.check(code == 1 and at[:2] == (line, col) and says in at[2], f"--check on {shown!r} says it at {line}:{col}", at)
+        else:
+            c.check(out.strip() == "OK", f"--check can't know {shown!r} before the run, and says OK", (out + err)[:300])
+    for i, code_text in enumerate(TMUSIC_GOOD):
+        code, out, err, _s = tmusic_run(folder, f"good{i}.tuf", "mention tmusic\n" + code_text + "\n", args=["--check"])
+        c.check(code == 0 and out.strip() == "OK", f"--check accepts: {code_text.splitlines()[-1][:60]}", (out + err)[:300])
+
+    # ---- where the sound goes: nowhere in a pipe, a message to the Run panel in TuffCode
+    quiet = os.path.join(folder, "music_pipe")
+    long_play = 'mention tmusic\nlong = tmusic.song(60)\nlong:track("piano", "C4*60")\nlong:play()\ntmusic.play("C4*30", "bell", 60)\n' \
+                'long:loop()\nlong:stop()\nsay "done"\n'
+    code, out, err, secs = tmusic_run(folder, "pipe.tuf", long_play, {"TUFF_NO_SOUND": None, "TUFF_MUSIC_DIR": quiet})
+    c.check(code == 0 and out.strip() == "done" and secs < 5 and not os.path.exists(quiet),
+            f"in a pipe, a minute of music plays nothing and doesn't wait: done in {secs:.1f} s, with no sound made", (out + err, secs))
+    ide = 'mention tmusic\nsay "start"\ntmusic.play("C5 E5 G5", "chip", 240)\nsay "after"\nbeat = tmusic.song(240)\n' \
+          'beat:track("drums", "kick hat")\nbeat:loop()\nbeat:stop()\n'
+    code, out, err, secs = tmusic_run(folder, "ide.tuf", ide, {"TUFF_NO_SOUND": None, "TUFF_IDE": "1", "TUFF_MUSIC_DIR": music})
+    sent = re.findall(r"\x1b\]tuff;music;(\w+);([^;\x07]*)(?:;([^;\x07]*);(\d))?\x07", out)
+    files = [base64.b64decode(m[2]).decode("utf-8") for m in sent if m[0] == "play"]
+    lengths = []
+    for f in files:
+        try:
+            with wave.open(f) as w:
+                lengths.append(w.getnframes() / w.getframerate())
+        except (OSError, EOFError, wave.Error):
+            lengths.append(None)
+    said = re.findall(r"\x1b\]tuff;say;\d+;([^;\x07]*)", out)
+    c.check(code == 0 and [(m[0], m[1], m[3]) for m in sent] == [("play", "s1", "0"), ("play", "s2", "1"), ("stop", "s2", "")]
+            and [base64.b64decode(s).decode() for s in said] == ["start", "after"],
+            "with TUFF_IDE=1, TuffCode's Run panel is sent music;play for the tune, music;play to loop the song, then music;stop",
+            (sent, out[-300:], err[-300:]))
+    c.check(all(os.path.isabs(f) and os.path.dirname(f) == music for f in files) and len(lengths) == 2 and abs(lengths[0] - 0.75) < 0.001 and lengths[1] == 0.5,
+            "...with each song's .wav (made in tmusic's folder, 0.75 and 0.5 seconds long)", (files, lengths))
+    c.check(0.75 <= secs < 5, f"...and tmusic.play waited until its tune ended ({secs:.2f} s for 0.75 s of notes)", secs)
+    tmusic_players(c, tm)
+
+    # ---- a game's music: --scene makes nothing, a run with no window (headless.py) sends the page the songs
+    game_dir = os.path.join(folder, "game")
+    os.makedirs(game_dir)
+    src = os.path.join(game_dir, "tune_game.tuf")
+    with open(src, "w", encoding="utf-8") as f:
+        f.write(TMUSIC_GAME)
+    preview_music = os.path.join(folder, "music_scene")
+    code, out, err, d, secs = scene(src, env={"TUFF_MUSIC_DIR": preview_music})
+    c.check(code == 0 and d.get("error") is None and d.get("stopped") == "loop" and not os.path.exists(preview_music)
+            and not any(cmd[0] == "k" and "sound" in cmd[2] for cmd in d.get("batch", [])),
+            f"Tuff Engine's preview runs a game with songs, and makes and plays none ({secs:.1f} s)", (d.get("error"), d.get("stopped"), err[-300:]))
+    os.makedirs(os.path.join(OUT, "frames"), exist_ok=True)
+    run = headless("tmusic_game", TMUSIC_GAME, 20)
+    if run is None:
+        c.check(True, "--runtime: skipped the headless run (it needs tuff.py)")
+    else:
+        rc, lines, err, cmds = run
+        sounds = [cmd[3] for cmd in cmds if cmd[0] == "k" and cmd[2] == "sound"]
+        names = [s[1].split("/")[-1] for s in sounds]
+        c.check(rc == 0 and lines == ["frames 5"] and len(sounds) == 2 and sounds[0][0] == "music" and sounds[0][2:] == [0.6, True]
+                and sounds[1][0].startswith("s") and sounds[1][2:] == [1, False] and all(s[1].startswith("shared:music/song-") for s in sounds),
+                "game:music(song) loops the song in the game's page, and game:sound(song) plays one once", (sounds, err[-300:]))
+        c.check(all(os.path.isfile(os.path.join(os.environ["TUFF_MUSIC_DIR"], n)) for n in names), "...as the .wav files tmusic made", names)
+    # The window's file server: a shared folder's files, by name, and nothing outside it.
+    import tuff_view
+    files = tuff_view._file_server()
+    token = "tmusic-test"
+    files.roots[token] = (tuff_view.WEB_DIR, None)
+    tuff_view.share("music", os.environ["TUFF_MUSIC_DIR"])
+    song_file = sorted(n for n in os.listdir(os.environ["TUFF_MUSIC_DIR"]) if n.endswith(".wav"))[0]
+    view = object.__new__(tuff_view.View)
+    view._base = f"http://127.0.0.1:{files.server_address[1]}/{token}/"
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def fetch(url):
+        try:
+            with opener.open(url, timeout=10) as r:
+                return r.status, r.headers.get("Content-Type"), r.read()
+        except urllib.error.HTTPError as err:
+            return err.code, None, b""
+    status, kind, body = fetch(view.shared_url("music", song_file))
+    with open(os.path.join(os.environ["TUFF_MUSIC_DIR"], song_file), "rb") as f:
+        c.check(status == 200 and kind == "audio/wav" and body == f.read(), "the game's page gets a song's .wav from the shared folder", (status, kind))
+    outside = [fetch(view._base + p)[0] for p in ("shared/music/../tmusic/song.tuf", "shared/music/%2e%2e/tmusic/song.tuf", "shared/nope/" + song_file)]
+    c.check(outside == [404, 404, 404], "...and nothing outside it, or from a folder that isn't shared", outside)
+    try:
+        view.shared_url("music", "../game/tune_game.tuf")
+        refused = False
+    except tuff_view.ViewError:
+        refused = True
+    c.check(refused and tuff_view.Recorder().shared_url("music", song_file) == f"shared:music/{song_file}",
+            "shared_url refuses a file outside the folder, and the preview's recorder names it shared:music/...")
+    del files.roots[token]
+
+    # ---- the editor and the guide
+    lang = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")
+    try:
+        p = subprocess.run(["node", "-e", TMUSIC_LANG, lang], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        t = json.loads(p.stdout)
+    except FileNotFoundError:
+        t = None
+        c.check(True, "Node isn't installed: skipped the editor checks")
+    except ValueError:
+        t = None
+        c.check(False, "the editor checks ran", (p.stdout + p.stderr)[-600:])
+    if t:
+        c.check(t["sharp"] == ["C sharp in octave 4 (277.2 Hz), 1 beat.", [1, 22, 1, 25]] and t["flat"][0] == "B flat in octave 3 (233.1 Hz), 2 beats."
+                and t["rest"][0] == "A rest: 1 beat of quiet." and t["drum"][0] == "The kick drum, 1 beat."
+                and t["chord"][0].startswith("A chord: C in octave 4 (261.6 Hz, middle C), E in octave 4") and t["chord"][0].endswith("0.5 beats."),
+                "hovering a note in a song:track string says what it is: C#4, Bb3*2, a rest, a chord, a drum", [t[k] for k in ("sharp", "flat", "rest", "chord", "drum")])
+        c.check(t["play"][0].startswith("C in octave 4") and t["instrument"] is None and t["plain"] is None,
+                "...and in tmusic.play's notes, but not on the instrument or in other text", [t["play"], t["instrument"], t["plain"]])
+        c.check(t["lib"] and "Music from notes" in t["lib"][0] and t["fn"] and "waits until they end" in t["fn"][0],
+                "mention tmusic and tmusic.play have hovers", [t["lib"], t["fn"]])
+        c.check(set(tm.tables()["kinds"]["song"]) <= set(t["song"]) and not {"track", "loop", "length"} & set(t["other"]),
+                "a file that mentions tmusic is offered a song's methods after ':', and other files aren't offered tmusic's own", (t["song"][:8], t["other"][:8]))
+        c.check(t["funcs"] == ["play", "song"] and "tmusic" in t["mention"] and "tmusic" in t["libs"] and "tmusic.song(" in (t["snippet"] or ""),
+                "tmusic. offers play and song, mention offers tmusic, it's coloured as a library, and there's a snippet", [t["funcs"], t["snippet"]])
+    guide = open(os.path.join(REPO, "tuffcode", "mcp", "tuff-guide.md"), encoding="utf-8").read()
+    start = guide.find("\n### tmusic")
+    section = guide[start:guide.find("\n### ", start + 1)] if start >= 0 else ""
+    blocks = re.findall(r"```tuff\n(.*?)```", section, re.S)
+    c.check(len(blocks) >= 2 and "is middle C" in section and "In a file or a pipe" in section, f"the guide has a tmusic section ({len(blocks)} examples)")
+    for i, code_text in enumerate(blocks, 1):
+        where = os.path.join(folder, f"guide{i}")
+        code, out, err, _s = tmusic_run(where, "guide.tuf", code_text, args=["--check"])
+        c.check(code == 0 and out.strip() == "OK", f"the guide's tmusic example {i} passes --check", (out + err)[:300])
+        if "tgame" in code_text:
+            code, out, err, d, secs = scene(os.path.join(where, "guide.tuf"))
+            c.check(code == 0 and d.get("error") is None, f"...and Tuff Engine's preview runs it ({secs:.1f} s)", (d.get("error"), err[-300:]))
+        else:
+            code, out, err, secs = tmusic_run(where, "guide.tuf", code_text, {"TUFF_MUSIC_DIR": music})
+            c.check(code == 0 and "Tuff error" not in err and os.path.isfile(os.path.join(where, "theme.wav")),
+                    f"...and runs, saving theme.wav ({secs:.1f} s)", (out + err)[-300:])
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
@@ -5845,6 +6426,7 @@ TESTS.update({"recursion": t_recursion, "recursion_window": t_recursion_window, 
 TESTS.update({"interp": t_interp})  # 1.5.0
 TESTS.update({"fstrings": t_fstrings})  # 1.5.0
 TESTS.update({"frames": t_frames, "frames_window": t_frames_window})  # 1.5.0: sprite sheets
+TESTS.update({"tmusic": t_tmusic})  # 1.5.0: music from notes
 
 
 def main():

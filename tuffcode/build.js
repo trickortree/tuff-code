@@ -5,7 +5,7 @@ const fsp = fs.promises;
 const { spawn } = require('child_process');
 
 const RUNTIME_DIR = app.isPackaged ? path.join(process.resourcesPath, 'runtime-src') : path.join(__dirname, '..');
-const RUNTIME_FILES = ['tuff.py', 'tuff_tgui.py', 'tuff_tap.py', 'tuff_atgui.py', 'tuff_tdraw.py'];
+const RUNTIME_FILES = ['tuff.py', 'tuff_tgui.py', 'tuff_tap.py', 'tuff_atgui.py', 'tuff_tdraw.py', 'tuff_tmusic.py'];
 const DEFAULT_ICON = path.join(__dirname, 'renderer', 'assets', 'icon.png');
 const ASSET_EXTS = new Set(['.png', '.gif', '.ico', '.jpg', '.jpeg', '.webp', '.svg', '.txt', '.json', '.csv', '.wav']);
 // Libraries whose windows are web views (tuff_view.py and its page, tuff_view_web): each is tuff_<name>.py.
@@ -414,6 +414,7 @@ async function build(opts, emit) {
   const usesDraw = /^\s*(import|mention)\s+tdraw\b/m.test(src); // tdraw draws with tkinter's turtle, like tgui's windows
   // tap needs Python's ssl (and certifi, where installed, for a Mac app's https:// certificates).
   const usesTap = /^\s*(import|mention)\s+tap\b/m.test(src);
+  const usesMusic = /^\s*(import|mention)\s+tmusic\b/m.test(src); // tmusic (1.5.0): its synth (and winsound to play)
   const windowed = opts.windowed ?? (usesGui || usesDraw || viewLibs.length > 0);
   step('pack', 'done', `Packed your program${assets.length ? ` and ${assets.length} file${assets.length > 1 ? 's' : ''} (${assets.slice(0, 3).join(', ')}${assets.length > 3 ? '…' : ''})` : ''}`);
 
@@ -429,6 +430,7 @@ async function build(opts, emit) {
     ...(usesDraw ? ['--hidden-import', 'tuff_tdraw', '--hidden-import', 'turtle'] : ['--exclude-module', 'tuff_tdraw']),
     ...(usesGui || usesDraw ? [] : ['--exclude-module', 'tkinter']),
     ...(usesTap ? ['--hidden-import', 'tuff_tap', '--hidden-import', 'ssl', '--hidden-import', 'certifi'] : ['--exclude-module', 'tuff_tap']),
+    ...(usesMusic ? ['--hidden-import', 'tuff_tmusic'] : ['--exclude-module', 'tuff_tmusic']),
     ...(viewLibs.length ? ['--hidden-import', 'tuff_view', ...viewModules.flatMap((m) => ['--hidden-import', m])] : ['--exclude-module', 'tuff_view', '--exclude-module', 'webview']),
     ...VIEW_LIBS.filter((lib) => !viewLibs.includes(lib)).flatMap((lib) => ['--exclude-module', `tuff_${lib}`]),
     launcher,
