@@ -1552,7 +1552,7 @@
 
   // ---------- build ----------
   const BUILD_STEPS = [
-    ['python', 'Find Python'],
+    ['python', 'Get ready to build'],
     ['check', 'Check your code for mistakes'],
     ['tools', 'Get the build tools ready'],
     ['pack', 'Pack your program'],

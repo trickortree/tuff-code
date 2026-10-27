@@ -168,7 +168,7 @@ def parent():
                          f"missing: no WebView2 gives a clear error and no window ({r.get('error', '')[:70]}...)")
             continue
         if case == "nopywebview":
-            checks.check(p.returncode == 1 and r.get("error", "").startswith("App and game windows need pywebview")
+            checks.check(p.returncode == 1 and r.get("error", "").startswith("App and game windows window engine, which")
                          and "py -m pip install pywebview" in r.get("error", "") and not r.get("windows_left"),
                          f"no pywebview: the error says how to install it here, and no window ({r.get('error')})")
             continue

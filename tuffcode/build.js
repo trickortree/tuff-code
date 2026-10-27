@@ -206,8 +206,8 @@ function friendlyError(out) {
 
 const MILESTONES = [
   [/Analyzing|Initializing module dependency graph/i, 'Looking at what your program needs…'],
-  [/Looking for dynamic libraries|Processing (standard )?module hook/i, 'Collecting Python pieces…'],
-  [/Building PYZ/i, 'Bundling Python…'],
+  [/Looking for dynamic libraries|Processing (standard )?module hook/i, 'Collecting what your program uses…'],
+  [/Building PYZ/i, 'Bundling Tuff…'],
   [/Building PKG/i, 'Packing everything together…'],
   [/Building EXE/i, WIN ? 'Writing the .exe…' : 'Writing the app…'],
   [/Copying icon|Copying \d+ resources/i, 'Adding your icon…'],
@@ -226,13 +226,11 @@ async function build(opts, emit) {
   const projectDir = opts.root || path.dirname(program);
   const distDir = path.join(projectDir, 'dist');
 
-  step('python', 'running', 'Finding Python');
+  step('python', 'running', 'Getting ready to build');
   await require('./shellpath').ready(); // on a Mac, wait for the login shell's PATH
   let r = await run(PY.cmd, [...PY.args, '--version'], { onLine: log });
   if (r.code !== 0) {
-    return fail('python', 'Finding Python', WIN
-      ? 'Python isn\'t installed (or Windows can\'t find it). Install it from python.org, tick "Add python.exe to PATH", then build again.'
-      : 'Python 3 isn\'t installed. Install it from python.org (or with Homebrew: brew install python), then build again.');
+    return fail('python', 'Getting ready to build', 'TuffCode can\'t find its app builder on this computer. Open "Technical details" below to see what\'s missing.');
   }
   step('python', 'done', `Found ${r.out.trim()}`);
 
@@ -265,13 +263,13 @@ async function build(opts, emit) {
     // It's made in a temporary folder and only moved into place once complete, so a cancelled or
     // failed setup can't leave a half-made one behind.
     if ((await run(vpy, ['-m', 'pip', '--version'])).code !== 0) {
-      step('tools', 'running', 'Getting the build tools ready', 'Setting up a Python just for building (first time only)');
+      step('tools', 'running', 'Getting the build tools ready', 'Setting it up (first time only)');
       const tmp = `${venv}.tmp`;
       await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
       r = await run(PY.cmd, [...PY.args, '-m', 'venv', tmp], { onLine: log });
       if (r.code !== 0) {
         await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
-        return fail('tools', 'Getting the build tools ready', "Python couldn't set up a place for the build tools. Reinstall Python 3 (from python.org, or with Homebrew: brew install python), then build again.");
+        return fail('tools', 'Getting the build tools ready', "TuffCode couldn't set up its build tools. Restart TuffCode and build again.");
       }
       await fsp.rm(venv, { recursive: true, force: true }).catch(() => {});
       await fsp.rename(tmp, venv);
@@ -289,35 +287,31 @@ async function build(opts, emit) {
       },
     });
     if (r.code !== 0) {
-      return fail('tools', 'Installing the build tools', 'TuffCode couldn\'t download its build tools (PyInstaller). Check your internet connection and try again.');
+      return fail('tools', 'Installing the build tools', 'TuffCode couldn\'t download its build tools. Check your internet connection and try again.');
     }
     r = await run(py.cmd, [...py.args, '-m', 'PyInstaller', '--version'], { onLine: log });
     if (r.code !== 0) {
-      return fail('tools', 'Installing the build tools', 'The build tools installed, but Python can\'t start them. Try restarting TuffCode and building again.');
+      return fail('tools', 'Installing the build tools', 'The build tools installed, but they won\'t start. Try restarting TuffCode and building again.');
     }
   }
-  const pyinstallerVersion = r.out.trim().split(/\s+/).pop();
   // A web view program (atgui, tgame) needs pywebview in the Python that builds it, like PyInstaller.
   const programSrc = await fsp.readFile(program, 'utf8');
   const allSrc = [programSrc, ...ownFiles.map((f) => f.src)].join('\n'); // a library one of its own files imports counts too
   const viewLibs = VIEW_LIBS.filter((lib) => usesLib(allSrc, lib) || (lib === 'atgui' && usesLib(allSrc, 'tgame')));  // a game's menus are atgui's widgets
   if (viewLibs.length && (await run(py.cmd, [...py.args, '-c', 'import webview'], { onLine: log })).code !== 0) {
-    step('tools', 'running', 'Installing the window engine', 'First time only: pywebview, for game and app windows.');
+    step('tools', 'running', 'Installing the window engine', 'First time only: what game and app windows need.');
     r = await run(py.cmd, [...py.args, '-m', 'pip', 'install', ...(py === PY ? ['--user'] : []), '--disable-pip-version-check', 'pywebview'], { onLine: log });
     if (r.code !== 0 || (await run(py.cmd, [...py.args, '-c', 'import webview'], { onLine: log })).code !== 0) {
-      return fail('tools', 'Installing the window engine', 'TuffCode couldn\'t download pywebview, which game and app windows need. Check your internet connection and try again.');
+      return fail('tools', 'Installing the window engine', 'TuffCode couldn\'t download the window engine that game and app windows need. Check your internet connection and try again.');
     }
   }
-  step('tools', 'done', `Build tools ready (PyInstaller ${pyinstallerVersion})`);
+  step('tools', 'done', 'Build tools ready');
 
   // A window app needs tkinter in the Python that builds it. Without it the app would build fine
   // and then close straight away when opened, so check first.
   const usesGuiEarly = /^\s*(import|mention)\s+m?tgui\b/m.test(allSrc);
   if (usesGuiEarly && (await run(py.cmd, [...py.args, '-c', 'import tkinter, _tkinter; tkinter.Tcl()'], { onLine: log })).code !== 0) {
-    const ver = (await run(PY.cmd, [...PY.args, '-c', 'import sys; print("%d.%d" % sys.version_info[:2])'])).out.trim().split(/\s+/).pop() || '3';
-    return fail('tools', 'Getting the build tools ready', WIN
-      ? 'Your Python doesn\'t include tkinter, which window apps need. Reinstall Python from python.org with "tcl/tk and IDLE" ticked, then build again.'
-      : `Your Python (${ver}) doesn't include tkinter, which window apps need. With Homebrew run: brew install python-tk@${ver} (or install Python from python.org), then build again.`);
+    return fail('tools', 'Getting the build tools ready', 'Window apps (tgui and mtgui) can\'t be built on this computer yet: a part they need is missing. Open "Technical details" below to see more.');
   }
 
   step('pack', 'running', 'Packing your program');

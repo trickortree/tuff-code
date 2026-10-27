@@ -151,7 +151,7 @@ function spawnTuff(file, id, channel, ended) {
   proc.stdin.on('error', () => {});
   proc.on('error', (err) => out('stderr', app.isPackaged
     ? `Could not start the Tuff runtime (${err.message}). Try reinstalling TuffCode.\n`
-    : `Could not start Python (${err.message}). Is Python installed?\n`));
+    : `Could not start Tuff (${err.message}). Try reinstalling TuffCode.\n`));
   proc.on('close', (code, signal) => {
     ended(proc);
     send(`${channel}:exit`, { id, code: code ?? (signal ? -1 : 0) });

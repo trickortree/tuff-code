@@ -334,7 +334,7 @@ window.TUFF_DOCS = {
   anims: ['import anims', 'Ready-made animations: loading, bar, type, countdown.'],
   tgui: ['import tgui', 'Tuff GUI: make real app windows with buttons, text boxes, toggles and more.'],
   mtgui: ['mention mtgui', 'Modern Tuff GUI: like tgui with gradients, gloss, shine and glow.'],
-  tap: ['mention tap', 'Get and send things on the web (HTTP), like Python\'s requests: tap.get, post, put, delete. JSON comes back as dictionaries and lists.'],
+  tap: ['mention tap', 'Get and send things on the web (HTTP): tap.get, post, put, delete. JSON comes back as dictionaries and lists.'],
   tgame: ['mention tgame', 'Make games, like pygame: tgame.window for 2D (sprites, keys, the mouse, collisions, sounds) and tgame.world for 3D (a sky, trees, a first-person player).'],
   mention: ['mention name', 'Loads a library, or one of your own files (mention money loads money.tuf). Works exactly like import.'],
   sqrt: ['sqrt(number)', 'Square root: sqrt(81) is 9.'],

@@ -409,9 +409,8 @@ def _stuck_threads(timeout):
 
 
 def _no_pywebview():
-    """What to do when pywebview isn't installed, with the command for this computer (a Mac has python3, not py)."""
-    python = "py" if sys.platform == "win32" else "python3"
-    return f"App and game windows need pywebview. Install it with:  {python} -m pip install pywebview"
+    """What to say when pywebview isn't installed. It names neither it nor Python: TuffCode's users only know Tuff."""
+    return "App and game windows need Tuff's window engine, which isn't installed. Reinstall TuffCode."
 
 
 QUIET_FLAGS = ["--mute-audio", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",

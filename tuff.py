@@ -2685,21 +2685,21 @@ class Interpreter:
         try:
             import tuff_tgui
         except ImportError:
-            raise TuffError("tgui needs Python's tkinter, which isn't installed. Reinstall Python and tick 'tcl/tk and IDLE'.")
+            raise TuffError("tgui can't open its windows: a part it needs isn't installed. Reinstall TuffCode.")
         return tuff_tgui.make_library(self.rt)
 
     def lib_mtgui(self):
         try:
             import tuff_tgui
         except ImportError:
-            raise TuffError("mtgui needs Python's tkinter, which isn't installed. Reinstall Python and tick 'tcl/tk and IDLE'.")
+            raise TuffError("mtgui can't open its windows: a part it needs isn't installed. Reinstall TuffCode.")
         return tuff_tgui.make_library(self.rt, modern=True)
 
     def lib_tdraw(self):
         try:
             import tuff_tdraw
         except ImportError:
-            raise TuffError("tdraw needs Python's tkinter, which isn't installed. Reinstall Python and tick 'tcl/tk and IDLE'.")
+            raise TuffError("tdraw can't open its windows: a part it needs isn't installed. Reinstall TuffCode.")
         return tuff_tdraw.make_library(self.rt, TEXT_COLORS)
 
     def lib_tap(self):
@@ -8159,7 +8159,7 @@ def run_program(path):
     try:
         import tuff_view
     except ImportError:
-        report(TuffError("This program needs Tuff's window engine (tuff_view.py), which isn't installed next to tuff.py."), src)
+        report(TuffError("This program needs Tuff's window engine, which isn't installed. Reinstall TuffCode."), src)
         return 1
     stack = big_stack()  # for the thread tuff_view.run starts
     try:
@@ -8228,7 +8228,7 @@ def main():
     if not args:
         print("Welcome to TuffCode, coding made easy.")
         print("TuffCode runs on its own coding language called Tuff, files end in .tuf")
-        print("Run a program with: python tuff.py yourfile.tuf")
+        print("Open a program in TuffCode and press Run.")
         return 0
     if args[0] in ("--help", "-h", "/?"):
         print(usage())

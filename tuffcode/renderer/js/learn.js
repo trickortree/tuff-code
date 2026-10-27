@@ -264,7 +264,7 @@
       id: 'tgui-build',
       title: 'Build an .exe',
       build: true,
-      body: `<p>Turn any Tuff program into a real Windows app you can share. No Python needed on the other computer.</p>
+      body: `<p>Turn any Tuff program into a real Windows app you can share. Nothing else needs to be installed on the other computer.</p>
              <p>Click the hammer at the top or press <kbd>Ctrl+F9</kbd>. Pick a name and an icon, then press <b>Build .exe</b>. The Build tab explains each step, and your app ends up in the <code>dist</code> folder.</p>`,
       example: '# 1. Open one of your tgui apps\n# 2. Click the hammer (or press Ctrl+F9)\n# 3. Choose a name and icon, then press Build .exe\n# 4. Click "Open app" when it finishes',
       task: 'Build one of your programs into an .exe.',
