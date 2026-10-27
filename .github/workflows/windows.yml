@@ -39,7 +39,7 @@ jobs:
 
       # npm run build:runtime, but with the Python set up above: py -3 could pick another one.
       - name: Build the Tuff runtime
-        run: python -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --hidden-import tuff_tterm --hidden-import tuff_tap --hidden-import tuff_atgui --hidden-import ssl --hidden-import certifi --hidden-import tuff_view --add-data ../tuff_view_web:tuff_view_web --hidden-import tuff_tgame --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py
+        run: python -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --hidden-import tuff_tterm --hidden-import tuff_tap --hidden-import tuff_tmusic --hidden-import tuff_atgui --hidden-import ssl --hidden-import certifi --hidden-import tuff_view --add-data ../tuff_view_web:tuff_view_web --hidden-import tuff_tgame --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py
 
       - run: npm ci
 
