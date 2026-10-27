@@ -4540,6 +4540,9 @@ PY_ONLY = {
     "slice": "Take a part with [ ], like items[1:3] (positions 1 to 3, both included).",
 }
 
+# tgame's sprite-sheet animation (1.5.0): the sprite methods Checker.check_flipbook looks at.
+FLIP_METHODS = ("frames", "frame", "animation", "play")
+
 
 class Checker:
     """Finds mistakes without running the program. It only reports what is certain to go wrong
@@ -4603,6 +4606,7 @@ class Checker:
         self.statement_call = None  # a call on a line of its own: its answer isn't used
         self.trying = 0  # inside how many try: blocks (a wrong key there may be on purpose: catch gets its message)
         self.base_dir = base_dir
+        self.flip_names = None  # the animations the program's sprites make (run() fills it in: animation_names)
 
     # ---- what the program makes, and where
     def collect(self, body, scope, top_level=True):
@@ -4656,6 +4660,7 @@ class Checker:
         kinds = [self.kind(n) for n in nodes(self.program) if n.kind == "call" and n.fn.kind == "attr"]
         self.makes_window = "window" in kinds
         self.makes_game = "game" in kinds or "world" in kinds  # tgame: atgui widgets on its panels and screens
+        self.flip_names = self.animation_names()  # the animations sprite:play can play (None: can't know them all)
         self.body(self.program, self.top, in_loop=False)
         self.check_top_level()
         self.check_one_terrain()
@@ -5860,6 +5865,83 @@ class Checker:
             self.check_physics_number(e, rule)
         if obj in tg.get("kit_inputs", {}) and name in tg["kit_inputs"][obj]:
             self.check_kit_inputs(e, obj, tg)
+        if obj == "sprite" and name in FLIP_METHODS:
+            self.check_flipbook(e)
+
+    def check_flipbook(self, e):
+        """Sprite-sheet animation (1.5.0): sprite:frames, :frame, :animation and :play written with something that
+        can't be right. Frames are numbered from 1, a picture is cut into 1 or more frames each way, an animation has a
+        list of frames and a speed above 0, and :play's second input is true or false. :play with a name no
+        sprite:animation in the program makes, but only when every one of them names its animation as text, and the
+        program makes the game and imports no files of its own (they could make more: animation_names)."""
+        name, args = e.name, e.args
+        o = e.obj.name if e.obj.kind == "var" else "hero"
+        example = f'{o}:animation("walk", [1, 2, 3, 4], 10)'
+
+        def number(a):
+            if a.kind == "neg" and a.value.kind == "const" and isinstance(a.value.value, (int, float)) and not isinstance(a.value.value, bool):
+                return -a.value.value
+            if a.kind == "const" and isinstance(a.value, (int, float)) and not isinstance(a.value, bool):
+                return a.value
+            return None
+
+        def frame_no(a):  # a frame number written in the code that can't be one
+            v = number(a)
+            if v is not None and (v < 1 or v != int(v)):
+                self.problem(a, f"Frames are numbered from 1 (the top left one), so there's no frame {to_text(v)}.")
+
+        if name == "frames":
+            for a in args:
+                v = number(a)
+                if v is not None and (v < 1 or v != int(v)):
+                    self.problem(a, f"{o}:frames needs how many frames across, then how many down (1 if you leave it out), "
+                                    f"as whole numbers from 1, like {o}:frames(4) or {o}:frames(4, 2).")
+        elif name == "frame" and args:
+            frame_no(args[0])
+        elif name == "animation" and len(args) >= 2:
+            first, frames = args[0], args[1]
+            if first.kind == "const" and not isinstance(first.value, str):
+                self.problem(first, f"{o}:animation needs a name as text first, like {example}.")
+            if frames.kind == "list":
+                if not frames.items:
+                    self.problem(frames, f"An animation needs at least one frame, like {example}.")
+                for a in frames.items:
+                    frame_no(a)
+            elif self.kind(frames) in ("$number", "$text", "$bool", "$dict"):
+                self.problem(frames, f"{o}:animation needs its frames as a list, like {example}.")
+            fps = number(args[2]) if len(args) > 2 else None
+            if fps is not None and fps <= 0:
+                self.problem(args[2], f"{o}:animation's last input is how many frames a second, above 0, like {example}.")
+        elif name == "play" and args:
+            if len(args) > 1 and args[1].kind == "const" and not isinstance(args[1].value, bool):
+                self.problem(args[1], f"{o}:play's second input is true (again and again, the same as leaving it out) or "
+                                      f"false (once), like {o}:play(\"jump\", false).")
+            wanted = self.fixed_text(args[0])
+            known = self.flip_names
+            if wanted is not None and known is not None and wanted not in known:
+                if known:
+                    listed = ", ".join(f'"{n}"' for n in sorted(known))
+                    close = difflib.get_close_matches(wanted, sorted(known), n=1, cutoff=0.6)
+                    hint = f' Did you mean "{close[0]}"?' if close else ""
+                    self.problem(args[0], f"There's no animation called \"{wanted}\". This program makes {listed}.{hint}")
+                else:
+                    self.problem(args[0], f"There's no animation called \"{wanted}\". Make it first, like "
+                                          f"{o}:animation(\"{wanted}\", [1, 2, 3, 4], 10), then {o}:play(\"{wanted}\").")
+
+    def animation_names(self):
+        """Every name the program's sprite:animation calls give (as text), or None when the checker can't know them
+        all: one is made from a variable or a sum, the program imports a file of its own, or it doesn't make the game
+        itself (a file of functions another program imports, which may make the animations)."""
+        if not self.makes_game or any(name not in LIBRARIES for name in self.imports):
+            return None
+        names = set()
+        for n in nodes(self.program):
+            if n.kind == "method" and n.name == "animation" and n.args:
+                text = self.fixed_text(n.args[0])
+                if text is None:
+                    return None
+                names.add(text)
+        return names
 
     def check_physics_inputs(self, e, obj, fn, physics, bare_fix):
         """How many inputs a physics method got. A spot ([x, y, z], or [x, y] in 2D) can go in place of its x, y and z,
@@ -6407,6 +6489,8 @@ class Checker:
 Checker.HANDLER_POS = {**Checker.HANDLER_POS, "clicked": 0, "hover": 0, "focus": 0, "key": 1, "closed": 0, "item": 1}
 # And the game kit's: enemy:on_death(gone), npc:on_talk(talk), game:countdown(60, times_up).
 Checker.HANDLER_POS = {**Checker.HANDLER_POS, "on_death": 0, "on_talk": 0, "countdown": 1}
+# 1.5.0: hero:on_done(landed), when an animation that plays once ends.
+Checker.HANDLER_POS = {**Checker.HANDLER_POS, "on_done": 0}
 
 
 # ---------------------------------------------------------------- Tuff Engine's preview (tuff.py --scene)

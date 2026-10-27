@@ -3,6 +3,7 @@
 // frame, at the display's own rate. Input goes back to Python as batched events.
 
 import * as anim from './anim.js';  // models that move by themselves: swaying trees, spinning coins, walking people, water
+import * as flip from './flip.js';  // tgame's sprite sheets: a picture cut into frames, and animations that step through them
 import * as fx from './fx.js';      // tgame's effects: a shake, pop text, rain and snow, stars; its clock runs at the game's speed
 import './hud.js';  // tgame's HUD: health bars, the countdown, the arrow and the minimap (the <tg-hud> element)
 import './interact.js';  // tgame's speech bubbles (npc:say), drawn for Python's view.js as window.tgInteract
@@ -271,6 +272,7 @@ const engineCalls = {
       draw_ms_per_frame: stats.frames ? stats.drawMs / stats.frames : 0,
       objects: objs.size, waiting: Math.max(0, batches.length - 1),
       physics: physics ? physics.info() : physicsJob ? 'loading' : null, anim: anim.info(), level: level.info(),
+      flip: flip.info(),
     };
     if (reset) Object.assign(stats, { since: now, frames: 0, draws: 0, gaps: [], batches: 0, cmds: 0, applyMs: 0, drawMs: 0 });
     return out;
@@ -396,7 +398,8 @@ function setCanvas(n, props) {
 
 const SHAPE_DEFAULTS = {
   rect: { w: 20, h: 20 }, circle: { r: 10 }, ellipse: { w: 30, h: 20 }, line: { points: [] }, poly: { points: [] },
-  text: { text: '', size: 16, font: 'Segoe UI, system-ui, sans-serif', bold: false, ax: 0, ay: 0 }, image: { src: '' },
+  text: { text: '', size: 16, font: 'Segoe UI, system-ui, sans-serif', bold: false, ax: 0, ay: 0 },
+  image: { src: '', cells: null, cell: 1, play: null },  // cells, cell and play: a sprite sheet's (flip.js)
 };
 
 function makeShape(type) {
@@ -416,6 +419,7 @@ function setShape(n, props) {
     p[k] = v;
     if (k === 'text' || k === 'size' || k === 'font' || k === 'bold') n.fontStr = '';
   }
+  if ('play' in props || 'cells' in props) flip.changed(n, props);
   if (n.phys || 'phys' in props) physicsChanged(n, props);
   n.host.dirty = true;
 }
@@ -455,7 +459,7 @@ function shapeSize(ctx, s) {
     case 'text': return [textSize(ctx, s), p.size];
     case 'image': {
       const img = images.get(p.src);
-      const f = p.frame;
+      const f = flip.rect(s, img);  // its own frame, or the frame of its sprite sheet it shows
       const nw = f ? f[2] : img && img.naturalWidth ? img.naturalWidth : 0;
       const nh = f ? f[3] : img && img.naturalHeight ? img.naturalHeight : 0;
       return [p.w == null ? nw : p.w, p.h == null ? nh : p.h];
@@ -575,7 +579,7 @@ function drawShape(ctx, s, k, ox, oy) {
       const img = image(p.src);
       if (!img) break;
       const [w, h] = shapeSize(ctx, s);
-      const f = p.frame;
+      const f = flip.rect(s, img);
       if (f) ctx.drawImage(img, f[0], f[1], f[2], f[3], -p.ax * w, -p.ay * h, w, h);
       else ctx.drawImage(img, -p.ax * w, -p.ay * h, w, h);
       break;
@@ -1999,6 +2003,7 @@ function tick(now) {
   const game = fx.time(now);  // the game's clock: physics, models and pads go at the game's speed (slow motion)
   try { anim.frame(now, game, scenes); } catch (err) { report(err, 'animating'); }  // anim.js: before the scenes are drawn
   level.frame(game);  // level.js's pads, on anim.js's steps (it reports its own errors)
+  try { flip.step(game); } catch (err) { report(err, 'animating a picture'); }  // flip.js: sprite sheets, at the game's speed
   if (stats.last) {
     stats.gaps.push(now - stats.last);
     if (stats.gaps.length > 4000) stats.gaps.splice(0, 1000);

@@ -556,6 +556,24 @@ window.TUFF_DOCS = {
   }
 })();
 
+// 1.5.0: tgame's sprite sheets. A picture cut into frames shows one of them, or plays an animation that steps through
+// them by itself. frame, play and stop are other names' too (game:frame(), line:play, spinner:stop): this use goes at
+// the end of their docs.
+(() => {
+  const docs = window.TUFF_METHOD_DOCS;
+  Object.assign(docs, {
+    frames: ['hero:frames(4, 2)', 'tgame (2D): cuts a picture (a sprite sheet) into frames, 4 across and 2 down (leave out the 2 for one row). They are numbered from 1, left to right, then the next row. It shows frame 1, as wide as game:image\'s width (or one frame\'s own size).'],
+    animation: ['hero:animation("walk", [1, 2, 3, 4], 10)', 'tgame (2D): names some frames of a picture cut with :frames, in the order they show, and how many show a second (10 if you leave it out). Then hero:play("walk").'],
+    on_done: ['hero:on_done(landed)', 'tgame (2D): runs landed(sprite, name) when an animation that plays once, like hero:play("jump", false), has shown its last frame.'],
+  });
+  const also = {
+    frame: 'A picture cut into frames (tgame): hero:frame(3) shows frame 3, and hero:frame() gives the frame it shows now.',
+    play: 'In tgame, hero:play("walk") plays a picture\'s animation again and again, and hero:play("jump", false) plays it once (it stays on its last frame). Playing the one that plays already carries on, so it can go in every frame.',
+    stop: 'In tgame, hero:stop() stops a picture\'s animation on the frame it shows.',
+  };
+  for (const [name, text] of Object.entries(also)) docs[name] = [docs[name][0], `${docs[name][1]} ${text}`];
+})();
+
 const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average',
   'now', 'today', 'time', 'date', 'sin', 'cos', 'tan', 'log'];
 // Libraries that are always there, with nothing to mention (1.4.0's file.read...). They aren't functions, and

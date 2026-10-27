@@ -5404,6 +5404,424 @@ def t_fstrings(c):
             "after a template (with a dictionary or another template in it) the next line is code again", [t["states"], t["next"]])
 
 
+# ---------------------------------------------------------------- 1.5.0: sprite sheets (sprite:frames, :animation, :play)
+# games/hero_sheet.png is 4 frames across and 2 down, 32 x 32 pixels each, every frame its own colour (FRAME_COLORS)
+# with a white dot that moves along.
+FRAME_COLORS = ["#e5484d", "#f97316", "#e2a508", "#22a35a", "#14b8a6", "#3574f0", "#8b5cf6", "#ec4899"]
+
+FRAMES_SCENE = """mention tgame
+
+game = tgame.window("Frames", 600, 400)
+hero = game:image("hero_sheet.png", 100, 300, 64)
+hero:frames(4, 2)
+hero:animation("walk", [1, 2, 3, 4], 10)
+hero:animation("jump", range(5, 8), 12)
+hero:play("walk")
+hero:flip()
+coin = game:image("hero_sheet.png", 300, 100)
+coin:frames(4, 2)
+coin:frame(6)
+badge = game:hud():image("hero_sheet.png", 40, 40, 16)
+badge:frames(4)
+plain = game:image("hero_sheet.png", 500, 100)
+
+while game:open():
+    dt = game:frame()
+"""
+
+# Run headless (headless.py: every frame is 1/60 s): a walk played every frame carries on, a jump plays once and its
+# on_done function runs, stop holds the frame, and pausing holds everything, the page's canvases too.
+FRAMES_RUN = """mention tgame
+
+game = tgame.window("Flip", 400, 300)
+hero = game:image("hero_sheet.png", 100, 100, 64)
+hero:frames(4, 2)
+hero:animation("walk", [1, 2, 3, 4], 10)
+hero:animation("jump", [5, 6, 7, 8], 20)
+hero:play("walk")
+say "start " + hero:frame()
+coin = game:hud():image("hero_sheet.png", 30, 30)
+coin:frames(4, 2)
+coin:animation("spin", [5, 6], 4)
+coin:play("spin")
+paused_frames = 0
+stage = "walk"
+
+func landed(who, name):
+    say "done " + name + " " + who:frame() + " at " + round(game:time(), 2)
+    who:play("walk")
+    say "then " + who:frame()
+
+hero:on_done(landed)
+
+func step(dt):
+    if stage is "walk":
+        hero:play("walk")
+    if stage is "paused":
+        paused_frames += 1
+        if paused_frames is 30:
+            say "while paused " + hero:frame()
+            game:resume()
+            stage = "after pause"
+
+func check():
+    say "at 0.25 " + hero:frame()
+    stage = "jump"
+    hero:play("jump", false)
+    say "jump " + hero:frame()
+
+func halt():
+    hero:stop()
+    say "stopped " + hero:frame()
+
+func later():
+    say "still " + hero:frame()
+    hero:play("walk")
+    stage = "paused"
+    say "before pause " + hero:frame()
+    game:pause("Paused")
+
+func finish():
+    say "end " + coin:frame()
+    game:close()
+
+game:every_frame step
+game:after(0.25, check)
+game:after(0.82, halt)
+game:after(1.2, later)
+game:after(1.55, finish)
+"""
+
+# Mistakes when it runs (Tuff Engine's preview shows the same error, on the same line): (code after the hero is made
+# and cut into 4 x 2 frames, the line, the message).
+FRAMES_RUN_ERRORS = [
+    ('b = game:box(1, 2)\nb:frames(4)\n', 6, "Only pictures have frames (:frames)."),
+    ('b = game:box(1, 2)\nb:stop()\n', 6, "To stop a sprite moving, use sprite:speed(0, 0)."),
+    ('pic = game:image("hero_sheet.png", 1, 2)\npic:frame(2)\n', 6, ":frame needs the picture cut into frames first"),
+    ('hero:frames(0)\n', 5, ":frames needs how many frames across"),
+    ('hero:frames(10000, 2)\n', 5, ":frames can cut a picture into 10000 frames at most, not 20000."),
+    ('hero:frame(9)\n', 5, ":frame: this picture has 8 frames (1 to 8), so there's no frame 9."),
+    ('hero:frame(0)\n', 5, ":frame: frames are numbered from 1 (the top left one), so there's no frame 0."),
+    ('hero:animation("walk", [1, 9], 10)\n', 5, "there's no frame 9"),
+    ('hero:animation("walk", [], 10)\n', 5, ':animation needs at least one frame, like hero:animation("walk", [1, 2, 3, 4], 10).'),
+    ('hero:animation("walk", 3, 10)\n', 5, ':animation needs its frames as a list, like hero:animation("walk", [1, 2, 3, 4], 10).'),
+    ('hero:animation("walk", [1, 2], 0)\n', 5, ":animation's speed is how many frames a second, above 0"),
+    ('hero:animation(5, [1, 2], 10)\n', 5, ":animation needs a name as text first"),
+    ('hero:play("walk")\n', 5, 'There\'s no animation called "walk". Make it first, like hero:animation("walk", [1, 2, 3, 4], 10)'),
+    ('hero:animation("walk", [1, 2], 10)\nhero:play("wlak")\n', 6, 'There\'s no animation called "wlak". This picture has "walk". Did you mean "walk"?'),
+    ('hero:animation("walk", [1, 2], 10)\nhero:play("walk", "once")\n', 6, ":play's second input is true (again and again"),
+    ('hero:animation("jump", [5, 6], 10)\nhero:frames(4)\nhero:play("jump")\n', 7,
+     'The animation "jump" shows frame 5, but this picture has 4 frames now (1 to 4).'),
+    ('hero:on_done("landed")\n', 5, ":on_done needs a function name"),
+]
+
+# The checker: what it accepts (every :animation it can't read, or a file of the program's own, keeps it quiet about
+# :play's names), and the mistakes it's sure of. After a window and hero = game:image("hero_sheet.png", 100, 100, 64).
+FRAMES_GOOD = [
+    'hero:frames(4, 2)\nhero:animation("walk", [1, 2, 3, 4], 10)\nhero:play("walk")\n',
+    'hero:frames(4)\nhero:animation("walk", range(1, 4))\nhero:play("walk", false)\nhero:stop()\nn = hero:frame()\nhero:frame(n + 1)\n',
+    'hero:frames(4)\nfunc make(name):\n    hero:animation(name, [1, 2], 8)\nmake("walk")\nhero:play("walk")\n',
+    'hero:frames(4)\nfunc landed(who, name):\n    who:play("idle")\nhero:animation("idle", [1], 1)\nhero:on_done(landed)\n',
+    'hero:frames(4)\nfunc landed():\n    say "done"\nhero:on_done(landed)\n',
+    'hero:frames(4)\nhero:animation("walk", [1, 2], 10)\nstate = "walk"\nhero:play(state)\n',
+    'hero:frames(4)\nfor n in ["a", "b"]:\n    hero:animation(n, [1], 2)\nhero:play("c")\n',
+    'hero:frames(4)\nhero:animation("walk", [1, 2], 10)\nhero:play("walk", true)\nx = hero:frames(2):frame(2)\n',
+    'hero:frames(4)\nhero:animation("walk", [1, 2], 0.5)\nhero:animation("all", [4, 3, 2, 1, 2, 3])\n',
+    'hero:frames(4)\nname = "run"\nhero:animation(name, [1, 2], 8)\nhero:play(name)\n',
+    'hud = game:hud()\nicon = hud:image("hero_sheet.png", 30, 30)\nicon:frames(4, 2)\nicon:frame(8)\n',
+    'w = tgame.world("x")\nbadge = w:hud():image("hero_sheet.png", 40, 40)\nbadge:frames(4, 2)\nbadge:animation("spin", [5, 6], 4)\nbadge:play("spin")\n',
+]
+FRAMES_BAD = [
+    ('hero:frames(0)\n', "hero:frames needs how many frames across, then how many down (1 if you leave it out), as whole numbers from 1"),
+    ('hero:frames(4, -1)\n', "hero:frames needs how many frames across"),
+    ('hero:frames(2.5)\n', "hero:frames needs how many frames across"),
+    ('hero:frames(4)\nhero:frame(0)\n', "Frames are numbered from 1 (the top left one), so there's no frame 0."),
+    ('hero:frames(4)\nhero:animation("walk", [0, 1, 2], 10)\n', "so there's no frame 0."),
+    ('hero:frames(4)\nhero:animation("walk", [1, 1.5], 10)\n', "so there's no frame 1.5."),
+    ('hero:frames(4)\nhero:animation("walk", [], 10)\n', "An animation needs at least one frame"),
+    ('hero:frames(4)\nhero:animation("walk", [1, 2], 0)\n', "hero:animation's last input is how many frames a second, above 0"),
+    ('hero:frames(4)\nhero:animation("walk", [1, 2], -3)\n', "hero:animation's last input is how many frames a second, above 0"),
+    ('hero:frames(4)\nhero:animation(3, [1, 2], 10)\n', "hero:animation needs a name as text first"),
+    ('hero:frames(4)\nhero:animation("walk", 4, 10)\n', "hero:animation needs its frames as a list"),
+    ('hero:frames(4)\nhero:animation("walk", [1, 2], 10)\nhero:play("wlak")\n',
+     'There\'s no animation called "wlak". This program makes "walk". Did you mean "walk"?'),
+    ('hero:frames(4)\nhero:play("walk")\n', 'There\'s no animation called "walk". Make it first, like hero:animation("walk", [1, 2, 3, 4], 10)'),
+    ('hero:frames(4)\nname = "run"\nhero:animation(name, [1, 2], 8)\nhero:play("walk")\n', 'There\'s no animation called "walk". This program makes "run".'),
+    ('hero:frames(4)\nhero:animation("walk", [1, 2], 10)\nhero:play("walk", "once")\n', "hero:play's second input is true"),
+    ('hero:frames(4)\nfunc landed(a, b, c):\n    say a\nhero:on_done(landed)\n', "landed() needs 3 inputs, but hero:on_done gives it 2 inputs"),
+    ('hero:frames(4)\nhero:on_done(landed)\n', "I don't know what 'landed' is."),
+    ('hero:frames(4)\nhero:on_done(landed())\nfunc landed():\n    say 1\n', "Pass the function's name without brackets"),
+    ('hero:animate("walk")\n', "A sprite doesn't have :animate. Use :play instead."),
+    ('hero:sprite_sheet(4)\n', "A sprite doesn't have :sprite_sheet. Use :frames instead."),
+    ('hero:on_finish(done)\n', "A sprite doesn't have :on_finish. Use :on_done instead."),
+    ('hero:frames(4, 2, 1)\n', "sprite:frames got the wrong number of inputs (3)."),
+    ('hero:play()\n', "sprite:play got the wrong number of inputs (0)."),
+    ('hero:animation("walk")\n', "sprite:animation got the wrong number of inputs (1)."),
+    ('w = tgame.world("x")\nt = w:box(0, 0, 0)\nt:frames(4)\n', "An object doesn't have :frames."),
+]
+
+
+def headless(name, code, frames=0, events=None):
+    """Runs a tgame program with no window (headless.py): (exit code, its say lines, stderr, every frame's changes),
+    or None with --runtime (headless.py needs tuff.py)."""
+    if RUNTIME:
+        return None
+    folder = os.path.join(OUT, "frames")
+    path = os.path.join(folder, name + ".tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(code)
+    out = os.path.join(folder, name + ".json")
+    args = [sys.executable, os.path.join(HERE, "headless.py"), path, out, str(frames)]
+    if events:
+        with open(os.path.join(folder, name + ".events.json"), "w", encoding="utf-8") as f:
+            json.dump(events, f)
+        args.append(os.path.join(folder, name + ".events.json"))
+    p = subprocess.run(args, cwd=folder, capture_output=True, text=True, encoding="utf-8", timeout=120,
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    return p.returncode, [x for x in p.stdout.splitlines() if x.strip()], p.stderr, read_json(out) or []
+
+
+def frame_sets(cmds, node, keys=("cells", "cell", "play", "attrs")):
+    """[(the frame it went in, its changes)] for one object, keeping only these keys."""
+    out, frame = [], 0
+    for cmd in cmds:
+        if cmd[0] == "f":
+            frame = cmd[1] + 1
+        elif cmd[0] == "s" and cmd[1] == node and any(k in cmd[2] for k in keys):
+            out.append((frame, {k: v for k, v in cmd[2].items() if k in keys}))
+    return out
+
+
+def t_frames(c):
+    """1.5.0, headless (no window): sprite sheets. Tuff Engine's preview (--scene) sends the grid, the frame and the
+    animation playing; a run (headless.py, 1/60 s a frame) plays, carries on, plays once and runs on_done, stops and
+    pauses; the mistakes a run finds, and those the checker is sure of; the page's flip.js in Node; the editor's docs;
+    the guide's example; and Sprite Studio's "Use in code"."""
+    folder = os.path.join(OUT, "frames")
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(GAMES, "hero_sheet.png"), "rb") as f, open(os.path.join(folder, "hero_sheet.png"), "wb") as g:
+        g.write(f.read())
+    # Tuff Engine's preview: what the setup sends
+    src = os.path.join(folder, "frames_scene.tuf")
+    with open(src, "w", encoding="utf-8") as f:
+        f.write(FRAMES_SCENE)
+    code, out, err, d, secs = scene(src)
+    c.check(code == 0 and d.get("stopped") == "loop" and d.get("error") is None, f"--scene runs the setup ({secs:.1f} s)", (d.get("stopped"), d.get("error"), err[-300:]))
+    batch = d.get("batch") or []
+    things = {t.get("var"): t for t in d.get("things", [])}
+    ids = {name: (things.get(name, {}).get("ids") or [None])[0] for name in ("hero", "coin", "badge", "plain")}
+    sets = {name: [cmd[2] for cmd in batch if cmd[0] == "s" and cmd[1] == i] for name, i in ids.items()}
+    hero = sets["hero"][-1] if sets["hero"] else {}
+    c.check(hero.get("cells") == [4, 2] and hero.get("cell") == 1 and hero.get("play") == [[1, 2, 3, 4], 10, True]
+            and hero.get("w") == 64 and hero.get("h") == 64 and hero.get("sx") == -1,
+            "hero: 4 x 2 frames, walk playing at 10 a second, one frame 64 wide (and 64 high), and :flip still mirrors it", hero)
+    coin = sets["coin"][-1] if sets["coin"] else {}
+    c.check(coin.get("cells") == [4, 2] and coin.get("cell") == 6 and coin.get("play") is None and coin.get("w") == 32 and coin.get("h") == 32,
+            "coin (no width given): frame 6, one frame's own size (32 x 32)", coin)
+    badge = sets["badge"][-1] if sets["badge"] else {}
+    c.check(things.get("badge", {}).get("layer") == "hud" and badge.get("cells") == [4, 1] and badge.get("w") == 16 and badge.get("h") == 32,
+            "badge on the HUD: 4 frames in a row, 16 wide (and 32 high, the shape of one frame)", badge)
+    plain = [cmd for cmd in batch if cmd[0] in ("c", "s") and cmd[1] == ids["plain"]]
+    c.check(plain and not any(k in cmd[-1] for cmd in plain for k in ("cells", "cell", "play", "pic", "sized")),
+            "a picture never cut into frames sends what it always did", plain)
+    want = {"cells": [4, 2], "frame": 1, "playing": "walk", "loop": True,
+            "animations": {"walk": {"frames": [1, 2, 3, 4], "fps": 10}, "jump": {"frames": [5, 6, 7, 8], "fps": 12}}}
+    c.check(things.get("hero", {}).get("frames") == want and things.get("coin", {}).get("frames", {}).get("frame") == 6
+            and "frames" not in things.get("plain", {}), "the dump has each sheet's grid, frame and animations", things.get("hero", {}).get("frames"))
+    # Mistakes, when it runs
+    for i, (more, line, msg) in enumerate(FRAMES_RUN_ERRORS):
+        path = os.path.join(folder, f"run_error{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('mention tgame\ngame = tgame.window("x")\nhero = game:image("hero_sheet.png", 100, 100, 64)\nhero:frames(4, 2)\n' + more)
+        e = scene(path)[3].get("error") or {}
+        c.check(e.get("line") == line and msg in e.get("message", ""), f"running it: {msg[:70]}", e)
+    # A run, with no window
+    run = headless("frames_run", FRAMES_RUN)
+    if run is None:
+        c.check(True, "--runtime: skipped the headless run (it needs tuff.py)")
+    else:
+        rc, said, err, cmds = run
+        c.check(rc == 0 and "Tuff error" not in err and "Traceback" not in err, "the headless run ends cleanly", err[-500:])
+        c.check(said == ["start 1", "at 0.25 3", "jump 5", "done jump 8 at 0.45", "then 1", "stopped 4", "still 4", "before pause 1",
+                         "while paused 1", "end 5"],
+                "walk carries on when played every frame, jump plays once then on_done runs, stop holds, a pause holds (the frames it said)", said)
+        hero_id = next((cmd[1] for cmd in cmds if cmd[0] == "c" and cmd[3] == "image"), None)
+        got = frame_sets(cmds, hero_id)
+        walk, jump = [[1, 2, 3, 4], 10, True], [[5, 6, 7, 8], 20, False]
+        c.check([g[1].get("play", "-") for g in got] == [walk, jump, walk, None, walk],
+                "the page hears of each play once (not every frame), the end of the jump, the stop and the walk again", got)
+        c.check(len(got) == 5 and got[0][0] == 0 and got[1][0] == 16 and got[2][0] == 28 and got[2][1].get("cell") == 8 and got[3][1].get("cell") == 4,
+                "on the frames it happened in: the jump at 0.25 s, its end at 0.45 s (on frame 8), the stop on frame 4", got)
+        paused = [(f, cmd[1], cmd[2]["attrs"]) for f, cmd in enumerate_frames(cmds) if cmd[0] == "s" and "attrs" in cmd[2]]
+        c.check([p[2] for p in paused] == [{"data-paused": True}] * 2 + [{"data-paused": False}] * 2 and {p[1] for p in paused} == {1, 3}
+                and paused[0][0] == 73 and paused[2][0] == 102,
+                "pausing tells the game's canvas and the HUD's (data-paused), and resuming takes it off again", paused)
+        rc, said, err, cmds = headless("frames_still", 'mention tgame\ngame = tgame.window("x")\nb = game:box(1, 2)\nb:speed(10, 0)\n'
+                                                       'func step(dt):\n    nil\ngame:every_frame step\ngame:pause()\n', frames=20)
+        c.check(rc == 0 and not any(cmd[0] == "s" and "attrs" in cmd[2] for cmd in cmds),
+                "a game without sprite sheets sends nothing new when it pauses", [cmd for cmd in cmds if cmd[0] == "s"][:6])
+    # The checker
+    for i, src in enumerate(FRAMES_GOOD):
+        path = os.path.join(folder, f"good{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('mention tgame\ngame = tgame.window("x")\nhero = game:image("hero_sheet.png", 100, 100, 64)\n' + src)
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(p.returncode == 0 and p.stdout.strip() == "OK", f"--check accepts: {' / '.join(src.strip().splitlines())[:80]}", (p.stdout + p.stderr)[:400])
+    for i, (src, want) in enumerate(FRAMES_BAD):
+        path = os.path.join(folder, f"bad{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('mention tgame\ngame = tgame.window("x")\nhero = game:image("hero_sheet.png", 100, 100, 64)\n' + src)
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(p.returncode == 1 and want in p.stderr, f"--check catches: {want[:80]}", p.stderr[:400])
+    # A file of the program's own could make more animations: then :play's name isn't checked
+    with open(os.path.join(folder, "moves.tuf"), "w", encoding="utf-8") as f:
+        f.write('func add_moves(who):\n    who:animation("walk", [1, 2], 10)\n')
+    path = os.path.join(folder, "own_file.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('mention tgame\nimport moves\ngame = tgame.window("x")\nhero = game:image("hero_sheet.png", 100, 100, 64)\n'
+                'hero:frames(4)\nhero:play("walk")\n')
+    p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    c.check("no animation called" not in p.stderr, "with a file of its own imported, --check doesn't say :play's animation is missing", p.stderr[:300])
+    # The page's side, in Node
+    try:
+        p = subprocess.run(["node", os.path.join(HERE, "flip_test.mjs"), os.path.join(REPO, "tuff_view_web", "flip.js")],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        seen = json.loads(p.stdout or "{}")
+    except FileNotFoundError:
+        seen = None
+        c.check(True, "Node isn't installed: skipped flip.js and the editor's docs")
+    if seen is not None:
+        c.check(seen.get("whole") is None and seen.get("cell6") == [32, 32, 32, 32] and seen.get("not_loaded") is None
+                and seen.get("own_frame") == [10, 20, 30, 40],
+                "flip.js: frame 6 of 4 x 2 is the second row's second (32, 32); a picture not cut (or not loaded) is drawn whole", seen)
+        c.check([seen.get(k) for k in ("start", "at_025", "paused", "after_pause")] == [1, 3, 3, 1] and seen.get("rect_025") == [64, 0, 32, 32]
+                and seen.get("dirty_while_paused") is False,
+                "flip.js: walk at 10 a second shows frame 3 at 0.25 s, holds still while paused, and goes on after", seen)
+        c.check([seen.get(k) for k in ("jump_start", "jump_mid", "jump_end", "playing_after_jump", "after_end")] == [5, 7, 8, 0, 8],
+                "flip.js: a jump played once stays on its last frame and stops stepping", seen)
+        c.check(seen.get("after_gap") == 2, "flip.js: after a 5 s gap (a hidden window) it steps 0.1 s, not 5", seen.get("after_gap"))
+        c.check(seen.get("info") == {"playing": 2, "shown": [[2, 2], [3, 1]]} and seen.get("info_gone") == {"playing": 0, "shown": []},
+                "flip.js: its stats list the sheets and their frames, and let removed ones go", (seen.get("info"), seen.get("info_gone")))
+        # engine.js itself, in a pretend page: tgame's commands in, drawImage calls out
+        p = subprocess.run(["node", os.path.join(HERE, "engine_flip_test.mjs"), os.path.join(REPO, "tuff_view_web", "engine.js")],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        try:
+            page = json.loads(p.stdout or "{}")
+        except ValueError:
+            page = {}
+        src = lambda name: (page.get(name) or [None] * 9)[1:5]  # noqa: E731 (the part of the picture it drew)
+        c.check(page.get("errors") == [] and len(page.get("whole") or []) == 5, "engine.js draws a picture never cut into frames whole, as before",
+                (page.get("whole"), page.get("errors"), p.stderr[-300:]))
+        c.check(src("cell6") == [32, 32, 32, 32] and (page.get("cell6") or [0] * 9)[7:] == [64, 64],
+                "engine.js draws frame 6's part of the picture, 64 x 64 on screen", page.get("cell6"))
+        c.check(src("walk_025") == [64, 0, 32, 32] and src("after_pause") == [96, 0, 32, 32] and page.get("paused_same") is True
+                and page.get("paused_draws") == 1, "engine.js steps the walk to frame 3, holds still (drawing nothing new) while the canvas is "
+                "paused, then goes on to frame 4", page)
+        c.check(src("stopped") == [64, 32, 32, 32] and page.get("stats") == {"playing": 0, "shown": [[2, 7]]},
+                "engine.js shows the frame a stop gives (7), and its stats say so", (page.get("stopped"), page.get("stats")))
+        # The editor's hover docs and completions
+        p = subprocess.run(["node", "-e", LOAD_LANG, os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        t = json.loads(p.stdout)
+        docs = t["methods"]
+        c.check(all(docs.get(m, ["", ""])[1].startswith("tgame") for m in ("frames", "animation", "on_done"))
+                and all(m in t["games"] and m not in t["plain"] for m in ("frames", "animation", "on_done")),
+                "frames, animation and on_done have tgame hover docs, offered after ':' in tgame files only", {m: docs.get(m) for m in ("frames", "animation", "on_done")})
+        c.check("hero:frame(3)" in docs["frame"][1] and docs["frame"][0] == "game:frame()" and 'hero:play("jump", false)' in docs["play"][1]
+                and docs["play"][1].startswith("Plays an animation on a line") and "hero:stop()" in docs["stop"][1] and docs["stop"][0] == "spinner:stop",
+                "frame, play and stop keep their docs and add a sprite sheet's", {m: docs[m] for m in ("frame", "play", "stop")})
+        import tuff_tgame
+        sprite = sorted(tuff_tgame.tables()["kinds"]["sprite"])
+        c.check(not [m for m in sprite if m not in docs], "every sprite method has hover docs", [m for m in sprite if m not in docs])
+    # The guide's example: --check, and a headless run where Space jumps and right walks
+    guide = open(os.path.join(REPO, "tuffcode", "mcp", "tuff-guide.md"), encoding="utf-8").read()
+    start = guide.find("\n#### Animated pictures (sprite sheets)")
+    blocks = re.findall(r"```tuff\n(.*?)```", guide[start:guide.find("\n#### ", start + 1)], re.S) if start >= 0 else []
+    c.check(len(blocks) == 1 and ":frames(" in blocks[0], "the guide's tgame section has a sprite sheet example", len(blocks))
+    if blocks:
+        path = os.path.join(folder, "guide_sheet.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(blocks[0])
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(p.returncode == 0, "the guide's sprite sheet example passes --check", (p.stdout + p.stderr)[:400])
+        run = headless("guide_sheet", blocks[0], frames=90, events={"10": [{"type": "keydown", "code": "Space"}], "12": [{"type": "keyup", "code": "Space"}],
+                                                                    "40": [{"type": "keydown", "code": "ArrowRight"}], "70": [{"type": "keyup", "code": "ArrowRight"}]})
+        if run is not None:
+            rc, said, err, cmds = run
+            hero_id = next((cmd[1] for cmd in cmds if cmd[0] == "c" and cmd[3] == "image"), None)
+            plays = [(f, s.get("play", "-"), s.get("cell")) for f, s in frame_sets(cmds, hero_id)]
+            jump, walk = [[5, 6, 7, 8], 12, False], [[1, 2, 3, 4], 10, True]
+            c.check(rc == 0 and "Tuff error" not in err, "and runs headless for 90 frames", err[-400:])
+            c.check(plays == [(0, None, 1), (10, jump, None), (30, None, 1), (40, walk, None), (70, None, 1)],
+                    "standing on frame 1, Space jumps once (landed after its 4 frames at 12 a second: 20 frames), right walks, "
+                    "letting go stands (and standing every frame sends nothing new)", plays)
+    # Sprite Studio's "Use in code" for a game: the sheet, cut into frames and played (not a timer swapping pictures)
+    panel = open(os.path.join(REPO, "tuffcode", "plugins", "sprite-studio", "panel.js"), encoding="utf-8").read()
+    c.check(":frames(${n})" in panel and ":animation(${q(info.name)}, ${list}, ${fps})" in panel and ":play(${q(info.name)})" in panel,
+            "Sprite Studio writes :frames, :animation and :play for a game", None)
+    code = 'walk = game:image("walk_sheet.png", 300, 200, 64)\nwalk:frames(4)\nwalk:animation("walk", [1, 2, 3, 4], 8)\nwalk:play("walk")\n'
+    with open(os.path.join(folder, "walk_sheet.png"), "wb") as f, open(os.path.join(GAMES, "hero_sheet.png"), "rb") as g:
+        f.write(g.read())
+    path = os.path.join(folder, "studio.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('mention tgame\n\ngame = tgame.window("Walk", 600, 400)\n' + code)
+    p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    c.check(p.returncode == 0, "the code it writes passes --check", (p.stdout + p.stderr)[:300])
+
+
+def enumerate_frames(cmds):
+    """(the frame each command went in, the command), leaving out the frame markers."""
+    frame = 0
+    for cmd in cmds:
+        if cmd[0] == "f":
+            frame = cmd[1] + 1
+        else:
+            yield frame, cmd
+
+
+def t_frames_window(c):
+    """1.5.0, in a real window: games/frames.tuf shows the frame tgame says it shows (each frame of hero_sheet.png is its
+    own colour), the page steps a walk by itself while Python's frame() follows the same clock, a jump plays once
+    and on_done runs, and a pause holds the page's frames still."""
+    r = play("frames", game("frames.tuf"), [
+        {"at": 0.4, "call": "hold"}, {"at": 0.7, "shot": "frames_hold.png"},
+        {"at": 0.8, "call": "walk"}, {"at": 1.3, "dump": "frames_walk1.json"}, {"at": 1.55, "dump": "frames_walk2.json"},
+        {"at": 1.8, "dump": "frames_walk3.json"},
+        {"at": 2.0, "call": "pause"}, {"at": 2.2, "dump": "frames_paused1.json"}, {"at": 3.2, "dump": "frames_paused2.json"},
+        {"at": 3.3, "shot": "frames_paused.png"}, {"at": 3.4, "call": "resume"},
+        {"at": 3.6, "call": "jump"}, {"at": 4.5, "dump": "frames_jumped.json"}, {"at": 4.6, "shot": "frames_jumped.png"},
+        {"at": 4.8, "close": True}])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    hero_box = (0.4, 0.3, 0.6, 0.7)
+    hold = r.shots.get("frames_hold.png")
+    c.check(hold and color_share(hold, hexrgb(FRAME_COLORS[1]), 40, hero_box) > 0.4,
+            "hero:frame(2) shows frame 2 (orange) and only that part of the picture", hold and color_share(hold, hexrgb(FRAME_COLORS[1]), 40, hero_box))
+    c.check(hold and color_share(hold, hexrgb(FRAME_COLORS[5]), 40, (0.02, 0.04, 0.16, 0.22)) > 0.2,
+            "the HUD's coin shows frame 6 (blue)", hold and color_share(hold, hexrgb(FRAME_COLORS[5]), 40, (0.02, 0.04, 0.16, 0.22)))
+
+    def frames_of(name):
+        d = r.dumps.get(name, {})
+        py = {f[0]: f[1] for f in d.get("frames", [])}
+        page = {s[0]: s[1] for s in ((d.get("page") or {}).get("flip") or {}).get("shown", [])}
+        return py, page
+
+    walk = [frames_of(f"frames_walk{i}.json") for i in (1, 2, 3)]
+    hero_id = min((k for py, _ in walk for k in py), default=None)
+    pairs = [(py.get(hero_id), page.get(hero_id)) for py, page in walk]
+    order = [1, 2, 3, 4]
+    near = all(a in order and b in order and (order.index(a) - order.index(b)) % 4 in (0, 1, 3) for a, b in pairs)
+    c.check(near and len({p[1] for p in pairs}) >= 2, "walking, the page steps by itself and Python's hero:frame() agrees (within a frame)", pairs)
+    p1, p2 = frames_of("frames_paused1.json"), frames_of("frames_paused2.json")
+    c.check(p1[1].get(hero_id) is not None and p1[1].get(hero_id) == p2[1].get(hero_id) and p1[0].get(hero_id) == p2[0].get(hero_id),
+            "paused for a second, the page's frame and Python's stay where they were", (p1, p2))
+    c.check(any(line.startswith("done jump") for line in r.lines), "the jump played once and on_done ran", r.lines)
+    jumped = frames_of("frames_jumped.json")
+    shot = r.shots.get("frames_jumped.png")
+    c.check(jumped[0].get(hero_id) == 8 and jumped[1].get(hero_id) == 8 and shot and color_share(shot, hexrgb(FRAME_COLORS[7]), 40, hero_box) > 0.4,
+            "after the jump it stays on frame 8 (pink), in Python, in the page and on screen", jumped)
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
@@ -5426,6 +5844,7 @@ TESTS.update({"car_enter": t_car_enter, "weight": t_weight, "sign_text": t_sign_
 TESTS.update({"recursion": t_recursion, "recursion_window": t_recursion_window, "pictures_up": t_pictures_up})  # 1.4.1
 TESTS.update({"interp": t_interp})  # 1.5.0
 TESTS.update({"fstrings": t_fstrings})  # 1.5.0
+TESTS.update({"frames": t_frames, "frames_window": t_frames_window})  # 1.5.0: sprite sheets
 
 
 def main():

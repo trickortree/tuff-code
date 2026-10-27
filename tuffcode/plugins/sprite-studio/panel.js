@@ -779,13 +779,22 @@ TuffPlugins.register('sprite-studio', (t) => {
     .slice(0, 60).join('').replace(/[. ]+$/, '') || 'sprite';
   const cleanFolder = (s) => slash(s).split('/').map((p) => p.trim().replace(/[<>:"|?*]/g, '')).filter((p) => p && p !== '.' && p !== '..').join('/');
 
+  // The library the open file uses (a tgui file gets mtgui's code), or null.
+  function fileLib() {
+    const found = /^\s*(?:mention|import)\s+(tgame|atgui|mtgui|tgui)\b/m.exec(t.editor.code() || '');
+    return found ? (found[1] === 'tgui' ? 'mtgui' : found[1]) : null;
+  }
+
+  // What saving writes. A game plays an animation from a sprite sheet (sprite:frames), so for tgame the sheet is
+  // always saved with the frames.
   function plan() {
     const name = cleanName($('[data-f="name"]').value);
     const dir = cleanFolder($('[data-f="folder"]').value);
     const pre = dir ? dir + '/' : '';
     const n = doc.frames.length;
     const frames = n === 1 ? [`${pre}${name}.png`] : doc.frames.map((_, i) => `${pre}${name}_${i + 1}.png`);
-    return { name, dir, pre, frames, sheet: n > 1 && sheet ? `${pre}${name}_sheet.png` : null };
+    const game = (fileLib() || lib) === 'tgame';
+    return { name, dir, pre, frames, sheet: n > 1 && (sheet || game) ? `${pre}${name}_sheet.png` : null };
   }
 
   function whereText() {
@@ -830,8 +839,8 @@ TuffPlugins.register('sprite-studio', (t) => {
         addMine(path);
       }
       saved = { name: p.name, frames: p.frames, sheet: p.sheet, w: doc.w * scale, h: doc.h * scale, scale };
-      const found = /^\s*(?:mention|import)\s+(tgame|atgui|mtgui|tgui)\b/m.exec(t.editor.code() || '');
-      if (found) setLib(found[1] === 'tgui' ? 'mtgui' : found[1]);
+      const found = fileLib();
+      if (found) setLib(found);
       renderCode();
       const left = p.frames.length > 1 && existing.has(`${p.pre}${p.name}_${p.frames.length + 1}.png`.toLowerCase());
       t.toast(`Saved ${p.frames.length === 1 ? p.frames[0] : `${p.frames.length} frames in ${p.dir || 'the project'}`}${p.sheet ? ' and a sprite sheet' : ''}.${left ? ` ${p.name}_${p.frames.length + 1}.png from before is still there.` : ''}`, 'ok', 3000);
@@ -890,6 +899,14 @@ TuffPlugins.register('sprite-studio', (t) => {
     const v = varName(info.name);
     const paths = info.frames.map((f) => relFrom(fromDir, f));
     const q = (s) => `"${s}"`;
+    const n = paths.length;
+    if (which === 'tgame' && n > 1 && info.sheet) {
+      // A game cuts the sprite sheet into its frames and plays them (sprite:frames, :animation and :play, 1.5.0),
+      // named after the sprite: walk_1.png to walk_4.png play as "walk".
+      const list = n <= 8 ? `[${paths.map((_, i) => i + 1).join(', ')}]` : `range(1, ${n})`;
+      return [`${v} = ${win.name}:image(${q(relFrom(fromDir, info.sheet))}, ${win.x}, ${win.y}, ${info.w})`,
+        `${v}:frames(${n})`, `${v}:animation(${q(info.name)}, ${list}, ${fps})`, `${v}:play(${q(info.name)})`].join('\n');
+    }
     let make;
     const lines = [];
     if (which === 'tgame') make = `${v} = ${win.name}:image(${q(paths[0])}, ${win.x}, ${win.y}, ${info.w})`;
@@ -956,10 +973,19 @@ TuffPlugins.register('sprite-studio', (t) => {
         <div class="ss-row"><button class="ss-btn ss-wrap" data-a="savethere" data-dir="${esc(there)}">Save it in "${esc(there)}"</button>${tryBtn}</div>`;
       return;
     }
+    const n = saved.frames.length;
+    if (lib === 'tgame' && n > 1 && !saved.sheet) {
+      // Saved for an app, without a sheet: a game plays its frames from one (saving for tgame always makes it).
+      body.innerHTML = `${libs}
+        <p class="ss-warn">A game plays the frames from a sprite sheet: one picture with every frame side by side.</p>
+        <div class="ss-row"><button class="ss-btn" data-a="savesheet">Save it with a sprite sheet</button></div>`;
+      return;
+    }
     const code = snippet(lib, saved, dir, windowInfo(lib));
+    const more = n === 1 ? '' : lib === 'tgame' ? ` It plays its ${n} frames, ${fps} a second.` : ` It shows the next picture ${fps} times a second.`;
     body.innerHTML = `${libs}
       <pre class="ss-pre" aria-label="Tuff code">${codeLines(code)}</pre>
-      <p class="ss-note">${esc(NOTES[lib](saved))}${saved.frames.length > 1 ? ` It shows the next picture ${fps} times a second.` : ''}</p>
+      <p class="ss-note">${esc(NOTES[lib](saved))}${more}</p>
       <div class="ss-row"><button class="ss-btn" data-a="copy">${icon('copy')}Copy</button><button class="ss-btn" data-a="insert">Insert</button>${tryBtn}</div>`;
   }
 
@@ -999,7 +1025,7 @@ TuffPlugins.register('sprite-studio', (t) => {
     if (d.color) return setColor(d.color);
     if (d.frame) return selectFrame(+d.frame);
     if (d.scale) return setScale(+d.scale);
-    if (d.lib) { setLib(d.lib); return renderCode(); }
+    if (d.lib) { setLib(d.lib); whereText(); return renderCode(); }  // (for tgame the sheet is saved too)
     if (d.open) return openPng(menuFiles[+d.open]);
     if (d.size) {
       const custom = $('.ss-custom');
@@ -1025,6 +1051,12 @@ TuffPlugins.register('sprite-studio', (t) => {
       case 'play': return setPlaying(!playing);
       case 'save': return save();
       case 'savethere': $('[data-f="folder"]').value = d.dir; whereText(); return save();
+      case 'savesheet': // ticks "Also save a sprite sheet", then saves (a game's code plays the sheet)
+        sheet = true;
+        t.storage.set('sheet', true);
+        $('[data-f="sheet"]').checked = true;
+        whereText();
+        return save();
       case 'copy': case 'insert':
         // the open file may have changed since the code was shown
         if (outOfReach(lib, saved, activeDir())) return renderCode();
