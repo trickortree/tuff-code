@@ -200,7 +200,7 @@
       const { code: line, comment } = stripComment(full);
       let m;
       if ((m = line.match(/^func\s+([A-Za-z_]\w*)/))) { res.funcs.push({ name: m[1], line: ln }); return; }
-      if ((m = line.match(/^(import|mention)\s+(m?tgui)\b/))) { res.lib = m[2]; res.importLine = ln; return; }
+      if ((m = line.match(/^(import|mention)\s+(m?tgui)\b(?!\.tuf)/))) { res.lib = m[2]; res.importLine = ln; return; }
       if ((m = line.match(/^([A-Za-z_]\w*)\s*=\s*(m?tgui)\.window\b\s*(.*)$/))) {
         const args = parseArgs(m[3]);
         res.win = { kind: 'window', var: m[1], lib: m[2], line: ln, comment, values: valuesFor(WINDOW, args), props: {}, children: [] };
@@ -592,7 +592,7 @@
       const code = model.getValue();
       let at = 0;
       code.split(/\r?\n/).forEach((l, i) => { if (/^(import|mention)\s+\w+/.test(l)) at = i + 1; });
-      const hasImport = new RegExp(`^(import|mention)\\s+${lib}\\b`, 'm').test(code);
+      const hasImport = new RegExp(`^(import|mention)\\s+${lib}\\b(?!\\.tuf)`, 'm').test(code);
       ed.insertAfter(at, `${hasImport ? '' : `mention ${lib}${ed.eol}`}${ed.eol}app = ${lib}.window("My App")${ed.eol}app:heading "Hello!"`);
       ed.commit();
     },
@@ -1145,7 +1145,7 @@
     updateUndo();
     if (!p.win) {
       // A tgame file is a game: Tuff Engine is where it's built visually.
-      const game = /^[ \t]*(?:import|mention)[ \t]+tgame\b/m.test(S.model.getValue());
+      const game = /^[ \t]*(?:import|mention)[ \t]+tgame\b(?!\.tuf)/m.test(S.model.getValue());
       stage.innerHTML = `<div class="sd-none">${ICONS.window}<b>${game ? 'This is a game' : "This file doesn't have an app window yet"}</b><span>${game ? 'Games are built in Tuff Engine. Or start an app from a template, or add an empty window and drag widgets onto it.' : 'Start from a template, or add an empty window and drag widgets onto it.'}</span>
         <div>${game ? '<button class="btn primary" data-a="engine">Open in Tuff Engine</button>' : ''}<button class="btn${game ? '' : ' primary'}" data-a="tpl">Pick a template</button><button class="btn" data-lib="mtgui">Empty modern window</button><button class="btn" data-lib="tgui">Empty classic window</button></div></div>`;
       $('[data-a="engine"]', stage)?.addEventListener('click', () => ide.openEngine(S.file));

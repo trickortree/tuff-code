@@ -492,10 +492,16 @@ class Parser:
                 raise TuffError(f"'{tok.value}' needs an 'if' right above it.", tok.line, tok.col)
             if tok.value in ("import", "mention"):
                 self.next()
-                name = self.expect("NAME", msg=f"Expected a library's name, like: {tok.value} anims, or one of your files' (without .tuf), "
-                                               f"like: {tok.value} money").value
+                name = self.expect("NAME", msg=f"Expected a library's name, like: {tok.value} anims, or one of your files, "
+                                               f"like: {tok.value} money.tuf").value
+                own = bool(self.at("OP", "."))  # import money.tuf (1.5.0): one of the program's own files, even one called tmusic.tuf
+                if own:
+                    self.next()
+                    ext = self.expect("NAME", msg=f"Your own files are imported with .tuf on the end, like: {tok.value} {name}.tuf")
+                    if ext.value != "tuf":
+                        raise TuffError(f"Your own files are imported with .tuf on the end, like: {tok.value} {name}.tuf", ext.line, ext.col)
                 self.end_line()
-                return N("import", tok, name=name, word=tok.value)
+                return N("import", tok, name=name, word=tok.value, own=own)
         # kind Pet: (1.5.0). A soft word too: kind followed by a name can't be anything else, so a program's own
         # variable called kind (kind = "dog", kind:upper()) keeps working.
         if tok.kind == "NAME" and tok.value == "kind" and self.toks[self.i + 1].kind == "NAME":
@@ -1161,11 +1167,11 @@ LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame", "tdraw", "tterm"
 # Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
-VIEW_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:" + "|".join(VIEW_LIBRARIES) + r")\b", re.M)
+VIEW_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:" + "|".join(VIEW_LIBRARIES) + r")\b(?!\.tuf)", re.M)
 # The first line a tgame program shows, in yellow, before anything it prints. In TuffCode the line gets an
 # "Open Tuff Engine" button (ide.js handleOsc). --check, --scene and --windowed apps never show it.
 TGAME_NOTICE = "Tuff Engine is here: open this game in TuffCode's Tuff Engine tab (Ctrl+Shift+G) to build it visually."
-TGAME_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+tgame\b", re.M)
+TGAME_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+tgame\b(?!\.tuf)", re.M)
 BUILTIN_NAMES = {"print", "number", "num", "text", "str", "int", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
                  "floor", "ceil", "min", "max", "sum", "average",
                  "now", "today", "time", "date", "sin", "cos", "tan", "log"}  # 1.4.0
@@ -2326,6 +2332,16 @@ def import_problem(name, folder, who, others=()):
     return f"{msg}, and {name} isn't one of Tuff's libraries ({', '.join(LIBRARIES)})."
 
 
+def library_problem(name, folder, who):
+    """import name, with no .tuf on the end (1.5.0): only Tuff's libraries are imported like that. Why name isn't one.
+    folder: the importing file's folder, or None when it isn't known."""
+    if folder or name in BUILTIN_NAMES or name in OWN_NAME_BUILTINS or name in ("err", "pi", "all"):
+        problem = import_problem(name, folder, who)
+        return problem or f"To import your file {name}.tuf, put .tuf on the end: import {name}.tuf"
+    return (f"{name} isn't one of Tuff's libraries ({', '.join(LIBRARIES)}). Your own files are imported with .tuf on the "
+            f"end, like: import {name}.tuf")
+
+
 def circle_problem(chain):
     """chain: the files importing each other, as shown, from the first back to it again (shop.tuf, money.tuf, shop.tuf)."""
     if len(chain) == 2:
@@ -3125,13 +3141,17 @@ class Interpreter:
         return value
 
     def s_import(self, s, env):
+        if getattr(s, "own", False):  # import money.tuf (1.5.0): one of the program's own files, even one called tmusic.tuf
+            env.set(s.name, self.load(s.name, env))
+            return None
         if s.name == "file":  # built in, so there's nothing to load
             return None
-        if s.name in LIBRARIES:  # a library's name is always the library, even with a file of that name nearby
+        if s.name in LIBRARIES:  # without .tuf, a library's name is always the library
             env.set(s.name, Module(s.name, getattr(self, "lib_" + s.name)()))
             return None
-        env.set(s.name, self.load(s.name, env))  # 1.5.0: one of the program's own files
-        return None
+        here = file_of(env)
+        who = OWN_FILES[here][1] if here in OWN_FILES else self.program_name()
+        raise TuffError(library_problem(s.name, os.path.dirname(here) if here else self.base_dir, who))
 
     def shown(self, path):
         """A file's name as messages show it: from the program's folder, like libs/money.tuf."""
@@ -5280,7 +5300,8 @@ class OwnFile:
         self.funcs = {name: params for name, params in c.funcs.items() if c.only_func(name)}  # certainly functions
         for s in program:
             if s.kind == "import":
-                self.first.append(s.name)
+                if getattr(s, "own", False):  # (only a file, with .tuf, can import back in a circle)
+                    self.first.append(s.name)
             elif s.kind not in ("func", "assign", "expr") or any(n.kind in ("call", "method", "input") for n in nodes(s)):
                 break
 
@@ -5343,6 +5364,7 @@ class Checker:
         self.params = set()
         self.loop_vars = set()
         self.imports = set()
+        self.own_imports = set()  # the names imported with .tuf (1.5.0): import money.tuf
         self.interp = Interpreter()
         self.builtins = {**self.interp.own_names.vars, **self.interp.globals.vars}
         self.memo = {}
@@ -5406,6 +5428,8 @@ class Checker:
                 scope.names.add(s.name)
                 self.everywhere.add(s.name)
                 self.imports.add(s.name)
+                if getattr(s, "own", False):
+                    self.own_imports.add(s.name)
             elif k == "kind":  # kind Pet: (1.5.0): its name is the program's, and each action is like a function with my
                 scope.names.add(s.name)
                 self.everywhere.add(s.name)
@@ -5470,7 +5494,7 @@ class Checker:
 
     def has_own_files(self):
         """Does the program import files of its own? (Their kinds can have any fields and actions.)"""
-        return any(name not in LIBRARIES and name != "file" for name in self.imports)
+        return bool(self.own_imports) or any(name not in LIBRARIES and name != "file" for name in self.imports)
 
     def is_field(self, name):
         """Could thing.name be an object's field? (One of the program's kinds has it, or it can't be told.)"""
@@ -5554,7 +5578,7 @@ class Checker:
         if name == "my" and self.kinds:
             return None  # in an action, my is its object (kind reads the node's of_kind); elsewhere, can't be sure
         kinds = set()
-        if name in self.imports:
+        if name in self.imports and not (name in self.own_imports and self.own_file(name) is None):  # (a file that can't be read isn't the library)
             kinds.add("$module:" + name)
         if name in self.func_count:
             kinds.add("$func")
@@ -5879,7 +5903,7 @@ class Checker:
     def own_file(self, name):
         """The OwnFile for name when it's one of the program's own files this file can import, else None (a library,
         no such file, or a folder that isn't known)."""
-        if name in LIBRARIES or name == "file" or not self.folder:
+        if (name in LIBRARIES and name not in self.own_imports) or name == "file" or not self.folder:
             return None
         if name not in self.own_by_name:  # (kind() asks often: the folder is read once for each name)
             path = module_file(self.folder, name)
@@ -5903,12 +5927,9 @@ class Checker:
         name, me = s.name, os.path.normcase(os.path.abspath(self.path)) if self.path else None
         if self.trying:  # try: import extras, catch: ...: a file that may not be there, on purpose
             return
-        if name in LIBRARIES or name == "file":
-            found = module_file(self.folder, name) if self.folder else None
-            if found and os.path.normcase(os.path.abspath(found)) != me:
-                lib = "file library" if name == "file" else "library"
-                self.problem(s, f"There's a file {self.own_name(found)} here, but {name} is Tuff's own {lib}, so {s.word} {name} "
-                                f"loads the library, not your file. To use your file, give it another name, like my_{name}.tuf.")
+        if not getattr(s, "own", False):  # without .tuf, only a library: import tmusic is Tuff's, even with a tmusic.tuf here
+            if name not in LIBRARIES and name != "file":
+                self.problem(s, library_problem(name, self.folder, os.path.basename(self.path) if self.path else "this file"))
             return
         who = os.path.basename(self.path) if self.path else "this file"
         problem = import_problem(name, self.folder, who, (os.path.basename(self.path or "")[:-4],))
@@ -5919,7 +5940,7 @@ class Checker:
         own = self.own_file(name)
         if own.error is not None:
             where = f" on line {own.error.line}" if own.error.line else ""
-            self.problem(s, f"{self.own_name(own.path)} has a mistake{where}, so {s.word} {name} stops the program there: {own.error.msg}")
+            self.problem(s, f"{self.own_name(own.path)} has a mistake{where}, so {s.word} {name}.tuf stops the program there: {own.error.msg}")
             return
         chain = self.circle(name, [(me, who)], self.folder)
         if chain:
@@ -5929,7 +5950,7 @@ class Checker:
         """Importing name from folder, with trail the files on the way here ((key, shown) each, this file first): the
         files of a circle of imports it starts, from the first file in it back to that file, or None. Only the imports
         each file always runs first count (see OwnFile.first)."""
-        if name in LIBRARIES or name == "file" or len(trail) > 30:
+        if name == "file" or len(trail) > 30:
             return None
         path = module_file(folder, name)
         if not path:
@@ -7177,7 +7198,7 @@ class Checker:
         """Every name the program's sprite:animation calls give (as text), or None when the checker can't know them
         all: one is made from a variable or a sum, the program imports a file of its own, or it doesn't make the game
         itself (a file of functions another program imports, which may make the animations)."""
-        if not self.makes_game or any(name not in LIBRARIES for name in self.imports):
+        if not self.makes_game or self.own_imports or any(name not in LIBRARIES for name in self.imports):
             return None
         names = set()
         for n in nodes(self.program):
@@ -7821,7 +7842,7 @@ class SceneInterpreter(Interpreter):
         return {name: Builtin(f"anims.{name}", lambda *_a: console.say("")) for name in names}
 
 
-OTHER_WINDOW = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|atgui)\b", re.M)
+OTHER_WINDOW = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|atgui)\b(?!\.tuf)", re.M)
 
 
 def scene_file(game_path, source_path, out_path):
@@ -8001,7 +8022,7 @@ DEEP_STACKS = (512 << 20, 255 << 20, 64 << 20)  # the first one a thread can sta
 # From Python 3.12 (what TuffCode's runtime is built with) Python's own calls don't use the stack, so the usual thread
 # goes as deep: the program's thread gets the usual stack, not a big one that Windows would set aside in full for every run.
 STACK_FREE = sys.version_info >= (3, 12)
-TK_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|tdraw)\b", re.M)
+TK_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|tdraw)\b(?!\.tuf)", re.M)
 
 
 def big_stack():
@@ -8088,7 +8109,7 @@ def run_deep(fn, *args, main=False):
     return done.get("value")
 
 
-IMPORT_LINE = re.compile(r"^[ \t]*(?:import|mention)[ \t]+([A-Za-z_]\w*)", re.M)
+IMPORT_LINE = re.compile(r"^[ \t]*(?:import|mention)[ \t]+([A-Za-z_]\w*)\.tuf\b", re.M)
 
 
 def with_imports(path, src):
@@ -8098,7 +8119,7 @@ def with_imports(path, src):
     while todo:
         folder, text = todo.pop()
         for name in IMPORT_LINE.findall(text):
-            found = None if name in LIBRARIES or name == "file" else module_file(folder, name)
+            found = module_file(folder, name)
             key = found and os.path.normcase(os.path.abspath(found))
             if not found or key in seen:
                 continue

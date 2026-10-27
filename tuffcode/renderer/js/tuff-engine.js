@@ -93,8 +93,8 @@
   ICON.lift = ICON.platform;
 
   // ---------------------------------------------------------------- reading the file
-  const IMPORT_RE = /^(?:import|mention)\s+tgame\b/;
-  const OTHER_RE = /^(?:import|mention)\s+(tgui|mtgui|atgui)\b/;
+  const IMPORT_RE = /^(?:import|mention)\s+tgame\b(?!\.tuf)/;
+  const OTHER_RE = /^(?:import|mention)\s+(tgui|mtgui|atgui)\b(?!\.tuf)/;
   const ANY_IMPORT_RE = /^(?:import|mention)\s+[A-Za-z_]\w*/;
   const GAME_RE = /^([A-Za-z_]\w*)\s*=\s*tgame\.(window|world)\b\s*(.*)$/;
   const SET_RE = /^([A-Za-z_]\w*):(background|sky|fog|sun|island|ground|lighting)\b\s*(.*)$/;
@@ -2217,7 +2217,7 @@ func coin_collect(dt):
     const all = (await ide.listFiles()).filter((f) => f.name.endsWith('.tuf') && !/^(dist|build)[\\/]/.test(f.rel));
     const games = new Set();
     await Promise.all(all.slice(0, 80).map(async (f) => {
-      try { if (/^[ \t]*(?:import|mention)[ \t]+tgame\b/m.test(await api.fs.readFile(f.path))) games.add(f.path); } catch { /* unreadable */ }
+      try { if (/^[ \t]*(?:import|mention)[ \t]+tgame\b(?!\.tuf)/m.test(await api.fs.readFile(f.path))) games.add(f.path); } catch { /* unreadable */ }
     }));
     if (!all.some((f) => f.path === S.file)) all.unshift({ path: S.file, rel: ide.rel(S.file) });
     all.sort((a, b) => a.rel.localeCompare(b.rel));

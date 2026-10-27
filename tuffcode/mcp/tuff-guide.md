@@ -28,7 +28,7 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `range(3)` gives 0, 1, 2 | `range(3)` gives 1, 2, 3, and `range(1, 3)` gives 1, 2, 3: both ends are included |
 | `for i in range(len(items)):` | `for item in items:`, or `for i in range(0, len(items) - 1):` |
 | `thing.method()` | `thing:method()`, with no spaces around the `:` (a dot is only for libraries, `mtgui.window(...)`, your own files, `money.as_money(5)`, and an object's fields, `rex.hunger`) |
-| `import money` / `from money import as_money` (your own money.py) | `import money` loads your money.tuf; then `money.as_money(5)` and `money.rate` (see "Your own files") |
+| `import money` / `from money import as_money` (your own money.py) | `import money.tuf` loads your money.tuf; then `money.as_money(5)` and `money.rate` (see "Your own files") |
 | `&&`, `\|\|`, `!` | `and`, `or`, `not` |
 | `1 < x < 9` | `x > 1 and x < 9` |
 | `a, b = 1, 2` | one per line: `a = 1`, then `b = 2` |
@@ -407,8 +407,8 @@ board:play("explode")                               # an animation on the line w
   - **A file or pipe** (agents' tuff_run): plain text, and an animation shows only how it ends.
 - Unknown words are mistakes, with a "did you mean": `say:color("x", "redd")`.
 
-## Your own files (import money)
-A program can be split into files. `import money` (or `mention money`) loads money.tuf, from the folder of the file that imports it, or from a folder called `libs` there. Then its functions and top-level values go after a dot, like a library's:
+## Your own files (import money.tuf)
+A program can be split into files. `import money.tuf` (or `mention money.tuf`) loads money.tuf, from the folder of the file that imports it, or from a folder called `libs` there. Then its functions and top-level values go after a dot, like a library's:
 ```tuff
 # money.tuf
 rate = 0.2
@@ -425,7 +425,7 @@ func set_rate(new_rate):
 ```
 ```tuff
 # shop.tuf, next to money.tuf
-import money
+import money.tuf
 say money.as_money(6.375)       # $6.38
 say money.with_tax(10)          # 12
 money.set_rate(0.5)
@@ -438,7 +438,7 @@ say money.with_tax(10)          # 15
 - **Changing a value:** `money.rate = 2` is an error. Change it with a function in money.tuf, like `set_rate` above.
 - **Once:** a file's top-level code (like a `say` that isn't in a function) runs the first time it's imported. Importing it again, from any file, gives the same one.
 - **Where:** the importing file's folder, then the `libs` folder there. A file in libs imports the other files in libs. The name is spelled exactly as the file is, capitals too, and must be a name Tuff can use (letters, numbers and _).
-- **Libraries win:** `import tgame` is always Tuff's tgame, even with a tgame.tuf in the folder (`tuff_check` says so), so give your files other names. A built-in's name can't be one either: `import random` says random() is built in.
+- **.tuf on the end:** `import tgame` is always Tuff's tgame, and `import tgame.tuf` is your tgame.tuf, so a file can have a library's name. `import money` without .tuf is a mistake (`tuff_check` says so). A built-in's name can't be a file's: `import random.tuf` says random() is built in.
 - **Two files can't import each other.** If shop.tuf imports money.tuf and money.tuf imports shop.tuf, neither can finish loading, and the error names them. Put what both need in a third file.
 - **Mistakes in money.tuf** are reported there, with its own line: "Tuff error in money.tuf on line 4: ...", and in TuffCode that line jumps to money.tuf.
 - **Files:** `file.read("prices.txt")` in money.tuf reads from the program's folder, like everywhere else.

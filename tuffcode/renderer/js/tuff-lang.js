@@ -330,7 +330,7 @@ window.TUFF_DOCS = {
   flush: ['flush', 'Wipes everything in the Run window. Same as clear(all).'],
   clear: ['clear(lines)', 'Removes the last few lines from the Run window, like clear(2). clear(all) removes everything. (line:clear empties one line you already said.)'],
   all: ['all', 'Means every line, as in clear(all).'],
-  import: ['import name', 'Loads a library of extra functions, like: import anims. It also loads your own files (1.5.0): import money loads money.tuf from this file\'s folder (or a libs folder there), and its functions and top-level values go after a dot: money.as_money(6.375), money.rate.'],
+  import: ['import name', 'Loads a library of extra functions, like: import anims. It also loads your own files (1.5.0): import money.tuf loads money.tuf from this file\'s folder (or a libs folder there), and its functions and top-level values go after a dot: money.as_money(6.375), money.rate.'],
   anims: ['import anims', 'Ready-made animations: loading, bar, type, countdown.'],
   tgui: ['import tgui', 'Tuff GUI: make real app windows with buttons, text boxes, toggles and more.'],
   mtgui: ['mention mtgui', 'Modern Tuff GUI: like tgui with gradients, gloss, shine and glow.'],
@@ -754,7 +754,7 @@ function insideStringOrComment(text) {
 }
 
 // ---------------------------------------------------------------- your own files as libraries (1.5.0)
-// import money loads money.tuf from the file's own folder, or the libs folder there (a library's name is always the
+// import money.tuf loads money.tuf from the file's own folder, or the libs folder there (a library's name is always the
 // library), and its functions and top-level values go after a dot: money.as_money(6.375), money.rate. Completions,
 // hovers and signature help after money. read that file through TuffIDE (an open tab's text, unsaved too).
 const TUFF_MODULE_FOLDER = 'libs';
@@ -762,8 +762,8 @@ const TUFF_MODULE_FOLDER = 'libs';
 // The names this file imports that aren't libraries: import money, mention tax.
 function tuffOwnImports(src) {
   const out = new Set();
-  for (const m of src.matchAll(/^[ \t]*(?:import|mention)[ \t]+([A-Za-z_]\w*)/gm)) {
-    if (!Object.hasOwn(window.TUFF_LIBS, m[1]) && m[1] !== 'file') out.add(m[1]);
+  for (const m of src.matchAll(/^[ \t]*(?:import|mention)[ \t]+([A-Za-z_]\w*)\.tuf\b/gm)) { // import money.tuf, even import tmusic.tuf
+    if (m[1] !== 'file') out.add(m[1]);
   }
   return out;
 }
@@ -961,7 +961,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
         };
       }
       const lib = before.match(/(\w+)\.$/);
-      if (lib && !window.TUFF_LIBS[lib[1]] && tuffOwnImports(model.getValue()).has(lib[1])) { // money.as_money (1.5.0)
+      if (lib && tuffOwnImports(model.getValue()).has(lib[1])) { // money.as_money (1.5.0)
         return tuffOwnFile(model, lib[1]).then((mod) => {
           const doc = mod && tuffOwnDoc(mod, word.word);
           return doc ? {
@@ -1015,7 +1015,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
       }
       if (libMatch) {
         const lib = window.TUFF_LIBS[libMatch[1]];
-        if (!lib && tuffOwnImports(model.getValue()).has(libMatch[1])) { // money. (1.5.0): what money.tuf makes
+        if (tuffOwnImports(model.getValue()).has(libMatch[1])) { // money. (1.5.0): what money.tuf makes
           return tuffOwnFile(model, libMatch[1]).then((mod) => ({
             suggestions: mod ? [
               ...mod.funcs.map((f) => ({ label: f.name, kind: K.Function, insertText: `${f.name}($0)`, insertTextRules: R, range,
@@ -1046,8 +1046,8 @@ window.registerTuff = function registerTuff(monaco, accent) {
             for (const e of entries || []) {
               const name = e.name.replace(/\.tuf$/i, '');
               if (e.isDir || !/\.tuf$/.test(e.name) || !/^[A-Za-z_]\w*$/.test(name) || (!rel && e.name === me)) continue;
-              if (Object.hasOwn(window.TUFF_LIBS, name) || TUFF_BUILTINS.includes(name) || own.some((x) => x.label === name)) continue;
-              own.push({ label: name, kind: K.File, insertText: name, range, detail: `${rel}${e.name}`, documentation: `Your own file ${rel}${e.name}: its functions and values go after ${name}.` });
+              if (TUFF_BUILTINS.includes(name) || own.some((x) => x.label === `${name}.tuf`)) continue; // (tmusic.tuf too: import tmusic.tuf)
+              own.push({ label: `${name}.tuf`, kind: K.File, insertText: `${name}.tuf`, range, detail: `${rel}${e.name}`, documentation: `Your own file ${rel}${e.name}: its functions and values go after ${name}.` });
             }
           }
           return { suggestions: [...own, ...libs] };
@@ -1076,11 +1076,11 @@ window.registerTuff = function registerTuff(monaco, accent) {
         // list in files that use that library. A game with a panel or a screen uses atgui's widgets too. print's
         // :ascii and :pen come only after say: or print: (above).
         const src = model.getValue();
-        const games = /^\s*(import|mention)\s+tgame\b/m.test(src);
-        const modern = /^\s*(import|mention)\s+atgui\b/m.test(src) || (games && /:\s*(panel|screen|start_screen|main_menu)\b/.test(src));
-        const drawing = /^\s*(import|mention)\s+tdraw\b/m.test(src);
-        const terminal = /^\s*(import|mention)\s+tterm\b/m.test(src);
-        const music = /^\s*(import|mention)\s+tmusic\b/m.test(src);
+        const games = /^\s*(import|mention)\s+tgame\b(?!\.tuf)/m.test(src);
+        const modern = /^\s*(import|mention)\s+atgui\b(?!\.tuf)/m.test(src) || (games && /:\s*(panel|screen|start_screen|main_menu)\b(?!\.tuf)/.test(src));
+        const drawing = /^\s*(import|mention)\s+tdraw\b(?!\.tuf)/m.test(src);
+        const terminal = /^\s*(import|mention)\s+tterm\b(?!\.tuf)/m.test(src);
+        const music = /^\s*(import|mention)\s+tmusic\b(?!\.tuf)/m.test(src);
         const names = Object.keys(window.TUFF_METHOD_DOCS).filter((m) => {
           const doc = window.TUFF_METHOD_DOCS[m][1] || '';
           if (m === 'ascii' || m === 'pen') return false;
@@ -1441,7 +1441,7 @@ function registerTuffNavigation(monaco) {
       if (insideStringOrComment(before)) return null;
       const call = callAt(before);
       if (!call) return null;
-      if (call.how === 'lib' && !window.TUFF_LIBS[call.lib] && tuffOwnImports(model.getValue()).has(call.lib)) { // money.as_money( (1.5.0)
+      if (call.how === 'lib' && tuffOwnImports(model.getValue()).has(call.lib)) { // money.as_money( (1.5.0)
         return tuffOwnFile(model, call.lib).then((mod) => {
           const f = mod && mod.funcs.find((x) => x.name === call.name);
           if (!f) return null;

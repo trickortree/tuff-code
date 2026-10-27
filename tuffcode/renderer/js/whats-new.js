@@ -154,7 +154,7 @@ ${NOTES['1.3.0'].notes}`,
 - \`hero:frames(4)\` cuts a sprite sheet into frames, \`hero:animation("walk", [1, 2, 3, 4], 10)\` names some, and \`hero:play("walk")\` plays them. They pause with the game, and Sprite Studio's "Use in code" writes them for you.
 
 ### Your own files
-- \`import money\` loads money.tuf from the same folder (or a libs folder there). Its functions and values go after a dot: \`money.as_money(6.375)\`, \`money.rate\`.
+- \`import money.tuf\` loads money.tuf from the same folder (or a libs folder there). A file can have a library's name too: \`import tmusic.tuf\` is yours, \`import tmusic\` is Tuff's. Its functions and values go after a dot: \`money.as_money(6.375)\`, \`money.rate\`.
 - Each file runs once, however many files import it. Mistakes name the file and line they're in.
 
 ### Kinds: your own objects

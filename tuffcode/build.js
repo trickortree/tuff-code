@@ -14,7 +14,7 @@ const VIEW_LIBS = ['atgui', 'tgame'];
 const VIEW_ASSET_EXTS = new Set(['.mp3', '.ogg', '.m4a', '.webp', '.bmp', '.svg', '.avif', '.glb']);
 // Folders that are never packed: earlier builds, tools' folders and hidden ones (.git and so on).
 const SKIP_DIRS = new Set(['dist', 'build', 'node_modules', '__pycache__', 'venv']);
-const usesLib = (src, lib) => new RegExp(`^\\s*(import|mention)\\s+${lib}\\b`, 'm').test(src);
+const usesLib = (src, lib) => new RegExp(`^\\s*(import|mention)\\s+${lib}\\b(?!\\.tuf)`, 'm').test(src);
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Tuff's own libraries (and the built-in file one): import with one of these names always loads the library.
 const LIBRARY_NAMES = new Set(['anims', 'tgui', 'mtgui', 'tap', 'atgui', 'tgame', 'tdraw', 'file']);
@@ -36,8 +36,7 @@ async function moduleFile(folder, name) {
 async function ownImports(program, src) {
   const found = new Map();
   const walk = async (file, text) => {
-    for (const m of text.matchAll(/^[ \t]*(?:import|mention)[ \t]+([A-Za-z_]\w*)/gm)) {
-      if (LIBRARY_NAMES.has(m[1])) continue;
+    for (const m of text.matchAll(/^[ \t]*(?:import|mention)[ \t]+([A-Za-z_]\w*)\.tuf\b/gm)) { // import money.tuf: one of its own files
       const full = await moduleFile(path.dirname(file), m[1]);
       if (!full || found.has(full) || path.resolve(full) === path.resolve(program)) continue;
       let more;
@@ -309,7 +308,7 @@ async function build(opts, emit) {
 
   // A window app needs tkinter in the Python that builds it. Without it the app would build fine
   // and then close straight away when opened, so check first.
-  const usesGuiEarly = /^\s*(import|mention)\s+m?tgui\b/m.test(allSrc);
+  const usesGuiEarly = /^\s*(import|mention)\s+m?tgui\b(?!\.tuf)/m.test(allSrc);
   if (usesGuiEarly && (await run(py.cmd, [...py.args, '-c', 'import tkinter, _tkinter; tkinter.Tcl()'], { onLine: log })).code !== 0) {
     return fail('tools', 'Getting the build tools ready', 'Window apps (tgui and mtgui) can\'t be built on this computer yet: a part they need is missing. Open "Technical details" below to see more.');
   }
@@ -451,13 +450,13 @@ async function build(opts, emit) {
     }
   }
   const src = allSrc;
-  const usesGui =/^\s*(import|mention)\s+m?tgui\b/m.test(src);
-  const usesDraw = /^\s*(import|mention)\s+tdraw\b/m.test(src); // tdraw draws with tkinter's turtle, like tgui's windows
+  const usesGui =/^\s*(import|mention)\s+m?tgui\b(?!\.tuf)/m.test(src);
+  const usesDraw = /^\s*(import|mention)\s+tdraw\b(?!\.tuf)/m.test(src); // tdraw draws with tkinter's turtle, like tgui's windows
   // tap needs Python's ssl (and certifi, where installed, for a Mac app's https:// certificates).
-  const usesTap = /^\s*(import|mention)\s+tap\b/m.test(src);
+  const usesTap = /^\s*(import|mention)\s+tap\b(?!\.tuf)/m.test(src);
   // tterm games (1.5.0) are console apps: they draw in the terminal and read its keys.
-  const usesTerm = /^\s*(import|mention)\s+tterm\b/m.test(src);
-  const usesMusic = /^\s*(import|mention)\s+tmusic\b/m.test(src); // tmusic (1.5.0): its synth (and winsound to play)
+  const usesTerm = /^\s*(import|mention)\s+tterm\b(?!\.tuf)/m.test(src);
+  const usesMusic = /^\s*(import|mention)\s+tmusic\b(?!\.tuf)/m.test(src); // tmusic (1.5.0): its synth (and winsound to play)
   const windowed = opts.windowed ?? ((usesGui || usesDraw || viewLibs.length > 0) && !usesTerm);
   step('pack', 'done', `Packed your program${assets.length ? ` and ${assets.length} file${assets.length > 1 ? 's' : ''} (${assets.slice(0, 3).join(', ')}${assets.length > 3 ? '…' : ''})` : ''}`);
 

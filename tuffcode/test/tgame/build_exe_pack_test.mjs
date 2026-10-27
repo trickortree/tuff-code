@@ -209,12 +209,12 @@ if (plain.app) {
   'with a console there\'s no box: the problem and its traceback are printed', s);
 }
 
-// 1.5.0: a program in several files (import money). The files it imports go in the app beside it, in the folders they're
+// 1.5.0: a program in several files (import money.tuf). The files it imports go in the app beside it, in the folders they're
 // in (libs/ too), and only those: a .tuf file it doesn't import stays out.
 console.log('== Build exe: a program that imports its own files');
 const modsDir = path.join(scratch, 'Own Files');
-write(path.join(modsDir, 'shop.tuf'), 'import money\nimport fmt\nsay money.as_money(6.375)\nsay fmt.stars(3)\nsay money.half("a")\n');
-write(path.join(modsDir, 'money.tuf'), 'import tax\nfunc as_money(x):\n    return f"{tax.add(x):money}"\nfunc half(n):\n    return n / 2\n');
+write(path.join(modsDir, 'shop.tuf'), 'import money.tuf\nimport fmt.tuf\nsay money.as_money(6.375)\nsay fmt.stars(3)\nsay money.half("a")\n');
+write(path.join(modsDir, 'money.tuf'), 'import tax.tuf\nfunc as_money(x):\n    return f"{tax.add(x):money}"\nfunc half(n):\n    return n / 2\n');
 write(path.join(modsDir, 'tax.tuf'), 'func add(x):\n    return x * 2\n');
 write(path.join(modsDir, 'libs', 'fmt.tuf'), 'func stars(n):\n    return "*" * n\n');
 write(path.join(modsDir, 'unused.tuf'), 'say "never imported"\n');

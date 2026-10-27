@@ -737,7 +737,7 @@
     if (!target && state.root) {
       const tufs = (await api.fs.listAll(state.root)).filter((f) => f.name.endsWith('.tuf') && !/^(dist|build)[\\/]/.test(f.rel)).sort((a, b) => a.rel.localeCompare(b.rel));
       for (const f of tufs.slice(0, 80)) {
-        try { if (/^[ \t]*(?:import|mention)[ \t]+tgame\b/m.test(await api.fs.readFile(f.path))) { target = f.path; break; } } catch { /* unreadable */ }
+        try { if (/^[ \t]*(?:import|mention)[ \t]+tgame\b(?!\.tuf)/m.test(await api.fs.readFile(f.path))) { target = f.path; break; } } catch { /* unreadable */ }
       }
       target = target || tufs[0]?.path || null;
       if (!target) {
@@ -923,7 +923,7 @@
   // reads the files a file imports from the disk.
   function recheckImporters(saved) {
     const name = basename(saved.path).replace(/\.tuf$/i, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const uses = new RegExp(`^[ \\t]*(import|mention)[ \\t]+${name}\\b`, 'm');
+    const uses = new RegExp(`^[ \\t]*(import|mention)[ \\t]+${name}\\.tuf\\b`, 'm');
     for (const t of state.tabs) if (t !== saved && ext(t.path) === 'tuf' && uses.test(t.model.getValue())) scheduleCheck(t);
   }
 
@@ -1601,7 +1601,7 @@
     const t = state.tabs.find((x) => x.path === bd.file);
     const src = t ? t.model.getValue() : await api.fs.readFile(bd.file);
     bd.icon = prefs.icon && (await api.fs.exists(prefs.icon)) ? prefs.icon : null;
-    bd.windowed = prefs.windowed ?? /^\s*(import|mention)\s+m?tgui\b/m.test(src);
+    bd.windowed = prefs.windowed ?? /^\s*(import|mention)\s+m?tgui\b(?!\.tuf)/m.test(src);
     const titled = src.match(/m?tgui\.window\(\s*["']([^"']+)["']/);
     $('#bd-name').value = prefs.name || titled?.[1] || basename(state.root);
     $('#bd-file').innerHTML = `${fileIcon(basename(bd.file))}<span>${esc(rel(bd.file))}</span>`;
