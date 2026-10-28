@@ -9994,7 +9994,7 @@ def t_learn_150(c):
     solutions run."""
     import shutil
     import tuff_tgame
-    folder = os.path.join(OUT, "learn_150")
+    folder = os.path.join(HERE, "out", "learn_150")  # never in the temp folder: there --check can't see money.tuf
     shutil.rmtree(folder, ignore_errors=True)
     os.makedirs(folder)
     learn = os.path.join(REPO, "tuffcode", "renderer", "js", "learn.js")
