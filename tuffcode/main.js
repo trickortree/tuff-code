@@ -12,6 +12,7 @@ const updater = require('./updater');
 const plugins = require('./plugins');
 const agents = require('./agents');
 const ai = require('./ai');
+const debug = require('./debug');
 
 const TUFF_INTERPRETER = app.isPackaged
   ? path.join(process.resourcesPath, 'runtime-src', 'tuff.py')
@@ -123,10 +124,24 @@ function send(channel, payload) {
 }
 
 // A new run starts over: the second player (if any) goes too, so both copies always run the same code.
-function startRun(file, id) {
+// opts.debug (1.5.0): run it with the debugger. The program connects to debug.js's server (TUFF_DEBUG is its port)
+// and is sent opts.debug.first (its breakpoints, then how it starts); what it says comes back as debug:event.
+let runSeq = 0;
+async function startRun(file, id, opts) {
+  const seq = ++runSeq;
   if (runProc) runProc.kill();
   if (run2Proc) run2Proc.kill();
-  runProc = spawnTuff(file, id, 'run', (proc) => { if (runProc === proc) runProc = null; });
+  debug.close();
+  let env = null;
+  if (opts && opts.debug) {
+    const port = await debug.open(Array.isArray(opts.debug.first) ? opts.debug.first : [], (msg) => send('debug:event', { ...msg, id })).catch(() => null);
+    if (seq !== runSeq) return; // another run started meanwhile
+    if (port) env = { TUFF_DEBUG: String(port) };
+  }
+  runProc = spawnTuff(file, id, 'run', (proc) => {
+    if (runProc === proc) runProc = null;
+    if (env && seq === runSeq) debug.close();
+  }, env);
 }
 
 function startSecond(file, id) {
@@ -134,15 +149,16 @@ function startSecond(file, id) {
   run2Proc = spawnTuff(file, id, 'run2', (proc) => { if (run2Proc === proc) run2Proc = null; });
 }
 
-// Runs a Tuff program and sends what it says to the Run panel as <channel>:data and <channel>:exit.
-function spawnTuff(file, id, channel, ended) {
+// Runs a Tuff program and sends what it says to the Run panel as <channel>:data and <channel>:exit. env: more for its
+// environment (the debugger's port).
+function spawnTuff(file, id, channel, ended, env) {
   const { cmd, args: fullArgs } = tuffCommand([file]);
   const out = (stream, text) => send(`${channel}:data`, { id, stream, text });
   out('cmd', `${cmd} ${fullArgs.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')}\n`);
   const proc = spawn(cmd, fullArgs, {
     cwd: path.dirname(file),
     windowsHide: true,
-    env: { ...process.env, TUFF_IDE: '1', PYTHONIOENCODING: 'utf-8' },
+    env: { ...process.env, TUFF_IDE: '1', PYTHONIOENCODING: 'utf-8', ...env },
   });
   proc.stdout.setEncoding('utf8');
   proc.stderr.setEncoding('utf8');
@@ -379,7 +395,8 @@ ipcMain.handle('dialog:openFolder', async () => {
   return res.canceled ? null : res.filePaths[0];
 });
 
-ipcMain.handle('run:start', (_e, file, id) => startRun(file, id));
+ipcMain.handle('run:start', (_e, file, id, opts) => startRun(file, id, opts));
+ipcMain.handle('debug:send', (_e, msg) => debug.send(msg));
 ipcMain.handle('run:input', (_e, text) => {
   if (runProc && runProc.stdin.writable) runProc.stdin.write(text);
 });

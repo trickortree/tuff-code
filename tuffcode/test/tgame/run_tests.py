@@ -8752,12 +8752,240 @@ def debug_relay(c):
             "...a new run closes the last one's server, a server takes one program, and nothing is sent once it's gone", got)
 
 
+# The renderer's side (renderer/js/debugger.js), with Node and stand-ins for the page, Monaco and TuffIDE: breakpoints
+# from the gutter and F9 (and Design Studio's gear lines left to it), moving with the code and kept while a tab is
+# closed; Debug's first messages; the paused line, the Variables panel and the call stack; the toolbar's commands;
+# where the program says breakpoints stop; Watch it run; pause on error; and a run without the debugger.
+DEBUG_UI = r"""
+const fs = require('fs'), vm = require('vm');
+const MAIN = 'C:\\proj\\main.tuf', MONEY = 'C:\\proj\\money.tuf';
+class ClassList {
+  constructor(el) { this.el = el; }
+  get set() { return new Set(this.el.className.split(/\s+/).filter(Boolean)); }
+  contains(c) { return this.set.has(c); }
+  add(...cs) { const s = this.set; cs.forEach((c) => s.add(c)); this.el.className = [...s].join(' '); }
+  remove(...cs) { const s = this.set; cs.forEach((c) => s.delete(c)); this.el.className = [...s].join(' '); }
+  toggle(c, on) { if (on === undefined ? !this.contains(c) : on) this.add(c); else this.remove(c); }
+}
+class El {
+  constructor(tag) { this.tagName = tag; this.className = ''; this.classList = new ClassList(this); this.dataset = {}; this.children = []; this.listeners = {};
+    this.attrs = {}; this.innerHTML = ''; this.textContent = ''; this.title = ''; this.disabled = false; this.style = { setProperty() {} }; }
+  append(...cs) { cs.forEach((c) => this.children.push(c)); }
+  appendChild(c) { this.children.push(c); return c; }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
+  fire(type, target) { (this.listeners[type] || []).forEach((fn) => fn({ target, preventDefault() {} })); }
+}
+const target = (cls, dataset) => ({ closest: (sel) => (sel.includes(cls) ? { dataset, disabled: false } : null) });
+const byId = { 'run-split': new El('div'), 'btn-debug': new El('button') };
+const rootStyle = new Map([['--bottom-h', '230px']]);
+const document = { createElement: (t) => new El(t), getElementById: (id) => byId[id] || null,
+  documentElement: { style: { getPropertyValue: (k) => rootStyle.get(k) || '', setProperty: (k, v) => rootStyle.set(k, v) } } };
+const listeners = {};
+const sent = [], runs = [], opened = [], toasts = [], commands = {};
+let onEvent = null, runId = 6;
+class Model {
+  constructor(path, n) { this.uri = { scheme: 'file', fsPath: path }; this.n = n; this.decos = new Map(); this.seq = 0; this.disposed = false; this.bye = []; }
+  isDisposed() { return this.disposed; }
+  getLineCount() { return this.n; }
+  deltaDecorations(old, add) { old.forEach((id) => this.decos.delete(id)); return add.map((d) => { const id = 'd' + ++this.seq; this.decos.set(id, d); return id; }); }
+  getDecorationRange(id) { const d = this.decos.get(id); return d ? { startLineNumber: d.range.a[0] } : null; }
+  getLineDecorations(n) { return [...this.decos.values()].filter((d) => d.range.a[0] === n).map((d) => ({ options: d.options })); }
+  onWillDispose(fn) { this.bye.push(fn); }
+  dispose() { this.bye.forEach((fn) => fn()); this.disposed = true; }
+  shift(from, by) { for (const d of this.decos.values()) if (d.range.a[0] >= from) d.range.a[0] += by; }
+  classes() { return [...this.decos.values()].map((d) => [d.range.a[0], d.options.glyphMarginClassName || '', d.options.className || '']); }
+}
+const created = [];
+let models = [new Model(MAIN, 22)];
+const ed = { model: models[0], pos: { lineNumber: 1, column: 1 }, handlers: {}, actions: [], focused: 0,
+  getModel() { return this.model; }, onMouseDown(fn) { this.handlers.down = fn; }, onMouseMove(fn) { this.handlers.move = fn; },
+  onMouseLeave(fn) { this.handlers.leave = fn; }, addAction(a) { this.actions.push(a); }, getPosition() { return this.pos; },
+  setPosition(p) { this.pos = p; }, revealLineInCenterIfOutsideViewport() {}, focus() { this.focused++; } };
+const monaco = { Range: class { constructor(...a) { this.a = a; } },
+  editor: { TrackedRangeStickiness: { NeverGrowsWhenTypingAtEdges: 1 }, MouseTargetType: { GUTTER_GLYPH_MARGIN: 2 }, OverviewRulerLane: { Full: 7 },
+    getModels: () => models.filter((m) => !m.disposed), onDidCreateModel: (fn) => created.push(fn) } };
+const newModel = (path, n) => { const m = new Model(path, n); models.push(m); created.forEach((fn) => fn(m)); return m; };
+const settings = {};
+const ide = { settings: () => settings, saveSettings: (p) => Object.assign(settings, p), toast: (m) => toasts.push(m), runTarget: () => MAIN,
+  runFile: async (p, opts) => { runs.push([p, opts]); return ++runId; }, stopRun: () => sent.push({ stop: true }),
+  openFile: async (p, line, opts) => { opened.push([p, line, opts && opts.focus]); ed.model = models.find((m) => m.uri.fsPath === p && !m.disposed) || newModel(p, 5); return {}; },
+  addCommand: (id, def) => { commands[id] = def; }, monacoReady: async () => monaco, editor: () => ed };
+const window = { tuff: { platform: 'win32', debug: { send: async (m) => sent.push(m), onEvent: (fn) => { onEvent = fn; } } },
+  addEventListener: (t, fn) => { (listeners[t] = listeners[t] || []).push(fn); } };
+const ctx = { window, document, console, setTimeout, clearTimeout, TuffIcon: (n) => `<svg data-i="${n}"></svg>`,
+  getComputedStyle: () => ({ getPropertyValue: () => '#3574f0' }), requestAnimationFrame: (fn) => fn(), addEventListener() {}, removeEventListener() {} };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+const D = window.TuffDebug;
+const tick = () => new Promise((r) => setTimeout(r, 5));
+const glyph = (n) => ed.handlers.down({ target: { type: 2, position: { lineNumber: n } } });
+const fire = (type, detail) => (listeners[type] || []).forEach((fn) => fn({ detail }));
+const split = byId['run-split'];
+const pane = () => split.children.find((c) => c.className.includes('') && c.tagName === 'section');
+const part = (cls) => pane().children.find((c) => c.className.split(' ').includes(cls));
+const body = () => part('dbg-body');
+const list = (i) => body().children[i].children[1];
+const bar = () => part('dbg-bar');
+const button = (act) => bar().children.find((b) => b.dataset.act === act);
+const out = {};
+(async () => {
+  await D.init(ide);
+  out.commands = Object.fromEntries(Object.entries(commands).map(([id, c]) => [id, c.sc || '']));
+  out.action = ed.actions.map((a) => a.label);
+  out.hidden = pane().classList.contains('hidden');
+  glyph(15);
+  out.click = D.breakpoints();
+  out.dot = models[0].classes().filter((c) => c[0] === 15);
+  models[0].deltaDecorations([], [{ range: new monaco.Range(13, 1, 13, 1), options: { glyphMarginClassName: 'tuff-gear' } }]);
+  glyph(13);
+  out.gear = D.breakpoints();
+  ed.pos = { lineNumber: 19, column: 1 };
+  commands.toggleBreakpoint.run();
+  out.f9 = D.breakpoints();
+  commands.toggleBreakpoint.run();
+  out.f9off = D.breakpoints();
+  models[0].shift(10, 2);
+  out.moved = D.breakpoints();
+  models[0].shift(12, -2);
+  models[0].dispose();
+  out.closed = D.breakpoints();
+  const again = newModel(MAIN, 22);
+  ed.model = again;
+  out.reopened = again.classes().filter((c) => c[1].includes('dbg-bp'));
+  commands.debug.run();
+  await tick();
+  out.first = runs[0];
+  fire('tuff:run-started', { id: runId, file: MAIN, debug: true });
+  out.shown = !pane().classList.contains('hidden') && byId['btn-debug'].classList.contains('on');
+  out.starting = part('dbg-status').innerHTML;
+  const stack = [{ index: 0, name: 'add', file: MAIN, line: 15, col: 5, top: false }, { index: 1, name: 'main.tuf', file: MAIN, line: 19, col: 5, top: true }];
+  const scopes = [{ name: 'add', top: false, vars: [{ name: 'n', value: '1', type: 'number' }] },
+    { name: 'main.tuf', top: true, vars: [{ name: 'total', value: '0', type: 'number' }, { name: 'items', value: '["milk", "eggs"]', type: 'list', more: 2 },
+      { name: 'rex', value: 'Pet(name: "Rex", hunger: 5, toys: [])', type: 'Pet', more: 3 }] }];
+  onEvent({ id: runId - 1, event: 'paused', reason: 'step', file: MAIN, line: 2, stack, scopes });
+  out.otherRun = part('dbg-status').innerHTML;
+  onEvent({ id: runId, event: 'paused', reason: 'breakpoint', file: MAIN, line: 15, col: 5, stack, scopes, frame: 0 });
+  await tick();
+  out.paused = { status: part('dbg-status').innerHTML, vars: list(0).innerHTML, stack: list(1).innerHTML, line: again.classes().filter((c) => c[2].includes('dbg-line')),
+    on: Object.fromEntries(bar().children.filter((b) => b.dataset.act).map((b) => [b.dataset.act, !b.disabled])) };
+  bar().fire('click', target('[data-act]', { act: 'next' }));
+  list(0).fire('click', target('.dbg-var', { i: '3' }));
+  list(1).fire('click', target('.dbg-frame', { i: '1' }));
+  await tick();
+  out.sentPaused = sent.slice();
+  out.frameLine = again.classes().filter((c) => c[2].includes('dbg-line'));
+  onEvent({ id: runId, event: 'scopes', frame: 1, scopes: [scopes[1]] });
+  out.frameVars = list(0).innerHTML;
+  onEvent({ id: runId, event: 'running' });
+  out.running = { status: part('dbg-status').innerHTML, line: again.classes().filter((c) => c[2].includes('dbg-line')).length, vars: list(0).innerHTML };
+  const changed = [{ name: 'add', top: false, vars: [{ name: 'n', value: '2', type: 'number' }] }, scopes[1]];
+  onEvent({ id: runId, event: 'paused', reason: 'step', file: MONEY, line: 4, col: 5, stack: [{ index: 0, name: 'with_tax', file: MONEY, line: 4, top: false }, stack[1]],
+    scopes: changed });
+  await tick();
+  out.money = { opened: opened.slice(-1)[0], line: models.find((m) => m.uri.fsPath === MONEY).classes().filter((c) => c[2].includes('dbg-line')),
+    changed: (list(0).innerHTML.match(/dbg-var[^"]*changed/g) || []).length };
+  ed.model = again;
+  sent.length = 0;
+  glyph(9);
+  glyph(3);
+  out.sentLive = sent.slice();
+  onEvent({ id: runId, event: 'breakpoints', file: MAIN, lines: [[3, null], [9, 10], [15, 15]] });
+  out.placed = { bps: D.breakpoints(), classes: again.classes().filter((c) => c[1].includes('dbg-bp')).map((c) => c[0] + ':' + c[1]) };
+  sent.length = 0;
+  commands.watchRun.run();
+  onEvent({ id: runId, event: 'watch', file: MAIN, line: 18, col: 1, stack: [stack[1]], scopes: [scopes[1]] });
+  await tick();
+  out.watch = { sent: sent.slice(), status: part('dbg-status').innerHTML, line: again.classes().filter((c) => c[2].includes('dbg-line')), focus: opened.slice(-1)[0] };
+  onEvent({ id: runId, event: 'paused', reason: 'error', file: MAIN, line: 16, col: 12, error: "I don't know what 'nope' is.", stack, scopes });
+  await tick();
+  out.error = { status: part('dbg-status').innerHTML, cls: part('dbg-status').className,
+    on: Object.fromEntries(bar().children.filter((b) => b.dataset.act).map((b) => [b.dataset.act, !b.disabled])), line: again.classes().filter((c) => c[2].includes('dbg-line')) };
+  sent.length = 0;
+  commands.debugContinue.run();
+  out.continueWatching = sent.slice();
+  onEvent({ id: runId, event: 'ended', code: 1 });
+  out.ended = { status: part('dbg-status').innerHTML, line: again.classes().filter((c) => c[2].includes('dbg-line')).length, close: !button('close').classList.contains('hidden'),
+    debugOn: byId['btn-debug'].classList.contains('on') };
+  fire('tuff:run-started', { id: runId + 1, file: MAIN, debug: false });
+  out.normalRun = pane().classList.contains('hidden');
+  commands.stepOver.run();
+  await tick();
+  out.stepStart = runs[runs.length - 1];
+  out.toasts = toasts;
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.log(JSON.stringify({ crash: String(e.stack || e) })); });
+"""
+
+
+def debug_ui(c):
+    """The renderer's side of the debugger (renderer/js/debugger.js), with Node (see DEBUG_UI)."""
+    ui = os.path.join(REPO, "tuffcode", "renderer", "js", "debugger.js")
+    try:
+        p = subprocess.run(["node", "-e", DEBUG_UI, ui], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        got = json.loads(p.stdout.strip().splitlines()[-1])
+    except (FileNotFoundError, ValueError, IndexError, subprocess.TimeoutExpired) as exc:
+        got = {"crash": str(exc), "stderr": locals().get("p") and p.stderr[-500:]}
+    if not c.check("crash" not in got, "debugger.js runs with Node's stand-ins for the page, Monaco and TuffIDE", got.get("crash")):
+        return
+    main, money = "C:\\proj\\main.tuf", "C:\\proj\\money.tuf"
+    c.check(got["commands"] == {"debug": "Shift+F9", "watchRun": "", "debugContinue": "F5", "stepOver": "F10", "stepInto": "F11",
+                                "stepOut": "Shift+F11", "debugPause": "", "toggleBreakpoint": "F9"} and got["action"] == ["Toggle Breakpoint"] and got["hidden"],
+            "its commands and keys (Debug, Watch it run, F5, F10, F11, Shift+F11, Pause, F9) and the editor's menu entry; the pane starts hidden",
+            (got["commands"], got["action"]))
+    c.check(got["click"] == [{"path": main, "lines": [15]}] and got["dot"] == [[15, "dbg-bp", ""]],
+            "a click in the gutter's glyph margin puts a red dot (a breakpoint) on that line", (got["click"], got["dot"]))
+    c.check(got["gear"] == got["click"], "...but not on a line with Design Studio's gear, which opens its customizer", got["gear"])
+    c.check(got["f9"] == [{"path": main, "lines": [15, 19]}] and got["f9off"] == got["click"], "F9 adds and takes away one on the cursor's line",
+            (got["f9"], got["f9off"]))
+    c.check(got["moved"] == [{"path": main, "lines": [17]}] and got["closed"] == got["click"] and [r[0] for r in got["reopened"]] == [15],
+            "breakpoints move with their lines as the code changes, and stay while the tab is closed and opened again", (got["moved"], got["closed"], got["reopened"]))
+    c.check(got["first"] == [main, {"debug": {"first": [{"cmd": "setBreakpoints", "file": main, "lines": [15]}, {"cmd": "continue"}]}}],
+            "Debug runs the file with the debugger: its breakpoints first, then continue", got["first"])
+    c.check(got["shown"] and "Starting the debugger" in got["starting"] and "Starting" in got["otherRun"],
+            "the debug pane opens and the Debug button lights up; messages from another run are left alone", (got["shown"], got["starting"], got["otherRun"]))
+    pz = got["paused"]
+    c.check("Stopped at a breakpoint on line 15 of main.tuf." in pz["status"] and pz["line"] == [[15, "dbg-at paused", "dbg-line paused"]]
+            and pz["on"] == {"continue": True, "next": True, "stepIn": True, "stepOut": True, "pause": False, "stop": True, "watch": True, "close": False},
+            "paused: it says where and why, lights the line, and the toolbar's Continue and steps work (not Pause)", pz)
+    c.check("In add()" in pz["vars"] and "main.tuf&#39;s top level" in pz["vars"] and ">n<" in pz["vars"] and ">rex<" in pz["vars"] and "▸" in pz["vars"]
+            and "list (2)" in pz["vars"] and "Pet(name: &quot;Rex&quot;" in pz["vars"],
+            "the Variables panel: the function's names, then the file's top level, and the values that open", pz["vars"][:800])
+    c.check("add()" in pz["stack"] and "main.tuf:15" in pz["stack"] and "top level" in pz["stack"] and "main.tuf:19" in pz["stack"] and 'dbg-frame sel" data-i="0"' in pz["stack"],
+            "the call stack: the function and its line, then the top level and the line that called it", pz["stack"])
+    c.check(got["sentPaused"] == [{"cmd": "next"}, {"cmd": "expand", "path": ["top", "rex"], "open": True}, {"cmd": "frame", "index": 1}]
+            and got["frameLine"] == [[19, "dbg-at frame", "dbg-line frame"]] and "In add()" not in got["frameVars"],
+            "Step Over, opening rex, and another frame of the call stack (its line lit, its names shown) go to the program", (got["sentPaused"], got["frameLine"]))
+    c.check("Running" in got["running"]["status"] and got["running"]["line"] == 0 and "show here when the program pauses" in got["running"]["vars"],
+            "running again: the line goes dark and the names wait for the next pause", got["running"])
+    mo = got["money"]
+    c.check(mo["opened"] == [money, 0, True] and mo["line"] == [[4, "dbg-at paused", "dbg-line paused"]] and mo["changed"] == 1,
+            "paused in money.tuf: that file opens with the line lit, and a value that changed is marked", mo)
+    c.check(got["sentLive"] == [{"cmd": "setBreakpoints", "file": main, "lines": [9, 15]}, {"cmd": "setBreakpoints", "file": main, "lines": [3, 9, 15]}],
+            "breakpoints changed while debugging go to the program at once", got["sentLive"])
+    c.check(got["placed"]["bps"] == [{"path": main, "lines": [3, 10, 15]}] and "3:dbg-bp off" in got["placed"]["classes"] and "10:dbg-bp" in got["placed"]["classes"],
+            "where the program says they stop: one on a blank line moves to the next statement, one where it never stops is hollow", got["placed"])
+    w = got["watch"]
+    c.check(w["sent"] == [{"cmd": "watch", "delay": 0.5}] and "Watching it run: line 18 of main.tuf." in w["status"] and w["line"] == [[18, "dbg-at watch", "dbg-line watch"]],
+            "Watch it run: on at the slider's speed, each line lit as it runs, without taking the keyboard", w)
+    e = got["error"]
+    c.check("Stopped by an error on line 16 of main.tuf: I don&#39;t know what &#39;nope&#39; is." in e["status"] and "error" in e["cls"]
+            and e["on"]["continue"] and not e["on"]["next"] and not e["on"]["stepIn"] and e["line"] == [[16, "dbg-at error", "dbg-line error"]],
+            "pause on error: the error and its line in red, with Continue (to end it) and no steps", e)
+    c.check(got["continueWatching"] == [{"cmd": "watch", "delay": 0.5}], "Continue while watching goes on watching", got["continueWatching"])
+    en = got["ended"]
+    c.check("The program has ended." in en["status"] and en["line"] == 0 and en["close"] and not en["debugOn"],
+            "ended: it says so, the line goes dark, and the pane can be closed", en)
+    c.check(got["normalRun"] and got["stepStart"][1]["debug"]["first"][-1] == {"cmd": "next"} and not got["toasts"],
+            "a run without the debugger closes the pane, and F10 with nothing debugged starts and pauses on the first line", (got["normalRun"], got["stepStart"]))
+
+
 def t_debug(c):
     """Console only, no window: 1.5.0's debugger, with this test as TuffCode (DebugLink). In both runtimes:
     breakpoints in two files and the Variables panel's values (kinds' objects, lists and dictionaries open up), the
     call stack and its frames' names, Step Over, Into and Out across functions, an action and an imported file, pause
     on error, input() while debugging, and Watch it run. Then Pause and Stop, a deep call stack, tterm and tmusic
-    programs, TuffCode going away, --debug, where breakpoints stop, its speed, and main.js's side (debug.js, Node)."""
+    programs, TuffCode going away, --debug, where breakpoints stop, its speed, main.js's side (debug.js) and the
+    editor's and the debug pane's (debugger.js), both with Node."""
     for slow in (False, True):
         mode = "the tree walker" if slow else "compiled"
         debug_breakpoints(c, slow, mode)
@@ -8770,6 +8998,7 @@ def t_debug(c):
     debug_more(c)
     debug_speed(c)
     debug_relay(c)
+    debug_ui(c)
 
 
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
