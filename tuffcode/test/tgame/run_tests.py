@@ -9527,6 +9527,42 @@ const [ideFile, sortFile, dir] = process.argv.slice(1);
   // the same line in a function and in the main program, and in two functions: each dot goes with its own one
   out.sortSame = await sortCase('func a():\n    say x\nx = 1\nsay x\n', [2, 4], [4, 1]);
   out.sortTwo = await sortCase('func a():\n    say "hi"\nfunc b():\n    say "hi"\na()\nb()\n', [2, 4], [4, 1]);
+  // Two sorts of one tab, with an edit between that unsorts it again: the tab has one watcher for them, undo goes back
+  // through both (the dots too) and redo sorts again.
+  out.sortAgain = await (async () => {
+    const before = 'func a():\n    say x\nx = 1\nsay x\n';
+    const m = make(before);
+    let watchers = 0;
+    const watch = m.onDidChangeContent.bind(m);
+    m.onDidChangeContent = (f) => { watchers++; return watch(f); };
+    let ids = dots(m, [2, 4]);
+    const lines = () => ids.map((id) => lineOf(m, id)).sort((x, y) => x - y);
+    const window = {
+      TuffSort: require(sortFile),
+      TuffDebug: { breakpoints: () => [{ path: FILE, lines: lines() }], setLines: (p, ls) => { ids = dots(m, ls, ids); } },
+    };
+    const autoSort = new Function('window', 'editor', 'api', 'toast', 'samePath', 'ext', 'activeTab', 'editsTo', `${fn('async function autoSort(')}\nreturn autoSort;`)(
+      window, cursor(m, 1, 1), { checkSource: async () => ({ ok: true }) }, () => {}, (x, y) => x.toLowerCase() === y.toLowerCase(),
+      (p) => (p.match(/\.([^.]+)$/) || [, ''])[1], () => null, editsTo);
+    const tab = { path: FILE, model: m };
+    await autoSort(tab, { quiet: true });
+    const r = { once: lines() };
+    m.pushStackElement();
+    m.pushEditOperations([], [{ range: new Range(1, 1, 1, 1), text: 'func b():\n    say 1\n' }], () => null);
+    m.pushStackElement();
+    await autoSort(tab, { quiet: true });
+    r.twice = lines().map((n) => m.getLineContent(n).trim());
+    r.watchers = watchers;
+    await m.undo();
+    r.undo1 = lines();
+    await m.undo();
+    await m.undo();
+    r.undo3 = lines();
+    r.undone = m.getValue() === before;
+    await m.redo();
+    r.redo1 = lines();
+    return r;
+  })();
   console.log(JSON.stringify(out));
 })().catch((e) => { console.log(JSON.stringify({ crash: String(e.stack || e) })); });
 """
@@ -9583,6 +9619,10 @@ def debug_edits(c):
             and s2["dots"] == [[8, True], [12, True]] and s2["cursor"]["lineNumber"] == 12 and s2["undoDots"] == [2, 4],
             "...with the same line in a function and in the main program, or in two functions, each breakpoint (and the cursor) goes with its own one",
             (ss, s2))
+    sa = got["sortAgain"]
+    c.check(sa == {"once": [3, 8], "twice": ["say x", "say x"], "watchers": 1, "undo1": [5, 10], "undo3": [2, 4], "undone": True, "redo1": [3, 8]},
+            "Auto Code Sort twice on one file, with an edit between: one undo watcher for the file, and undo takes both sorts back, the "
+            "breakpoints too", sa)
 
 
 def t_debug(c):

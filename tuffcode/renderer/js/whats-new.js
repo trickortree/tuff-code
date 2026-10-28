@@ -178,12 +178,20 @@ ${NOTES['1.3.0'].notes}`,
 - While it's stopped, Variables shows each name's value (lists, dictionaries and kinds open up) and the call stack shows which function called which. Step Over (F10), Step Into (F11), Step Out (Shift+F11) and Continue (F5) move it on.
 - An error stops it on the line that went wrong, with the names as they were.
 - Watch it run lights up each line as it runs, slow enough to follow, with a speed slider.
+- Breakpoints stay with their lines when the whole file changes at once: Auto Code Sort (and its Undo), Replace in Files, or another program changing the file.
 
 ### New Project
 - File > New Project… starts a project from a starter: Hello, Quiz, Habit Tracker, Corner Shop, Snake, Coin Collector, Music Box, Drawing, Weather or a blank one. Give it a name and it opens, ready to run.
 
 ### Learn
-- A new section, 1.7 · Workshop: a lesson each for text templates, kinds, actions, your own files, music, a terminal game and animated pictures.`,
+- A new section, 1.7 · Workshop: a lesson each for text templates, kinds, actions, your own files, music, a terminal game and animated pictures.
+
+### Fixes
+- **Built apps keep what they save:** files from \`file.save\`, \`file.write\`, \`file.add\` and \`song:save\` go in a folder beside the app, named after it (Corner Shop files for Corner Shop), so they're still there next time. If it can't save there (in Program Files, say), it saves in a TuffApps folder in your app data. They used to vanish when the app closed.
+- Build Exe works for a project whose folder has a ; in its name, and a new project's name can't have one.
+- After you open another folder, Run, Rerun (Ctrl+F5), Design Studio and Build use that folder's files, not the last project's.
+- On Windows and Linux, Ctrl+W and Ctrl+R in a box (New Project, Search Everywhere) no longer close or reload TuffCode.
+- Learn: stopping a lesson's program (Stop, or Ctrl+F2) no longer says it hit an error.`,
   };
   // 1.4.1 fixes 1.4.0 and adds looks to input and anims.
   NOTES['1.4.1'] = {

@@ -1548,14 +1548,15 @@
     model.pushStackElement();
     if (dots.length) {
       const moved = dots.map(where);
-      const sorted = model.getAlternativeVersionId();
       window.TuffDebug.setLines(t.path, moved);
       // Undo (Ctrl+Z, or the toast's) brings the old text back but would leave the dots where they are: they go back
-      // with it, and Redo takes them to the sorted lines again.
-      model.onDidChangeContent((e) => {
-        const v = model.getAlternativeVersionId();
-        if (e.isUndoing && v === unsorted) window.TuffDebug.setLines(t.path, dots);
-        else if (e.isRedoing && v === sorted) window.TuffDebug.setLines(t.path, moved);
+      // with it, and Redo takes them to the sorted lines again. (One watcher for the tab, however many sorts it has had.)
+      const back = (t.sortDots ||= { undo: new Map(), redo: new Map() });
+      back.undo.set(unsorted, dots);
+      back.redo.set(model.getAlternativeVersionId(), moved);
+      t.sortWatch ||= model.onDidChangeContent((e) => {
+        const lines = (e.isUndoing ? back.undo : e.isRedoing ? back.redo : null)?.get(model.getAlternativeVersionId());
+        if (lines) window.TuffDebug.setLines(t.path, lines);
       });
     }
     if (onScreen && pos && editor.getPosition().lineNumber !== where(pos.lineNumber)) editor.setPosition({ lineNumber: where(pos.lineNumber), column: 1 });
