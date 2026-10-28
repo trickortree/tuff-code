@@ -1,0 +1,68 @@
+# habits.tuf: the habits, and how they're kept, in a file of their own.
+# main.tuf uses it with  import habits.tuf , then habits.load(), habits.save(...)
+# and each habit's actions, like habit:toggle(today()).
+
+# A Habit is a name and the days it was done on, like "2026-10-27".
+kind Habit:
+    name = "?"
+    days = []                       # every new Habit gets a list of its own
+
+    # Was it done on that day?
+    func done_on(day):
+        return my.days:has(day)
+
+    # Ticks the day off, or unticks it when it was ticked already.
+    func toggle(day):
+        if my.days:has(day):
+            my.days:remove(day)
+        else:
+            my.days:add(day)
+
+    # How many days in a row it was done, up to that day. A streak isn't
+    # broken until the day is over, so when that day isn't ticked yet it
+    # counts from the day before.
+    func streak(day):
+        numbers = []
+        for done in my.days:
+            numbers:add(day_number(done))
+        n = day_number(day)
+        if not numbers:has(n):
+            n -= 1
+        count = 0
+        while numbers:has(n):
+            count += 1
+            n -= 1
+        return count
+
+# "2026-10-27" -> a count of days, so the day before is always one less, even
+# across months and leap years. (You don't need to follow the maths!)
+func day_number(day):
+    parts = day:split("-")
+    year = int(parts[0])
+    month = int(parts[1])
+    if month < 3:                   # count each year from March, so a leap day comes last
+        year -= 1
+        month += 12
+    return 365 * year + floor(year / 4) - floor(year / 100) + floor(year / 400) + floor((153 * (month - 3) + 2) / 5) + int(parts[2])
+
+# How many of the habits were done on each of the last 7 days, oldest first.
+func last_week(list, day):
+    today_n = day_number(day)
+    counts = []
+    for back in range(6, 0, -1):
+        count = 0
+        for habit in list:
+            for done in habit.days:
+                if day_number(done) is today_n - back:
+                    count += 1
+        counts:add(count)
+    return counts
+
+save_file = "habits.json"           # next to the program
+
+# The habits saved last time, or three to start with.
+func load():
+    return file.load(save_file, [Habit("Drink water"), Habit("Read 10 pages"), Habit("Go for a walk")])
+
+func save(list):
+    file.save(save_file, list)

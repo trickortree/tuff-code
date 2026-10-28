@@ -1,0 +1,44 @@
+# Quiz: questions in a dictionary, a score, and a result at the end.
+# Each question is a key, and its value is a list of the answers that count as
+# right (in lower case). Change the questions, or add your own!
+
+quiz = {
+    "What is 7 x 6?": ["42", "forty-two", "forty two"],
+    "Which planet is called the Red Planet?": ["mars"],
+    "How many legs does a spider have?": ["8", "eight"],
+    "What do bees make?": ["honey"],
+    "What is the biggest ocean on Earth?": ["pacific", "the pacific", "pacific ocean", "the pacific ocean"]
+}
+
+score = 0
+asked = 0
+
+say:color("QUIZ TIME!", "gold", "bold")
+say f"{len(quiz)} questions. Type an answer and press Enter."
+say ""
+
+for question in quiz:                      # a loop over a dictionary goes through its keys
+    asked += 1
+    answer = input f"{asked}. {question} "
+    answer = answer:trim():lower()         # " Mars " counts as "mars"
+    right = quiz[question]
+    if right:has(answer):
+        score += 1
+        say:color("Right!", "lime")
+    else:
+        say:color(f"Not quite: it's {right[0]}.", "orange")
+
+say ""
+percent = score / len(quiz) * 100
+say f"You got {score} out of {len(quiz)} ({percent:0}%)."
+if score is len(quiz):
+    say:color("A perfect score!", "rainbow")
+elif percent >= 60:
+    say "Well done!"
+else:
+    say "Good try! Run it again to beat your score."
+
+# Ideas to try:
+# - Keep the best score with file.save("best.json", score) and file.load("best.json", 0).
+# - Time each answer with time(), and give a bonus for quick ones.
+# - Ask the questions in a random order (hint: quiz:keys() is a list).

@@ -1,0 +1,12 @@
+[
+  { "id": "blank", "name": "Blank", "about": "An empty main.tuf, ready for your own idea.", "tags": ["empty"], "color": "#8a919e", "project": "My Project" },
+  { "id": "hello", "name": "Hello", "about": "Say hello, ask questions and try the basics.", "tags": ["console"], "uses": ["input", "f-string"], "color": "#5b8def" },
+  { "id": "quiz", "name": "Quiz", "about": "Questions in a dictionary, with a score at the end.", "tags": ["console", "game"], "uses": ["dictionary", "input", "f-string"], "color": "#9b6cf0" },
+  { "id": "habits", "name": "Habit Tracker", "about": "Tick off habits each day and watch your streaks grow.", "tags": ["app", "saves"], "uses": ["atgui", "import", "kind", "file.save"], "color": "#2fb3a0" },
+  { "id": "shop", "name": "Corner Shop", "about": "A shop in two files, with money.tuf and a kind.", "tags": ["console", "files"], "uses": ["import", "kind", "input", "file.write"], "color": "#e8a33d" },
+  { "id": "snake", "name": "Snake", "about": "Steer with the arrow keys, eat the * and grow.", "tags": ["game", "terminal"], "uses": ["tterm", "keys", "random", "file.save"], "color": "#63c74d" },
+  { "id": "coins", "name": "Coin Collector", "about": "Grab coins, dodge ladybirds, beat your best.", "tags": ["game", "2D"], "uses": ["tgame", "sprites", "keys", "random", "game:save"], "color": "#f0b429" },
+  { "id": "music", "name": "Music Box", "about": "Play tunes written as notes, or write your own.", "tags": ["music", "console"], "uses": ["tmusic", "try", "wav"], "color": "#e85d9c" },
+  { "id": "drawing", "name": "Drawing", "about": "A pen that draws a rainbow spiral, a moon and stars.", "tags": ["drawing"], "uses": ["tdraw", "turtle", "random"], "color": "#f0643c" },
+  { "id": "weather", "name": "Weather", "about": "The weather in any city, from the internet.", "tags": ["web", "console"], "uses": ["tap", "api", "json", "try", "catch"], "color": "#38b6d8" }
+]

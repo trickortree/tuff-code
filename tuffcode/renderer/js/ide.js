@@ -1792,6 +1792,7 @@
   };
 
   const commands = {
+    newProject: { label: 'New Project…', run: () => window.TuffNewProject?.open() },
     newFile: { label: 'New File…', sc: 'Ctrl+Alt+N', run: () => newEntry(false) },
     newFolder: { label: 'New Folder', run: () => newEntry(true) },
     openFolder: { label: 'Open Folder…', sc: 'Ctrl+O', run: pickFolder },
@@ -1852,7 +1853,7 @@
   };
 
   const menus = [
-    ['File', ['newFile', 'newFolder', 'openFolder', 'sep', 'saveAll', 'closeTab', 'sep', 'settings', 'sep', 'exit']],
+    ['File', ['newProject', 'newFile', 'newFolder', 'openFolder', 'sep', 'saveAll', 'closeTab', 'sep', 'settings', 'sep', 'exit']],
     ['Edit', ['undo', 'redo', 'sep', 'find', 'replace', 'findInFiles', 'sep', 'renameSymbol', 'autoSort', 'comment', 'dupLine', 'deleteLine', 'selectAll']],
     ['View', ['toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'engine', 'sep', 'zen', 'zoomIn', 'zoomOut', 'zoomReset', 'sep', 'settings', 'devtools']],
     ['Go', ['searchEverywhere', 'goToFile', 'goToSymbol', 'sep', 'goToDefinition', 'findUses', 'sep', 'reopenTab', 'nextTab', 'prevTab']],
@@ -2161,7 +2162,8 @@
   $('#search-everywhere').addEventListener('mousedown', (e) => { if (e.target.id === 'search-everywhere') closeSearch(); });
 
   // ---------- keyboard ----------
-  const overlayOpen = () => !$('#modal').classList.contains('hidden') || !$('#settings').classList.contains('hidden') || !$('#build-dialog').classList.contains('hidden') || !$('#search-everywhere').classList.contains('hidden') || !$('#intro').classList.contains('hidden');
+  const overlayOpen = () => !$('#modal').classList.contains('hidden') || !$('#settings').classList.contains('hidden') || !$('#build-dialog').classList.contains('hidden') || !$('#search-everywhere').classList.contains('hidden') || !$('#intro').classList.contains('hidden')
+    || !!window.TuffNewProject?.isOpen();
   let shiftClean = false;
   let lastShift = 0;
 
@@ -2267,6 +2269,7 @@
     const r = e.currentTarget.getBoundingClientRect();
     const recent = (state.settings.recent || []).filter((p) => p !== state.root);
     showMenu(r.left, r.bottom + 4, [
+      { label: 'New Project…', run: commands.newProject.run },
       { label: 'Open Folder…', sc: 'Ctrl+O', run: pickFolder },
       { label: 'New File…', sc: 'Ctrl+Alt+N', run: () => newEntry(false) },
       ...(recent.length ? ['sep', ...recent.map((p) => ({ label: basename(p), sc: p.length > 38 ? '…' + p.slice(-36) : p, run: () => openFolder(p) }))] : []),
@@ -2311,6 +2314,7 @@
 
   window.TuffIDE = {
     root: () => state.root,
+    openFolder: (dir) => openFolder(dir), // New Project opens the folder it made (new-project.js)
     join,
     settings: () => state.settings,
     saveSettings,

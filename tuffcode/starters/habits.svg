@@ -1,0 +1,12 @@
+<svg viewBox="0 0 120 72" xmlns="http://www.w3.org/2000/svg">
+  <rect class="t" x="9" y="20" width="12" height="12" rx="3"/>
+  <rect class="t" x="24" y="20" width="12" height="12" rx="3"/>
+  <rect class="t" x="39" y="20" width="12" height="12" rx="3"/>
+  <rect class="t" x="54" y="20" width="12" height="12" rx="3"/>
+  <rect class="t" x="69" y="20" width="12" height="12" rx="3"/>
+  <rect class="pf" x="84" y="20" width="12" height="12" rx="3"/>
+  <rect class="pf" x="99" y="20" width="12" height="12" rx="3"/>
+  <path class="pline thin" d="M12 26l2.5 2.5 4-5m8.5 2.5l2.5 2.5 4-5m8.5 2.5l2.5 2.5 4-5m8.5 2.5l2.5 2.5 4-5m8.5 2.5l2.5 2.5 4-5"/>
+  <rect class="pf" x="9" y="44" width="102" height="7" rx="3.5"/>
+  <rect class="t" x="9" y="44" width="72" height="7" rx="3.5"/>
+</svg>

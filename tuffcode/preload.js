@@ -10,6 +10,7 @@ const on = (ch) => (cb) => {
 contextBridge.exposeInMainWorld('tuff', {
   settings: { get: invoke('settings:get'), set: invoke('settings:set') },
   project: { default: invoke('project:default'), openFolder: invoke('dialog:openFolder') },
+  starters: { list: invoke('starters:list'), check: invoke('starters:check'), create: invoke('starters:create'), pickFolder: invoke('starters:pickFolder') },
   fs: {
     readDir: invoke('fs:readDir'),
     listAll: invoke('fs:listAll'),

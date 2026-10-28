@@ -1,0 +1,120 @@
+# Coin Collector: grab as many coins as you can in 30 seconds, and keep away
+# from the ladybirds. The arrow keys (or W, A, S, D) move. Your best score is
+# saved for next time.
+# The pictures are in the pictures folder. Draw your own (Sprite Studio in the
+# sidebar can), or change these: each one is a row of frames.
+mention tgame
+
+game = tgame.window("Coin Collector", 800, 600)
+game:background "#2f6b3a"
+
+best = game:load("best", 0)         # what an earlier game saved, or 0 the first time
+score = 0
+speed = 260                         # how fast the hero walks, in pixels a second
+
+hero = game:image("pictures/hero.png", 400, 300, 48)
+hero:frames(4)                      # hero.png is 4 frames side by side
+hero:animation("walk", [1, 2, 3, 4], 8)
+hero:on_edge "stop"
+hero:layer 2
+
+coins = game:group()
+bugs = game:group()
+
+hud = game:hud()
+score_label = hud:text("Coins: 0", 24, 30, 26, "gold")
+score_label:align "left"
+best_label = hud:text(f"Best: {best}", 24, 62, 18, "white")
+best_label:align "left"
+
+start_screen = game:start_screen("Coin Collector", "Click or press Space to play")
+start_screen:text "Grab the coins before the time runs out. Keep away from the ladybirds!"
+
+# A coin somewhere new, not too close to the hero.
+func add_coin():
+    coin = game:image("pictures/coin.png", 0, 0, 36)
+    coin:frames(4)
+    coin:animation("spin", [1, 2, 3, 4], 10)
+    coin:play("spin")
+    coin:move_to(game:random_spot())
+    while coin:distance(hero) < 120:
+        coin:move_to(game:random_spot())
+    coins:add(coin)
+
+# A ladybird that comes in at the top and bounces around.
+func add_bug():
+    bug = game:image("pictures/bug.png", random(60, 740), 40, 40)
+    bug:frames(2)
+    bug:animation("scuttle", [1, 2], 8)
+    bug:play("scuttle")
+    bug:speed(random(-150, 150), random(90, 160))
+    bug:on_edge "bounce"
+    bugs:add(bug)
+
+# A new game: 5 coins, 1 ladybird and 30 seconds on the clock.
+func start():
+    score = 0
+    score_label:set "Coins: 0"
+    hero:move_to(400, 300)
+    coins:clear()
+    bugs:clear()
+    for i in range(1, 5):
+        add_coin()
+    add_bug()
+    game:countdown(30, times_up)
+
+# Runs every frame; dt is the seconds since the last one.
+func step(dt):
+    if game:paused():
+        return
+    moving = false
+    if game:held("left") or game:held("a"):
+        hero:move(-speed * dt, 0)
+        moving = true
+    if game:held("right") or game:held("d"):
+        hero:move(speed * dt, 0)
+        moving = true
+    if game:held("up") or game:held("w"):
+        hero:move(0, -speed * dt)
+        moving = true
+    if game:held("down") or game:held("s"):
+        hero:move(0, speed * dt)
+        moving = true
+    if moving:
+        hero:play("walk")           # already walking: it carries on
+    else:
+        hero:frame(1)               # standing still
+    got = hero:touches(coins)
+    if got:
+        score += 1
+        score_label:set f"Coins: {score}"
+        game:sound "coin"
+        game:pop_text("+1", got:x(), got:y(), "gold", 30)
+        got:remove()
+        add_coin()
+        if score % 5 is 0:
+            add_bug()               # another ladybird every 5 coins
+    if hero:touches(bugs):
+        game:sound "hit"
+        game:shake(0.6)
+        finish("A ladybird got you!")
+
+func times_up():
+    game:sound "win"
+    finish("Time's up!")
+
+# The end of a game: keep a new best score, then Space plays again.
+func finish(why):
+    if score > best:
+        best = score
+        game:save("best", best)
+        best_label:set f"Best: {best}"
+    game:game_over(f"{why} You got {score} coins.", start)
+
+start()
+game:every_frame step
+
+# Ideas to try:
+# - A gold coin worth 5 that only stays for 3 seconds.
+# - Make the ladybirds chase the hero (bug:point_at(hero), then bug:forward(80 * dt)).
+# - game:music with a tune from tmusic.

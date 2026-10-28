@@ -9314,6 +9314,461 @@ def t_debug(c):
     debug_ui(c)
 
 
+# ---------------------------------------------------------------- New Project's starters (1.5.0)
+
+STARTERS_DIR = os.path.join(REPO, "tuffcode", "starters")
+# An atgui program with no window at all, for a starter's self-test: pywebview can't load, and a stand-in takes the
+# window's place (as in test/atgui/close_test.py), clicking a popup's OK or Yes as soon as it shows.
+STARTERS_NO_WINDOW = r"""
+import json, os, sys, time
+sys.modules["webview"] = None
+sys.path.insert(0, sys.argv[1])
+import tuff, tuff_view
+
+class FakeWindow:
+    def __init__(self, view):
+        self.view, self.seq = view, 0
+    def run_js(self, code):
+        for _seq, cmds in json.loads(code[len("__tv.apply("):-1]):
+            for cmd in cmds:
+                if cmd[0] == "s" and str(cmd[2].get("html", "")) in ("<span>OK</span>", "<span>Yes</span>"):
+                    self.seq += 1
+                    self.view._on_events(self.seq, [{"type": "click", "path": [cmd[1]]}])
+    def destroy(self):
+        self.view._on_closing()
+    def __getattr__(self, name):
+        return lambda *args: None
+
+def stand_in(view):
+    view._win = FakeWindow(view)
+    view._on_ready({"w": 460, "h": 640})
+    deadline = time.monotonic() + 20
+    while not view._closed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    view._on_closed()
+
+tuff_view.View._open = stand_in
+sys.argv = [os.path.join(sys.argv[1], "tuff.py"), sys.argv[2]]
+sys.exit(tuff.main())
+"""
+# A tdraw program with stand-ins for tkinter and turtle, so no window opens: it counts what the pen did.
+STARTERS_NO_TK = r"""
+import collections, json, os, sys, types
+calls = collections.Counter()
+class Fake:
+    def __init__(self, *args, **kwargs):
+        pass
+    def __getattr__(self, name):
+        def call(*args, **kwargs):
+            calls[name] += 1
+            return [] if name in ("turtles", "find_all") else 0.0 if name in ("xcor", "ycor") else None
+        return call
+tk, turtle = types.ModuleType("tkinter"), types.ModuleType("turtle")
+tk.Tk, tk.Canvas, tk.TclError = Fake, Fake, type("TclError", (Exception,), {})
+turtle.TurtleScreen, turtle.RawTurtle, turtle.Terminator = Fake, Fake, type("Terminator", (Exception,), {})
+sys.modules["tkinter"], sys.modules["turtle"] = tk, turtle
+sys.path.insert(0, sys.argv[1])
+import tuff
+sys.argv = [os.path.join(sys.argv[1], "tuff.py"), sys.argv[2]]
+code = tuff.main()
+print("PEN " + json.dumps(calls), flush=True)
+sys.exit(code)
+"""
+# The Habit Tracker's habits.tuf on its own, in a console program: streaks across months and leap years, the
+# chart's week, and saving.
+STARTERS_HABITS = """import habits.tuf
+run = habits.Habit("Run", ["2026-10-25", "2026-10-26", "2026-10-27"])
+say run:streak("2026-10-27")
+say run:streak("2026-10-28")
+say run:streak("2026-10-29")
+say habits.Habit("Leap", ["2028-02-28", "2028-02-29", "2028-03-01"]):streak("2028-03-01")
+say habits.Habit("New year", ["2025-12-31", "2026-01-01"]):streak("2026-01-01")
+say habits.day_number("2026-03-01") - habits.day_number("2026-02-28")
+say habits.day_number("2100-03-01") - habits.day_number("2100-02-28")
+say habits.day_number("2000-03-01") - habits.day_number("2000-02-28")
+say habits.last_week([run], "2026-10-27")
+say len(habits.load())
+run:toggle("2026-10-28")
+habits.save([run])
+say habits.load()[0]
+"""
+# The Habit Tracker's window, driven from inside (app:after): add, a name that's there already, tick, delete (its
+# confirm answered Yes), untick.
+STARTERS_HABITS_UI = """
+
+func selftest():
+    say len(my_habits)
+    new_name:set "Stretch"
+    add_habit()
+    new_name:set "stretch"
+    add_habit()
+    say len(my_habits)
+    tick("Stretch")
+    say summary:value()
+    say week:value()
+    say done_bar:value()
+    delete_habit("Read 10 pages")
+    say habit_list:items()
+    tick("Stretch")
+    say habit_called("Stretch"):done_on(today())
+    app:close
+
+app:after(0.3, selftest)
+"""
+# Coin Collector, driven from inside: a coin put on the hero is picked up, then the time runs out.
+STARTERS_COINS = """
+
+func selftest():
+    first = coins:items()[0]
+    first:move_to(hero:x(), hero:y())
+    game:after(0.2, report)
+
+func report():
+    say f"score {score}, coins {coins:count()}, bugs {bugs:count()}, paused {game:paused()}"
+    times_up()
+    say f"best {best}, paused {game:paused()}"
+    game:close()
+
+game:after(0.5, selftest)
+"""
+
+
+def starters_copy(sid):
+    """A fresh copy of a starter in OUT/starters/<id> (runs leave saves behind): its folder."""
+    import shutil
+    folder = os.path.join(OUT, "starters", sid)
+    shutil.rmtree(folder, ignore_errors=True)
+    shutil.copytree(os.path.join(STARTERS_DIR, sid), folder)
+    return folder
+
+
+def starters_env():
+    """A plain pipe: no Run panel, no sound, and games' saves and songs in the test's own folder."""
+    env = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW", "TUFF_NO_WRITES", "TUFF_BASE_DIR")}
+    env.update({"PYTHONIOENCODING": "utf-8", "TUFF_NO_SOUND": "1", "TUFF_SAVE_DIR": os.path.join(OUT, "starters", "saves"),
+                "TUFF_MUSIC_DIR": os.path.join(OUT, "starters", "music")})
+    return env
+
+
+def starters_run(folder, stdin="", args=None, env=None, main="main.tuf", timeout=90):
+    """Runs a program in its folder, with its answers through a pipe: (exit code, stdout, stderr, seconds)."""
+    t0 = time.perf_counter()
+    p = subprocess.run(args or tuff_cmd() + [main], input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       cwd=folder, env={**starters_env(), **(env or {})}, timeout=timeout)
+    return p.returncode, p.stdout, p.stderr, time.perf_counter() - t0
+
+
+def starters_add(folder, code_text, main="main.tuf"):
+    with open(os.path.join(folder, main), "a", encoding="utf-8") as f:
+        f.write(code_text)
+
+
+def starters_snake(c, extra):
+    """Snake through a pipe, with screen:press keys (and anything else) put in just before screen:every_frame:
+    (exit code, stdout, stderr, the final screen's rows, the folder). Food the checks don't place goes in the top left
+    corner, out of every check's way: nothing seeds random() in a pipe, and a * on the snake's row would be eaten."""
+    folder = starters_copy("snake")
+    path = os.path.join(folder, "main.tuf")
+    with open(path, encoding="utf-8") as f:
+        code_text = f.read()
+    hook = "start()\nscreen:every_frame(step)"
+    spot = "food = [random(1, width - 2), random(1, height - 2)]"
+    c.check(hook in code_text and spot in code_text, "snake: main.tuf starts the game with start() and screen:every_frame(step), "
+            "and puts the food anywhere with random()", None)
+    with open(path, "w", encoding="utf-8") as f:  # (only the first spot: the one after it, for food on the snake, stays random)
+        f.write(code_text.replace(spot, "food = [1, 1]", 1).replace(hook, "start()\n" + extra + "screen:every_frame(step)"))
+    code, out, err, _s = starters_run(folder)
+    lines = out.splitlines()
+    top = next((i for i, x in enumerate(lines) if x.startswith("┌")), None)
+    return code, out, err, lines[top:top + 16] if top is not None else [], folder
+
+
+def starters_weather(c, folder, stdin="Testville\nAtlantis\n\n", first=0):
+    """Weather against a stand-in for Open-Meteo on this computer: the copy's two addresses point at it. Its three days
+    start first days from today here: they're the place's own days (timezone=auto), so far away they can start
+    tomorrow (1) or yesterday (-1)."""
+    import datetime
+    import http.server
+    import threading
+    import urllib.parse
+    asked = []
+    days = [(datetime.date.today() + datetime.timedelta(days=first + i)).isoformat() for i in range(3)]
+
+    class Answer(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            u = urllib.parse.urlsplit(self.path)
+            q = urllib.parse.parse_qs(u.query)
+            asked.append((u.path, q))
+            if u.path == "/geo":
+                body = {"results": [{"name": "Testville", "country": "Nowhere Land", "latitude": 51.5, "longitude": -0.12}]} \
+                    if q.get("name") == ["Testville"] else {"generationtime_ms": 0.4}
+            else:
+                body = {"current": {"temperature_2m": 12.6, "apparent_temperature": 10.2, "relative_humidity_2m": 81, "weather_code": 61,
+                                    "wind_speed_10m": 14.4},
+                        "daily": {"time": days, "weather_code": [61, 3, 0],
+                                  "temperature_2m_max": [14.1, 15.9, 17.4], "temperature_2m_min": [8.2, 9.6, 7.5]}}
+            data = json.dumps(body).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Answer)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        path = os.path.join(folder, "main.tuf")
+        with open(path, encoding="utf-8") as f:
+            code_text = f.read()
+        urls = ('"https://geocoding-api.open-meteo.com/v1/search"', '"https://api.open-meteo.com/v1/forecast"')
+        c.check(all(u in code_text for u in urls), "weather: asks Open-Meteo's places and forecast addresses", None)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code_text.replace(urls[0], f'"{base}/geo"').replace(urls[1], f'"{base}/forecast"'))
+        result = starters_run(folder, stdin)
+    finally:
+        server.shutdown()
+    return result, asked
+
+
+def t_starters(c):
+    """1.5.0, no window and no sound: New Project's starters (tuffcode/starters). Each is listed with its picture and
+    passes --check. The console ones run in a pipe with their answers; Snake (tterm) with screen:press keys; Coin
+    Collector (tgame) in Tuff Engine's preview and through headless.py; the Habit Tracker (atgui) with a stand-in for
+    its window, and the Drawing (tdraw) with a stand-in pen; Weather against a stand-in weather service, and with no
+    internet. Then the create logic and the gallery in Node (new_project_harness.js), and how the IDE and the built
+    app find the starters."""
+    import datetime
+    import shutil
+    import socket
+    import wave
+    root = os.path.join(OUT, "starters")
+    shutil.rmtree(root, ignore_errors=True)
+    os.makedirs(root)
+    with open(os.path.join(STARTERS_DIR, "starters.json"), encoding="utf-8") as f:
+        listed = json.load(f)
+    ids = [s.get("id") for s in listed]
+    c.check(ids == ["blank", "hello", "quiz", "habits", "shop", "snake", "coins", "music", "drawing", "weather"], "starters.json lists the 10 starters", ids)
+    for s in listed:
+        sid = s.get("id")
+        c.check(os.path.isfile(os.path.join(STARTERS_DIR, sid, "main.tuf")) and os.path.isfile(os.path.join(STARTERS_DIR, f"{sid}.svg"))
+                and s.get("name") and s.get("about") and isinstance(s.get("tags"), list) and re.fullmatch(r"#[0-9a-f]{6}", s.get("color", ""))
+                and all(isinstance(u, str) and u for u in s.get("uses", [])),
+                f"{sid}: main.tuf, a picture, a name, an about line, tags, what it uses (for the search) and a colour", s)
+    uses = {s.get("id"): s.get("uses", []) for s in listed}
+    c.check(all(lib in uses.get(sid, []) for sid, lib in (("snake", "tterm"), ("coins", "tgame"), ("music", "tmusic"), ("drawing", "tdraw"),
+                                                             ("weather", "tap"), ("habits", "atgui"), ("habits", "import"), ("shop", "import"))),
+            "searching for a library finds the starters that use it (starters.json's uses: tterm, tgame, tmusic, tdraw, tap, atgui, import)", uses)
+    left = [os.path.relpath(os.path.join(d, f), STARTERS_DIR) for d, _dirs, files in os.walk(STARTERS_DIR) for f in files
+            if f in ("best.json", "habits.json", "receipt.txt", "my_tune.wav", ".DS_Store") or "__pycache__" in d]
+    c.check(not left, "no starter has a file a run leaves behind (it would go into every new project)", left)
+    for d, _dirs, files in os.walk(STARTERS_DIR):
+        for f in sorted(files):
+            if f.endswith(".tuf"):  # in its own folder, so import money.tuf finds money.tuf
+                p = subprocess.run(tuff_cmd() + ["--check", f], cwd=d, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                   env=starters_env(), stdin=subprocess.DEVNULL, timeout=60)
+                c.check(p.returncode == 0 and p.stdout.strip() == "OK", f"{os.path.relpath(os.path.join(d, f), STARTERS_DIR)} passes --check",
+                        (p.stdout + p.stderr)[:400])
+
+    # ---- console starters, through a pipe
+    code, out, err, _s = starters_run(starters_copy("blank"))
+    c.check(code == 0 and out == "" and err == "", "blank: runs, and says nothing (it's all comments)", (code, out, err))
+    folder = starters_copy("hello")
+    code, out, err, _s = starters_run(folder, "Sam\n12\n")
+    c.check(code == 0 and "Nice to meet you, Sam!" in out and "In ten years you'll be 22." in out and "TUFF IS FUN!" in out
+            and out.count("Counting: ") == 3 and "This line is purple." in out and "Bye for now, Sam!" in out and not err,
+            "hello: asks a name and an age, counts, shouts and says goodbye", (out + err)[-600:])
+    code, out, err, _s = starters_run(folder, "  \nold\n")
+    c.check(code == 0 and "Nice to meet you, friend!" in out and "That isn't a number, but that's OK." in out,
+            "hello: no name is 'friend', and an age that isn't a number is fine", (out + err)[-400:])
+    folder = starters_copy("quiz")
+    code, out, err, _s = starters_run(folder, "42\n MARS \n6\nhoney\nThe Pacific Ocean\n")
+    c.check(code == 0 and out.count("Right!") == 4 and "Not quite: it's 8." in out and "You got 4 out of 5 (80%)." in out and "Well done!" in out,
+            "quiz: answers count in any case and with spaces, a wrong one shows the answer, and the score is a percent", (out + err)[-600:])
+    code, out, err, _s = starters_run(folder, "forty-two\nmars\neight\nhoney\npacific\n")
+    c.check(code == 0 and "You got 5 out of 5 (100%)." in out and "A perfect score!" in out, "quiz: every answer in a question's list counts", (out + err)[-300:])
+    folder = starters_copy("shop")
+    code, out, err, _s = starters_run(folder, "1\n3\n9\n2\n5\n4\n2\nx\n3\n0\n\n")
+    receipt = ""
+    if os.path.isfile(os.path.join(folder, "receipt.txt")):
+        with open(os.path.join(folder, "receipt.txt"), encoding="utf-8") as f:
+            receipt = f.read()
+    c.check(code == 0 and "Added 3 x Apple. Basket so far: $1.35" in out and "There's no number 9 on the shelf." in out
+            and "Sorry, there are only 4 left." in out and "There's no number x on the shelf." in out and "Type how many you'd like" in out
+            and "Thanks for shopping!" in out, "shop: buys with money.tuf's prices, and turns down what isn't on the shelf or in stock", (out + err)[-800:])
+    c.check(re.search(r"3 x Apple +\$1\.35", receipt) and re.search(r"2 x Cheese +\$7\.60", receipt) and re.search(r"Subtotal +\$8\.95", receipt)
+            and re.search(r"Tax \(20%\) +\$1\.79", receipt) and re.search(r"Total +\$10\.74", receipt),
+            "shop: the receipt (money.tuf's tax and as_money) is in receipt.txt", receipt)
+    folder = starters_copy("shop")
+    code, out, err, _s = starters_run(folder, "\n")
+    c.check(code == 0 and "Nothing in the basket" in out and not os.path.exists(os.path.join(folder, "receipt.txt")),
+            "shop: paying for nothing writes no receipt", (out + err)[-300:])
+    folder = starters_copy("music")
+    code, out, err, secs = starters_run(folder, "1\ni\nchip\n2\nw\nC4 E4 G4 C5*2\nw\nH4 C4\ni\ntrumpet\ns\nb\nzz\n9\nq\n")
+    try:
+        with wave.open(os.path.join(folder, "my_tune.wav")) as w:
+            seconds = w.getnframes() / w.getframerate()
+    except (OSError, wave.Error, EOFError):
+        seconds = None
+    c.check(code == 0 and "Playing Twinkle Twinkle on the piano..." in out and "Playing Ode to Joy on the chip..." in out
+            and "There's no trumpet, so it's still chip." in out and "Playing the band..." in out
+            and out.count("Type a number or a letter from the list.") == 2 and out.rstrip().endswith("Bye!") and not err,
+            "music: plays tunes, changes the instrument, plays the band, and asks again after a wrong choice", (out + err)[-800:])
+    c.check("Those notes didn't work:" in out and '"H4" (note 1) isn\'t a note' in out, "music: a mistake in typed notes is shown, and it carries on", out[-600:])
+    c.check(seconds is not None and abs(seconds - 2.5) < 0.1 and "Saved my_tune.wav (2.5 seconds)" in out,
+            "music: saves the last tune (C4 E4 G4 C5*2) as my_tune.wav, 2.5 seconds long", (seconds, out[-300:]))
+    c.check(secs < 30, f"music: in a pipe nothing plays, so nothing waits ({secs:.1f} s)", secs)
+
+    # ---- Weather: a stand-in weather service, then no internet (a proxy that refuses), with the real addresses
+    weekday = lambda days_on: (datetime.date.today() + datetime.timedelta(days=days_on)).strftime("%A")  # in days from today here
+    (code, out, err, _s), asked = starters_weather(c, starters_copy("weather"))
+    forecast = next((q for p, q in asked if p == "/forecast"), {})
+    c.check(code == 0 and "Testville, Nowhere Land" in out and "Now: Light rain, 13°C (feels like 10°C)" in out
+            and "Wind 14 km/h, humidity 81%" in out and re.search(r"Today +Light rain +8 to 14°C", out) and re.search(r"Tomorrow +Cloudy +10 to 16°C", out)
+            and re.search(rf"\n +{weekday(2)} +Clear sky +8 to 17°C", out) and not err,
+            f"weather: finds the place, then shows the weather now and for three days (the third is {weekday(2)})", (out + err)[-800:])
+    c.check(forecast.get("latitude") == ["51.5"] and forecast.get("longitude") == ["-0.12"] and "weather_code" in forecast.get("current", [""])[0]
+            and "temperature_2m_max" in forecast.get("daily", [""])[0], "weather: asks for the forecast where the place is", asked)
+    c.check("I couldn't find a place called Atlantis. Check the spelling?" in out and out.rstrip().endswith("Bye!"),
+            "weather: a place that isn't there says so, and Enter stops", out[-300:])
+    # Far away it can be tomorrow already (Sydney, seen from London in the evening), or still yesterday: the days are
+    # the place's own, so the third one is named from the place's today
+    for first, where in ((1, "a day ahead of this computer"), (-1, "a day behind it")):
+        (code, out, err, _s), _asked = starters_weather(c, starters_copy("weather"), "Testville\n\n", first)
+        c.check(code == 0 and re.search(r"Today +Light rain", out) and re.search(r"Tomorrow +Cloudy", out)
+                and re.search(rf"\n +{weekday(first + 2)} +Clear sky +8 to 17°C", out) and not err,
+                f"weather: for a place {where}, Today and Tomorrow are its own, and the third day is {weekday(first + 2)}", (out + err)[-500:])
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    proxy = f"http://127.0.0.1:{s.getsockname()[1]}"  # nothing answers there once it's closed
+    s.close()
+    code, out, err, _s = starters_run(starters_copy("weather"), "London\n\n", env={"HTTPS_PROXY": proxy, "HTTP_PROXY": proxy, "https_proxy": proxy,
+                                                                                  "http_proxy": proxy, "NO_PROXY": "", "no_proxy": ""})
+    c.check(code == 0 and "Couldn't get the weather:" in out and "Check that the computer is on the internet" in out and out.rstrip().endswith("Bye!")
+            and "Tuff error" not in err, "weather: with no internet, try and catch say so kindly, and it carries on", (out + err)[-500:])
+
+    # ---- the Habit Tracker: habits.tuf on its own, then the window with a stand-in for it
+    folder = starters_copy("habits")
+    with open(os.path.join(folder, "check_habits.tuf"), "w", encoding="utf-8") as f:
+        f.write(STARTERS_HABITS)
+    code, out, err, _s = starters_run(folder, main="check_habits.tuf")
+    c.check(code == 0 and out.splitlines() == ["3", "3", "0", "3", "2", "1", "1", "2", "[0, 0, 0, 0, 1, 1, 1]", "3",
+                                               'Habit(name: "Run", days: ["2026-10-25", "2026-10-26", "2026-10-27", "2026-10-28"])'],
+            "habits.tuf: streaks (a day not ticked yet doesn't break one; months, years and leap days), the week, three to start and "
+            "saving Habits in habits.json", (out + err)[-600:])
+    if RUNTIME:
+        c.check(True, "the Habit Tracker's and the Drawing's stand-in runs need tuff.py: skipped with --runtime")
+    else:
+        folder = starters_copy("habits")
+        starters_add(folder, STARTERS_HABITS_UI)
+        code, out, err, secs = starters_run(folder, args=[sys.executable, "-c", STARTERS_NO_WINDOW, REPO, "main.tuf"])
+        said = out.splitlines()
+        saved = read_json(os.path.join(folder, "habits.json")) or []
+        c.check(code == 0 and not err and len(said) == 7 and said[:2] == ["3", "4"] and re.fullmatch(r"\w+ \d+ \w+: 1 of 4 done", said[2])
+                and said[3:] == ["[0, 0, 0, 0, 0, 0, 1]", "25", '["Drink water", "Go for a walk", "Stretch"]', "false"],
+                f"habits: the window (a stand-in) adds a habit but not the same one twice, ticks it, deletes one after Yes, and unticks ({secs:.1f} s)",
+                (out + err)[-800:])
+        c.check([h.get("name") for h in saved] == ["Drink water", "Go for a walk", "Stretch"] and all(h.get("$kind") == "Habit" for h in saved)
+                and saved[2].get("days") == [], "habits: every change is saved in habits.json, as Habits", saved)
+        # ---- the Drawing, with a stand-in pen
+        code, out, err, _s = starters_run(starters_copy("drawing"), args=[sys.executable, "-c", STARTERS_NO_TK, REPO, "main.tuf"])
+        pen = json.loads(out.split("PEN ", 1)[1]) if "PEN " in out else {}
+        c.check(code == 0 and not err.strip() and pen.get("forward", 0) > 100 and pen.get("begin_fill") == 5 and pen.get("dot") == 2
+                and pen.get("write") == 1 and pen.get("onclick") == 1 and pen.get("mainloop") == 1,
+                "drawing: draws with a stand-in pen (no window): the spiral, 5 stars, the moon, the words, and waits for clicks", (pen, err[-300:]))
+
+    # ---- Snake, through a pipe with screen:press keys
+    code, out, err, screen, folder = starters_snake(c, "")
+    c.check(code == 0 and len(screen) == 16 and "GAME OVER" in "\n".join(screen) and "Score 0  Best 0" in screen[0] and screen[-1].startswith("└")
+            and out.rstrip().endswith("Thanks for playing! Your best is 0.") and not os.path.exists(os.path.join(folder, "best.json")),
+            "snake: with no keys it runs into the wall: game over, and nothing is saved", out[-900:])
+    code, out, err, screen, folder = starters_snake(c, "food = [12, 8]\n")
+    c.check(code == 0 and "Score 1  Best 1" in screen[0] and read_json(os.path.join(folder, "best.json")) == 1
+            and out.rstrip().endswith("Your best is 1."), "snake: it eats the food in its way, grows, and the best score is saved in best.json", out[-900:])
+    code, out, err, screen, folder = starters_snake(c, 'food = [12, 8]\nscreen:press("space", 90)\nscreen:press("up", 100)\n')
+    c.check(code == 0 and "@" in screen[1] and "GAME OVER" in "\n".join(screen) and "Best 1" in screen[0] and read_json(os.path.join(folder, "best.json")) == 1,
+            "snake: Space plays again after game over, and the new snake turns up into the top wall", out[-900:])
+    for key in ("q", "escape"):  # after eating once: the new best counts, though the snake never hit anything
+        code, out, err, screen, folder = starters_snake(c, f'food = [12, 8]\nscreen:press("{key}", 40)\n')
+        c.check(code == 0 and "GAME OVER" not in "\n".join(screen) and "Score 1  Best 1" in screen[0] and read_json(os.path.join(folder, "best.json")) == 1
+                and out.rstrip().endswith("Your best is 1."), f"snake: {'Q' if key == 'q' else 'Esc'} stops the game mid-game, and keeps the new best score",
+                out[-900:])
+
+    # ---- Coin Collector: Tuff Engine's preview, then headless.py with a self-test
+    folder = starters_copy("coins")
+    code, out, err, d, secs = scene(os.path.join(folder, "main.tuf"))
+    things = {t.get("var"): t for t in d.get("things", []) if t.get("var")}
+    c.check(code == 0 and d.get("error") is None and d.get("mode") == "2d" and d.get("title") == "Coin Collector" and "hero" in things,
+            f"coins: Tuff Engine's preview runs it ({secs:.1f} s), with the hero", {k: d.get(k) for k in ("error", "mode", "title", "stopped")})
+    if not RUNTIME:
+        folder = starters_copy("coins")
+        starters_add(folder, STARTERS_COINS)
+        with open(os.path.join(folder, "events.json"), "w", encoding="utf-8") as f:
+            json.dump({"3": [{"type": "keydown", "code": "Space"}], "4": [{"type": "keyup", "code": "Space"}],
+                       "10": [{"type": "keydown", "code": "ArrowRight"}], "25": [{"type": "keyup", "code": "ArrowRight"}]}, f)
+        code, out, err, secs = starters_run(folder, args=[sys.executable, os.path.join(HERE, "headless.py"), "main.tuf", "out.json", "900", "events.json"])
+        cmds = read_json(os.path.join(folder, "out.json")) or []
+        images = {cmd[1]: cmd[5].get("src") for cmd in cmds if cmd[0] == "c" and len(cmd) > 5 and cmd[3] == "image"}
+        hero = next((i for i, src in images.items() if src == "asset:pictures/hero.png"), None)
+        walked = any(cmd[0] == "s" and cmd[1] == hero and (cmd[2].get("play") or [None])[0] == [1, 2, 3, 4] for cmd in cmds)
+        texts = [cmd[2]["text"] for cmd in cmds if cmd[0] == "s" and "text" in cmd[2]]
+        m = re.search(r"^score (\d+), coins 5, bugs 1, paused false\nbest (\d+), paused true$", out, re.M)
+        c.check(code == 0 and "Tuff error" not in err and m and int(m.group(1)) >= 1 and m.group(1) == m.group(2),
+                f"coins: headless, Space starts it, a coin on the hero is picked up (a new one comes), and when the time's up the game ends ({secs:.1f} s)",
+                (out + err)[-600:])
+        c.check(set(images.values()) == {"asset:pictures/hero.png", "asset:pictures/coin.png", "asset:pictures/bug.png"} and walked and "Coins: 1" in texts,
+                "coins: the pictures come from the pictures folder, the hero walks while an arrow is held, and the score goes up", (images, texts[:6]))
+        saves = read_json(os.path.join(root, "saves", "Coin Collector.json")) or {}
+        c.check(m and saves.get("saves", {}).get("best") == int(m.group(2)), "coins: the best score is saved with game:save", saves)
+    with open(os.path.join(STARTERS_DIR, "coins", "main.tuf"), encoding="utf-8") as f:
+        coins_code = f.read()
+    c.check(re.search(r"[\"'](\./)?pictures[\"'\\/]", coins_code, re.I), "coins: Build exe takes the pictures folder along (the code names it in a path)", None)
+
+    # ---- the create logic and the gallery, in Node
+    app = os.path.join(REPO, "tuffcode")
+    try:
+        for js in ("starters.js", os.path.join("renderer", "js", "new-project.js"), os.path.join("test", "e2e", "suites", "newproject.mjs")):
+            p = subprocess.run(["node", "--check", os.path.join(app, js)], capture_output=True, text=True, encoding="utf-8", timeout=60)
+            c.check(p.returncode == 0, f"node --check {js}", p.stderr[-400:])
+        p = subprocess.run(["node", os.path.join(HERE, "new_project_harness.js"), os.path.join(root, "harness")], capture_output=True, text=True,
+                           encoding="utf-8", timeout=180)
+        results = json.loads(p.stdout)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the New Project harness")
+        results = []
+    except ValueError:
+        c.check(False, "the New Project harness ran", (p.stdout + p.stderr)[-800:])
+        results = []
+    for ok, what, got in results:
+        c.check(ok, f"New Project: {what}", got)
+
+    # ---- how the IDE and the built app find them
+    def text_of(*parts):
+        with open(os.path.join(app, *parts), encoding="utf-8") as f:
+            return f.read()
+    build = json.loads(text_of("package.json"))["build"]
+    c.check({"from": "starters", "to": "starters"} in build["extraResources"] and "starters.js" in build["files"],
+            "the built app has resources/starters (extraResources) and starters.js", build["extraResources"][-2:])
+    main = text_of("main.js")
+    c.check("require('./starters')" in main and "path.join(process.resourcesPath, 'starters')" in main
+            and all(f"'starters:{n}'" in main for n in ("list", "check", "create", "pickFolder")),
+            "main.js finds the starters (resources/starters when built) and answers the gallery's calls", None)
+    c.check(re.search(r"const SAMPLE_MAIN = `[^`]*# Want a head start\? File > New Project\.\.\. has starter projects", main),
+            "a first run's HelloTuff points to File > New Project... (its main.tuf is what opens first)", None)
+    c.check("starters: { list: invoke('starters:list')" in text_of("preload.js"), "preload.js gives the page the starters calls", None)
+    html = text_of("renderer", "index.html")
+    c.check('<script src="js/new-project.js"></script>' in html and 'id="es-new-project"' in html,
+            "index.html loads new-project.js, and the empty editor has a New Project… button", None)
+    ide = text_of("renderer", "js", "ide.js")
+    c.check("newProject: { label: 'New Project…'" in ide and "['File', ['newProject'," in ide and "{ label: 'New Project…', run: commands.newProject.run }" in ide
+            and "window.TuffNewProject?.isOpen()" in ide and "openFolder: (dir) => openFolder(dir)" in ide,
+            "ide.js: New Project… is a command (so Search Everywhere finds it), first in the File menu and the project menu, and "
+            "the IDE's shortcuts wait while it's open", None)
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
@@ -9343,6 +9798,7 @@ TESTS.update({"kinds": t_kinds})  # 1.5.0: your own objects
 TESTS.update({"tterm": t_tterm})  # 1.5.0: terminal games
 TESTS.update({"tmusic": t_tmusic})  # 1.5.0: music from notes
 TESTS.update({"debug": t_debug})  # 1.5.0: the debugger
+TESTS.update({"starters": t_starters})  # 1.5.0: New Project's starters
 
 
 def main():
