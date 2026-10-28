@@ -289,7 +289,8 @@
   let litSeq = 0;
   async function showLine(file, n, kind, focus) {
     const seq = ++litSeq;
-    if (key(modelPath(editor.getModel()) || '') !== key(file)) {
+    // (Design Studio or Tuff Engine in front: the code goes in front, even when the editor has the file already)
+    if (key(modelPath(editor.getModel()) || '') !== key(file) || ide.studioVisible() || ide.engineVisible()) {
       await ide.openFile(file, 0, { focus });
       if (seq !== litSeq) return;
     }

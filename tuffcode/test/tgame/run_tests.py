@@ -8808,6 +8808,7 @@ const monaco = { Range: class { constructor(...a) { this.a = a; } },
 const newModel = (path, n) => { const m = new Model(path, n); models.push(m); created.forEach((fn) => fn(m)); return m; };
 const settings = {};
 const ide = { settings: () => settings, saveSettings: (p) => Object.assign(settings, p), toast: (m) => toasts.push(m), runTarget: () => MAIN,
+  studioVisible: () => false, engineVisible: () => false,
   runFile: async (p, opts) => { runs.push([p, opts]); return ++runId; }, stopRun: () => sent.push({ stop: true }),
   openFile: async (p, line, opts) => { opened.push([p, line, opts && opts.focus]); ed.model = models.find((m) => m.uri.fsPath === p && !m.disposed) || newModel(p, 5); return {}; },
   addCommand: (id, def) => { commands[id] = def; }, monacoReady: async () => monaco, editor: () => ed };
