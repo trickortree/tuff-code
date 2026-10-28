@@ -40,7 +40,8 @@ export default async (t, ctx) => {
   await ev(`document.querySelector('#menubar .dropdown .mi').click(); 1`);
   await t.waitFor(`document.querySelector('#np-name')?.value === 'My Project'`, 5000);
   let s = await state();
-  check('it opens the gallery: 10 starters, Blank chosen, named "My Project"', s && s.cards.length === 10 && s.sel === 'blank' && s.name === 'My Project', s);
+  const listed = s?.cards.length === 10 ? null : await ev(`window.tuff.starters.list().then((r) => ({ starters: r.starters.map((x) => x.id), folder: r.folder }), (e) => String(e))`);
+  check('it opens the gallery: 10 starters, Blank chosen, named "My Project"', s && s.cards.length === 10 && s.sel === 'blank' && s.name === 'My Project', { s, listed });
   check('the projects go in the folder used last (here the scratch folder)', s && s.folder === projects && s.status.includes(path.join(projects, 'My Project')), s);
   check('the search box has the focus', s?.focus === 'np-q', s);
   await t.shot('newproject.png');

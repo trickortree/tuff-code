@@ -39,7 +39,9 @@ async function list() {
       uses: Array.isArray(s.uses) ? s.uses.map(String) : [],
       color: /^#[0-9a-f]{6}$/i.test(s.color || '') ? s.color : null, project: String(s.project || s.name), main, picture });
   }
-  return { starters: out, folder: where.folder() };
+  let folder = '';
+  try { folder = where.folder(); } catch {} // the starters still show, and Change… picks a folder
+  return { starters: out, folder };
 }
 
 const LONGEST = 80; // letters in a project's name (the gallery's name box takes no more)

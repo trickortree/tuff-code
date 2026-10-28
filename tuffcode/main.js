@@ -73,8 +73,18 @@ if answer is "yes":
         print("yes AGAIN")
 `;
 
+// Documents/TuffProjects, or TuffProjects in the home folder when Windows can't say where Documents is (on a PC
+// whose Documents is a network folder that isn't there, say)
+function projectsHome() {
+  try {
+    return path.join(app.getPath('documents'), 'TuffProjects');
+  } catch {
+    return path.join(app.getPath('home'), 'TuffProjects');
+  }
+}
+
 async function ensureDefaultProject() {
-  const dir = path.join(app.getPath('documents'), 'TuffProjects', 'HelloTuff');
+  const dir = path.join(projectsHome(), 'HelloTuff');
   const main = path.join(dir, 'main.tuf');
   await fsp.mkdir(dir, { recursive: true });
   if (!fs.existsSync(main)) await fsp.writeFile(main, SAMPLE_MAIN, 'utf8');
@@ -231,7 +241,7 @@ ipcMain.handle('project:default', () => ensureDefaultProject());
 // extraResources). New projects go in Documents/TuffProjects, next to HelloTuff, unless Change… picks another folder.
 starters.setup({
   dir: app.isPackaged ? path.join(process.resourcesPath, 'starters') : path.join(__dirname, 'starters'),
-  folder: () => path.join(app.getPath('documents'), 'TuffProjects'),
+  folder: projectsHome,
 });
 ipcMain.handle('starters:list', () => starters.list());
 ipcMain.handle('starters:check', (_e, folder, name) => starters.check(folder, name));
