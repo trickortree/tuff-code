@@ -1747,6 +1747,15 @@
     return [parsed.win, ...parsed.nodes].find((n) => n && Object.values(n.props).some((p) => p.line === line)) || null;
   }
 
+  // The widget whose gear goes on this line, where a click in the glyph margin opens its customizer: on the widget's
+  // own line, unless the debugger has a red dot there (1.5.0, debugger.js: a click takes the breakpoint away). A click
+  // on the widget's other lines (title:color "red") puts a breakpoint there.
+  function gearAt(model, line) {
+    if (!model || model.getLanguageId() !== 'tuff' || !line || window.TuffDebug?.hasBreakpoint(model, line)) return null;
+    const node = nodeAtLine(parsedFor(model), line);
+    return node && node.line === line ? node : null;
+  }
+
   function closeCustomizer() {
     $('#customizer')?.classList.add('hidden');
     C.sub?.dispose();
@@ -1815,20 +1824,15 @@
       const line = e.target.position?.lineNumber || 0;
       if (line === hoverLine) return;
       hoverLine = line;
-      let decos = [];
-      if (model && model.getLanguageId() === 'tuff' && line) {
-        const node = nodeAtLine(parsedFor(model), line);
-        if (node && node.line === line) {
-          decos = [{ range: new monaco.Range(line, 1, line, 1), options: { glyphMarginClassName: 'tuff-gear', glyphMarginHoverMessage: { value: `Customize this ${kindInfo(node).label.toLowerCase()}` } } }];
-        }
-      }
+      const node = gearAt(model, line);
+      const decos = node ? [{ range: new monaco.Range(line, 1, line, 1), options: { glyphMarginClassName: 'tuff-gear', glyphMarginHoverMessage: { value: `Customize this ${kindInfo(node).label.toLowerCase()}` } } }] : [];
       C.decos = editor.deltaDecorations(C.decos, decos);
     });
     editor.onMouseLeave(() => { hoverLine = 0; C.decos = editor.deltaDecorations(C.decos, []); });
     editor.onMouseDown((e) => {
       if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position) {
         const model = editor.getModel();
-        if (model && nodeAtLine(parsedFor(model), e.target.position.lineNumber)) openCustomizer(model, e.target.position.lineNumber);
+        if (gearAt(model, e.target.position.lineNumber)) openCustomizer(model, e.target.position.lineNumber);
       }
     });
     editor.onDidChangeModel(closeCustomizer);
@@ -1852,6 +1856,8 @@
     undo: () => undoRedo('undo'),
     redo: () => undoRedo('redo'),
     closeCustomizer,
+    // A click in the glyph margin on this line opens a widget's customizer (the debugger leaves it alone, debugger.js).
+    ownsGlyph: (model, line) => !!gearAt(model, line),
     parse,
     templates: () => TEMPLATES.map((t) => ({ ...t })),
     // Shared with Tuff Engine (tuff-engine.js), which reads and writes tgame code the same way.

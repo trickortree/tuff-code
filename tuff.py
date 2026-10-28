@@ -7905,6 +7905,743 @@ def scene_file(game_path, source_path, out_path):
     return 0
 
 
+# ---------------------------------------------------------------- the debugger (1.5.0: tuff.py --debug PORT file.tuf)
+# TuffCode's Debug button runs a program with TUFF_DEBUG=PORT (or tuff.py --debug PORT file.tuf), and the program
+# connects to TuffCode on that port of this computer. They talk in JSON, one message to a line, so the program's own
+# input and output stay where they always are: say and input work as usual while it's debugged. From TuffCode:
+#   {"cmd": "setBreakpoints", "file": path, "lines": [3, 7]}   a file's breakpoints (all of them, each time)
+#   {"cmd": "continue"}, {"cmd": "pause"}, {"cmd": "next"}, {"cmd": "stepIn"}, {"cmd": "stepOut"}
+#   {"cmd": "watch", "delay": 0.5}   Watch it run: a statement at a time, this many seconds each (0: full speed again)
+#   {"cmd": "frame", "index": 1}     while paused: the names of another function in the call stack
+#   {"cmd": "expand", "path": ["top", "rex"], "open": true}   show (or stop showing) what's inside a value
+#   {"cmd": "stop"}                  end the program
+# The program waits for the first of continue, next, stepIn, stepOut, watch and pause before it starts (the
+# breakpoints come first). To TuffCode:
+#   {"event": "paused", "reason": "breakpoint" | "step" | "error" | "pause", "file", "line", "col", "stack", "scopes",
+#    "frame": 0, "error": the message and "ends": whether it ends the program (for an error: one in a function a
+#    window calls lets the program carry on), "window": "tk" (a tgui, mtgui or tdraw window: it can't redraw
+#    while the program is paused)}. stack: [{"index", "name", "file", "line", "col", "top"}], the function it's in
+#    first and the program's own top level last. scopes: [{"name", "top", "vars"}], the function's names and then its
+#    file's top level; vars: [{"name", "value" (as say shows it, cut short), "type", "more" (how many things are
+#    inside it), "kids" (them, once it's opened with expand)}]
+#   {"event": "watch", ...}   the statement Watch it run is on, with the same fields
+#   {"event": "scopes", "frame", "scopes"}   the names, after frame or expand
+#   {"event": "breakpoints", "file", "lines": [[the line asked for, the line it stops on or null], ...]}
+#   {"event": "asking"}   Pause while input() waits for an answer: it pauses on the next line, once there is one
+#   {"event": "idle"}     Pause while nothing runs (the top level has ended, and the program waits for something to
+#                         happen in its window): it pauses on the next line it runs
+#   {"event": "running"}, {"event": "ended", "code"}
+# With no debugger nothing of this runs: the program gets the usual Interpreter, with no step hook.
+DEBUGGER = None  # the Debugger, when the program runs with one (see main)
+DEBUG_TEXT = 120  # how long a value in the Variables panel can be before it's cut short with …
+DEBUG_ITEMS = 100  # the most items (or keys, or fields) shown inside one value
+DEBUG_NAMES = 300  # the most names shown for a function or a file
+DEBUG_STACK = 40  # the most functions the call stack lists (the program's own top level is always there)
+DEBUG_STARTS = ("continue", "next", "stepIn", "stepOut", "watch", "pause")
+
+
+class DebugFull(Exception):
+    """debug_text has said as much as it shows."""
+
+
+def debug_text(v, room=DEBUG_TEXT):
+    """A value as say shows it, on one line, for the Variables panel: text as it is (the panel's type says it's text),
+    and in quotes inside a list, a dictionary or an object, as say shows it there. Cut short with … past room letters,
+    without working out the rest: a list of a million numbers is as quick to show as a short one."""
+    parts, size = [], 0
+
+    def put(text):
+        nonlocal size
+        parts.append(text)
+        size += len(text)
+        if size > room:
+            raise DebugFull
+
+    def show(x, inside):
+        if x.__class__ is str:
+            text = x[:room + 1].replace("\n", "\\n").replace("\t", "\\t")
+            put(f'"{text}"' if inside else text)
+        elif x.__class__ is int and x.bit_length() > 4000:  # (every digit would take a while to work out)
+            put(f"a whole number {int(x.bit_length() * 0.30103) + 1} digits long")
+        elif x.__class__ in (list, dict, Instance):
+            if any(x is y for y in inside):
+                put("[...]" if x.__class__ is list else "{...}" if x.__class__ is dict else f"{x.kind.name}(...)")
+                return
+            if x.__class__ is list:
+                put("[")
+                pairs = ((None, item) for item in x)
+            elif x.__class__ is dict:
+                put("{")
+                pairs = ((to_text(k, True) + ": ", item) for k, item in x.items())
+            else:
+                put(x.kind.name + "(")
+                pairs = ((k + ": ", item) for k, item in x.fields.items())
+            for i, (key, item) in enumerate(pairs):
+                if i:
+                    put(", ")
+                if key:
+                    put(key)
+                show(item, inside + (x,))
+            put("]" if x.__class__ is list else "}" if x.__class__ is dict else ")")
+        else:
+            put(to_text(x, True).replace("\n", "\\n"))
+
+    try:
+        show(v, ())
+    except DebugFull:
+        return "".join(parts)[:room] + "…"
+    except Exception:  # (a library's own value that couldn't say what it is)
+        return "…"
+    return "".join(parts)
+
+
+def debug_type(v):
+    """What kind of value v is, in a word or two, for the Variables panel: a kind's own name for its objects."""
+    if v is None:
+        return "nil"
+    if isinstance(v, bool):
+        return "true/false"
+    if isinstance(v, (int, float)):
+        return "number"
+    for kind, word in ((str, "text"), (list, "list"), (dict, "dictionary"), (Line, "line"), (FileModule, "file"),
+                       (Module, "library"), (Kind, "kind"), (Err, "err")):
+        if isinstance(v, kind):
+            return word
+    if isinstance(v, Instance):
+        return v.kind.name
+    if isinstance(v, Native):
+        return v.kind
+    return "all" if v is ALL else "function"
+
+
+def debug_seconds(v):
+    """Watch it run's seconds a statement, from TuffCode (0: watching is off)."""
+    try:
+        v = float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return min(max(v, 0.0), 10.0) if math.isfinite(v) else 0.0
+
+
+def debug_paused():
+    """The seconds the debugger has kept the program paused so far: the time limits a window puts on a function
+    (atgui's app:closed, tuff_view's close) leave them out, so a breakpoint there doesn't use them up."""
+    return 0.0 if DEBUGGER is None else DEBUGGER.held()
+
+
+class DebugFrame:
+    """A function that's running, or a file's top-level code: the debugger's call stack is a list of these, the
+    program's own top level first. env holds its names and stmt is the statement it's on (both set as its statements
+    run). known: its file's (DebugFile, breakpoints, the lines the step hook looks out for), see Debugger.know; None
+    for an imported file's top level, whose file is known once its first statement runs (see Debugger.enter)."""
+    __slots__ = ("name", "file", "top", "env", "stmt", "info", "stops", "lines")
+
+    def __init__(self, name, file, top, known):
+        self.name, self.file, self.top = name, file, top
+        self.env = self.stmt = None
+        self.info, self.stops, self.lines = known or (None, frozenset(), frozenset())
+
+
+class DebugFile:
+    """Where a file's statements are. A breakpoint can be put on any line: a blank one, a comment, a func line or an
+    else:, and it stops at the statement the program runs there (see place). loops: each loop's first statement inside
+    it, by its (line, col) -> the loop's line and col, and where its body starts and ends, so a loop that goes round
+    again shows its own line before its first statement, and one written on one line stops there again (see
+    Debugger.round)."""
+
+    def __init__(self, src):
+        self.starts = set()  # the lines a statement starts on
+        self.spans = []  # (first line, last line) of a statement that goes on over more lines (a list written over several)
+        self.funcs = {}  # a func line (an action's too) -> the line of the first statement inside it
+        self.never = set()  # a kind's line and its fields' lines: nothing runs there (the fields are worked out, not run)
+        self.loops = {}
+        try:
+            program = Parser(tokenize(src)).program()
+        except (TuffError, RecursionError):  # a mistake in it: its breakpoints stay where they are
+            program = None
+        self.ok = program is not None
+        self.walk(program or [])
+        self.order = sorted(self.starts)
+
+    def walk(self, body):
+        for s in body:
+            if s.kind == "func":
+                self.funcs[s.line] = next((x.line for x in s.body if x.kind not in ("func", "kind")), None)
+                self.walk(s.body)
+                continue
+            if s.kind == "kind":
+                self.never.add(s.line)
+                for f in s.fields:
+                    self.never.update(range(f.line, max(x.line for x in nodes(f)) + 1))
+                self.walk(s.actions)
+                continue
+            self.starts.add(s.line)
+            if s.kind == "if":
+                for _cond, block in s.branches:
+                    self.walk(block)
+                self.walk(s.else_body or [])
+            elif s.kind in ("while", "for"):
+                first = s.body[0] if s.body else None
+                if first is not None:  # (one on one line too: while n < 3: n += 1)
+                    end = max((x.line, x.col) for x in nodes(s.body))
+                    self.loops[(first.line, first.col)] = (s.line, s.col, (first.line, first.col), end)
+                self.walk(s.body)
+            elif s.kind == "try":
+                self.walk(s.body)
+                self.walk(s.handler)
+            else:
+                last = max(x.line for x in nodes(s))
+                if last > s.line:
+                    self.spans.append((s.line, last))
+
+    def place(self, line):
+        """The line a breakpoint on this line stops on: its own when a statement starts there, a func's first statement
+        for its func line, a statement's first line for the lines it goes on over, else the next statement's. None
+        where nothing ever stops: a kind's fields, and after the last statement."""
+        if not self.ok or line in self.starts:
+            return line
+        if line in self.funcs:
+            return self.funcs[line]
+        if line in self.never:
+            return None
+        for first, last in self.spans:
+            if first < line <= last:
+                return first
+        return next((n for n in self.order if n > line), None)
+
+
+class Debugger:
+    """The program's side of TuffCode's debugger: the step hook (it stops at breakpoints, steps, and shows each
+    statement in Watch it run), the call stack and the names in it, and the line to TuffCode: a thread of its own reads
+    TuffCode's commands, and the program waits on cond while it's paused. One program, so one Debugger (DEBUGGER)."""
+
+    def __init__(self, sock):
+        self.sock = sock
+        self.out = threading.Lock()  # one message at a time, from any thread
+        self.cond = threading.Condition()
+        self.interp = self.main = None
+        self.frames = []  # the call stack (DebugFrames), the program's own top level first
+        self.files = {}  # each file's DebugFile, by its os.path.normcase'd full path, as are asked and bps
+        self.asked = {}  # each file's breakpoints, the lines TuffCode asked for
+        self.bps = {}  # each file's (stops, lines) sets (see place): changed in place, so frames see new ones at once
+        self.known = {}  # (DebugFile, stops, lines) by the path a frame has, for a new frame at each call (see know)
+        self.placing = threading.RLock()  # (TuffCode's breakpoints and the program's first look at a file can come together)
+        self.mode, self.depth = "run", 0  # how it goes on: run, next, in or out, and how deep the step started
+        self.watching = 0.0  # Watch it run's seconds a statement (0: it isn't watching)
+        self.started = False  # TuffCode's first run command has come (see begin)
+        self.command = None  # the command that ends a pause, or starts the program
+        self.asked_pause = self.asking = self.gone = False
+        self.busy = True  # the step hook has more to do than look for breakpoints (see update)
+        self.paused = None  # the call stack while it's paused (the function it's in first), for frame and expand
+        self.shown = 0  # which of them the Variables panel shows
+        self.opened = set()  # the values opened in the Variables panel, by path: ("top", "rex"), ("local", "items", "0")
+        self.since = None  # (frame, line) of the last pause: that line doesn't stop again until the frame runs another
+        self.window = None  # "tk": a tgui, mtgui or tdraw window, which can't redraw while the program is paused
+        self.top_ended = False  # the program's top level has ended: only its windows' functions run now (see top_done)
+        self.held_for, self.held_at = 0.0, None  # the seconds it's been paused, all told, and when this pause began
+        threading.Thread(target=self.listen, name="tuff-debug", daemon=True).start()
+
+    @classmethod
+    def connect(cls, port):
+        """Connects to TuffCode on this port (on this computer): a Debugger, or None when it can't (the program then
+        runs as usual)."""
+        import socket
+        try:
+            sock = socket.create_connection(("127.0.0.1", int(port)), timeout=10)
+            sock.settimeout(None)
+        except (OSError, ValueError, OverflowError):
+            sys.stderr.write("The debugger couldn't start, so the program runs as usual.\n")
+            sys.stderr.flush()
+            return None
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # (each message goes at once)
+        except OSError:
+            pass
+        return cls(sock)
+
+    def attach(self, interp):
+        """The program's interpreter is ready (a DebugInterpreter): its step hook, and wait()'s (see waiting)."""
+        self.interp, self.main = interp, interp.path
+        interp.debugger = self
+        self.frames = [DebugFrame(os.path.basename(interp.path), interp.path, True, self.know(interp.path))]
+        interp.step_hooks.append(self.hook)
+        interp.rt.on_wait(self.waiting)
+        interp.rt.finish_hooks.insert(0, self.top_done)
+        if TK_IMPORT.search(with_imports(interp.path, interp.src)):
+            self.window = "tk"
+
+    # ---- talking to TuffCode
+    def send(self, msg):
+        if self.gone:
+            return
+        data = (json.dumps(msg, separators=(",", ":")) + "\n").encode("utf-8")
+        try:
+            with self.out:
+                self.sock.sendall(data)
+        except OSError:
+            self.leave()
+
+    def listen(self):
+        """The reader thread: TuffCode's commands, as they come."""
+        try:
+            with self.sock.makefile("r", encoding="utf-8", errors="replace") as lines:
+                for line in lines:
+                    try:
+                        msg = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(msg, dict):
+                        try:
+                            self.handle(msg)
+                        except Exception:  # (one odd message mustn't stop the rest)
+                            pass
+        except (OSError, ValueError):
+            pass
+        self.leave()
+
+    def leave(self):
+        """TuffCode has gone: the program runs on as it would without a debugger."""
+        with self.cond:
+            if self.gone:
+                return
+            self.gone = True
+            for sets in self.bps.values():
+                for lines in sets:
+                    lines.clear()
+            self.mode, self.watching, self.asked_pause = "run", 0.0, False
+            if self.paused is not None or not self.started:
+                self.command = "continue"
+            self.started = True
+            self.update()
+            self.cond.notify_all()
+
+    def update(self):
+        """busy: the step hook can't just look for a breakpoint (it's stepping or watching, or asked to pause)."""
+        self.busy = self.mode != "run" or self.watching > 0 or self.asked_pause
+
+    def handle(self, msg):
+        cmd = msg.get("cmd")
+        if cmd == "setBreakpoints":
+            self.set_breakpoints(msg.get("file"), msg.get("lines"))
+        elif cmd in DEBUG_STARTS:
+            tell = False
+            with self.cond:
+                if cmd == "watch":
+                    self.watching = debug_seconds(msg.get("delay"))
+                if not self.started:  # (main waits for it, see begin)
+                    self.command, self.started = cmd, True
+                elif self.paused is not None:
+                    if cmd != "pause" and (cmd != "watch" or self.watching):  # turning Watch it run off keeps it paused
+                        self.command = cmd
+                elif cmd == "pause":
+                    self.asked_pause = True
+                    tell = "asking" if self.asking else "idle" if self.idle() else None
+                elif cmd == "continue":
+                    self.asked_pause = False  # (a pause asked for that hasn't happened yet)
+                self.update()
+                self.cond.notify_all()
+            if tell:
+                self.send({"event": tell})
+        elif cmd == "frame":
+            stack, i = self.paused, msg.get("index")
+            if stack is not None and isinstance(i, int) and 0 <= i < len(stack):
+                self.shown = i
+                self.send({"event": "scopes", "frame": i, "scopes": self.scopes(stack[i])})
+        elif cmd == "expand":
+            path = msg.get("path")
+            if isinstance(path, list) and path and all(isinstance(p, str) for p in path):
+                (self.opened.add if msg.get("open", True) else self.opened.discard)(tuple(path))
+                stack = self.paused
+                if stack is not None:
+                    i = self.shown if self.shown < len(stack) else 0
+                    self.send({"event": "scopes", "frame": i, "scopes": self.scopes(stack[i])})
+        elif cmd == "stop":
+            self.stop()
+
+    def begin(self):
+        """Waits for TuffCode's first run command (its breakpoints come before it)."""
+        with self.cond:
+            while not self.started:
+                self.cond.wait()
+            cmd, self.command = self.command, None
+            self.go(cmd, 1)
+        self.send({"event": "running"})
+
+    def go(self, cmd, depth):
+        """How the program goes on after a pause (or at the start), from the command that ended it."""
+        self.mode, self.depth = {"next": ("next", depth), "stepIn": ("in", depth), "stepOut": ("out", depth)}.get(cmd, ("run", 0))
+        if cmd == "pause":
+            self.asked_pause = True
+        self.update()
+
+    def stop(self):
+        """Stop: the program ends at once, the way TuffCode's Stop button ends a run, wherever it is (paused, waiting
+        for an answer, or in a window's function)."""
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except (OSError, ValueError):
+                pass
+        self.end(130)
+        os._exit(130)
+
+    def end(self, code):
+        """The program has ended: TuffCode hears it, and the line to it closes."""
+        self.send({"event": "ended", "code": code})
+        with self.cond:
+            self.gone = True
+            self.cond.notify_all()
+        try:
+            self.sock.shutdown(2)  # (SHUT_RDWR: the reader thread's file of it would keep it open)
+            self.sock.close()
+        except OSError:
+            pass
+
+    # ---- breakpoints
+    def set_breakpoints(self, file, lines):
+        if not isinstance(file, str) or not file or not isinstance(lines, list):
+            return
+        full = os.path.abspath(file)
+        key = os.path.normcase(full)
+        self.asked[key] = sorted({int(n) for n in lines if isinstance(n, (int, float)) and not isinstance(n, bool)
+                                  and 0 < n < 10_000_000})
+        self.place(key, full, tell=True)
+
+    def file(self, key, full):
+        """A file's DebugFile, made from its code the first time it's needed: the program's, an imported file's, or
+        the file on disk (for breakpoints set before it's loaded)."""
+        info = self.files.get(key)
+        if info is None:
+            src = None
+            if self.interp is not None and os.path.normcase(self.interp.path) == key:
+                src = self.interp.src
+            else:
+                src = next((text for path, (text, _shown) in list(OWN_FILES.items()) if os.path.normcase(path) == key), None)
+            if src is None:
+                try:
+                    src = source_text(full)
+                except (OSError, UnicodeDecodeError):
+                    src = ""
+            info = self.files[key] = DebugFile(src)
+        return info
+
+    def place(self, key, full, tell=False):
+        """A file's (stops, lines) sets: stops are the lines its breakpoints stop on (see DebugFile.place), and lines
+        also have the first statement of each loop whose own line has one, which stops on the loop's line as it goes
+        round again (see round). tell: TuffCode hears where they stop."""
+        with self.placing:
+            info = self.file(key, full)
+            asked = self.asked.get(key, [])
+            placed = [[n, info.place(n)] for n in asked]
+            stops = {line for _n, line in placed if line is not None}
+            heads = {first for (first, _col), (line, *_rest) in info.loops.items() if line in stops}
+            sets = self.bps.get(key)
+            if sets is None:
+                sets = self.bps[key] = (set(), set())
+            for have, want in zip(sets, (stops, stops | heads)):
+                have.update(want)  # (new ones first, then the old ones go: a breakpoint that stays is never missed)
+                have.intersection_update(want)
+        if tell:
+            self.send({"event": "breakpoints", "file": full, "lines": placed})
+        return sets
+
+    def know(self, file):
+        """A file's (DebugFile, stops, lines), for its frames: worked out once for each path (the sets change in place)."""
+        known = self.known.get(file)
+        if known is None:
+            key = os.path.normcase(file)
+            with self.placing:
+                known = self.known[file] = (self.file(key, file),) + tuple(self.bps.get(key) or self.place(key, file))
+        return known
+
+    # ---- the step hook
+    def hook(self, s, env):
+        """The step hook, before every statement. It only looks for a breakpoint on the line, unless it's stepping,
+        watching, or asked to pause."""
+        frame = self.frames[-1]
+        if frame.env is not env:
+            if frame.file is None:
+                self.enter(frame, env)
+            frame.env = env
+        last, frame.stmt = frame.stmt, s
+        if self.busy or s.line in frame.lines:
+            try:
+                self.step(frame, s, last)
+            except Exception:  # (a mistake in the debugger must never stop the program)
+                pass
+
+    def enter(self, frame, env):
+        """The first statement of an imported file's top level (see DebugInterpreter.load): its file, from its names."""
+        frame.file = file_of(env) or self.main
+        frame.name = OWN_FILES.get(frame.file, ("", os.path.basename(frame.file)))[1]
+        frame.info, frame.stops, frame.lines = self.know(frame.file)
+
+    def step(self, frame, s, last):
+        head = self.round(frame, s, last)
+        if head is not None:
+            if self.since is not None and self.since[0] is frame:
+                self.since = None  # (round again: its lines can stop again, a loop written on one line's too)
+            if head[0] != s.line:
+                self.stop_at(frame, *head)
+        if s.kind not in ("func", "kind"):  # (making a function or a kind isn't a step)
+            self.stop_at(frame, s.line, s.col)
+
+    def round(self, frame, s, last):
+        """A loop going round again: (line, col) of the loop, when s is its first statement and the statement before it
+        (last) was in it too. It's shown before s, the way the loop checks its condition (or takes its next item) again."""
+        loop = frame.info.loops.get((s.line, s.col)) if last is not None else None
+        if loop is not None and loop[2] <= (last.line, last.col) <= loop[3]:
+            return loop[0], loop[1]
+        return None
+
+    def stop_at(self, frame, line, col):
+        """Pauses on this line if it should (a breakpoint, a step that's done, Pause), or shows it in Watch it run."""
+        since, quiet = self.since, False
+        if since is not None and since[0] is frame:
+            if since[1] == line:
+                quiet = True  # still on the line it paused on (two statements on one line)
+            else:
+                self.since = None
+        depth = len(self.frames)
+        mode = self.mode
+        if self.asked_pause:
+            reason = "pause"
+        elif quiet:
+            reason = None
+        elif line in frame.stops:
+            reason = "breakpoint"
+        elif mode == "in" or (mode == "next" and depth <= self.depth) or (mode == "out" and depth < self.depth):
+            reason = "step"
+        else:
+            reason = None
+        if reason is not None:
+            self.pause(frame, line, col, reason)
+        elif self.watching:
+            self.show_line(frame, line, col)
+
+    def pause(self, frame, line, col, reason, error=None, frames=None, file=None, ends=None):
+        """Stops the program here until TuffCode says how it goes on (this thread waits). frames: the call stack to
+        show, when it isn't the one now (an error's, see failed); file: the error's file; ends: whether the error ends
+        the program."""
+        stack = (frames or self.frames)[::-1]
+        with self.cond:
+            if self.gone:
+                return
+            self.asked_pause = False
+            self.paused, self.shown, self.command = stack, 0, None
+            self.held_at = time.monotonic()
+            self.update()
+        self.send(self.where("paused", stack, line, col, file, reason=reason, error=error, ends=ends))
+        with self.cond:
+            while self.command is None and not self.gone:
+                self.cond.wait()
+            cmd, self.command, self.paused = self.command, None, None
+            self.held_for += time.monotonic() - self.held_at
+            self.held_at = None
+            self.since = (frame, line)
+            self.go(cmd, len(self.frames))
+        self.send({"event": "running"})
+
+    def held(self):
+        """The seconds the program has been paused so far, this pause too (see debug_paused)."""
+        at = self.held_at
+        return self.held_for + (time.monotonic() - at if at is not None else 0.0)
+
+    def show_line(self, frame, line, col):
+        """Watch it run: TuffCode shows the statement it's on (and the names), then it waits a moment before running it.
+        Pause stops it there."""
+        self.send(self.where("watch", self.frames[::-1], line, col))
+        start = time.monotonic()
+        with self.cond:
+            while self.watching and not (self.asked_pause or self.gone):
+                left = start + self.watching - time.monotonic()
+                if left <= 0:
+                    break
+                self.cond.wait(left)
+            asked = self.asked_pause
+        if asked:
+            self.pause(frame, line, col, "pause")
+
+    def waiting(self):
+        """A wait hook (wait() calls it over and over): Pause stops on the wait's line at once."""
+        frame = self.frames[-1] if self.frames else None
+        if self.asked_pause and frame is not None and frame.stmt is not None:
+            self.pause(frame, frame.stmt.line, frame.stmt.col, "pause")
+
+    def asked_for(self, asking):
+        """input() starts (or stops) waiting for an answer: a Pause asked for while it waits is said to TuffCode."""
+        self.asking = asking
+        if asking and self.asked_pause:
+            self.send({"event": "asking"})
+
+    def top_done(self):
+        """A finish hook (the first): the program's top level has ended, and only its windows' functions run now. A
+        Pause that hasn't happened yet waits for one of them (TuffCode hears so)."""
+        if self.frames:
+            self.frames[0].stmt = None
+        self.top_ended = True
+        if self.asked_pause and self.idle():
+            self.send({"event": "idle"})
+
+    def idle(self):
+        """Nothing runs: the top level has ended and none of the program's functions is running, so it waits for
+        something to happen in its window."""
+        return self.top_ended and len(self.frames) == 1
+
+    def failed(self, err):
+        """report() is showing an error (pause on error): it pauses on the error's line first, with the names as they
+        were when it went wrong, then the program goes on to end (err.ends, see ending), or a window's function to
+        its end and the program carries on."""
+        if self.interp is None or self.gone or not err.line:
+            return
+        frames = [f for f in (getattr(err, "frames", None) or self.frames) if f.env is not None]
+        if frames:
+            try:
+                self.pause(frames[-1], err.line, err.col or 1, "error", err.msg, frames, err.file or self.main,
+                           getattr(err, "ends", False))
+            except Exception:  # (the error is shown either way)
+                pass
+
+    # ---- what TuffCode shows
+    def where(self, event, stack, line, col, file=None, **more):
+        """A paused or watch message: where it is, the call stack and the names in its first frame."""
+        here = stack[0]
+        file = file or here.file
+        same = os.path.normcase(file) == os.path.normcase(here.file or "")
+        frames = []
+        for i, f in enumerate(stack):
+            if i and f.stmt is None:  # (the program's top level once it has ended, or a file that's loading)
+                continue
+            at = (line, col) if i == 0 and same else (f.stmt.line, f.stmt.col) if f.stmt is not None else (line, col)
+            frames.append({"index": i, "name": f.name, "file": f.file, "top": f.top, "line": at[0], "col": at[1]})
+        if len(frames) > DEBUG_STACK:  # (a function deep inside itself: the newest ones, and the program's own)
+            more["hidden"] = len(frames) - DEBUG_STACK
+            frames = frames[:DEBUG_STACK - 1] + frames[-1:]
+        msg = {"event": event, "file": file, "line": line, "col": col, "stack": frames, "frame": 0, "scopes": self.scopes(here)}
+        if self.window:
+            msg["window"] = self.window
+        msg.update((k, v) for k, v in more.items() if v is not None)
+        return msg
+
+    def scopes(self, frame):
+        """The names in a frame: its function's own (its inputs and the names it made), then its file's top level."""
+        env = frame.env
+        if env is None:
+            return []
+        top = env
+        while top.parent is not None and not top.parent.own_names:
+            top = top.parent
+        out = []
+        try:
+            if top is not env:
+                names, e = {}, env
+                while e is not None and e is not top:  # (a function made inside another one: that one's names too)
+                    for name, v in e.vars.items():
+                        names.setdefault(name, v)
+                    e = e.parent
+                out.append({"name": frame.name, "top": False, "vars": self.values(names.items(), ("local",))})
+            shown = OWN_FILES.get(frame.file, ("", os.path.basename(frame.file or self.main or "")))[1]
+            out.append({"name": shown, "top": True, "vars": self.values(self.own(top), ("top",))})
+        except RuntimeError:  # (changed while it was read: a window's thread, say)
+            pass
+        return out
+
+    def own(self, env):
+        """A file's own top-level names: not the built-ins, its functions, its kinds or the libraries it imports (a file
+        of the program's own, import money.tuf, is shown: what's in it opens)."""
+        base = self.interp.base_globals if self.interp is not None else {}
+        for name, v in list(env.vars.items()):
+            if base.get(name, base) is v or (v.__class__ in (Func, Kind) and v.name == name) or v.__class__ is Module:
+                continue
+            yield name, v
+
+    def values(self, items, path):
+        out = []
+        for name, v in items:
+            if len(out) >= DEBUG_NAMES:
+                break
+            out.append(self.var(name, v, path))
+        return out
+
+    def var(self, name, v, path):
+        item = {"name": name, "value": debug_text(v), "type": debug_type(v)}
+        inside = self.inside(v)
+        if inside is not None:
+            count, items = inside
+            item["more"] = count
+            here = path + (name,)
+            if count and here in self.opened:
+                kids = []
+                for key, x in items:
+                    if len(kids) >= DEBUG_ITEMS:
+                        break
+                    kids.append(self.var(key, x, here))
+                item["kids"] = kids
+        return item
+
+    def inside(self, v):
+        """(how many, (name, value) for each) of what's inside a value that opens: a list's items, a dictionary's keys,
+        an object's fields, or a file's own names. None for anything else."""
+        if v.__class__ is list:
+            return len(v), ((str(i), x) for i, x in enumerate(v))
+        if v.__class__ is dict:
+            return len(v), ((to_text(k, True), x) for k, x in v.items())
+        if v.__class__ is Instance:
+            return len(v.fields), iter(list(v.fields.items()))
+        if v.__class__ is FileModule:
+            own = list(self.own(v.env))
+            return len(own), iter(own)
+        return None
+
+
+class DebugInterpreter(Interpreter):
+    """The interpreter a debugged program runs with (see Debugger). It keeps the debugger's call stack: a frame for
+    each function running and for each imported file's top-level code. With its own invoke() every call goes through
+    it (the compiled runtime's quicker call is only for Interpreter's own invoke, see own), and an error keeps the
+    call stack it went wrong in (err.frames), for pause on error."""
+    debugger = None
+
+    def step(self, s, env):
+        if len(self.step_hooks) == 1:  # (only the debugger's, which raises no Tuff errors: straight to it)
+            return self.debugger.hook(s, env)
+        return super().step(s, env)
+
+    def invoke(self, fn, args, loose=False, me=None):
+        if fn.__class__ is not Func:
+            return super().invoke(fn, args, loose, me)
+        dbg = self.debugger
+        file = file_of(fn.env) or self.path
+        frames = dbg.frames
+        frames.append(DebugFrame(fn.name, file, False, dbg.known.get(file) or dbg.know(file)))
+        try:
+            return super().invoke(fn, args, loose, me)
+        except TuffError as err:
+            if getattr(err, "frames", None) is None:
+                err.frames = frames[:]
+            raise
+        finally:
+            frames.pop()
+
+    def load(self, name, env):
+        frames = self.debugger.frames
+        frames.append(DebugFrame(name + ".tuf", None, True, None))  # (its file is known once its first statement runs)
+        try:
+            return super().load(name, env)
+        except TuffError as err:
+            if getattr(err, "frames", None) is None:
+                err.frames = frames[:]
+            raise
+        finally:
+            frames.pop()
+
+    def ask(self, prompt, looks):
+        self.debugger.asked_for(True)
+        try:
+            return super().ask(prompt, looks)
+        finally:
+            self.debugger.asked_for(False)
+
+
 # ---------------------------------------------------------------- entry point
 
 def error_lines(err, src):
@@ -7934,6 +8671,8 @@ def report(err, src):
         sys.stdout.flush()
     sys.stderr.write("\n".join(out) + "\n")
     sys.stderr.flush()
+    if DEBUGGER is not None:  # (1.5.0) pause on error: the debugger stops on its line, with the names as they were
+        DEBUGGER.failed(err)
     if WINDOWED:
         SHOWING_BOX.set()
         try:
@@ -7943,6 +8682,13 @@ def report(err, src):
             pass
         finally:
             SHOWING_BOX.clear()
+
+
+def ending(err):
+    """An error that ends the program, as run_file's do (1.5.0): the debugger's pause on error says Continue ends it.
+    One in a function a window calls is reported and the window carries on (see Runtime.call)."""
+    err.ends = True
+    return err
 
 
 WINDOWED = False
@@ -8139,8 +8885,10 @@ def run_file(path):
         return 1
     try:
         program = Parser(tokenize(src)).program()
-        interp = Interpreter(src, base_folder(path))
+        interp = (Interpreter if DEBUGGER is None else DebugInterpreter)(src, base_folder(path))
         interp.path = os.path.abspath(path)
+        if DEBUGGER is not None:
+            DEBUGGER.attach(interp)
         for stmt in program:
             if stmt.kind in ("func", "kind"):  # functions and kinds can be used above where they're written
                 interp.run(stmt, interp.globals)
@@ -8148,17 +8896,17 @@ def run_file(path):
         for hook in interp.rt.finish_hooks:
             hook()
     except TuffError as err:
-        report(err, src)
+        report(ending(err), src)
         return 1
     except (ReturnSignal, BreakSignal, ContinueSignal) as sig:
         word = {"ReturnSignal": "return", "BreakSignal": "break", "ContinueSignal": "continue"}[type(sig).__name__]
-        report(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}.", sig.line, sig.col), src)
+        report(ending(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}.", sig.line, sig.col)), src)
         return 1
     except MemoryError:  # (1.4.1) a list or text growing without end, outside any function
-        report(TuffError("The program ran out of memory. Is a list or some text growing without end?"), src)
+        report(ending(TuffError("The program ran out of memory. Is a list or some text growing without end?")), src)
         return 1
     except OverflowError:  # (1.5.0) the maths says so itself, with the line; this is in case anything is missed
-        report(TuffError(TOO_BIG_NUMBER), src)
+        report(ending(TuffError(TOO_BIG_NUMBER)), src)
         return 1
     except KeyboardInterrupt:
         return 130
@@ -8242,6 +8990,7 @@ def usage():
 
 
 def main():
+    global DEBUGGER
     setup_streams()
     if hasattr(sys, "set_int_max_str_digits"):  # say 2 ^ 20000 shows every digit (Python stops at 4300)
         sys.set_int_max_str_digits(0)
@@ -8264,10 +9013,22 @@ def main():
             sys.stderr.write("--scene needs the game file, the source file and the output file.\n")
             return 2
         return scene_file(args[1], args[2], args[3])
+    port = os.environ.pop("TUFF_DEBUG", None)  # (1.5.0) TuffCode's Debug button: see the debugger, above
+    if args[0] == "--debug":
+        if len(args) < 3:
+            sys.stderr.write("--debug needs TuffCode's port and the file to run, like: --debug 5678 main.tuf\n")
+            return 2
+        port, args = args[1], args[2:]
     if args[0].startswith("--") and not os.path.exists(args[0]):
         sys.stderr.write(f"Unknown option '{args[0]}'.\n" + usage() + "\n")
         return 2
+    if port:
+        DEBUGGER = Debugger.connect(port)
+        if DEBUGGER is not None:
+            DEBUGGER.begin()
     code = run_program(args[0])
+    if DEBUGGER is not None:
+        DEBUGGER.end(code)
     if getattr(sys, "frozen", False) and not WINDOWED and not IDE:
         try:
             input("\nPress Enter to close...")

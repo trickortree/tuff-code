@@ -542,6 +542,7 @@
     }
     if (state.active && isUnder(state.active, p)) state.active = np + state.active.slice(p.length);
     if (state.lastRunFile && isUnder(state.lastRunFile, p)) state.lastRunFile = np + state.lastRunFile.slice(p.length);
+    window.dispatchEvent(new CustomEvent('tuff:renamed', { detail: { from: p, to: np } })); // (1.5.0: breakpoints go with it, debugger.js)
     tree.expanded = new Set([...tree.expanded].map((d) => (isUnder(d, p) ? np + d.slice(p.length) : d)));
     for (const k of [...tree.children.keys()]) if (isUnder(k, p)) tree.children.delete(k);
     await refreshTree();
@@ -605,7 +606,7 @@
   const syncDirty = (t) => t.el?.classList.toggle('dirty', isDirty(t));
 
   async function openFile(p, { focus = true, quiet = false, background = false } = {}) {
-    let t = state.tabs.find((x) => x.path === p);
+    let t = state.tabs.find((x) => x.path === p) || state.tabs.find((x) => samePath(x.path, p));
     if (!t) {
       let content;
       try {
@@ -1419,8 +1420,9 @@
       .join('');
   }
 
-  // A new run starts over with one copy: main.js ends the second player too.
-  function startRun(file) {
+  // A new run starts over with one copy: main.js ends the second player too. opts.debug (1.5.0): the debugger's
+  // (debugger.js). Gives the run's id; tuff:run-started says a run started, and whether it's debugged.
+  function startRun(file, opts = null) {
     state.lastRunFile = file;
     state.runId += 1;
     stopMusic();
@@ -1441,7 +1443,9 @@
     $('#run-tab-name').innerHTML = `${fileIcon(basename(file))}<span>${esc(basename(file))}</span>`;
     setRunning(true);
     updateChrome();
-    api.run.start(file, state.runId);
+    api.run.start(file, state.runId, opts);
+    window.dispatchEvent(new CustomEvent('tuff:run-started', { detail: { file, id: state.runId, debug: !!opts?.debug } }));
+    return state.runId;
   }
 
   async function runCurrent() {
@@ -1852,7 +1856,9 @@
     ['Edit', ['undo', 'redo', 'sep', 'find', 'replace', 'findInFiles', 'sep', 'renameSymbol', 'autoSort', 'comment', 'dupLine', 'deleteLine', 'selectAll']],
     ['View', ['toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'engine', 'sep', 'zen', 'zoomIn', 'zoomOut', 'zoomReset', 'sep', 'settings', 'devtools']],
     ['Go', ['searchEverywhere', 'goToFile', 'goToSymbol', 'sep', 'goToDefinition', 'findUses', 'sep', 'reopenTab', 'nextTab', 'prevTab']],
-    ['Run', ['run', 'rerun', 'stop', 'sep', 'build', 'sep', 'liveCheck']],
+    // (debug to toggleBreakpoint are the debugger's, debugger.js: a menu leaves out the commands that aren't there)
+    ['Run', ['run', 'debug', 'watchRun', 'rerun', 'stop', 'sep', 'debugContinue', 'stepOver', 'stepInto', 'stepOut', 'debugPause', 'toggleBreakpoint',
+      'sep', 'build', 'sep', 'liveCheck']],
     ['Help', ['learn', 'replayIntro', 'whatsNew', 'sep', 'checkUpdates', 'about']],
   ];
 
@@ -1872,6 +1878,7 @@
         for (const id of ids) {
           if (id === 'sep') { dd.appendChild(document.createElement('hr')); continue; }
           const c = commands[id];
+          if (!c) continue;
           const mi = document.createElement('button');
           mi.className = 'mi';
           mi.innerHTML = `<span>${esc(c.label)}</span>${c.sc ? `<span class="sc">${esc(c.sc)}</span>` : ''}`;
@@ -2166,7 +2173,8 @@
   // and moved you into the editor, so a Ctrl+Z after them undid code too. In a box they stay the box's own.
   // Ctrl+Alt ones (Settings, New File, Zen) stay out too: on Windows Ctrl+Alt is AltGr, which types ł, ż, ś.
   const APP_WIDE = new Set(['saveAll', 'openFolder', 'closeTab', 'goToFile', 'findInFiles', 'reopenTab', 'nextTab', 'prevTab',
-    'toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'engine', 'run', 'rerun', 'stop', 'build', 'devtools', 'zoomIn', 'zoomOut', 'zoomReset']);
+    'toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'engine', 'run', 'rerun', 'stop', 'build', 'devtools', 'zoomIn', 'zoomOut', 'zoomReset',
+    'debug', 'debugContinue', 'stepOver', 'stepInto', 'stepOut']);
   function worksInTextBox(id, combo, e) {
     // On a Mac, Ctrl+letter in a text box is the box's editing (Ctrl+A, Ctrl+E, Ctrl+K, Ctrl+Y...); shortcuts are Cmd.
     if (api.platform === 'darwin' && e.ctrlKey && !e.metaKey && /^Key/.test(e.code)) return false;
@@ -2271,6 +2279,8 @@
       state.running
         ? { label: 'Stop', sc: 'Ctrl+F2', run: () => api.run.stop() }
         : { label: cur ? `Run '${basename(cur)}'` : 'Run Current File', sc: 'Shift+F10', run: runCurrent },
+      ...(commands.debug ? [{ label: cur ? `Debug '${basename(cur)}'` : commands.debug.label, sc: commands.debug.sc, run: commands.debug.run },
+        { label: commands.watchRun.label, run: commands.watchRun.run }] : []),
       { label: 'Rerun', sc: 'Ctrl+F5', run: rerun },
       ...(!$('#btn-run2').classList.contains('hidden')
         ? [{ label: state.running2 ? 'Stop the Second Player' : 'Run a Second Player', run: runSecond }] : []),
@@ -2306,13 +2316,18 @@
     saveSettings,
     toast,
     refreshTree,
-    // With a line, the cursor goes there (a link like "main.tuf:12" in an agent's reply).
-    openFile: async (p, line) => {
-      const tab = await openFile(p);
-      if (tab && line > 0) { editor.revealLineInCenter(line); editor.setPosition({ lineNumber: line, column: 1 }); editor.focus(); }
+    // With a line, the cursor goes there (a link like "main.tuf:12" in an agent's reply). focus: false leaves the
+    // keyboard where it is (the debugger's Watch it run, while an answer is typed in the Run window).
+    openFile: async (p, line, { focus = true } = {}) => {
+      const tab = await openFile(p, { focus });
+      if (tab && line > 0) { editor.revealLineInCenter(line); editor.setPosition({ lineNumber: line, column: 1 }); if (focus) editor.focus(); }
       return tab;
     },
-    runFile: async (p) => { await saveAll(); startRun(p); },
+    // opts: startRun's (the debugger's). Gives the run's id.
+    runFile: async (p, opts) => { await saveAll(); return startRun(p, opts); },
+    runTarget: () => runTarget(),
+    // A model's file: its tab's path (a renamed tab keeps its model, whose uri has the path it was opened with).
+    pathOf: (m) => state.tabs.find((t) => t.model === m)?.path ?? null,
     openBuild: (p) => openBuildDialog(p),
     editor: () => editor,
     getModel: async (p) => (await openFile(p, { background: true, quiet: true }))?.model,
@@ -2416,6 +2431,7 @@
 
     window.TuffStudio.init(window.TuffIDE);
     window.TuffEngine?.init(window.TuffIDE);
+    window.TuffDebug?.init(window.TuffIDE); // 1.5.0: the debugger (debugger.js)
     window.TuffWhatsNew?.init({ openWeb: (url) => api.openWeb(url), focusEditor: () => editor?.focus() });
     if (firstRun) {
       const introDone = playIntro();

@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('tuff', {
   },
   run: { start: invoke('run:start'), stop: invoke('run:stop'), input: invoke('run:input'), onData: on('run:data'), onExit: on('run:exit') },
   run2: { start: invoke('run2:start'), stop: invoke('run2:stop'), onData: on('run2:data'), onExit: on('run2:exit') },
+  debug: { send: invoke('debug:send'), onEvent: on('debug:event') }, // 1.5.0: a run with the debugger (run.start's opts.debug)
   build: {
     start: invoke('build:start'),
     cancel: invoke('build:cancel'),
