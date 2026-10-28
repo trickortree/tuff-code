@@ -8122,6 +8122,656 @@ def t_tmusic(c):
                     f"...and runs, saving theme.wav ({secs:.1f} s)", (out + err)[-300:])
 
 
+# ---------------------------------------------------------------- the debugger (1.5.0)
+
+# A shop in two files: a kind, a list, a dictionary, a function called in a loop, and money.tuf with a top level of
+# its own. The line numbers matter: the checks below name them.
+DEBUG_MAIN = '''import money.tuf
+kind Pet:
+    name = "?"
+    hunger = 5
+    toys = []
+    func feed(amount):
+        my.hunger -= amount
+        return my.hunger
+
+total = 0
+items = ["milk", "eggs"]
+ages = {"sam": 14, "ann": 12}
+rex = Pet("Rex")
+func add(n):
+    total += n
+    return total
+
+for i in range(1, 3):
+    add(i)
+rex:feed(2)
+say money.with_tax(10)
+say total
+'''
+DEBUG_MONEY = '''rate = 0.2
+
+func with_tax(price):
+    extra = price * rate
+    return price + extra
+'''
+# Step Into from the start, then into, over and out of functions, an action and the other file: (the step, the
+# file and line it stops on). A loop going round again stops on its own line (18) before its first statement.
+DEBUG_STEPS = [("stepIn", "main", 1), ("stepIn", "money", 1), ("stepOut", "main", 10), ("next", "main", 11), ("next", "main", 12),
+               ("next", "main", 13), ("next", "main", 18), ("next", "main", 19), ("stepIn", "main", 15), ("stepOut", "main", 18),
+               ("next", "main", 19), ("next", "main", 18), ("next", "main", 19), ("next", "main", 20), ("stepIn", "main", 7),
+               ("next", "main", 8), ("next", "main", 21), ("stepIn", "money", 4), ("stepOut", "main", 22)]
+DEBUG_COUNT = 'count = 3\nwhile count > 0:\n    say count\n    count -= 1\nsay "Liftoff!"\n'
+DEBUG_ERROR = 'func half(x):\n    y = x * 2\n    return y + nope\nitems = [1, 2, 3]\nsay "start"\nsay half(items[0])\nsay "never"\n'
+DEBUG_ASK = 'name = input "Name? "\nsay "Hi " + name\nsize = len(name)\nsay size\n'
+
+
+class DebugLink:
+    """TuffCode's side of the debugger, for one run of a program: a server on this computer that the program connects
+    to (TUFF_DEBUG, or --debug with arg=True), the commands it's sent and the messages it sends back. Every wait has a
+    time limit, so a run that gets stuck fails its checks instead of hanging the tests."""
+
+    def __init__(self, folder, main, slow=False, env=None, arg=False):
+        import queue
+        import socket
+        import threading
+        self.srv = socket.socket()
+        self.srv.bind(("127.0.0.1", 0))
+        self.srv.listen(1)
+        self.srv.settimeout(30)
+        port = str(self.srv.getsockname()[1])
+        full = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW", "TUFF_DEBUG", "TUFF_NO_WRITES", "TUFF_BASE_DIR")}
+        full.update({"PYTHONIOENCODING": "utf-8", "TUFF_NO_SOUND": "1", **(env or {})})
+        if slow:
+            full["TUFF_SLOW"] = "1"
+        if not arg:
+            full["TUFF_DEBUG"] = port
+        path = os.path.join(folder, main)
+        self.proc = subprocess.Popen(tuff_cmd() + (["--debug", port] if arg else []) + [path], cwd=folder, env=full,
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                     encoding="utf-8", errors="replace")
+        self.out, self.err, self.log = [], [], []
+        for stream, into in ((self.proc.stdout, self.out), (self.proc.stderr, self.err)):
+            threading.Thread(target=lambda s=stream, i=into: i.extend(s), daemon=True).start()
+        self.msgs = queue.Queue()
+        try:
+            self.conn, _ = self.srv.accept()
+        except OSError:
+            self.conn = None
+            return
+        threading.Thread(target=self.read, daemon=True).start()
+
+    def read(self):
+        try:
+            for line in self.conn.makefile("r", encoding="utf-8"):
+                self.msgs.put(json.loads(line))
+        except (OSError, ValueError):
+            pass
+        self.msgs.put(None)
+
+    def send(self, cmd, **fields):
+        try:
+            self.conn.sendall((json.dumps({"cmd": cmd, **fields}) + "\n").encode("utf-8"))
+        except (OSError, AttributeError):
+            pass
+
+    def answer(self, text):
+        """Types an answer for input()."""
+        self.proc.stdin.write(text + "\n")
+        self.proc.stdin.flush()
+
+    def next(self, *events, timeout=20):
+        """The next message that's one of these events (the others go in self.log too), or None after timeout s."""
+        import queue
+        end = time.monotonic() + timeout
+        while self.conn is not None:
+            try:
+                m = self.msgs.get(timeout=max(0.01, end - time.monotonic()))
+            except queue.Empty:
+                return None
+            if m is None:
+                self.msgs.put(None)
+                return None
+            self.log.append(m)
+            if m.get("event") in events:
+                return m
+        return None
+
+    def finish(self, timeout=30):
+        """Waits for the program to end: (exit code, what it said, its errors). One still running is stopped (None)."""
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+        try:
+            code = self.proc.wait(timeout)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            code = None
+        time.sleep(0.1)  # (the last of its output)
+        self.close()
+        return code, "".join(self.out), "".join(self.err)
+
+    def close(self):
+        for s, shut in ((self.conn, True), (self.srv, False)):
+            try:
+                if s and shut:
+                    s.shutdown(2)  # (SHUT_RDWR: read()'s file of it would keep it open)
+                if s:
+                    s.close()
+            except OSError:
+                pass
+        if self.proc.poll() is None:
+            self.proc.kill()
+
+
+def debug_names(msg, scope=-1):
+    """{name: value as shown} of one of a paused (or watch, or scopes) message's scopes: the last is the file's top level."""
+    scopes = (msg or {}).get("scopes") or []
+    return {v["name"]: v["value"] for v in scopes[scope]["vars"]} if scopes else {}
+
+
+def debug_var(msg, name, scope=-1):
+    scopes = (msg or {}).get("scopes") or []
+    return next((v for v in scopes[scope]["vars"] if v["name"] == name), None) if scopes else None
+
+
+def debug_where(msg, folder):
+    """(the file's name without .tuf, the line) a message is at, like ("main", 15)."""
+    if not msg:
+        return None
+    return os.path.splitext(os.path.relpath(msg["file"], folder))[0].replace(os.sep, "/"), msg["line"]
+
+
+def debug_project(name, files):
+    folder = os.path.join(OUT, "debug", name)
+    os.makedirs(folder, exist_ok=True)
+    for rel, code in files.items():
+        with open(os.path.join(folder, rel), "w", encoding="utf-8", newline="") as f:
+            f.write(code)
+    return folder
+
+
+def debug_steps(c, slow, mode):
+    """The shop, stepped through: into money.tuf's top level and out of it, over and into functions, an action, the
+    other file's function, and a loop going round."""
+    folder = debug_project(f"steps_{mode}", {"main.tuf": DEBUG_MAIN, "money.tuf": DEBUG_MONEY})
+    link = DebugLink(folder, "main.tuf", slow)
+    got, at = [], {}
+    link.send("stepIn")
+    msg = link.next("paused")
+    for i, (cmd, file, line) in enumerate(DEBUG_STEPS):
+        where = debug_where(msg, folder)
+        got.append(where)
+        at[where] = msg
+        if where != (file, line) or i + 1 == len(DEBUG_STEPS):
+            break
+        link.send(DEBUG_STEPS[i + 1][0])
+        msg = link.next("paused")
+    want = [(file, line) for _cmd, file, line in DEBUG_STEPS]
+    c.check(got == want, f"{mode}: Step Into, Over and Out stop where they should, in both files and as the loop goes round", (got, want))
+    feed = at.get(("main", 7))
+    c.check(feed and [f["name"] for f in feed["stack"]] == ["Pet:feed", "main.tuf"] and feed["stack"][1]["line"] == 20
+            and debug_names(feed, 0).get("amount") == "2" and (debug_var(feed, "my", 0) or {}).get("type") == "Pet",
+            f"{mode}: in an action, the call stack has it and the line that called it, and its names have my (a Pet)", feed and (feed["stack"], feed["scopes"][0]))
+    tax = at.get(("money", 4))
+    c.check(tax and [f["name"] for f in tax["stack"]] == ["with_tax", "main.tuf"] and debug_names(tax, 0) == {"price": "10"}
+            and debug_names(tax) == {"rate": "0.2"} and tax["scopes"][-1]["name"] == "money.tuf",
+            f"{mode}: in money.tuf's function, its names and then money.tuf's own top level (not main.tuf's)", tax and tax["scopes"])
+    top = at.get(("money", 1))
+    c.check(top and [f["name"] for f in top["stack"]] == ["money.tuf", "main.tuf"] and top["stack"][0]["top"],
+            f"{mode}: money.tuf's top-level code is in the call stack while it's imported", top and top["stack"])
+    loop = at.get(("main", 18))
+    c.check(loop and debug_names(loop).get("i") == "3" and debug_names(loop).get("total") == "3",
+            f"{mode}: on the loop's own line as it goes round, i is the next item already", loop and debug_names(loop))
+    link.send("continue")
+    end = link.next("ended")
+    code, out, err = link.finish()
+    c.check(end and end.get("code") == 0 and code == 0 and out.splitlines() == ["12", "6"],
+            f"{mode}: Continue runs it to the end, with its output as usual", (end, code, out, err[-300:]))
+
+
+def debug_breakpoints(c, slow, mode, crlf=False):
+    """Breakpoints in both files, the Variables panel's values (kinds' objects, lists and dictionaries open up), the
+    call stack's frames, and breakpoints changed while it runs."""
+    nl = "\r\n" if crlf else "\n"
+    folder = debug_project(f"breaks_{mode}{'_crlf' if crlf else ''}", {"main.tuf": DEBUG_MAIN.replace("\n", nl),
+                                                                       "money.tuf": DEBUG_MONEY.replace("\n", nl)})
+    main, money = os.path.join(folder, "main.tuf"), os.path.join(folder, "money.tuf")
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("setBreakpoints", file=main, lines=[15])
+    link.send("continue")
+    first = link.next("paused")
+    names = debug_names(first)
+    c.check(first and first["reason"] == "breakpoint" and debug_where(first, folder) == ("main", 15) and first["col"] == 5,
+            f"{mode}{' (CRLF lines)' if crlf else ''}: it stops at a breakpoint in a function, on the editor's line", first and (first["reason"], first["file"], first["line"]))
+    if crlf:
+        link.close()
+        return
+    c.check(first and [(f["name"], f["line"]) for f in first["stack"]] == [("add", 15), ("main.tuf", 19)],
+            f"{mode}: the call stack is the function and the line that called it", first and first["stack"])
+    c.check(debug_names(first, 0) == {"n": "1"} and names.get("total") == "0" and names.get("items") == '["milk", "eggs"]'
+            and names.get("ages") == '{"sam": 14, "ann": 12}' and names.get("rex") == 'Pet(name: "Rex", hunger: 5, toys: [])'
+            and "add" not in names and "Pet" not in names and "print" not in names and names.get("money") == "<file money.tuf>",
+            f"{mode}: the function's names, then the file's own top-level ones as say shows them (not its functions, kinds or built-ins)", (first or {}).get("scopes"))
+    kinds = {k: (debug_var(first, k) or {}).get("type") for k in ("total", "items", "ages", "rex", "money")}
+    sizes = {k: (debug_var(first, k) or {}).get("more") for k in ("items", "ages", "rex")}
+    c.check(kinds == {"total": "number", "items": "list", "ages": "dictionary", "rex": "Pet", "money": "file"}
+            and sizes == {"items": 2, "ages": 2, "rex": 3}, f"{mode}: each value says what it is, and how much is inside it", (kinds, sizes))
+    link.send("expand", path=["top", "rex"], open=True)
+    opened = link.next("scopes")
+    rex = debug_var(opened, "rex") or {}
+    c.check([(k["name"], k["value"], k["type"]) for k in rex.get("kids", [])] == [("name", '"Rex"', "text"), ("hunger", "5", "number"), ("toys", "[]", "list")],
+            f"{mode}: an object opens to show its fields", rex)
+    link.send("expand", path=["top", "items"], open=True)
+    link.send("expand", path=["top", "ages"], open=True)
+    link.next("scopes")
+    opened = link.next("scopes")
+    items, ages = debug_var(opened, "items") or {}, debug_var(opened, "ages") or {}
+    c.check([(k["name"], k["value"]) for k in items.get("kids", [])] == [("0", '"milk"'), ("1", '"eggs"')]
+            and [(k["name"], k["value"]) for k in ages.get("kids", [])] == [('"sam"', "14"), ('"ann"', "12")],
+            f"{mode}: a list opens to its items and a dictionary to its keys", (items, ages))
+    link.send("frame", index=1)
+    frame = link.next("scopes")
+    c.check(frame and frame["frame"] == 1 and len(frame["scopes"]) == 1 and debug_names(frame).get("i") == "1",
+            f"{mode}: another frame of the call stack shows its own names", frame)
+    link.send("continue")
+    again = link.next("paused")
+    c.check(again and debug_where(again, folder) == ("main", 15) and debug_names(again, 0) == {"n": "2"} and debug_names(again)["total"] == "1"
+            and (debug_var(again, "rex") or {}).get("kids"), f"{mode}: Continue stops there again the next time, with the new values (and rex still open)",
+            again and again["scopes"])
+    link.send("setBreakpoints", file=main, lines=[])
+    link.send("setBreakpoints", file=money, lines=[4])
+    link.send("continue")
+    tax = link.next("paused")
+    c.check(tax and debug_where(tax, folder) == ("money", 4) and debug_names(tax, 0) == {"price": "10"} and debug_names(tax) == {"rate": "0.2"},
+            f"{mode}: breakpoints changed while it runs: it goes on past the old one and stops in money.tuf", tax and (tax["file"], tax["line"], tax["scopes"]))
+    link.send("continue")
+    end = link.next("ended")
+    code, out, _err = link.finish()
+    c.check(end and code == 0 and out.splitlines() == ["12", "6"], f"{mode}: ...then it ends as usual", (end, code, out))
+
+
+def debug_errors(c, slow, mode):
+    """Pause on error: in a function, in another file and at the top level it stops on the error's line with the
+    names as they were; an error caught by try doesn't stop it."""
+    folder = debug_project(f"errors_{mode}", {"main.tuf": DEBUG_ERROR})
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("continue")
+    msg = link.next("paused")
+    c.check(msg and msg["reason"] == "error" and (msg["line"], msg["col"]) == (3, 16) and "I don't know what 'nope' is" in msg.get("error", "")
+            and [(f["name"], f["line"]) for f in msg["stack"]] == [("half", 3), ("main.tuf", 6)]
+            and debug_names(msg, 0) == {"x": "1", "y": "2"} and debug_names(msg).get("items") == "[1, 2, 3]",
+            f"{mode}: an error pauses on its line before the program ends, with the function's names still there", msg)
+    err_now = "".join(link.err)
+    c.check("Tuff error on line 3" in err_now, f"{mode}: ...and the error is already in the Run window while it's paused", err_now[-300:])
+    link.send("continue")
+    end = link.next("ended")
+    code, out, err = link.finish()
+    c.check(end and end["code"] == 1 and code == 1 and out.splitlines() == ["start"] and "Tuff error on line 3" in err,
+            f"{mode}: Continue then ends it, as the error would have", (end, code, out, err[-200:]))
+
+    bad_money = DEBUG_MONEY.replace("price + extra", "price + extra + oops")
+    folder = debug_project(f"errors_file_{mode}", {"main.tuf": DEBUG_MAIN, "money.tuf": bad_money})
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("continue")
+    msg = link.next("paused")
+    c.check(msg and msg["reason"] == "error" and debug_where(msg, folder) == ("money", 5) and debug_names(msg, 0) == {"price": "10", "extra": "2"}
+            and debug_names(msg) == {"rate": "0.2"}, f"{mode}: an error in money.tuf pauses there, with its names", msg and (msg["file"], msg["line"], msg["scopes"]))
+    link.send("continue")
+    code, _out, err = link.finish()
+    c.check(code == 1 and "Tuff error in money.tuf on line 5" in err, f"{mode}: ...and is reported in money.tuf", err[-200:])
+
+    folder = debug_project(f"errors_top_{mode}", {"main.tuf": 'n = 5\nsay n\nsay n + "x" * nope\n',
+                                                  "caught.tuf": 'try:\n    say 1 / 0\ncatch problem:\n    say "caught"\nsay "after"\n'})
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("continue")
+    msg = link.next("paused")
+    c.check(msg and msg["reason"] == "error" and msg["line"] == 3 and debug_names(msg) == {"n": "5"} and len(msg["scopes"]) == 1,
+            f"{mode}: an error at the top level pauses too", msg)
+    link.send("continue")
+    link.finish()
+    link = DebugLink(folder, "caught.tuf", slow)
+    link.send("continue")
+    end = link.next("paused", "ended")
+    code, out, _err = link.finish()
+    c.check(end and end["event"] == "ended" and code == 0 and out.splitlines() == ["caught", "after"],
+            f"{mode}: an error that try catches doesn't pause", (end, out))
+
+
+def debug_input(c, slow, mode):
+    """input() while debugging: the answer is typed in the Run window as usual, and Pause while it waits says so."""
+    folder = debug_project(f"input_{mode}", {"main.tuf": DEBUG_ASK})
+    main = os.path.join(folder, "main.tuf")
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("setBreakpoints", file=main, lines=[3])
+    link.send("continue")
+    time.sleep(0.3)
+    link.answer("Sam")
+    msg = link.next("paused")
+    c.check(msg and msg["line"] == 3 and debug_names(msg) == {"name": '"Sam"'} and (debug_var(msg, "name") or {}).get("type") == "text",
+            f"{mode}: input() gets its answer while debugging, and the Variables panel shows it as text", msg and msg["scopes"])
+    link.send("continue")
+    code, out, _err = link.finish()
+    c.check(code == 0 and "Hi Sam" in out and out.splitlines()[-1] == "3", f"{mode}: ...and the program goes on as usual", out)
+
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("continue")
+    time.sleep(0.4)
+    link.send("pause")
+    asking = link.next("asking", "paused", timeout=5)
+    c.check(asking and asking["event"] == "asking", f"{mode}: Pause while input() waits says it's waiting for an answer", asking)
+    link.answer("Ann")
+    msg = link.next("paused")
+    c.check(msg and msg["reason"] == "pause" and msg["line"] == 2 and debug_names(msg) == {"name": '"Ann"'},
+            f"{mode}: ...and pauses on the next line once there is one", msg)
+    link.send("continue")
+    code, out, _err = link.finish()
+    c.check(code == 0 and "Hi Ann" in out, f"{mode}: ...then goes on", out)
+
+
+def debug_watch(c, slow, mode):
+    """Watch it run: every statement in turn at a readable speed, the loop's own line each time round, the names as
+    they change; Pause and Continue in it, and its speed changed while it runs."""
+    folder = debug_project(f"watch_{mode}", {"main.tuf": DEBUG_COUNT, "long.tuf": "n = 0\nwhile n < 100000:\n    n += 1\nsay n\n"})
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("watch", delay=0.01)
+    seen = []
+    while True:
+        msg = link.next("watch", "paused", "ended")
+        if not msg or msg["event"] != "watch":
+            break
+        seen.append((msg["line"], debug_names(msg).get("count")))
+    code, out, _err = link.finish()
+    c.check([line for line, _n in seen] == [1, 2, 3, 4, 2, 3, 4, 2, 3, 4, 5] and msg and msg["event"] == "ended",
+            f"{mode}: it shows every line as it runs, and the while line each time the loop goes round", seen)
+    c.check([n for line, n in seen if line == 3] == ["3", "2", "1"] and seen[0][1] is None,
+            f"{mode}: ...with the Variables panel's values as they change", seen)
+    c.check(code == 0 and out.splitlines() == ["3", "2", "1", "Liftoff!"], f"{mode}: ...and its output as usual", out)
+
+    link = DebugLink(folder, "long.tuf", slow)
+    link.send("watch", delay=0.3)
+    first = link.next("watch")
+    t0 = time.monotonic()
+    second = link.next("watch")
+    gap = time.monotonic() - t0
+    c.check(first and second and gap > 0.2, f"{mode}: slow is slow enough to read: {gap:.2f} s a line at 0.3", gap)
+    link.send("watch", delay=0.02)
+    time.sleep(0.6)
+    link.send("pause")
+    msg = link.next("paused", timeout=10)
+    shown = sum(1 for m in link.log if m.get("event") == "watch")
+    c.check(msg and msg["reason"] == "pause" and msg["line"] in (2, 3) and 5 <= shown <= 120,
+            f"{mode}: faster when the speed changes ({shown} lines in 0.6 s), and Pause stops it where it is", (msg and msg["line"], shown))
+    link.send("watch", delay=0)
+    still = link.next("running", "watch", timeout=0.5)
+    c.check(still is None, f"{mode}: turning Watch it run off while paused keeps it paused", still)
+    link.send("continue")
+    end = link.next("ended", timeout=30)
+    later = sum(1 for m in link.log if m.get("event") == "watch") - shown
+    code, out, _err = link.finish()
+    c.check(end and code == 0 and out.strip() == "100000" and later == 0, f"{mode}: ...and Continue then runs it at full speed", (end, later, out))
+
+
+def debug_more(c):
+    """Pause and Stop in a busy loop and in wait(), a function deep inside itself, tterm and tmusic programs, TuffCode
+    going away, --debug, no TuffCode to connect to, and the connect message."""
+    folder = debug_project("more", {
+        "busy.tuf": "n = 0\nwhile true:\n    n += 1\n",
+        "slow.tuf": 'say "waiting"\nwait(30)\nsay "done"\n',
+        "deep.tuf": "func down(n):\n    if n is 0:\n        return 0\n    return down(n - 1) + 1\nsay down(100)\n",
+        "term.tuf": "mention tterm\nscreen = tterm.screen(5, 2)\nn = 0\nfunc step(dt):\n    n += 1\n    if n is 3:\n        screen:put(0, 0, nope)\n"
+                    "screen:every_frame(step)\nsay n\n",
+        "count.tuf": DEBUG_COUNT,
+        "music.tuf": 'mention tmusic\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4")\ntmusic.play("C4 E4")\nsay song:length()\n',
+    })
+    link = DebugLink(folder, "busy.tuf")
+    link.send("continue")
+    time.sleep(0.4)
+    link.send("pause")
+    msg = link.next("paused", timeout=5)
+    c.check(msg and msg["reason"] == "pause" and msg["line"] in (2, 3) and int(debug_names(msg).get("n", "0")) > 0,
+            "Pause stops a loop that never ends, where it is", msg and (msg["line"], debug_names(msg)))
+    t0 = time.monotonic()
+    link.send("stop")
+    end = link.next("ended", timeout=5)
+    code, _out, _err = link.finish(timeout=10)
+    c.check(end and code == 130 and time.monotonic() - t0 < 5, f"Stop ends it at once ({time.monotonic() - t0:.1f} s)", (end, code))
+
+    link = DebugLink(folder, "slow.tuf")
+    link.send("continue")
+    time.sleep(0.5)
+    t0 = time.monotonic()
+    link.send("pause")
+    msg = link.next("paused", timeout=5)
+    c.check(msg and msg["line"] == 2 and time.monotonic() - t0 < 2, f"Pause stops wait(30) on its line straight away ({time.monotonic() - t0:.1f} s)", msg)
+    link.send("stop")
+    code, out, _err = link.finish(timeout=10)
+    c.check(code == 130 and "done" not in out, "...and Stop ends it", (code, out))
+
+    deep = os.path.join(folder, "deep.tuf")
+    link = DebugLink(folder, "deep.tuf")
+    link.send("setBreakpoints", file=deep, lines=[3])
+    link.send("continue")
+    msg = link.next("paused")
+    stack = (msg or {}).get("stack", [])
+    c.check(len(stack) == 40 and msg.get("hidden") == 62 and stack[0]["name"] == "down" and stack[-1]["name"] == "deep.tuf"
+            and stack[1]["line"] == 4 and debug_names(msg, 0) == {"n": "0"},
+            "a function 101 calls deep: the call stack lists the newest 39 and the program's own top level, and says how many more", (len(stack), msg and msg.get("hidden")))
+    link.send("frame", index=5)
+    frame = link.next("scopes")
+    c.check(frame and debug_names(frame, 0) == {"n": "5"}, "...and each of them has its own n", frame)
+    link.send("continue")
+    code, out, _err = link.finish()
+    c.check(code == 0 and out.strip() == "100", "...then it ends as usual", out)
+
+    term = os.path.join(folder, "term.tuf")
+    link = DebugLink(folder, "term.tuf")
+    link.send("setBreakpoints", file=term, lines=[5])
+    link.send("continue")
+    msg = link.next("paused")
+    c.check(msg and msg["line"] == 5 and [f["name"] for f in msg["stack"]] == ["step", "term.tuf"] and msg["stack"][1]["line"] == 8
+            and debug_names(msg, 0) == {"dt": debug_names(msg, 0).get("dt")} and debug_names(msg).get("n") == "0",
+            "tterm: a breakpoint in a game's frame function stops it there, called by screen:every_frame", msg and (msg["stack"], msg["scopes"]))
+    link.send("setBreakpoints", file=term, lines=[])
+    link.send("continue")
+    msg = link.next("paused")
+    c.check(msg and msg["reason"] == "error" and msg["line"] == 7 and debug_names(msg).get("n") == "3",
+            "tterm: an error in the frame function pauses there, with n as it was", msg and (msg["reason"], msg["line"], debug_names(msg)))
+    link.send("continue")
+    code, _out, err = link.finish()
+    c.check(code == 1 and "Tuff error on line 7" in err, "...then the game ends with its error", err[-200:])
+
+    music = os.path.join(folder, "music.tuf")
+    link = DebugLink(folder, "music.tuf", env={"TUFF_MUSIC_DIR": os.path.join(folder, "music")})
+    link.send("setBreakpoints", file=music, lines=[5])
+    link.send("continue")
+    msg = link.next("paused")
+    song = debug_var(msg, "song") or {}
+    c.check(msg and msg["line"] == 5 and song.get("type") == "song", "tmusic: it stops after the music played, and a song is a song", msg and msg["scopes"])
+    link.send("continue")
+    code, out, _err = link.finish()
+    c.check(code == 0 and out.strip(), "...and goes on to the end", out)
+
+    count = os.path.join(folder, "count.tuf")
+    link = DebugLink(folder, "count.tuf")
+    link.send("setBreakpoints", file=count, lines=[3])
+    link.send("continue")
+    msg = link.next("paused")
+    link.conn.shutdown(2)  # TuffCode closed (or crashed) while the program was paused
+    code, out, _err = link.finish()
+    c.check(msg and code == 0 and out.splitlines() == ["3", "2", "1", "Liftoff!"], "TuffCode going away while it's paused: the program runs on to its end",
+            (msg and msg["line"], code, out))
+
+    link = DebugLink(folder, "count.tuf", arg=True)
+    link.send("watch", delay=0.001)
+    end = link.next("ended")
+    code, out, _err = link.finish()
+    c.check(end and code == 0 and out.splitlines()[-1] == "Liftoff!" and sum(m["event"] == "watch" for m in link.log) == 11,
+            "tuff.py --debug PORT file.tuf works the same as TUFF_DEBUG", (end, code, out))
+
+    full = {**os.environ, "PYTHONIOENCODING": "utf-8", "TUFF_DEBUG": "1"}
+    full.pop("TUFF_IDE", None)
+    p = subprocess.run(tuff_cmd() + [count], cwd=folder, env=full, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=60, stdin=subprocess.DEVNULL)
+    c.check(p.returncode == 0 and p.stdout.splitlines() == ["3", "2", "1", "Liftoff!"] and
+            p.stderr.strip() == "The debugger couldn't start, so the program runs as usual.",
+            "with nothing to connect to, the program runs as usual (and says so once)", (p.returncode, p.stdout, p.stderr))
+
+
+def debug_places(c):
+    """Where a breakpoint stops (the breakpoints message): a blank line, a func line and an action's, a kind and its
+    fields, and the lines a list goes on over."""
+    folder = debug_project("places", {"main.tuf": DEBUG_MAIN, "money.tuf": DEBUG_MONEY,
+                                      "list.tuf": 'numbers = [\n    1,\n    2\n]\nsay numbers\n# the end\n\n'})
+    main, lst = os.path.join(folder, "main.tuf"), os.path.join(folder, "list.tuf")
+    link = DebugLink(folder, "main.tuf")
+    link.send("setBreakpoints", file=main, lines=[2, 3, 6, 9, 14, 17, 22, 99])
+    link.send("setBreakpoints", file=lst, lines=[2, 3, 5, 6])
+    a, b = link.next("breakpoints"), link.next("breakpoints")
+    c.check(a and a["lines"] == [[2, None], [3, None], [6, 7], [9, 10], [14, 15], [17, 18], [22, 22], [99, None]],
+            "breakpoints stop on the next statement from a blank line, inside a func from its line, and nowhere on a kind", a)
+    c.check(b and b["lines"] == [[2, 1], [3, 1], [5, 5], [6, None]], "...on a list's first line from the lines it goes on over, and nowhere after the end", b)
+    hits = []
+    for _i in range(12):
+        link.send("continue")
+        msg = link.next("paused", "ended")
+        if not msg or msg["event"] == "ended":
+            break
+        hits.append((msg["line"], msg["reason"]))
+    code, _out, _err = link.finish()
+    c.check([line for line, _r in hits] == [10, 18, 15, 18, 15, 18, 15, 7, 22] and all(r == "breakpoint" for _l, r in hits) and code == 0,
+            "...and they stop there as it runs: the for line each time round, the function's and the action's first lines", hits)
+
+
+def debug_speed(c):
+    """In this process: no debugger, no step hook; with one, a loop's statements are checked quickly (with no
+    breakpoints, or many on other lines)."""
+    import contextlib
+    import io
+    import tuff
+    folder = debug_project("speed", {"plain.tuf": 'x = 1\nsay x\n'})
+    made = []
+    init = tuff.Interpreter.__init__
+
+    def spy(self, *args, **kwargs):
+        init(self, *args, **kwargs)
+        made.append(self)
+    tuff.Interpreter.__init__ = spy
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            tuff.run_file(os.path.join(folder, "plain.tuf"))
+    finally:
+        tuff.Interpreter.__init__ = init
+    c.check(tuff.DEBUGGER is None and len(made) == 1 and type(made[0]) is tuff.Interpreter and not made[0].step_hooks,
+            "with no debugger, a program gets the usual interpreter, with no step hook", [(type(m).__name__, m.step_hooks) for m in made])
+
+    class Quiet:
+        """Stands in for TuffCode's line: takes every message, sends none."""
+
+        def sendall(self, data):
+            pass
+
+        def makefile(self, *args, **kwargs):
+            return io.StringIO("")
+
+        def close(self):
+            pass
+
+    src = INTERP_PERF["while"].replace("say total\n", "")
+    program = tuff.Parser(tuff.tokenize(src)).program()
+    secs = []
+    for many in (None, False, True):
+        if many is None:
+            interp = tuff.Interpreter(src, folder)
+        else:
+            dbg = tuff.Debugger(Quiet())
+            time.sleep(0.05)  # (its reader thread finds nothing and goes)
+            dbg.gone, dbg.started = False, True
+            dbg.go("continue", 1)
+            interp = tuff.DebugInterpreter(src, folder)
+            interp.path = os.path.join(folder, "loop.tuf")
+            if many:
+                dbg.set_breakpoints(interp.path, list(range(10, 600)))
+            dbg.attach(interp)
+        t0 = time.perf_counter()
+        interp.run_block(program, interp.globals)
+        secs.append(time.perf_counter() - t0)
+    c.check(secs[1] < secs[0] * 4 + 0.2 and secs[2] < secs[1] * 1.5 + 0.2,
+            f"600,000 statements: {secs[0]:.2f} s with no debugger, {secs[1]:.2f} s with it, {secs[2]:.2f} s with 590 breakpoints elsewhere", secs)
+
+
+DEBUG_RELAY = r"""
+// main.js's side (debug.js), with a real program: it connects, gets its first messages, and what it says comes back.
+const { spawn } = require('child_process');
+const net = require('net');
+const path = require('path');
+const debug = require(process.argv[1]);
+const [python, tuffPy, folder] = process.argv.slice(2);
+const main = path.join(folder, 'main.tuf');
+const events = [];
+let child = null;
+const done = (out) => { console.log(JSON.stringify({ ...out, events })); process.exit(0); };
+setTimeout(() => { if (child) child.kill(); done({ timeout: true }); }, 30000);
+const refused = (port) => new Promise((resolve) => {
+  const sock = net.connect(port, '127.0.0.1', () => { sock.destroy(); resolve(false); });
+  sock.on('error', () => resolve(true));
+});
+(async () => {
+  const oldPort = await debug.open([{ cmd: 'continue' }], () => events.push('old'));  // a run replaced before its program connects
+  const port = await debug.open([{ cmd: 'setBreakpoints', file: main, lines: [15] }, { cmd: 'continue' }], (msg) => {
+    events.push(msg.event + (msg.line ? ':' + msg.line : ''));
+    if (msg.event === 'paused') { debug.send({ cmd: 'setBreakpoints', file: main, lines: [] }); debug.send({ cmd: 'continue' }); }
+  });
+  const oldGone = await refused(oldPort);
+  let out = '';
+  child = spawn(python, [tuffPy, main], { cwd: folder, env: { ...process.env, TUFF_DEBUG: String(port), PYTHONIOENCODING: 'utf-8' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  child.stdout.on('data', (d) => (out += d));
+  child.on('close', (code) => setTimeout(async () => done({ code, out, oldGone, sent: debug.send({ cmd: 'continue' }), closed: await refused(port) }), 300));
+})();
+"""
+
+
+def debug_relay(c):
+    """main.js's side, with Node: debug.js's server gives the program its first messages and passes on what it says."""
+    folder = debug_project("relay", {"main.tuf": DEBUG_MAIN, "money.tuf": DEBUG_MONEY})
+    relay = os.path.join(REPO, "tuffcode", "debug.js")
+    if RUNTIME:
+        c.check(True, "debug.js with Node: skipped with --runtime (it runs tuff.py)")
+        return
+    try:
+        p = subprocess.run(["node", "-e", DEBUG_RELAY, relay, sys.executable, TUFF, folder], capture_output=True, text=True,
+                           encoding="utf-8", timeout=60, env={**os.environ, "TUFF_NO_SOUND": "1"})
+        got = json.loads(p.stdout.strip().splitlines()[-1])
+    except (FileNotFoundError, ValueError, IndexError, subprocess.TimeoutExpired) as exc:
+        got = {"error": str(exc), "stderr": locals().get("p") and p.stderr[-400:]}
+    c.check(not got.get("timeout") and got.get("code") == 0 and got.get("events") == ["breakpoints", "running", "paused:15", "breakpoints",
+                                                                                     "running", "ended"] and got.get("out", "").split() == ["12", "6"],
+            "debug.js: the program connects, gets its breakpoints and the start, pauses, is sent Continue, and ends", got)
+    c.check(got.get("oldGone") is True and got.get("closed") is True and got.get("sent") is False,
+            "...a new run closes the last one's server, a server takes one program, and nothing is sent once it's gone", got)
+
+
+def t_debug(c):
+    """Console only, no window: 1.5.0's debugger, with this test as TuffCode (DebugLink). In both runtimes:
+    breakpoints in two files and the Variables panel's values (kinds' objects, lists and dictionaries open up), the
+    call stack and its frames' names, Step Over, Into and Out across functions, an action and an imported file, pause
+    on error, input() while debugging, and Watch it run. Then Pause and Stop, a deep call stack, tterm and tmusic
+    programs, TuffCode going away, --debug, where breakpoints stop, its speed, and main.js's side (debug.js, Node)."""
+    for slow in (False, True):
+        mode = "the tree walker" if slow else "compiled"
+        debug_breakpoints(c, slow, mode)
+        debug_steps(c, slow, mode)
+        debug_errors(c, slow, mode)
+        debug_input(c, slow, mode)
+        debug_watch(c, slow, mode)
+    debug_breakpoints(c, False, "compiled", crlf=True)
+    debug_places(c)
+    debug_more(c)
+    debug_speed(c)
+    debug_relay(c)
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
@@ -8150,6 +8800,7 @@ TESTS.update({"modules": t_modules})  # 1.5.0: your own files as libraries (impo
 TESTS.update({"kinds": t_kinds})  # 1.5.0: your own objects
 TESTS.update({"tterm": t_tterm})  # 1.5.0: terminal games
 TESTS.update({"tmusic": t_tmusic})  # 1.5.0: music from notes
+TESTS.update({"debug": t_debug})  # 1.5.0: the debugger
 
 
 def main():
