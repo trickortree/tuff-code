@@ -1335,27 +1335,30 @@ def truthy(v):
 
 
 def make_file_members(interp):
-    """file (1.4.0): text files and saved data, in the program's own folder unless the path says otherwise. When
-    interp.writes is False (Tuff Engine's preview, and tuff_run for AI agents: TUFF_NO_WRITES=1) the writes are kept
-    in memory for this run only: later reads see them, and nothing on disk changes."""
+    """file (1.4.0): text files and saved data, in the program's own folder unless the path says otherwise (a built
+    app saves in a folder of its own, see Runtime.path). When interp.writes is False (Tuff Engine's preview, and
+    tuff_run for AI agents: TUFF_NO_WRITES=1) the writes are kept in memory for this run only: later reads see them,
+    and nothing on disk changes."""
     rt = interp.rt
     memory = {}  # with writes off: a file's text as this run left it, or None for one it deleted
 
     def where(path, what):
+        """Where the file is read from, where it's written, and its name as the program gave it. A built app writes in
+        a folder of its own, and reads a file packed with it until it has its own copy (see Runtime.path)."""
         p = rt.text(path)
         if not p.strip():
             raise TuffError(f"{what} needs a file name, like \"notes.txt\".")
-        return rt.path(p), p
+        return rt.path(p), rt.save_path(p), p
 
     def spot(full):
         return os.path.normcase(os.path.abspath(full))
 
     def read(path, what="file.read"):
-        full, p = where(path, what)
-        if spot(full) in memory:
-            if memory[spot(full)] is None:
+        full, own, p = where(path, what)
+        if spot(own) in memory:
+            if memory[spot(own)] is None:
                 raise TuffError(f"Couldn't find {p} in your project folder. Check first with file.exists(\"{p}\").")
-            return memory[spot(full)]
+            return memory[spot(own)]
         try:
             interp.room(os.path.getsize(full))
             with open(full, "rb") as f:
@@ -1380,17 +1383,17 @@ def make_file_members(interp):
             return data.decode("cp1252", errors="replace"), "cp1252"
 
     def write_text(path, text, mode, what):
-        full, p = where(path, what)
+        full, own, p = where(path, what)
         if not interp.writes:
-            had = memory.get(spot(full)) if spot(full) in memory else (read(path, what) if mode == "a" and os.path.isfile(full) else "")
-            memory[spot(full)] = (had or "") + text if mode == "a" else text
-            interp.room(len(memory[spot(full)]))  # Tuff Engine's preview counts what it keeps
+            had = memory.get(spot(own)) if spot(own) in memory else (read(path, what) if mode == "a" and os.path.isfile(full) else "")
+            memory[spot(own)] = (had or "") + text if mode == "a" else text
+            interp.room(len(memory[spot(own)]))  # Tuff Engine's preview counts what it keeps
             return None
         try:
-            folder = os.path.dirname(full)
+            folder = os.path.dirname(own)
             if folder:
                 os.makedirs(folder, exist_ok=True)
-            with open(full, mode, encoding="utf-8", newline="") as f:
+            with open(own, mode, encoding="utf-8", newline="") as f:
                 f.write(text)
         except OSError as exc:
             raise TuffError(f"Couldn't write {p}: {exc.strerror or exc}.")
@@ -1400,26 +1403,27 @@ def make_file_members(interp):
         return write_text(path, rt.text(text), "w", "file.write")
 
     def add(path, text):  # adds a line to the end (makes the file if it isn't there), on a line of its own
-        full, p = where(path, "file.add")
+        full, own, p = where(path, "file.add")
         line = rt.text(text)
         if not interp.writes:
             had = read(path, "file.add") if exists(path) else ""
             return write_text(path, ("\n" if had and not had.endswith("\n") else "") + line + "\n", "a", "file.add")
         try:  # in the file's own way of saving text and ending lines, so a UTF-16 or Excel file stays readable
             with open(full, "rb") as f:
-                had, how = decode(f.read(), p, "file.add")
+                data = f.read()
+            had, how = decode(data, p, "file.add")
         except FileNotFoundError:
-            had, how = "", "utf-8"
+            data, had, how = b"", "", "utf-8"
         except OSError as exc:
             raise TuffError(f"Couldn't read {p}: {exc.strerror or exc}.")
         end = "\r\n" if "\r\n" in had else "\n"
         chunk = ("" if not had or had.endswith("\n") else end) + line.replace("\n", end) + end
         try:
-            folder = os.path.dirname(full)
+            folder = os.path.dirname(own)
             if folder:
                 os.makedirs(folder, exist_ok=True)
-            with open(full, "ab") as f:
-                f.write(chunk.encode(how, errors="replace"))
+            with open(own, "ab") as f:  # (a built app's own copy of a file packed with it starts as that file)
+                f.write((data if own != full else b"") + chunk.encode(how, errors="replace"))
         except OSError as exc:
             raise TuffError(f"Couldn't write {p}: {exc.strerror or exc}.")
         return None
@@ -1429,21 +1433,23 @@ def make_file_members(interp):
         return text.split("\n")[:-1] if text.endswith("\n") else (text.split("\n") if text else [])
 
     def exists(path):
-        full = where(path, "file.exists")[0]
-        if spot(full) in memory:
-            return memory[spot(full)] is not None
+        full, own, _ = where(path, "file.exists")
+        if spot(own) in memory:
+            return memory[spot(own)] is not None
         return os.path.isfile(full)
 
     def delete(path):
-        full, p = where(path, "file.delete")
+        full, own, p = where(path, "file.delete")
         if not interp.writes:
             if not exists(path):
                 raise TuffError(f"Couldn't find {p} to delete it.")
-            memory[spot(full)] = None
+            memory[spot(own)] = None
             return None
         try:
-            os.remove(full)
+            os.remove(own)
         except FileNotFoundError:
+            if own != full:  # only in what a built app is packed with, which stays: it has no copy of its own to delete
+                return None
             raise TuffError(f"Couldn't find {p} to delete it.")
         except OSError as exc:
             raise TuffError(f"Couldn't delete {p}: {exc.strerror or exc}.")
@@ -1482,7 +1488,7 @@ def make_file_members(interp):
         return write_text(path, text, "w", "file.save")
 
     def load(path, default=None):
-        full, p = where(path, "file.load")
+        p = where(path, "file.load")[2]
         if not exists(path) and default is not None:
             return default
         text = read(path, "file.load")
@@ -2418,8 +2424,18 @@ class Runtime:
         return Builtin(name, fn)
 
     def path(self, p):
+        """Where the program's file p is read from: a relative path is from the program's folder. A built app reads
+        its own copy first (see save_path), and the one packed with it until it has saved one."""
         p = self.text(p)
-        return p if os.path.isabs(p) else os.path.join(self.interp.base_dir, p)
+        own = self.save_path(p)
+        packed = p if os.path.isabs(p) else os.path.join(self.interp.base_dir, p)
+        return packed if own != packed and not os.path.exists(own) and os.path.exists(packed) else own
+
+    def save_path(self, p):
+        """Where the program's file p is written: next to the program, or in a built app's own folder (data_dir), since
+        the folder a built app runs from is unpacked again each time it starts."""
+        p = self.text(p)
+        return p if os.path.isabs(p) else os.path.join(self.interp.data_dir or self.interp.base_dir, p)
 
     def on_finish(self, fn):
         self.finish_hooks.append(fn)
@@ -2623,6 +2639,8 @@ class Interpreter:
         self.made_kinds = {}  # id(kind node): (node, its Kind), made once (see s_kind)
         if os.environ.get("TUFF_NO_WRITES") == "1":  # tuff_run for AI agents: file writes stay in memory
             self.writes = False
+        # A built app's own folder, which build.js's launcher names: the files the program saves go there (save_path).
+        self.data_dir = os.environ.get("TUFF_DATA_DIR") or None
         takes_err = {"number", "num", "int", "text", "str", "print"}  # they hand an err back, or show it as "err"
         for name, fn in builtins.items():
             (self.own_names if name in OWN_NAME_BUILTINS else self.globals).vars[name] = Builtin(name, fn, name in takes_err)

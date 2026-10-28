@@ -3,7 +3,8 @@
 // build_exe_test.mjs) and its --check is real, but PyInstaller is stood in for: the stand-in lays the --add-data files
 // out in a folder the way a --onefile app unpacks them (its _MEIPASS), with the launcher and the runtime beside them.
 // Console programs then run from that folder for real, and as_windowed.py runs the launcher as an app with no console
-// would, with its error box stood in for, so nothing ever opens.
+// would, with its error box stood in for, so nothing ever opens. 1.5.0: where a built app keeps what it saves (run frozen,
+// unpacked afresh each time), and a project folder with ";" in its path.
 //   node tuffcode/test/tgame/build_exe_pack_test.mjs [--keep]
 // About 10 s. Exits 1 if a check failed. The real builds (PyInstaller, and the apps opened) are build_exe_test.mjs.
 import fs from 'node:fs';
@@ -35,30 +36,37 @@ const electron = {
   nativeImage: { createFromPath: (file) => image(fs.existsSync(file) ? fs.readFileSync(file) : null) },
 };
 
-// PyInstaller's stand-in: the app's files laid out in apps/<name> (what the app unpacks to), and an empty .exe.
+// PyInstaller's stand-in: the app's files laid out in archives/<name> (what the .exe holds), unpacked into apps/<name>
+// as the app does each time it starts (unpack), and an empty .exe.
 let lastBuild = null;
 function standInBuild(args) {
   const value = (flag) => args[args.indexOf(flag) + 1];
   const name = value('--name');
+  const archive = path.join(scratch, 'archives', name);
   const bundle = path.join(scratch, 'apps', name);
-  fs.rmSync(bundle, { recursive: true, force: true });
-  fs.mkdirSync(bundle, { recursive: true });
+  fs.rmSync(archive, { recursive: true, force: true });
+  fs.mkdirSync(archive, { recursive: true });
   const data = [];
   args.forEach((a, i) => { if (a === '--add-data') data.push(args[i + 1]); });
   for (const d of data) {
     const from = d.slice(0, d.lastIndexOf(SEP));
-    const dest = path.join(bundle, ...d.slice(d.lastIndexOf(SEP) + 1).split('/'));
+    const dest = path.join(archive, ...d.slice(d.lastIndexOf(SEP) + 1).split('/'));
     fs.mkdirSync(dest, { recursive: true });
     if (fs.statSync(from).isDirectory()) fs.cpSync(from, dest, { recursive: true });
     else fs.copyFileSync(from, path.join(dest, path.basename(from)));
   }
   const work = path.dirname(args.at(-1)); // the launcher, with the runtime's modules beside it
-  for (const f of fs.readdirSync(work)) if (f.endsWith('.py')) fs.copyFileSync(path.join(work, f), path.join(bundle, f));
+  for (const f of fs.readdirSync(work)) if (f.endsWith('.py')) fs.copyFileSync(path.join(work, f), path.join(archive, f));
+  const unpack = () => {
+    fs.rmSync(bundle, { recursive: true, force: true });
+    fs.cpSync(archive, bundle, { recursive: true });
+  };
+  unpack();
   fs.mkdirSync(value('--distpath'), { recursive: true });
   const exe = path.join(value('--distpath'), name + (process.platform === 'win32' ? '.exe' : ''));
   if (process.platform === 'darwin' && args.includes('--windowed')) fs.mkdirSync(`${exe}.app`, { recursive: true });
   else fs.writeFileSync(exe, 'a stand-in');
-  lastBuild = { args, data, bundle, launcher: path.join(bundle, path.basename(args.at(-1))) };
+  lastBuild = { args, data, bundle, unpack, exe, launcher: path.join(bundle, path.basename(args.at(-1))) };
 }
 function standInSpawn(cmd, args, opts) {
   if (args.includes('--check')) return childProcess.spawn(cmd, args, opts); // the real check (it opens nothing)
@@ -102,7 +110,7 @@ async function buildApp(file, name) {
 }
 const write = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
 const env = { ...process.env };
-for (const k of ['TUFF_IDE', 'TUFF_BASE_DIR', 'TUFF_NO_WRITES']) delete env[k];
+for (const k of ['TUFF_IDE', 'TUFF_BASE_DIR', 'TUFF_NO_WRITES', 'TUFF_DATA_DIR']) delete env[k];
 const runApp = (app) => spawnSync(PY[0], [...PY.slice(1), app.launcher], { cwd: scratch, env, input: '', encoding: 'utf8', timeout: 30000, windowsHide: true });
 const said = (r) => r.stdout.replace(/\r/g, '').trim().split('\n').join('|');
 const inApp = (app, rel) => fs.existsSync(path.join(app.bundle, ...rel.split('/')));
@@ -208,6 +216,116 @@ if (plain.app) {
     && /Tuff error: Tuff itself had a problem \(running the program\): RuntimeError: the engine broke/.test(s.stderr),
   'with a console there\'s no box: the problem and its traceback are printed', s);
 }
+
+// 1.5.0: a built app runs from the folder it unpacks into each time it starts, which goes when it closes. So what its
+// program saves goes in the folder its .exe is in (on a Mac, the one its .app is in), or in TuffApps in the user's data
+// folder when that one can't be written to, and the next start reads it back, starting from the files packed with it.
+// Its own .tuf files still come from the app. Run here as the real app runs: frozen, unpacked afresh each time, its .exe
+// in dist, started from another folder; and the user's data folder is one of the test's own.
+console.log('== Build exe: a built app keeps what it saves');
+const BOOT = ['import runpy, sys', 'sys.frozen, sys._MEIPASS, sys.executable = True, sys.argv[1], sys.argv[2]', 'sys.path.insert(0, sys.argv[1])',
+  'launcher, sys.argv = sys.argv[3], sys.argv[2:3]', 'runpy.run_path(launcher, run_name="__main__")'].join('\n');
+const elsewhere = path.join(scratch, 'Elsewhere');
+fs.mkdirSync(elsewhere, { recursive: true });
+const userEnv = { ...env, APPDATA: path.join(scratch, 'appdata'), HOME: path.join(scratch, 'home'), XDG_DATA_HOME: path.join(scratch, 'xdg'),
+  TUFF_NO_SOUND: '1', TUFF_MUSIC_DIR: path.join(scratch, 'music') };
+const tuffApps = process.platform === 'win32' ? path.join(userEnv.APPDATA, 'TuffApps')
+  : process.platform === 'darwin' ? path.join(userEnv.HOME, 'Library', 'Application Support', 'TuffApps') : path.join(userEnv.XDG_DATA_HOME, 'TuffApps');
+const runFrozen = (app, exe) => {
+  app.unpack();
+  return spawnSync(PY[0], [...PY.slice(1), '-c', BOOT, app.bundle, exe, app.launcher], { cwd: elsewhere, env: userEnv, input: '', encoding: 'utf8', timeout: 30000, windowsHide: true });
+};
+const saidFrozen = (r) => r.stdout.replace(/\r/g, '').split('\n').filter((x) => x.trim() && x !== 'Press Enter to close...').join('|');
+const text = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').replace(/\r/g, '') : null);
+const keepDir = path.join(scratch, 'Keeps Files');
+write(path.join(keepDir, 'notes.txt'), 'packed line\n');
+write(path.join(keepDir, 'prices.json'), '{"apple": 0.45}\n');
+write(path.join(keepDir, 'tune.wav'), 'a tune it was built with'); // (song:save writes a new one: not over the packed one)
+write(path.join(keepDir, 'helper.tuf'), 'func hello():\n    return "the helper.tuf it was built with"\n');
+write(path.join(keepDir, 'keeper.tuf'), ['import helper.tuf', 'mention tmusic', 'runs = file.load("runs.json", 0) + 1', 'file.save("runs.json", runs)',
+  'file.add("notes.txt", f"run {runs}")', 'say f"run {runs}, {helper.hello()}"', 'apple = file.load("prices.json")["apple"]',
+  'notes = file.lines("notes.txt"):join(" / ")', 'say f"apple {apple}, notes {notes}"', 'if runs is 1:', '    file.write("gone.txt", "for a moment")',
+  '    file.delete("gone.txt")', '    file.delete("prices.json")', '    song = tmusic.song(120)', '    song:track("piano", "C4")', '    song:save("tune.wav")',
+  'say f"{file.exists("gone.txt")} {file.exists("prices.json")} {file.exists("tune.wav")}"', ''].join('\n'));
+const keep = await buildApp(path.join(keepDir, 'keeper.tuf'), 'Keeps Files Test');
+check(keep.ok && keep.app, 'it builds', keep.message);
+if (keep.app) {
+  const dist = path.dirname(keep.app.exe);
+  // On a Mac the .exe is the program inside name.app (what a windowed build makes): its files go beside the .app.
+  const exe = process.platform === 'darwin' ? path.join(dist, 'Keeps Files Test.app', 'Contents', 'MacOS', 'Keeps Files Test') : keep.app.exe;
+  fs.mkdirSync(path.dirname(exe), { recursive: true });
+  let r = runFrozen(keep.app, exe);
+  check(r.status === 0 && saidFrozen(r) === 'run 1, the helper.tuf it was built with|apple 0.45, notes packed line / run 1|false true true',
+    'the first run reads the files packed with it (prices.json, notes.txt), and file.delete leaves a packed file there',
+    { status: r.status, stdout: r.stdout, stderr: r.stderr });
+  const mine = (f) => path.join(dist, f);
+  check(text(mine('runs.json')) === '1' && text(mine('notes.txt')) === 'packed line\nrun 1\n' && text(mine('tune.wav'))?.startsWith('RIFF')
+    && !fs.existsSync(mine('gone.txt')), 'file.save, file.add (after the packed text) and song:save go next to the .exe', fs.readdirSync(dist));
+  const inside = (f) => fs.existsSync(path.join(keep.app.bundle, f));
+  check(!inside('runs.json') && text(path.join(keep.app.bundle, 'tune.wav')) === 'a tune it was built with'
+    && text(path.join(keep.app.bundle, 'notes.txt')) === 'packed line\n' && inside('prices.json')
+    && !fs.readdirSync(elsewhere).length && (process.platform !== 'darwin' || !fs.readdirSync(path.dirname(exe)).length),
+  'and none of it goes in the folder the app unpacks into (it goes when the app closes), inside a Mac\'s .app, or where it was started from',
+  { unpacked: fs.readdirSync(keep.app.bundle), elsewhere: fs.readdirSync(elsewhere) });
+  write(mine('helper.tuf'), 'func hello():\n    return "a helper.tuf next to the .exe"\n');
+  r = runFrozen(keep.app, exe);
+  check(r.status === 0 && saidFrozen(r) === 'run 2, the helper.tuf it was built with|apple 0.45, notes packed line / run 1 / run 2|false true true'
+    && text(mine('runs.json')) === '2', 'the next start (unpacked afresh) reads them back, and its own .tuf files still come from the app',
+  { status: r.status, stdout: r.stdout, stderr: r.stderr });
+  // A folder that can't be written to (Program Files, or a Mac app run where it was downloaded): here one that isn't there.
+  const locked = path.join(scratch, 'Not There', path.basename(keep.app.exe));
+  const own = path.join(tuffApps, 'Keeps Files Test');
+  check(!fs.existsSync(tuffApps), 'while the .exe\'s folder can be written to, nothing goes in TuffApps', tuffApps);
+  r = runFrozen(keep.app, locked);
+  const again = runFrozen(keep.app, locked);
+  check(r.status === 0 && saidFrozen(r).startsWith('run 1,') && saidFrozen(again).startsWith('run 2,') && text(path.join(own, 'runs.json')) === '2'
+    && text(path.join(own, 'notes.txt')) === 'packed line\nrun 1\nrun 2\n',
+  'when the .exe\'s folder can\'t be written to, they go in TuffApps/<the app\'s name> in the user\'s data folder, and are read back',
+  { first: r.stdout + r.stderr, again: again.stdout + again.stderr, own: fs.existsSync(own) && fs.readdirSync(own) });
+  if (plain.app) {
+    r = runFrozen(plain.app, path.join(scratch, 'Not There', 'Plain Pack Test.exe'));
+    check(r.status === 0 && saidFrozen(r) === 'words next to it|and one in sprites' && !fs.existsSync(path.join(tuffApps, 'Plain Pack Test')),
+      'an app that saves nothing makes no folder there', { stdout: r.stdout, stderr: r.stderr });
+  }
+}
+// Not built (TuffCode's Run): the program's files stay next to it, as before.
+const notBuilt = spawnSync(PY[0], [...PY.slice(1), path.join(APP_DIR, '..', 'tuff.py'), 'keeper.tuf'], { cwd: keepDir, env: userEnv, input: '', encoding: 'utf8', timeout: 30000, windowsHide: true });
+check(notBuilt.status === 0 && said(notBuilt).endsWith('false false true') && text(path.join(keepDir, 'runs.json')) === '1'
+  && text(path.join(keepDir, 'notes.txt')) === 'packed line\nrun 1\n' && !fs.existsSync(path.join(keepDir, 'prices.json')),
+'not built, a program\'s files stay next to it (and file.delete deletes)', { stdout: notBuilt.stdout, stderr: notBuilt.stderr, files: fs.readdirSync(keepDir) });
+
+// A project folder with PyInstaller's separator in its path (";", ":" on a Mac), from Open Folder or a folder chosen for
+// New Project: --add-data can't name its files, so Build exe packs copies of them. The app's name drops it.
+console.log(`== Build exe: a project folder with ${SEP} in its path`);
+// How PyInstaller reads --add-data (makespec.py's SourceDestAction): at its one ":" or ";" (":" on a Mac) that isn't a
+// drive's (C:\), and it refuses one with more.
+const splitsOnce = (d) => [...d.matchAll(process.platform === 'win32' ? /(^\w:[/\\])|[:;]/g : /(^\w:[/\\])|:/g)].filter((m) => !m[1]).length === 1;
+const semiDir = path.join(scratch, `Shop${SEP} Cafe`);
+write(path.join(semiDir, 'money.tuf'), 'func as_money(x):\n    return f"{x:money}"\n');
+write(path.join(semiDir, 'words.txt'), 'words next to it');
+write(path.join(semiDir, 'data', 'info.txt'), 'and one in data');
+write(path.join(semiDir, 'shop.tuf'), 'import money.tuf\nsay money.as_money(1.5)\nsay file.read("words.txt")\nsay file.read("data/info.txt")\n');
+const semi = await buildApp(path.join(semiDir, 'shop.tuf'), `Shop${SEP} Cafe`);
+check(semi.ok && semi.app, 'it builds', semi.message);
+if (semi.app) {
+  check(semi.app.data.every(splitsOnce), `every --add-data has one ${SEP}, so PyInstaller can read it`, semi.app.data);
+  check(path.basename(semi.app.exe) === `Shop Cafe${process.platform === 'win32' ? '.exe' : ''}` && !semi.app.data.some((d) => d.includes(`Shop${SEP}`)),
+    `the app is called Shop Cafe, and it packs copies of the project's files`, { exe: semi.app.exe, data: semi.app.data });
+  check(['program.tuf', 'money.tuf', 'words.txt', 'data/info.txt'].every((f) => inApp(semi.app, f)) && !inApp(semi.app, 'packed'),
+    'they\'re where they belong in the app: money.tuf beside the program, data/info.txt in data', fs.readdirSync(semi.app.bundle));
+  const r = runApp(semi.app);
+  check(r.status === 0 && said(r) === '$1.50|words next to it|and one in data', 'and the program runs in the app, with all three', { status: r.status, stdout: r.stdout, stderr: r.stderr });
+}
+// With a file from the folder above too, the program's own folder in the app (_project/Shop; Cafe) has the separator.
+write(path.join(scratch, 'Semi Up', 'shared.txt'), 'from the folder above');
+write(path.join(scratch, 'Semi Up', `Shop${SEP} Cafe`, 'up.tuf'), 'say file.read("../shared.txt")\n');
+const semiUp = await buildApp(path.join(scratch, 'Semi Up', `Shop${SEP} Cafe`, 'up.tuf'), 'Semi Up Test');
+if (semiUp.app) {
+  const r = runApp(semiUp.app);
+  check(semiUp.app.data.every(splitsOnce) && inApp(semiUp.app, `_project/Shop${SEP} Cafe/program.tuf`) && inApp(semiUp.app, '_project/shared.txt')
+    && r.status === 0 && said(r) === 'from the folder above', `with a "../" file, the program goes in _project/Shop${SEP} Cafe and finds it there`,
+  { data: semiUp.app.data, stdout: r.stdout, stderr: r.stderr });
+} else check(false, 'the program with a "../" file builds', semiUp.message);
 
 // 1.5.0: a program in several files (import money.tuf). The files it imports go in the app beside it, in the folders they're
 // in (libs/ too), and only those: a .tuf file it doesn't import stays out.

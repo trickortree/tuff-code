@@ -1563,7 +1563,7 @@
     ['build', api.platform === 'win32' ? 'Build your .exe' : 'Build your app'],
   ];
   const bd = { file: null, icon: null, windowed: true, building: false, steps: {}, last: null };
-  const exeName = (n) => n.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'MyTuffApp';
+  const exeName = (n) => n.replace(/[<>:"/\\|?*;]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'MyTuffApp';
   const buildPrefs = () => (state.settings.builds || {})[state.root] || {};
 
   function setBottomTab(tab) {

@@ -47,7 +47,7 @@ const LONGEST = 80; // letters in a project's name (the gallery's name box takes
 // What's wrong with a project's name (it becomes a folder's name), or null.
 function nameProblem(name) {
   if (!name) return 'Give the project a name.';
-  if (/[<>:"/\\|?*\u0000-\u001f]/.test(name)) return 'A name can\'t have < > : " / \\ | ? or * in it.';
+  if (/[<>:"/\\|?*;\u0000-\u001f]/.test(name)) return 'A name can\'t have < > : " / \\ | ? * or ; in it.'; // (; too: Build exe's tools split paths at it)
   if (/^\.+$/.test(name)) return 'A name needs a letter or a number in it.';
   if (/[. ]$/.test(name)) return 'A name can\'t end with a dot.';
   if (RESERVED.test(name)) return `${name} is a name Windows keeps for itself. Try another one.`;
