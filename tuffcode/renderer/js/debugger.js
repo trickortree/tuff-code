@@ -122,10 +122,22 @@
   }
 
   function toggleHere() {
+    // (Design Studio or Tuff Engine in front: the code editor is hidden, and may hold another file)
+    if (ide.studioVisible() || ide.engineVisible()) { ide.toast('Show the code (click its tab) to put a breakpoint on a line.'); return; }
     const model = editor?.getModel();
     const path = modelPath(model);
     if (!isTuf(path)) { ide.toast('Breakpoints go on the lines of a .tuf file.'); return; }
     toggle(path, editor.getPosition().lineNumber);
+  }
+
+  // A file's breakpoints on these lines (Auto Code Sort puts each back on its own line, ide.js). The lines they were
+  // hollow on aren't theirs any more: the program says again at the next Debug.
+  function setLines(path, lines) {
+    const e = entry(path);
+    const set = new Set(lines);
+    e.off.clear();
+    draw(e, set);
+    if (live() && !e.changed) api.debug.send({ cmd: 'setBreakpoints', file: e.path, lines: [...set].sort((a, b) => a - b) });
   }
 
   // Where the program says each breakpoint stops: one on a blank line, a comment or a func line moves to the
@@ -268,6 +280,9 @@
     render(false);
   });
   window.addEventListener('tuff:run-finished', (ev) => { if (S.id && live()) ended(ev.detail?.code); });
+  // Another folder opened (New Project, Open Folder, ide.js): the program being debugged is the old project's, so it
+  // stops, and what it still sends on its way out is left alone.
+  window.addEventListener('tuff:folder-opened', () => { if (live()) { ide.stopRun(); ended(-1); } });
 
   // A file or folder renamed in the project tree (ide.js): its breakpoints go with it.
   window.addEventListener('tuff:renamed', (ev) => {
@@ -349,9 +364,11 @@
   let litSeq = 0;
   async function showLine(file, n, kind, focus) {
     const seq = ++litSeq;
+    // (with a dialog open, New Project or Search Everywhere say, the line is lit and shown, and the keyboard stays there)
+    const take = focus && !ide.overlayOpen?.();
     // (Design Studio or Tuff Engine in front: the code goes in front, even when the editor has the file already)
     if (key(modelPath(editor.getModel()) || '') !== key(file) || ide.studioVisible() || ide.engineVisible()) {
-      await ide.openFile(file, 0, { focus });
+      await ide.openFile(file, 0, { focus: take });
       if (seq !== litSeq) return;
     }
     const model = editor.getModel();
@@ -364,7 +381,7 @@
       overviewRuler: { color: ruler, position: monaco.editor.OverviewRulerLane.Full } } }]) };
     if (focus) {
       editor.setPosition({ lineNumber: n, column: 1 });
-      editor.focus();
+      if (take) editor.focus();
     }
     editor.revealLineInCenterIfOutsideViewport(n);
   }
@@ -614,9 +631,10 @@
     },
     start,
     toggle,
+    setLines,
     // A red dot on this line of the model (Design Studio leaves a click on one to the debugger, studio.js).
     hasBreakpoint: (model, n) => isTuf(modelPath(model)) && has(modelPath(model), n),
-    // The breakpoints, by file: [{ path, lines }] (for the tests and Learn).
+    // The breakpoints, by file: [{ path, lines }] (for the tests, Learn and Auto Code Sort).
     breakpoints: () => [...files.values()].map((e) => ({ path: e.path, lines: [...linesOf(e)].sort((a, b) => a - b) })).filter((b) => b.lines.length),
     state: () => ({ state: S.state, watching: S.watching, reason: S.msg?.reason ?? null, file: S.msg?.file ?? null, line: S.msg?.line ?? null, frame: S.frame }),
   };

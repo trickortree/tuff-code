@@ -8982,8 +8982,10 @@ const newModel = (path, n, text) => { const m = new Model(path, n, text); models
 const renamed = new Map();
 const pathOf = (m) => renamed.get(m) || m.uri.fsPath;
 const settings = {};
+let overlay = false, shown = null; // a dialog open (TuffIDE.overlayOpen), and Design Studio or Tuff Engine on screen
 const ide = { settings: () => settings, saveSettings: (p) => Object.assign(settings, p), toast: (m) => toasts.push(m), runTarget: () => MAIN,
-  studioVisible: () => false, engineVisible: () => false, pathOf: (m) => (models.includes(m) && !m.disposed ? pathOf(m) : null),
+  studioVisible: () => shown === 'studio', engineVisible: () => shown === 'engine', overlayOpen: () => overlay,
+  pathOf: (m) => (models.includes(m) && !m.disposed ? pathOf(m) : null),
   runFile: async (p, opts) => { runs.push([p, opts]); return ++runId; }, stopRun: () => sent.push({ stop: true }),
   openFile: async (p, line, opts) => { opened.push([p, line, opts && opts.focus]); ed.model = models.find((m) => pathOf(m) === p && !m.disposed) || newModel(p, 5); return {}; },
   addCommand: (id, def) => { commands[id] = def; }, monacoReady: async () => monaco, editor: () => ed, activeFile: () => pathOf(ed.model) };
@@ -9197,6 +9199,64 @@ const out = {};
   out.reversed = { customizer: await customizer(() => glyph(5)), bps: D.breakpoints().filter((b) => b.path === SHOP) };
   out.studioWidget = { customizer: await customizer(() => glyph(3)), bps: D.breakpoints().filter((b) => b.path === SHOP) };
   ed.on.down.reverse();
+
+  // ---- a pause while a dialog is open (New Project, Search Everywhere...): the line is lit, the keyboard stays there
+  commands.debug.run();
+  await tick();
+  fire('tuff:run-started', { id: runId, file: MAIN, debug: true });
+  const money = models.find((m) => m.uri.fsPath === MONEY && !m.disposed);
+  const at = (line) => ({ index: 0, name: 'money.tuf', file: MONEY, line, top: true });
+  overlay = true;
+  const focused = ed.focused;
+  onEvent({ id: runId, event: 'paused', reason: 'breakpoint', file: MONEY, line: 2, col: 1, stack: [at(2)], scopes: [] });
+  await tick();
+  out.dialog = { opened: opened.slice(-1)[0], focused: ed.focused - focused, line: lit(money), pos: ed.pos, status: status() };
+  onEvent({ id: runId, event: 'paused', reason: 'step', file: MONEY, line: 3, col: 1, stack: [at(3)], scopes: [] }); // (the file on screen)
+  await tick();
+  out.dialogSame = { focused: ed.focused - focused, line: lit(money), pos: ed.pos };
+  overlay = false;
+  onEvent({ id: runId, event: 'paused', reason: 'step', file: MONEY, line: 4, col: 1, stack: [at(4)], scopes: [] });
+  await tick();
+  out.noDialog = { focused: ed.focused - focused, line: lit(money) };
+
+  // ---- F9 while Design Studio or Tuff Engine shows (the code editor hidden): only a toast
+  ed.model = again;
+  ed.pos = { lineNumber: 7, column: 1 };
+  const bpsBefore = JSON.stringify(D.breakpoints());
+  const toastsAt = toasts.length;
+  shown = 'studio';
+  commands.toggleBreakpoint.run();
+  const studioSame = JSON.stringify(D.breakpoints()) === bpsBefore;
+  shown = 'engine';
+  commands.toggleBreakpoint.run();
+  shown = null;
+  out.hiddenF9 = { same: [studioSame, JSON.stringify(D.breakpoints()) === bpsBefore], toasts: toasts.splice(toastsAt) };
+  commands.toggleBreakpoint.run();
+  out.shownF9 = D.breakpoints().find((b) => b.path === MAIN).lines;
+  commands.toggleBreakpoint.run();
+
+  // ---- Auto Code Sort puts each breakpoint back on its line (TuffDebug.setLines, ide.js)
+  onEvent({ id: runId, event: 'breakpoints', file: MAIN, lines: [[3, null]] }); // (hollow: the program never stops there)
+  sent.length = 0;
+  D.setLines(MAIN, [4, 12, 12, 21]);
+  out.setLines = { bps: D.breakpoints().find((b) => b.path === MAIN).lines, dots: dots(again), sent: sent.slice() };
+  again.edit();
+  sent.length = 0;
+  D.setLines(MAIN, [5]);
+  out.setLinesEdited = { bps: D.breakpoints().find((b) => b.path === MAIN).lines, sent: sent.slice() };
+  again.edit(-1);
+
+  // ---- another folder opened (New Project, Open Folder): the program being debugged stops
+  sent.length = 0;
+  fire('tuff:folder-opened', { dir: 'C:\\other' });
+  out.folder = { sent: sent.slice(), state: D.state().state, status: status(), line: lit(money).length };
+  const openedAt = opened.length;
+  onEvent({ id: runId, event: 'paused', reason: 'breakpoint', file: MONEY, line: 2, col: 1, stack: [at(2)], scopes: [] }); // (on its way already)
+  await tick();
+  out.folderLate = { state: D.state().state, opened: opened.length - openedAt, line: lit(money).length };
+  sent.length = 0;
+  fire('tuff:folder-opened', { dir: 'C:\\another' });
+  out.folderIdle = sent.slice();
   out.toasts = toasts;
   out.errors = ed.errors;
   console.log(JSON.stringify(out));
@@ -9308,7 +9368,207 @@ def debug_ui(c):
     c.check(got["reversed"] == {"customizer": False, "bps": [{"path": shop, "lines": [4]}]}
             and got["studioWidget"] == {"customizer": True, "bps": [{"path": shop, "lines": [4]}]},
             "...the same with the debugger's listener first", (got["reversed"], got["studioWidget"]))
+    dl = got["dialog"]
+    c.check(dl["opened"] == [money, 0, False] and dl["focused"] == 0 and dl["line"] == [[2, "dbg-at paused", "dbg-line paused"]]
+            and dl["pos"] == {"lineNumber": 2, "column": 1} and "Stopped at a breakpoint on line 2 of money.tuf." in dl["status"],
+            "a pause while a dialog is open (New Project, Search Everywhere, What's New...) opens the file, lights the line and fills the pane, "
+            "and leaves the keyboard in the dialog", dl)
+    c.check(got["dialogSame"] == {"focused": 0, "line": [[3, "dbg-at paused", "dbg-line paused"]], "pos": {"lineNumber": 3, "column": 1}}
+            and got["noDialog"] == {"focused": 1, "line": [[4, "dbg-at paused", "dbg-line paused"]]},
+            "...in the file on screen too; with no dialog open the keyboard goes to the paused line", (got["dialogSame"], got["noDialog"]))
+    c.check(got["hiddenF9"] == {"same": [True, True], "toasts": ["Show the code (click its tab) to put a breakpoint on a line."] * 2} and got["shownF9"] == [3, 7, 10, 15],
+            "F9 while Design Studio or Tuff Engine shows (the code editor hidden) only says to show the code; with the code on screen it puts a breakpoint",
+            (got["hiddenF9"], got["shownF9"]))
+    c.check(got["setLines"] == {"bps": [4, 12, 21], "dots": ["4:dbg-bp", "12:dbg-bp", "21:dbg-bp"], "sent": [{"cmd": "setBreakpoints", "file": main, "lines": [4, 12, 21]}]}
+            and got["setLinesEdited"] == {"bps": [5], "sent": []},
+            "TuffDebug.setLines (Auto Code Sort putting breakpoints back on their lines) draws them, none hollow, and sends them while it's debugged "
+            "(not once the code has changed since it started)", (got["setLines"], got["setLinesEdited"]))
+    fo = got["folder"]
+    c.check(fo["sent"] == [{"stop": True}] and fo["state"] == "ended" and "The program was stopped." in fo["status"] and fo["line"] == 0
+            and got["folderLate"] == {"state": "ended", "opened": 0, "line": 0} and got["folderIdle"] == [],
+            "another folder opened (New Project, Open Folder) stops the program being debugged, a pause on its way after is left alone, "
+            "and with nothing debugged nothing happens", (fo, got["folderLate"], got["folderIdle"]))
     c.check(got["errors"] == [], "nothing the debugger does throws", got["errors"])
+
+
+# A file's whole new text in one go (ide.js's editsTo: a reload after another program changed the file, Replace in
+# Files, a plugin's replaceAll, and Auto Code Sort), with Monaco's own text model and undo in Node: breakpoints (made as
+# debugger.js makes them) and the cursor stay on the lines they're on, and one undo takes it back. ide.js's own
+# editsTo and autoSort are taken from its source. One edit over the whole file put every dot on whatever line then
+# held its old place in the text.
+DEBUG_EDITS = r"""
+const fs = require('fs'), path = require('path'), url = require('url');
+const [ideFile, sortFile, dir] = process.argv.slice(1);
+(async () => {
+  if (!dir || !fs.existsSync(path.join(dir, 'esm'))) { console.log(JSON.stringify({ real: null })); return; }
+  const imp = (p) => import(url.pathToFileURL(path.join(dir, 'esm', 'vs', p)).href);
+  const { TextModel } = await imp('editor/common/model/textModel.js');
+  const { Range } = await imp('editor/common/core/range.js');
+  const { UndoRedoService } = await imp('platform/undoRedo/common/undoRedoService.js');
+  const any = () => new Proxy(function () {}, { get: (t, k) => (k === Symbol.toPrimitive ? () => '' : k === 'then' ? undefined : k === 'dispose' ? () => {} : k === 'languageId' ? 'tuff' : any()),
+    apply: () => any(), construct: () => any() });
+  const undo = new UndoRedoService({}, {});
+  const make = (text) => new TextModel(text, 'tuff', TextModel.DEFAULT_CREATION_OPTIONS, null, undo, any(), any(), { createInstance: (C, ...a) => new C(...a, any(), any(), any(), any()) });
+  // ide.js's own functions, from its source: each from its first line to the } under it
+  const src = fs.readFileSync(ideFile, 'utf8').replace(/\r\n/g, '\n');
+  const fn = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n  }\n', at) + 4); };
+  const out = { real: true, found: [!!fn('function editsTo('), !!fn('async function autoSort(')] };
+  const DOT = { glyphMarginClassName: 'dbg-bp', stickiness: 1 }; // (NeverGrowsWhenTypingAtEdges, as debugger.js has it)
+  const dots = (m, lines, old = []) => m.deltaDecorations(old, lines.map((n) => ({ range: new Range(n, 1, n, 1), options: DOT })));
+  const lineOf = (m, id) => m.getDecorationRange(id).startLineNumber;
+  // The cursor, as Monaco brings it back after an edit made on the model: from a marker that grows at both ends.
+  const cursor = (m, line, column) => {
+    let id = m.deltaDecorations([], [{ range: new Range(line, column, line, column), options: { stickiness: 0 } }])[0];
+    return { getModel: () => m, getPosition: () => { const r = m.getDecorationRange(id); return { lineNumber: r.startLineNumber, column: r.startColumn }; },
+      setPosition: (p) => { id = m.deltaDecorations([id], [{ range: new Range(p.lineNumber, p.column, p.lineNumber, p.column), options: { stickiness: 0 } }])[0]; } };
+  };
+  // (without editsTo, the one edit over the whole file it replaced: what these checks see then)
+  const whole = (m, text) => [{ range: m.getFullModelRange(), text }];
+  const editsTo = out.found[0] ? new Function('window', `${fn('function editsTo(')}\nreturn editsTo;`)({ monaco: { Range } }) : whole;
+  // One whole-file change as ide.js makes it (its own undo step): where the dots and the cursor are, and the text after
+  // one undo.
+  const change = async (before, after, lines, at, edits = editsTo) => {
+    const m = make(before);
+    const ids = dots(m, lines);
+    const ed = cursor(m, ...at);
+    m.pushStackElement();
+    m.pushEditOperations([], edits(m, after), () => null);
+    m.pushStackElement();
+    const r = { same: m.getValue() === after, dots: ids.map((id) => [lineOf(m, id), m.getLineContent(lineOf(m, id)).trim()]), cursor: ed.getPosition() };
+    await m.undo();
+    r.undone = m.getValue() === before;
+    return r;
+  };
+  const PROG = 'score = 0\nfor i in range(1, 4):\n    score += i\n    say score\nsay "done"\n';
+  out.reloadWhole = await change(PROG, '# my game\n' + PROG, [3, 4], [4, 5], whole); // (the old way)
+  out.reload = await change(PROG, '# my game\n' + PROG, [3, 4], [4, 5]); // another program put a line on top
+  out.replace = await change(PROG, PROG.replace(/score/g, 'points'), [2, 3, 5], [5, 3]); // Replace in Files: four lines
+  const SHOP = 'name = "Shop"\nprice = 3\nsay name\nsay price\nsay "bye"\n';
+  // a plugin's replaceAll (Tuff Agents) adding a function, the cursor at the start of the line after it
+  out.plugin = await change(SHOP, 'name = "Shop"\nprice = 3\nfunc tax(p):\n    return p * 1.2\nsay name\nsay price\nsay "bye"\n', [1, 3, 5], [3, 1]);
+  out.cut = await change(PROG, 'score = 0\nsay "done"\n', [1, 5], [5, 2]); // lines taken away in the middle
+  out.cutEnd = await change(PROG, 'score = 0\nfor i in range(1, 4):\n', [1, 2], [2, 4]); // ...and at the end
+
+  // Pairs of short texts (made of a few lines, LF and CRLF): the edits make exactly the new text, one undo takes them
+  // back, and a dot or the cursor (at the start or the end) on a line both keep stays on it: at the start, at the end,
+  // or any line when they have as many lines. (A dot on an empty last line that lines go after moves down with them,
+  // as when Enter is typed there.)
+  let seed = 7;
+  const rand = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const WORDS = ['a', 'b', 'say x', '', '    c'];
+  const textOf = (k, eol) => Array.from({ length: k }, () => WORDS[rand(WORDS.length)]).join(eol) + (rand(2) ? eol : '');
+  const bad = [];
+  let tried = 0;
+  for (let i = 0; i < 1500 && bad.length < 5; i++) {
+    const eol = rand(3) ? '\n' : '\r\n';
+    const before = textOf(rand(6), eol);
+    const after = textOf(rand(6), eol);
+    const m = make(before);
+    const old = m.getLinesContent();
+    const next = after.split(/\r?\n/);
+    let a = 0;
+    while (a < old.length && a < next.length && old[a] === next[a]) a++;
+    let b = 0;
+    while (b < old.length - a && b < next.length - a && old[old.length - 1 - b] === next[next.length - 1 - b]) b++;
+    const kept = old.map((l, k) => k + 1).filter((n) => (old.length === next.length ? old[n - 1] === next[n - 1] : n <= a || n > old.length - b)
+      && !(old[n - 1] === '' && n === old.length && b === 0 && a === old.length));
+    const to = (n) => (old.length === next.length || n <= a ? n : n + next.length - old.length);
+    const ids = dots(m, kept);
+    const marks = kept.map((n) => [n, m.deltaDecorations([], [{ range: new Range(n, 1, n, 1), options: { stickiness: 0 } }])[0],
+      m.deltaDecorations([], [{ range: new Range(n, m.getLineMaxColumn(n), n, m.getLineMaxColumn(n)), options: { stickiness: 0 } }])[0]]);
+    m.pushStackElement();
+    m.pushEditOperations([], editsTo(m, after), () => null);
+    m.pushStackElement();
+    tried++;
+    const want = after.split(/\r?\n/).join(m.getEOL());
+    const moved = kept.filter((n, k) => lineOf(m, ids[k]) !== to(n));
+    const cursorMoved = marks.filter(([n, s, e]) => { const rs = m.getDecorationRange(s), re = m.getDecorationRange(e);
+      return rs.startLineNumber !== to(n) || rs.startColumn !== 1 || re.startLineNumber !== to(n) || re.startColumn !== m.getLineMaxColumn(to(n)); }).map(([n]) => n);
+    const text = m.getValue();
+    await m.undo();
+    if (text !== want || moved.length || cursorMoved.length || m.getValue() !== before) bad.push({ before, after, text, moved, cursorMoved, undone: m.getValue() === before });
+  }
+  out.pairs = { tried, bad };
+
+  // Auto Code Sort itself (ide.js's autoSort, with autosort.js and a TuffDebug with breakpoints() and setLines): each
+  // dot goes back on its own line, the cursor stays on a line the sort left alone and goes to its own line otherwise,
+  // and one undo takes it all back.
+  const FILE = 'C:\\proj\\main.tuf';
+  const sortCase = async (before, lines, at) => {
+    const m = make(before);
+    let ids = dots(m, lines);
+    const ed = cursor(m, ...at);
+    const texts = lines.map((n) => m.getLineContent(n).replace(/\s+/g, ''));
+    const atText = m.getLineContent(at[0]).trim();
+    let calls = 0;
+    const window = {
+      TuffSort: require(sortFile),
+      TuffDebug: { breakpoints: () => [{ path: FILE, lines: [...new Set(ids.map((id) => lineOf(m, id)))].sort((x, y) => x - y) }],
+        setLines: (p, ls) => { calls++; ids = dots(m, ls, ids); } },
+    };
+    const api = { checkSource: async () => ({ ok: true }) };
+    const autoSort = new Function('window', 'editor', 'api', 'toast', 'samePath', 'ext', 'activeTab', 'editsTo', `${fn('async function autoSort(')}\nreturn autoSort;`)(
+      window, ed, api, () => {}, (x, y) => x.toLowerCase() === y.toLowerCase(), (p) => (p.match(/\.([^.]+)$/) || [, ''])[1], () => null, editsTo);
+    await autoSort({ path: FILE, model: m }, { quiet: true });
+    const r = { calls, dots: ids.map((id, k) => [lineOf(m, id), m.getLineContent(lineOf(m, id)).replace(/\s+/g, '') === texts[k]]),
+      cursor: ed.getPosition(), cursorLine: m.getLineContent(ed.getPosition().lineNumber).trim() === atText };
+    await m.undo();
+    r.undone = m.getValue() === before;
+    return r;
+  };
+  const MESSY = 'name = input("Name? ")\nif name is "Sam":\n  say "hi Sam"\nelse:\n  say "hello " + name\nsay "bye"\n';
+  out.sortIndent = await sortCase(MESSY, [3, 5, 6], [6, 5]);
+  out.sortIndentCursor = await sortCase(MESSY, [5], [5, 3]);
+  // functions go last and imports first, each part gets a header, x=1 becomes x = 1
+  out.sortMoved = await sortCase('func greet(who):\n  say "hi " + who\nx=1\nimport tgui\ngreet("Sam")\nsay x\n', [2, 3, 6], [6, 1]);
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.log(JSON.stringify({ crash: String(e.stack || e) })); });
+"""
+
+
+def debug_edits(c):
+    """A file's whole new text in one go keeps breakpoints and the cursor on their lines (ide.js's editsTo and Auto Code
+    Sort), with Monaco's own text model in Node (see DEBUG_EDITS)."""
+    js = os.path.join(REPO, "tuffcode", "renderer", "js")
+    monaco_dir = os.environ.get("TUFF_MONACO") or os.path.join(REPO, "tuffcode", "node_modules", "monaco-editor")
+    try:
+        p = subprocess.run(["node", "-e", DEBUG_EDITS, os.path.join(js, "ide.js"), os.path.join(js, "autosort.js"), monaco_dir], capture_output=True, text=True,
+                           encoding="utf-8", timeout=120)
+        got = json.loads(p.stdout.strip().splitlines()[-1])
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the whole-file edit checks")
+        return
+    except (ValueError, IndexError, subprocess.TimeoutExpired) as exc:
+        got = {"crash": str(exc), "stderr": locals().get("p") and p.stderr[-500:]}
+    if not c.check("crash" not in got, "the whole-file edit checks run (ide.js's editsTo and autoSort with Monaco's own text model)", got):
+        return
+    if got["real"] is None:
+        c.check(True, "monaco-editor isn't installed here: skipped the whole-file edit checks")
+        return
+    c.check(got["found"] == [True, True], "ide.js has editsTo (a file's whole new text, over only the lines that change) and autoSort", got["found"])
+    c.check(got["reloadWhole"]["dots"] == [[3, "for i in range(1, 4):"], [4, "score += i"]],
+            "(one edit over the whole file, as before, puts the breakpoints on other lines: this check sees it)", got["reloadWhole"])
+    c.check(got["reload"] == {"same": True, "dots": [[4, "score += i"], [5, "say score"]], "cursor": {"lineNumber": 5, "column": 5}, "undone": True},
+            "a reload after another program put a line on top: the breakpoints and the cursor move down with their lines, and one undo takes it back",
+            got["reload"])
+    c.check(got["replace"] == {"same": True, "dots": [[2, "for i in range(1, 4):"], [3, "points += i"], [5, 'say "done"']], "cursor": {"lineNumber": 5, "column": 3},
+                               "undone": True},
+            "Replace in Files changing four lines: breakpoints between them and on them stay on their lines", got["replace"])
+    c.check(got["plugin"] == {"same": True, "dots": [[1, 'name = "Shop"'], [5, "say name"], [7, 'say "bye"']], "cursor": {"lineNumber": 5, "column": 1}, "undone": True},
+            "a plugin's replaceAll adding a function (Tuff Agents): the breakpoints and the cursor after it move down with their lines", got["plugin"])
+    c.check(got["cut"] == {"same": True, "dots": [[1, "score = 0"], [2, 'say "done"']], "cursor": {"lineNumber": 2, "column": 2}, "undone": True}
+            and got["cutEnd"] == {"same": True, "dots": [[1, "score = 0"], [2, "for i in range(1, 4):"]], "cursor": {"lineNumber": 2, "column": 4}, "undone": True},
+            "lines taken away, in the middle and at the end: the ones left keep their breakpoints and the cursor", (got["cut"], got["cutEnd"]))
+    c.check(got["pairs"] == {"tried": 1500, "bad": []},
+            "1500 pairs of short texts (LF and CRLF): the edits make exactly the new text, one undo takes them back, and dots and the cursor on the "
+            "lines kept stay on them", got["pairs"])
+    si, sc, sm = got["sortIndent"], got["sortIndentCursor"], got["sortMoved"]
+    c.check(si == {"calls": 1, "dots": [[3, True], [5, True], [6, True]], "cursor": {"lineNumber": 6, "column": 5}, "cursorLine": True, "undone": True}
+            and sc["dots"] == [[5, True]] and sc["cursorLine"] and sc["undone"],
+            "Auto Code Sort fixing the indentation: each breakpoint stays on its line, the cursor on a line it left alone stays put (and one on a "
+            "line it changed stays on that line), and one undo takes it back", (si, sc))
+    c.check(sm == {"calls": 1, "dots": [[12, True], [5, True], [7, True]], "cursor": {"lineNumber": 7, "column": 1}, "cursorLine": True, "undone": True},
+            "Auto Code Sort moving functions last and imports first (and x=1 to x = 1): each breakpoint goes back on its own line, the cursor too", sm)
 
 
 def t_debug(c):
@@ -9318,7 +9578,8 @@ def t_debug(c):
     on error, input() while debugging, Watch it run, and loops written on one line. Then Pause and Stop, a deep call
     stack, tterm and tmusic programs, TuffCode going away, --debug, where breakpoints stop, its speed, values as say
     shows them, the functions a window calls (with no window), main.js's side (debug.js) and the editor's and the
-    debug pane's (debugger.js, with Design Studio's studio.js), both with Node."""
+    debug pane's (debugger.js, with Design Studio's studio.js), both with Node, and a file's whole new text keeping
+    breakpoints on their lines (ide.js, with Monaco's own text model)."""
     for slow in (False, True):
         mode = "the tree walker" if slow else "compiled"
         debug_breakpoints(c, slow, mode)
@@ -9335,6 +9596,7 @@ def t_debug(c):
     debug_windows(c)
     debug_relay(c)
     debug_ui(c)
+    debug_edits(c)
 
 
 # ---------------------------------------------------------------- New Project's starters (1.5.0)
@@ -9790,6 +10052,9 @@ def t_starters(c):
             and "window.TuffNewProject?.isOpen()" in ide and "openFolder: (dir) => openFolder(dir)" in ide,
             "ide.js: New Project… is a command (so Search Everywhere finds it), first in the File menu and the project menu, and "
             "the IDE's shortcuts wait while it's open", None)
+    c.check("if (process.platform !== 'darwin') { Menu.setApplicationMenu(null); return; }" in main,
+            "main.js sets no menu on Windows and Linux: the keys of Electron's default one (Ctrl+W closes the window, Ctrl+R reloads it) "
+            "would work in the gallery, where the IDE's own shortcuts wait", None)
 
 
 # ---------------------------------------------------------------- Learn's Section 1.7, the Workshop (1.5.0)

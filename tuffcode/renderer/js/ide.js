@@ -382,6 +382,33 @@
     tree.fresh = null;
   }
 
+  // ---------- a file's whole new text ----------
+  // One edit over a file's whole text puts every breakpoint (a decoration, debugger.js) and the cursor on whatever line
+  // then holds their old place in the text. These edits leave alone the lines that stay the same, so what's on them
+  // stays there: with as many lines as before (a replace, a file tidied, lines another program changed) they change
+  // only the lines that differ; otherwise the lines the old and new text share at the start and at the end are left
+  // alone and only the middle is replaced, as Design Studio's commit does (studio.js). [] when the text is the same.
+  function editsTo(model, text) {
+    const old = model.getLinesContent();
+    const next = text.split(/\r?\n/);
+    const { Range } = window.monaco;
+    const end = (n) => model.getLineMaxColumn(n);
+    if (old.length === next.length) return old.flatMap((line, i) => (line === next[i] ? [] : [{ range: new Range(i + 1, 1, i + 1, end(i + 1)), text: next[i] }]));
+    const eol = model.getEOL();
+    let a = 0;
+    while (a < old.length && a < next.length && old[a] === next[a]) a++;
+    let b = 0;
+    while (b < old.length - a && b < next.length - a && old[old.length - 1 - b] === next[next.length - 1 - b]) b++;
+    const mid = next.slice(a, next.length - b).join(eol);
+    const from = a + 1; // (the old lines it replaces: from to to)
+    const to = old.length - b;
+    // Lines only added go in before the shared end, which moves down with what's on it, or after the last line. Lines
+    // only taken away go with the line break after them, or before them at the end.
+    if (to < from) return [b ? { range: new Range(from, 1, from, 1), text: mid + eol, forceMoveMarkers: true } : { range: new Range(to, end(to), to, end(to)), text: eol + mid }];
+    if (a + b === next.length) return [{ range: b ? new Range(from, 1, to + 1, 1) : new Range(a, end(a), to, end(to)), text: '' }];
+    return [{ range: new Range(from, 1, to, end(to)), text: mid }];
+  }
+
   // ---------- files changed outside TuffCode ----------
   // main.js watches the open folder, so files an agent (or Explorer/Finder, or anything else) makes,
   // changes or deletes show up straight away, and open tabs follow along unless you've edited them.
@@ -394,7 +421,7 @@
       if (!state.tabs.includes(t) || t.model.isDisposed() || isDirty(t)) continue;
       if (disk === null || norm(disk) === norm(t.model.getValue())) continue;
       t.model.pushStackElement(); // the reload is its own undo step
-      t.model.pushEditOperations([], [{ range: t.model.getFullModelRange(), text: disk }], () => null);
+      t.model.pushEditOperations([], editsTo(t.model, disk), () => null);
       t.model.pushStackElement();
       t.saved = t.model.getAlternativeVersionId();
     }
@@ -572,7 +599,12 @@
   async function openFolder(dir, { restore } = {}) {
     await saveAll();
     for (const t of [...state.tabs]) closeTab(t, { save: false, quiet: true });
+    // (the old project's Design Studio and Tuff Engine tabs go too: they'd show its files)
+    if (studio.open) closeStudio();
+    if (engine.open) closeEngine();
+    studio.file = engine.file = null;
     state.root = dir;
+    window.dispatchEvent(new CustomEvent('tuff:folder-opened', { detail: { dir } })); // (1.5.0: a program being debugged stops, debugger.js)
     tree.children.clear();
     tree.expanded = new Set([dir]);
     tree.selected = null;
@@ -1072,10 +1104,9 @@
     for (const g of find.results) {
       const t = state.tabs.find((x) => x.path === g.path);
       if (t) {
-        const text = t.model.getValue();
-        const next = text.replace(re, find.re ? rep : () => rep);
-        if (next !== text) {
-          t.model.pushEditOperations([], [{ range: t.model.getFullModelRange(), text: next }], () => null);
+        const edits = editsTo(t.model, t.model.getValue().replace(re, find.re ? rep : () => rep));
+        if (edits.length) {
+          t.model.pushEditOperations([], edits, () => null);
           await saveTab(t);
         }
       } else {
@@ -1502,10 +1533,22 @@
     if (model.getValue() !== before) return;
     const onScreen = editor.getModel() === model;
     const pos = onScreen ? editor.getPosition() : null;
+    // The sort moves lines about and changes the spaces in them: afterwards each breakpoint goes back on the line with
+    // its text (spaces aside) nearest where it was, and so does the cursor when its own line changed.
+    const flat = (s) => s.replace(/\s+/g, '');
+    const dots = (window.TuffDebug?.breakpoints().find((b) => samePath(b.path, t.path))?.lines || []).map((n) => [n, flat(model.getLineContent(n))]);
+    const here = pos && flat(model.getLineContent(pos.lineNumber));
     model.pushStackElement();
-    model.pushEditOperations([], [{ range: model.getFullModelRange(), text: result.code }], () => null);
+    model.pushEditOperations([], editsTo(model, result.code), () => null);
     model.pushStackElement();
-    if (onScreen && pos) editor.setPosition({ lineNumber: Math.min(pos.lineNumber, model.getLineCount()), column: 1 });
+    const sorted = model.getLinesContent().map(flat);
+    const near = (line, n) => {
+      let best = 0;
+      sorted.forEach((s, i) => { if (s === line && (!best || Math.abs(i + 1 - n) < Math.abs(best - n))) best = i + 1; });
+      return best || Math.min(n, sorted.length);
+    };
+    if (dots.length) window.TuffDebug.setLines(t.path, dots.map(([n, line]) => near(line, n)));
+    if (onScreen && pos && sorted[editor.getPosition().lineNumber - 1] !== here) editor.setPosition({ lineNumber: near(here, pos.lineNumber), column: 1 });
     const what = result.summary.length ? result.summary.join(', ') : 'tidied up';
     const text = `Auto code sort: ${what.charAt(0).toUpperCase() + what.slice(1)}.`;
     if (!was.ok && now.ok) toast(`${text} That also fixed the mistake in your code.`, 'ok', 6000);
@@ -1514,7 +1557,8 @@
   }
 
   async function rerun() {
-    if (!state.lastRunFile) return runCurrent();
+    // (only a file in the open folder: after New Project or Open Folder, the one run last is the old project's)
+    if (!state.lastRunFile || !isUnder(state.lastRunFile, state.root)) return runCurrent();
     await saveAll();
     startRun(state.lastRunFile);
   }
@@ -2163,7 +2207,7 @@
 
   // ---------- keyboard ----------
   const overlayOpen = () => !$('#modal').classList.contains('hidden') || !$('#settings').classList.contains('hidden') || !$('#build-dialog').classList.contains('hidden') || !$('#search-everywhere').classList.contains('hidden') || !$('#intro').classList.contains('hidden')
-    || !!window.TuffNewProject?.isOpen();
+    || !!window.TuffNewProject?.isOpen() || !!document.getElementById('whatsnew');
   let shiftClean = false;
   let lastShift = 0;
 
@@ -2374,14 +2418,15 @@
       editor.pushUndoStop();
       return true;
     },
-    // Replaces the whole open file, as one step Ctrl+Z undoes.
+    // Replaces the whole open file, as one step Ctrl+Z undoes (only the lines that change: see editsTo).
     replaceAllText: async (text) => {
       const t = engineTab() || activeTab();
       if (!editor || !t) { toast('Open a file first.'); return false; }
       if (studio.visible || engine.visible) activate(t);
       editor.focus();
+      const edits = editsTo(t.model, String(text ?? ''));
       editor.pushUndoStop();
-      editor.executeEdits('plugin', [{ range: t.model.getFullModelRange(), text, forceMoveMarkers: true }]);
+      if (edits.length) editor.executeEdits('plugin', edits);
       editor.pushUndoStop();
       return true;
     },
@@ -2402,6 +2447,9 @@
     engineVisible: () => engine.visible,
     scene: (file, source, tag) => api.engine.scene(file, source, tag),
     stopRun: () => api.run.stop(),
+    // A dialog is open (New Project, Search Everywhere, What's New...): the IDE's shortcuts wait, and the debugger
+    // leaves the keyboard in it when the program pauses.
+    overlayOpen: () => overlayOpen(),
     isRunning: () => !!state.running,
     runCommand: (id) => commands[id]?.run(),
     hasCommand: (id) => !!commands[id],
