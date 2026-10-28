@@ -77,8 +77,11 @@ export default async (t, ctx) => {
   await t.shot('breakpoint.png');
   await clickSel('#btn-debug');
   check('Debug runs it and it stops at the breakpoint, inside add()', await pausedAt(10), await state());
-  check('...the paused line is lit and the debug pane is open beside the Run output', await lit('paused') === 1
-    && await ev(`!document.querySelector('#debug-pane').classList.contains('hidden')`), await lit('paused'));
+  // (once on the Windows CI machine the pane was still hidden here, with the line lit: it gets a moment, and says
+  // how it was if it stays hidden)
+  const paneOpen = await t.waitFor(`[...document.querySelectorAll('#debug-pane')].some((p) => !p.classList.contains('hidden'))`, 3000);
+  check('...the paused line is lit and the debug pane is open beside the Run output', await lit('paused') === 1 && paneOpen,
+    { lit: await lit('paused'), panes: await ev(`[...document.querySelectorAll('#debug-pane')].map((p) => p.className)`), state: await state() });
   const status = await text('#debug-pane .dbg-status');
   check('...it says where and why', /Stopped at a breakpoint on line 10 of debug\.tuf/.test(status), status);
   let vars = await text('#debug-pane .dbg-sec.vars .dbg-list');
