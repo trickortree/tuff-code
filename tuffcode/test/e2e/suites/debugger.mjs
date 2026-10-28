@@ -67,6 +67,9 @@ export default async (t, ctx) => {
     await t.sleep(200);
   };
   const lit = (kind) => ev(`document.querySelectorAll('.monaco-editor .dbg-line.${kind}').length`);
+  // A line lit by a pause: the debugger marks it as the state changes, and the editor paints it on its next frame, so
+  // on a slow machine (a CI Mac) a check can come in between. It gets a moment.
+  const litSoon = (kind) => t.waitFor(`document.querySelectorAll('.monaco-editor .dbg-line.${kind}').length === 1`, 3000);
   const ended = () => t.waitFor(`window.TuffDebug.state().state === 'ended'`, 20000);
 
   // ---- a breakpoint from the gutter, then Debug
@@ -80,7 +83,7 @@ export default async (t, ctx) => {
   // (once on the Windows CI machine the pane was still hidden here, with the line lit: it gets a moment, and says
   // how it was if it stays hidden)
   const paneOpen = await t.waitFor(`[...document.querySelectorAll('#debug-pane')].some((p) => !p.classList.contains('hidden'))`, 3000);
-  check('...the paused line is lit and the debug pane is open beside the Run output', await lit('paused') === 1 && paneOpen,
+  check('...the paused line is lit and the debug pane is open beside the Run output', await litSoon('paused') && paneOpen,
     { lit: await lit('paused'), panes: await ev(`[...document.querySelectorAll('#debug-pane')].map((p) => p.className)`), state: await state() });
   const status = await text('#debug-pane .dbg-status');
   check('...it says where and why', /Stopped at a breakpoint on line 10 of debug\.tuf/.test(status), status);
@@ -125,7 +128,7 @@ export default async (t, ctx) => {
   check('It stops on line 15', await pausedAt(15), await state());
   await fkey('F11', 122);
   check('F11 goes into money.with_tax: money.tuf opens with its line lit', await t.waitFor(`(() => { const s = window.TuffDebug.state(); return s.state === 'paused' && /money\\.tuf$/.test(s.file) && s.line === 4; })()`, 10000)
-    && await ev(`window.TuffIDE.activeFile().endsWith('money.tuf')`) && await lit('paused') === 1, await state());
+    && await ev(`window.TuffIDE.activeFile().endsWith('money.tuf')`) && await litSoon('paused'), { state: await state(), lit: await lit('paused') });
   vars = await text('#debug-pane .dbg-sec.vars .dbg-list');
   check("...and the names are with_tax's, then money.tuf's own top level", /In with_tax\(\)/.test(vars) && /price\s+10/.test(vars) && /money\.tuf's top level/.test(vars)
     && /rate\s+0\.2/.test(vars) && !/total/.test(vars), vars);
@@ -142,7 +145,7 @@ export default async (t, ctx) => {
   await open('oops.tuf');
   await clickSel('#btn-debug');
   check('An error pauses on its line before the program ends', await t.waitFor(`(() => { const s = window.TuffDebug.state(); return s.state === 'paused' && s.reason === 'error' && s.line === 3; })()`, 20000)
-    && await lit('error') === 1, await state());
+    && await litSoon('error'), { state: await state(), lit: await lit('error') });
   vars = await text('#debug-pane .dbg-sec.vars .dbg-list');
   check("...with the error in the pane, and half's names as they were", /Stopped by an error on line 3/.test(await text('#debug-pane .dbg-status')) && /x\s+4/.test(vars) && /y\s+8/.test(vars), vars);
   check('...and it says Continue ends the program', /Continue ends the program/.test(await text('#debug-pane .dbg-status')), await text('#debug-pane .dbg-status'));
@@ -212,8 +215,8 @@ export default async (t, ctx) => {
   await ev(`window.TuffIDE.runCommand('searchEverywhere')`);
   await t.waitFor(`document.activeElement?.id === 'se-input'`, 3000);
   await t.type('ab', 40);
-  check('A breakpoint reached while Search Everywhere is open lights its line, and the keyboard stays in the search box', await pausedAt(3) && await lit('paused') === 1
-    && await ev(`document.activeElement?.id === 'se-input'`), await state());
+  check('A breakpoint reached while Search Everywhere is open lights its line, and the keyboard stays in the search box', await pausedAt(3) && await litSoon('paused')
+    && await ev(`document.activeElement?.id === 'se-input'`), { state: await state(), lit: await lit('paused') });
   await t.type('xy', 40);
   const searched = await ev(`document.querySelector('#se-input').value`);
   check('...what is typed then goes into the box, not the code', searched === 'abxy' && (await t.code()).replace(/\r\n/g, '\n') === SLOW, [searched, await t.code()]);

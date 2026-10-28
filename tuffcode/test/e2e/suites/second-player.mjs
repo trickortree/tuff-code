@@ -137,8 +137,10 @@ export default async (t, ctx) => {
   check(chips.hosting?.chip === '"P1"' && chips.joined2?.chip === '"P1"' && !chips.hosting.p2, "the first copy's lines start with a P1 chip (the ones from before the second player too)", chips);
   check(chips.joined1 && chips.hosting && chips.joined1.bg !== chips.hosting.bg, 'P1 and P2 are different colors', chips);
   check(chips.notices === 1 && chips.cmds === 2, 'the Tuff Engine notice shows once, and each copy\'s command line shows', chips);
-  const text = await out();
-  check(!/P[12]/.test(text), "the chips aren't in the panel's text (copying it gives what the programs said)", text.slice(-300));
+  // What the two programs said (the chips go on their lines). Not the command lines: they hold the project's temp
+  // folder, whose random name once had a P1 in it ("...-second-player-JP1CQ6").
+  const programs = await ev(`[...document.querySelectorAll('#run-output > span:not(.cmd)')].map((s) => s.innerText).join('')`);
+  check(/joined Player 2/.test(programs) && !/P[12]/.test(programs), "the chips aren't in the panel's text (copying it gives what the programs said)", programs.slice(-300));
   await t.shot('second_running.png');
 
   // Its own button stops only the second player.

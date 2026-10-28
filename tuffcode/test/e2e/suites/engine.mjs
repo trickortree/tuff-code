@@ -24,10 +24,11 @@ fs.writeFileSync(PLAN, JSON.stringify({ on_top: false, timeout: 20, out: PLAY, s
   { at: 1.9, dump: 'over.json' },
   { at: 2.0, key: 'space' },
   { at: 2.6, dump: 'again.json' },
-  { at: 2.7, hold: 'right', for: 0.5 },
-  { at: 3.5, dump: 'moved.json' },
-  { at: 3.6, shot: 'play.png' },
-  { at: 3.8, close: true },
+  // (a slow Intel Mac's frames came so far apart that none saw a 0.5 s hold; a frame moves the player 30 px at most)
+  { at: 2.7, hold: 'right', for: 1.5 },
+  { at: 4.5, dump: 'moved.json' },
+  { at: 4.6, shot: 'play.png' },
+  { at: 4.8, close: true },
 ] }));
 
 export const meta = { title: 'Tuff Engine: the visual game editor tab', timeout: 600000, env: { TUFF_TGAME_AUTOPILOT: PLAN } };
@@ -544,7 +545,7 @@ export default async (t, ctx) => {
   const kid3 = path.join(ctx.root, 'kid3d.tuf');
   fs.writeFileSync(kid3, '');
   await ev(`window.TuffIDE.openEngine(${JSON.stringify(kid3)})`);
-  await waitFor(`!!document.querySelector('#en-start [data-a="3d"]')`, 5000);
+  await waitFor(`!!document.querySelector('#en-start [data-a="3d"]')`, 15000); // (a CI Mac once took over 5 s)
   await clickSel('#en-start [data-a="3d"]');
   const m3 = () => ev(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kid3)})).getValue().replace(/\\r\\n/g, '\\n'))()`);
   await waitFor(`(async () => (await window.TuffIDE.getModel(${JSON.stringify(kid3)})).getValue().replace(/\\r\\n/g, '\\n').includes('tgame.world'))()`, 4000);
@@ -1099,7 +1100,7 @@ export default async (t, ctx) => {
 
   // ================================================================ start cards, Design Studio, the round trip
   await ev(`window.TuffIDE.openEngine(${JSON.stringify(path.join(ctx.root, 'demo.tuf'))})`);
-  await waitFor(`/This is an app, not a game/.test(document.querySelector('#en-start')?.textContent || '')`, 5000);
+  await waitFor(`/This is an app, not a game/.test(document.querySelector('#en-start')?.textContent || '')`, 15000);
   check(await ev(`!!document.querySelector('#en-start [data-a="studio"]')`), 'an mtgui file says "This is an app, not a game." with Open in Design Studio', await ev(`document.querySelector('#en-start').textContent`));
   await clickSel('#en-start [data-a="studio"]');
   await waitFor(`!document.querySelector('#studio').classList.contains('hidden')`, 4000);
@@ -1395,7 +1396,7 @@ export default async (t, ctx) => {
   await ev(`window.TuffIDE.openFile(${JSON.stringify(fresh)}).then(() => 1)`);
   const nToasts3 = (await toasts()).length;
   await clickSel('#toolstrip .ts-btn[data-tool="engine"]');
-  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(fresh)} && !!document.querySelector('#en-start:not(.hidden) [data-a="2d"]')`, 5000);
+  await waitFor(`window.TuffEngine.debug().file === ${JSON.stringify(fresh)} && !!document.querySelector('#en-start:not(.hidden) [data-a="2d"]')`, 15000);
   check(await ev(`window.TuffEngine.debug().file`) === fresh && !(await toasts()).slice(nToasts3).some((x) => /Couldn't open/.test(x)) && await ev(`!!document.querySelector('#en-start:not(.hidden) [data-a="2d"]')`),
     "the gamepad, after the game Tuff Engine showed was deleted: it opens the .tuf tab that's open (its start card), not a blank tab", { file: await ev(`window.TuffEngine.debug().file`), toasts: (await toasts()).slice(nToasts3) });
   await ev(`window.TuffIDE.openEngine(${JSON.stringify(kid)})`);
@@ -1445,7 +1446,7 @@ export default async (t, ctx) => {
   await t.sleep(300);
   await clickSel('#toolstrip .ts-btn[data-tool="engine"]');
   const newMain = path.join(emptyDir, 'main.tuf');
-  await waitFor(`!!document.querySelector('#en-start:not(.hidden) [data-a="2d"]')`, 6000);
+  await waitFor(`!!document.querySelector('#en-start:not(.hidden) [data-a="2d"]')`, 15000);
   check(fs.existsSync(newMain) && await ev(`window.TuffEngine.debug().file`) === newMain && /Make a game in main\.tuf/.test(await ev(`document.querySelector('#en-start').textContent`)),
     'in a new, empty folder the gamepad makes main.tuf and opens it on the start card (Make a 2D game here)', { exists: fs.existsSync(newMain), file: await ev(`window.TuffEngine.debug().file`), card: await ev(`document.querySelector('#en-start').textContent`) });
   const errors = t.events.filter((x) => /tuff-engine.js|engine-host|host.js|Tuff Engine/.test(x));
