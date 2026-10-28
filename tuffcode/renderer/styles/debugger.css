@@ -27,7 +27,7 @@
 #run-split:has(> #run-output.hidden) { display: none; }
 #run-split > #run-output { min-width: 0; }
 #debug-pane { width: var(--debug-w, 480px); max-width: 75%; min-width: 300px; flex: none; display: flex; flex-direction: column; min-height: 0;
-  background: var(--bg-editor); border-left: 1px solid var(--border-soft); font-size: 12.5px; }
+  background: var(--bg-editor); border-left: 1px solid var(--border-soft); font-size: 12.5px; container-type: inline-size; }
 
 .dbg-bar { display: flex; align-items: center; gap: 2px; padding: 4px 8px; border-bottom: 1px solid var(--border-soft); flex: none; }
 .dbg-b { width: 28px; height: 26px; border-radius: 6px; display: grid; place-items: center; color: var(--text); flex: none; }
@@ -49,8 +49,8 @@
 .dbg-status.error { color: #ff8a95; }
 .dbg-status .note { display: block; color: var(--text-dim); }
 
-/* Variables and the call stack: side by side when there's room, one over the other when not. */
-.dbg-body { flex: 1; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; }
+/* Variables and the call stack: side by side when the pane has room, one over the other when not. */
+.dbg-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .dbg-sec { display: flex; flex-direction: column; min-height: 0; }
 .dbg-sec.vars { flex: 3; }
 .dbg-sec.stack { flex: 2; border-top: 1px solid var(--border-soft); }
