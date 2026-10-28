@@ -396,6 +396,13 @@ def _box_up():
     return False
 
 
+def _paused():
+    """The seconds tuff.py's debugger has kept the program paused, at a breakpoint or an error (1.5.0; 0 with no
+    debugger). tuff.py is found the way _box_up finds it."""
+    held = [getattr(sys.modules.get(name), "debug_paused", None) for name in ("tuff", "__main__")]
+    return max([paused() for paused in held if paused is not None] or [0.0])
+
+
 def _stuck_threads(timeout):
     """pywebview's own threads still running after `timeout` seconds (a thread's target is kept while it runs)."""
     def pywebview_threads():
@@ -707,6 +714,7 @@ class View:
         self._closed = False
         self._close_done = False      # the close handlers have started (they run once)
         self._close_started = None    # ...when (time.monotonic())
+        self._close_paused = 0.0      # ...and how long the debugger had held the program by then (see _paused)
         self._close_finished = False  # ...and they've finished
         self._in_call = 0             # calls into pywebview's window in progress (see _window_call)
         self._failure = None
@@ -1152,6 +1160,7 @@ class View:
             if self._close_done:
                 return
             self._close_done = True
+            self._close_paused = _paused()
             self._close_started = time.monotonic()
             try:
                 self._handle(e, t)
@@ -1173,9 +1182,11 @@ class View:
             self._dispatch({"type": "close"})
 
     def _close_overdue(self):
-        """Main thread: the close handlers are still running CLOSE_GRACE s after CLOSE_LIMIT (run() ends the program)."""
+        """Main thread: the close handlers are still running CLOSE_GRACE s after CLOSE_LIMIT (run() ends the program).
+        The time the debugger has held the program since doesn't count (1.5.0): a handler paused there isn't stuck."""
         started = self._close_started
-        return started is not None and not self._close_finished and time.monotonic() > started + CLOSE_LIMIT + CLOSE_GRACE
+        return (started is not None and not self._close_finished
+                and time.monotonic() - (_paused() - self._close_paused) > started + CLOSE_LIMIT + CLOSE_GRACE)
 
     def _handle(self, e, t):
         for i in e.get("path") or ():

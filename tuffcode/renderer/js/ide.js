@@ -542,6 +542,7 @@
     }
     if (state.active && isUnder(state.active, p)) state.active = np + state.active.slice(p.length);
     if (state.lastRunFile && isUnder(state.lastRunFile, p)) state.lastRunFile = np + state.lastRunFile.slice(p.length);
+    window.dispatchEvent(new CustomEvent('tuff:renamed', { detail: { from: p, to: np } })); // (1.5.0: breakpoints go with it, debugger.js)
     tree.expanded = new Set([...tree.expanded].map((d) => (isUnder(d, p) ? np + d.slice(p.length) : d)));
     for (const k of [...tree.children.keys()]) if (isUnder(k, p)) tree.children.delete(k);
     await refreshTree();
@@ -2325,6 +2326,8 @@
     // opts: startRun's (the debugger's). Gives the run's id.
     runFile: async (p, opts) => { await saveAll(); return startRun(p, opts); },
     runTarget: () => runTarget(),
+    // A model's file: its tab's path (a renamed tab keeps its model, whose uri has the path it was opened with).
+    pathOf: (m) => state.tabs.find((t) => t.model === m)?.path ?? null,
     openBuild: (p) => openBuildDialog(p),
     editor: () => editor,
     getModel: async (p) => (await openFile(p, { background: true, quiet: true }))?.model,

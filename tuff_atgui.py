@@ -1200,9 +1200,12 @@ class Lib:
         window has gone, so one that's stuck can't keep the program running where nobody can see it."""
         hooks = self.rt.interp.step_hooks  # (1.5.0: run before each statement, by both of tuff.py's runtimes)
         deadline = time.monotonic() + seconds
+        # (1.5.0) The time the debugger keeps it paused (at a breakpoint in it, say) doesn't count.
+        paused = getattr(self.tuff, "debug_paused", None) or (lambda: 0.0)
+        was = paused()
 
         def timed(s, env):
-            if time.monotonic() > deadline:
+            if time.monotonic() - (paused() - was) > deadline:
                 raise self.error_type(why, s.line, s.col)
         hooks.append(timed)
         try:

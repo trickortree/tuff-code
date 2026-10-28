@@ -19,7 +19,9 @@
   // A file's key: the same file however its path is written (Windows ignores case, and takes / for \).
   const key = (p) => (api?.platform === 'win32' ? String(p).replace(/\//g, '\\').toLowerCase() : String(p));
   const isTuf = (p) => /\.tuf$/i.test(p || '');
-  const modelPath = (model) => (model && !model.isDisposed() && model.uri.scheme === 'file' ? model.uri.fsPath : null);
+  // A model's file: its tab's path (a tab renamed in the project tree keeps its model, whose uri has the old path), or
+  // its uri's for one with no tab yet (attach, as the tab opens).
+  const modelPath = (model) => (model && !model.isDisposed() && model.uri.scheme === 'file' ? ide?.pathOf?.(model) || model.uri.fsPath : null);
 
   // The step buttons' pictures (the others are MingCute's): an arc over a line, an arrow into it, and one out of it.
   const svg = (body) => `<svg viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
@@ -41,15 +43,19 @@
 
   // ---------- breakpoints ----------
   // Each file's: its lines while its tab is closed, or the decorations that hold them while it's open (they move with
-  // their lines as the code changes). off: lines the program never stops on (it says so, see placed).
-  const files = new Map(); // key -> { path, lines: Set, model, ids, off: Set }
+  // their lines as the code changes). off: lines the program never stops on (it says so, see placed). While a run is
+  // debugged, version: its model's as the run started (or as its tab opened), and changed: its code has changed
+  // since, so the program's lines aren't the editor's any more (see edited).
+  const files = new Map(); // key -> { path, lines: Set, model, ids, off: Set, version, changed }
 
   function entry(path) {
     const k = key(path);
     let e = files.get(k);
-    if (!e) files.set(k, (e = { path, lines: new Set(), model: null, ids: [], off: new Set() }));
+    if (!e) files.set(k, (e = { path, lines: new Set(), model: null, ids: [], off: new Set(), version: null, changed: false }));
     return e;
   }
+
+  const has = (path, n) => { const e = files.get(key(path)); return !!e && linesOf(e).has(n); };
 
   function linesOf(e) {
     if (!e.model) return new Set(e.lines);
@@ -83,13 +89,27 @@
     const e = entry(path);
     e.model = model;
     e.ids = [];
+    if (live() && !e.changed) e.version = model.getAlternativeVersionId(); // (opened while it's debugged: the code it ran)
     draw(e, new Set([...e.lines].filter((n) => n <= model.getLineCount())));
+    model.onDidChangeContent(() => {
+      if (!live() || e.model !== model || e.version === null) return;
+      const changed = model.getAlternativeVersionId() !== e.version; // (an edit undone is the same code again)
+      if (changed === e.changed) return;
+      e.changed = changed;
+      if (!changed) api.debug.send({ cmd: 'setBreakpoints', file: e.path, lines: [...linesOf(e)].sort((a, b) => a - b) }); // (ones put in meanwhile)
+      renderStatus();
+    });
     model.onWillDispose(() => {
       e.lines = linesOf(e);
       e.model = null;
       e.ids = [];
+      e.version = null;
     });
   }
+
+  // A file whose code has changed since the debugged run started: the program runs it as it was, so the editor's line
+  // numbers aren't its own. Its breakpoints stay as the program has them until the next Debug.
+  const edited = () => live() && [...files.values()].some((e) => e.changed);
 
   function toggle(path, n) {
     const e = entry(path);
@@ -98,7 +118,7 @@
     else lines.add(n);
     e.off.delete(n);
     draw(e, lines);
-    if (live()) api.debug.send({ cmd: 'setBreakpoints', file: e.path, lines: [...lines].sort((a, b) => a - b) });
+    if (live() && !e.changed) api.debug.send({ cmd: 'setBreakpoints', file: e.path, lines: [...lines].sort((a, b) => a - b) });
   }
 
   function toggleHere() {
@@ -109,21 +129,25 @@
   }
 
   // Where the program says each breakpoint stops: one on a blank line, a comment or a func line moves to the
-  // statement it stops on, and one where it never stops (a kind's fields) is drawn hollow.
+  // statement it stops on, and one where it never stops (a kind's fields) is drawn hollow, until it stops there.
+  // (Not in a file changed since the run started: the program's lines aren't the editor's.)
   function placed({ file, lines }) {
     const e = entry(file);
+    if (e.changed) return;
     const now = linesOf(e);
     let changed = false;
     for (const [asked, at] of lines || []) {
       if (!now.has(asked)) continue;
-      if (at === null) { if (!e.off.has(asked)) { e.off.add(asked); changed = true; } }
-      else if (at !== asked) { now.delete(asked); now.add(at); changed = true; }
+      if (at === null) { if (!e.off.has(asked)) { e.off.add(asked); changed = true; } continue; }
+      if (e.off.delete(asked)) changed = true; // (code written there since)
+      if (at !== asked) { now.delete(asked); now.add(at); changed = true; }
     }
     if (changed) draw(e, now);
   }
 
-  // Design Studio's gear is on this line (studio.js): a click there opens its customizer, so F9 adds a breakpoint.
-  const gearOn = (model, n) => model.getLineDecorations(n).some((d) => /\btuff-gear\b/.test(d.options.glyphMarginClassName || ''));
+  // A widget's own line in a Design Studio program, where its gear opens the widget's customizer (studio.js): a click
+  // there is Studio's, unless the line has a red dot (F9 puts one there).
+  const studios = (model, n) => !!window.TuffStudio?.ownsGlyph?.(model, n);
 
   // The faint dot under the mouse in the glyph margin, where a click adds a breakpoint.
   const hinted = { model: null, ids: [], line: 0 };
@@ -132,7 +156,7 @@
     Object.assign(hinted, { model: null, ids: [], line: n });
     const model = editor.getModel();
     const path = modelPath(model);
-    if (!n || !isTuf(path) || linesOf(entry(path)).has(n) || gearOn(model, n)) return;
+    if (!n || !isTuf(path) || has(path, n) || studios(model, n)) return;
     hinted.model = model;
     hinted.ids = model.deltaDecorations([], [{ range: new monaco.Range(n, 1, n, 1), options: {
       glyphMarginClassName: 'dbg-bp hint', glyphMarginHoverMessage: { value: 'Click to add a breakpoint: the debugger stops the program on this line.' } } }]);
@@ -142,18 +166,23 @@
     const glyph = monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN;
     monaco.editor.getModels().forEach(attach);
     monaco.editor.onDidCreateModel(attach);
+    // A click in the glyph margin: on a red dot it takes the breakpoint away, anywhere else it puts one there, but
+    // not on a widget's own line (Design Studio's gear). The dot comes or goes once every listener has seen the
+    // click, so Design Studio's sees the line as it was (it leaves a line with a dot alone).
     editor.onMouseDown((ev) => {
       if (ev.target.type !== glyph || !ev.target.position) return;
       const model = editor.getModel();
       const path = modelPath(model);
       const n = ev.target.position.lineNumber;
-      if (!isTuf(path) || gearOn(model, n)) return;
-      toggle(path, n);
-      hint(0);
+      if (!isTuf(path) || (!has(path, n) && studios(model, n))) return;
+      Promise.resolve().then(() => {
+        toggle(path, n);
+        hint(0);
+      });
     });
     editor.onMouseMove((ev) => {
       const n = ev.target.type === glyph && ev.target.position ? ev.target.position.lineNumber : 0;
-      if (n !== hinted.line) setTimeout(() => hint(n), 0); // (after Design Studio has put its gear on the line, or not)
+      if (n !== hinted.line) hint(n);
     });
     editor.onMouseLeave(() => hint(0));
     editor.addAction({
@@ -176,25 +205,36 @@
     frame: 0, // the call stack's frame the Variables panel shows
     seen: null, // each value shown at the last step, by its path: the ones that change are marked
     asking: false, // Pause while input() waits for an answer
+    idle: false, // ...or while nothing runs, until something happens in the program's window
     pausing: false,
     code: null, // how it ended
   };
   const live = () => S.state === 'starting' || S.state === 'running' || S.state === 'paused';
+  // Continue: while paused, or to call off a Pause that hasn't happened yet.
+  const canContinue = () => S.state === 'paused' || (S.state === 'running' && S.pausing);
 
+  let watchNext = false; // the run start() starts is watched (its tuff:run-started takes it)
   async function start(how = 'continue', watch = false) {
     const file = ide.runTarget();
     if (!isTuf(file)) { ide.toast('Open a .tuf file to debug it.'); return; }
     const first = [...files.values()].map((e) => ({ cmd: 'setBreakpoints', file: e.path, lines: [...linesOf(e)] })).filter((m) => m.lines.length);
     first.push(watch ? { cmd: 'watch', delay: delayOf(S.speed) } : { cmd: how });
-    S.watching = watch;
+    for (const e of files.values()) Object.assign(e, { version: e.model ? e.model.getAlternativeVersionId() : null, changed: false });
+    watchNext = watch;
     await ide.runFile(file, { debug: { first } });
   }
 
   function cmd(name) {
     if (name === 'stop') { ide.stopRun(); return; }
+    if (name === 'continue' && S.state === 'running') { // (a Pause that hasn't happened yet: it's called off)
+      Object.assign(S, { pausing: false, asking: false, idle: false });
+      api.debug.send({ cmd: 'continue' });
+      render(false);
+      return;
+    }
     if (name === 'continue' && S.watching) api.debug.send({ cmd: 'watch', delay: delayOf(S.speed) }); // (on at the slider's speed)
     else api.debug.send({ cmd: name });
-    if (name === 'pause') { S.pausing = true; renderStatus(); }
+    if (name === 'pause') { S.pausing = true; renderBar(); renderStatus(); }
   }
 
   // Step Over, Into: one step while paused; when nothing is being debugged, a new run that pauses on its first line.
@@ -203,7 +243,8 @@
     else if (!live()) start(name);
   }
 
-  function watch(on = !S.watching) {
+  // The eye: Watch it run on or off while it's debugged, or a new run that's watched.
+  function watch(on = !(live() && S.watching)) {
     if (!live()) { if (on) start('continue', true); return; }
     S.watching = on;
     api.debug.send({ cmd: 'watch', delay: on ? delayOf(S.speed) : 0 }); // (off while paused keeps it paused)
@@ -213,39 +254,58 @@
 
   window.addEventListener('tuff:run-started', (ev) => {
     const { id, debug } = ev.detail || {};
+    const watching = !!debug && watchNext;
+    watchNext = false;
     clearLine();
     if (!debug) {
-      Object.assign(S, { id: 0, state: 'off', msg: null });
+      Object.assign(S, { id: 0, state: 'off', msg: null, watching });
       show(false);
       render(false);
       return;
     }
-    Object.assign(S, { id, state: 'starting', msg: null, frame: 0, seen: null, asking: false, pausing: false, code: null });
+    Object.assign(S, { id, state: 'starting', msg: null, watching, frame: 0, seen: null, asking: false, idle: false, pausing: false, code: null });
     show(true);
     render(false);
   });
   window.addEventListener('tuff:run-finished', (ev) => { if (S.id && live()) ended(ev.detail?.code); });
 
+  // A file or folder renamed in the project tree (ide.js): its breakpoints go with it.
+  window.addEventListener('tuff:renamed', (ev) => {
+    const { from, to } = ev.detail || {};
+    if (!from || !to) return;
+    const k = key(from);
+    const sep = api?.platform === 'win32' ? '\\' : '/';
+    for (const [old, e] of [...files]) {
+      if (old !== k && !old.startsWith(k + sep)) continue;
+      files.delete(old);
+      e.path = to + e.path.slice(from.length);
+      files.set(key(e.path), e);
+    }
+  });
+
   function onEvent(msg) {
     if (!S.id || msg.id !== S.id) return;
+    if (msg.event === 'breakpoints') { placed(msg); return; }
+    if (!live()) return; // (one that comes after the run has ended, or after Stop)
     if (msg.event === 'paused') paused(msg);
     else if (msg.event === 'watch') watched(msg);
     else if (msg.event === 'running') running();
     else if (msg.event === 'scopes') scopes(msg);
-    else if (msg.event === 'breakpoints') placed(msg);
-    else if (msg.event === 'asking') { S.asking = true; renderStatus(); }
+    else if (msg.event === 'asking' || msg.event === 'idle') { S[msg.event] = true; renderStatus(); }
     else if (msg.event === 'ended') ended(msg.code);
   }
 
   function paused(msg) {
-    Object.assign(S, { state: 'paused', msg, frame: 0, asking: false, pausing: false });
+    Object.assign(S, { state: 'paused', msg, frame: 0, asking: false, idle: false, pausing: false });
     showLine(msg.file, msg.line, msg.reason === 'error' ? 'error' : 'paused', true);
     render(true);
   }
 
-  // Watch it run's next line: its names are drawn once a frame, however fast the lines come.
+  // Watch it run's next line: its names are drawn once a frame, however fast the lines come. (One sent before Watch it
+  // run was turned off is left alone.)
   let drawing = false;
   function watched(msg) {
+    if (!S.watching) return;
     Object.assign(S, { state: 'running', msg, frame: 0 });
     showLine(msg.file, msg.line, 'watch', false);
     if (drawing) return;
@@ -254,7 +314,7 @@
   }
 
   function running() {
-    Object.assign(S, { state: 'running', asking: false });
+    Object.assign(S, { state: 'running', asking: false, idle: false });
     if (!S.watching) { S.msg = null; clearLine(); }
     render(false);
   }
@@ -269,7 +329,7 @@
 
   function ended(code) {
     if (!live()) return;
-    Object.assign(S, { state: 'ended', msg: null, asking: false, pausing: false, code: code ?? null });
+    Object.assign(S, { state: 'ended', msg: null, watching: false, asking: false, idle: false, pausing: false, code: code ?? null });
     clearLine();
     render(false);
   }
@@ -440,7 +500,7 @@
     if (!el.buttons) return;
     const paused = S.state === 'paused';
     const stepping = paused && S.msg?.reason !== 'error';
-    const on = { continue: paused, next: stepping, stepIn: stepping, stepOut: stepping, pause: S.state === 'running', stop: live(), watch: true, close: !live() };
+    const on = { continue: canContinue(), next: stepping, stepIn: stepping, stepOut: stepping, pause: S.state === 'running', stop: live(), watch: true, close: !live() };
     for (const [act, b] of Object.entries(el.buttons)) b.disabled = !on[act];
     el.buttons.watch.classList.toggle('on', S.watching);
     el.buttons.close.classList.toggle('hidden', live());
@@ -457,16 +517,19 @@
     if (S.state === 'starting') text = 'Starting the debugger…';
     else if (S.state === 'running') {
       text = S.asking ? 'The program is waiting for an answer in the Run window. It pauses once you type one.'
-        : S.pausing ? 'Pausing…' : S.watching ? (m ? `Watching it run: ${where}.` : 'Watching it run.') : 'Running. It stops at your breakpoints, or press Pause.';
+        : S.idle ? 'Your program is waiting for something to happen in its window. It pauses on the next line it runs.'
+          : S.pausing ? 'Pausing…' : S.watching ? (m ? `Watching it run: ${where}.` : 'Watching it run.') : 'Running. It stops at your breakpoints, or press Pause.';
     } else if (S.state === 'paused') {
       if (m.reason === 'error') {
         text = `Stopped by an error on ${where}: ${m.error || ''}`;
-        note = 'The names are as they were when it went wrong. Continue ends the program.';
+        // (one in a function the program's window calls, a button's, say: it's shown and the window goes on)
+        note = `The names are as they were when it went wrong. ${m.ends === false ? 'Continue lets the program carry on: its window keeps running.' : 'Continue ends the program.'}`;
       } else text = m.reason === 'breakpoint' ? `Stopped at a breakpoint on ${where}.` : `Paused on ${where}.`;
       if (m.window === 'tk') note = `${note} Its window can't move or redraw while the program is paused.`.trim();
     } else if (S.state === 'ended') {
       text = S.code === 0 ? 'The program has finished.' : S.code === 130 || S.code < 0 ? 'The program was stopped.' : 'The program has ended.';
     }
+    if (edited()) note = `${note} You've changed the code since it started. Debug again to run your changes.`.trim();
     el.status.classList.toggle('error', S.state === 'paused' && m?.reason === 'error');
     el.status.innerHTML = esc(text) + (note ? `<span class="note">${esc(note)}</span>` : '');
   }
@@ -527,7 +590,7 @@
     const add = (id, def) => ide.addCommand(id, def);
     add('debug', { label: 'Debug Current File', sc: 'Shift+F9', run: () => start('continue') });
     add('watchRun', { label: 'Watch It Run', run: () => watch(true) });
-    add('debugContinue', { label: 'Continue', sc: 'F5', run: () => (S.state === 'paused' ? cmd('continue') : live() ? null : start('continue')) });
+    add('debugContinue', { label: 'Continue', sc: 'F5', run: () => (canContinue() ? cmd('continue') : live() ? null : start('continue')) });
     add('stepOver', { label: 'Step Over', sc: 'F10', run: () => step('next') });
     add('stepInto', { label: 'Step Into', sc: 'F11', run: () => step('stepIn') });
     add('stepOut', { label: 'Step Out', sc: 'Shift+F11', run: () => { if (S.state === 'paused' && S.msg?.reason !== 'error') cmd('stepOut'); } });
@@ -551,6 +614,8 @@
     },
     start,
     toggle,
+    // A red dot on this line of the model (Design Studio leaves a click on one to the debugger, studio.js).
+    hasBreakpoint: (model, n) => isTuf(modelPath(model)) && has(modelPath(model), n),
     // The breakpoints, by file: [{ path, lines }] (for the tests and Learn).
     breakpoints: () => [...files.values()].map((e) => ({ path: e.path, lines: [...linesOf(e)].sort((a, b) => a - b) })).filter((b) => b.lines.length),
     state: () => ({ state: S.state, watching: S.watching, reason: S.msg?.reason ?? null, file: S.msg?.file ?? null, line: S.msg?.line ?? null, frame: S.frame }),

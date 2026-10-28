@@ -1,7 +1,7 @@
 // The Tuff Debugger (1.5.0), driven like a person would: a breakpoint from a click in the gutter, the Debug button,
 // the paused line, the Variables panel and the call stack, F10, F11, Shift+F11 and F5, a value opened, another frame,
-// stepping into the file it imports, pause on error, input() while debugging, Watch it run with Pause and Continue,
-// the Run menu, and a plain Run closing the debug pane. The program runs with the Tuff runtime (packaged) or Python
+// stepping into the file it imports, pause on error, input() while debugging, Watch it run with Pause and Continue
+// (and the eye again once it has ended), the Run menu, and a plain Run closing the debug pane. The program runs with the Tuff runtime (packaged) or Python
 // + tuff.py (checkout); it's a console program, so no window opens.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -140,6 +140,7 @@ export default async (t, ctx) => {
     && await lit('error') === 1, await state());
   vars = await text('#debug-pane .dbg-sec.vars .dbg-list');
   check("...with the error in the pane, and half's names as they were", /Stopped by an error on line 3/.test(await text('#debug-pane .dbg-status')) && /x\s+4/.test(vars) && /y\s+8/.test(vars), vars);
+  check('...and it says Continue ends the program', /Continue ends the program/.test(await text('#debug-pane .dbg-status')), await text('#debug-pane .dbg-status'));
   await t.shot('error.png');
   await fkey('F5', 116);
   check('Continue ends it with the error', await ended() && /Tuff error on line 3/.test(await text('#run-output')), await text('#run-output'));
@@ -153,7 +154,7 @@ export default async (t, ctx) => {
   await clickSel('#run-input');
   await t.type('Sam\n', 40);
   check('input() is answered in the Run window as usual, then it stops at the breakpoint', await pausedAt(3), await state());
-  check('...and the Variables panel shows the answer as text', /name\s+"Sam"\s+text/.test(await text('#debug-pane .dbg-sec.vars .dbg-list')), await text('#debug-pane .dbg-sec.vars .dbg-list'));
+  check('...and the Variables panel shows the answer as text, as say shows it', /name\s+Sam\s+text/.test(await text('#debug-pane .dbg-sec.vars .dbg-list')), await text('#debug-pane .dbg-sec.vars .dbg-list'));
   await fkey('F9', 120); // (the cursor is on line 3 again: the breakpoint goes)
   await fkey('F5', 116);
   check('...then it goes on', await ended() && /Hi Sam/.test(await text('#run-output')), await text('#run-output'));
@@ -176,6 +177,12 @@ export default async (t, ctx) => {
   await ev(`(() => { const s = document.querySelector('#debug-pane .dbg-speed input'); s.value = '10'; s.dispatchEvent(new Event('input')); })()`);
   await clickSel('#debug-pane .dbg-b[data-act="continue"]');
   check('Continue goes on watching (at the new speed) to the end', await ended() && /Liftoff!/.test(await text('#run-output')), await text('#run-output'));
+  const eye = '#debug-pane .dbg-b[data-act="watch"]';
+  check('...then the eye goes out', await ev(`!document.querySelector(${JSON.stringify(eye)}).classList.contains('on')`), await state());
+  await clickSel(eye);
+  check('...and the eye watches it run again', await t.waitFor(`window.TuffDebug.state().watching && document.querySelectorAll('.monaco-editor .dbg-line.watch').length === 1`, 20000), await state());
+  await clickSel('#debug-pane .dbg-b[data-act="stop"]');
+  await ended();
 
   // ---- the Run menu, and a plain run
   await ev(`[...document.querySelectorAll('#menubar .menu-root > button')].find((b) => b.textContent === 'Run').click()`);

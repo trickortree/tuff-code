@@ -7918,7 +7918,8 @@ def scene_file(game_path, source_path, out_path):
 # The program waits for the first of continue, next, stepIn, stepOut, watch and pause before it starts (the
 # breakpoints come first). To TuffCode:
 #   {"event": "paused", "reason": "breakpoint" | "step" | "error" | "pause", "file", "line", "col", "stack", "scopes",
-#    "frame": 0, "error": the message (for an error), "window": "tk" (a tgui, mtgui or tdraw window: it can't redraw
+#    "frame": 0, "error": the message and "ends": whether it ends the program (for an error: one in a function a
+#    window calls lets the program carry on), "window": "tk" (a tgui, mtgui or tdraw window: it can't redraw
 #    while the program is paused)}. stack: [{"index", "name", "file", "line", "col", "top"}], the function it's in
 #    first and the program's own top level last. scopes: [{"name", "top", "vars"}], the function's names and then its
 #    file's top level; vars: [{"name", "value" (as say shows it, cut short), "type", "more" (how many things are
@@ -7927,6 +7928,8 @@ def scene_file(game_path, source_path, out_path):
 #   {"event": "scopes", "frame", "scopes"}   the names, after frame or expand
 #   {"event": "breakpoints", "file", "lines": [[the line asked for, the line it stops on or null], ...]}
 #   {"event": "asking"}   Pause while input() waits for an answer: it pauses on the next line, once there is one
+#   {"event": "idle"}     Pause while nothing runs (the top level has ended, and the program waits for something to
+#                         happen in its window): it pauses on the next line it runs
 #   {"event": "running"}, {"event": "ended", "code"}
 # With no debugger nothing of this runs: the program gets the usual Interpreter, with no step hook.
 DEBUGGER = None  # the Debugger, when the program runs with one (see main)
@@ -7942,9 +7945,9 @@ class DebugFull(Exception):
 
 
 def debug_text(v, room=DEBUG_TEXT):
-    """A value as say shows it inside a list (text in quotes, so "5" isn't mistaken for 5), on one line, for the
-    Variables panel. Cut short with … past room letters, without working out the rest: a list of a million numbers
-    is as quick to show as a short one."""
+    """A value as say shows it, on one line, for the Variables panel: text as it is (the panel's type says it's text),
+    and in quotes inside a list, a dictionary or an object, as say shows it there. Cut short with … past room letters,
+    without working out the rest: a list of a million numbers is as quick to show as a short one."""
     parts, size = [], 0
 
     def put(text):
@@ -7956,7 +7959,8 @@ def debug_text(v, room=DEBUG_TEXT):
 
     def show(x, inside):
         if x.__class__ is str:
-            put('"' + x[:room + 1].replace("\n", "\\n").replace("\t", "\\t") + '"')
+            text = x[:room + 1].replace("\n", "\\n").replace("\t", "\\t")
+            put(f'"{text}"' if inside else text)
         elif x.__class__ is int and x.bit_length() > 4000:  # (every digit would take a while to work out)
             put(f"a whole number {int(x.bit_length() * 0.30103) + 1} digits long")
         elif x.__class__ in (list, dict, Instance):
@@ -8019,6 +8023,12 @@ def debug_seconds(v):
     return min(max(v, 0.0), 10.0) if math.isfinite(v) else 0.0
 
 
+def debug_paused():
+    """The seconds the debugger has kept the program paused so far: the time limits a window puts on a function
+    (atgui's app:closed, tuff_view's close) leave them out, so a breakpoint there doesn't use them up."""
+    return 0.0 if DEBUGGER is None else DEBUGGER.held()
+
+
 class DebugFrame:
     """A function that's running, or a file's top-level code: the debugger's call stack is a list of these, the
     program's own top level first. env holds its names and stmt is the statement it's on (both set as its statements
@@ -8036,7 +8046,8 @@ class DebugFile:
     """Where a file's statements are. A breakpoint can be put on any line: a blank one, a comment, a func line or an
     else:, and it stops at the statement the program runs there (see place). loops: each loop's first statement inside
     it, by its (line, col) -> the loop's line and col, and where its body starts and ends, so a loop that goes round
-    again shows its own line before its first statement (see Debugger.round)."""
+    again shows its own line before its first statement, and one written on one line stops there again (see
+    Debugger.round)."""
 
     def __init__(self, src):
         self.starts = set()  # the lines a statement starts on
@@ -8071,7 +8082,7 @@ class DebugFile:
                 self.walk(s.else_body or [])
             elif s.kind in ("while", "for"):
                 first = s.body[0] if s.body else None
-                if first is not None and first.line != s.line:  # (a loop on one line shows that line anyway)
+                if first is not None:  # (one on one line too: while n < 3: n += 1)
                     end = max((x.line, x.col) for x in nodes(s.body))
                     self.loops[(first.line, first.col)] = (s.line, s.col, (first.line, first.col), end)
                 self.walk(s.body)
@@ -8126,6 +8137,8 @@ class Debugger:
         self.opened = set()  # the values opened in the Variables panel, by path: ("top", "rex"), ("local", "items", "0")
         self.since = None  # (frame, line) of the last pause: that line doesn't stop again until the frame runs another
         self.window = None  # "tk": a tgui, mtgui or tdraw window, which can't redraw while the program is paused
+        self.top_ended = False  # the program's top level has ended: only its windows' functions run now (see top_done)
+        self.held_for, self.held_at = 0.0, None  # the seconds it's been paused, all told, and when this pause began
         threading.Thread(target=self.listen, name="tuff-debug", daemon=True).start()
 
     @classmethod
@@ -8222,13 +8235,13 @@ class Debugger:
                         self.command = cmd
                 elif cmd == "pause":
                     self.asked_pause = True
-                    tell = self.asking
+                    tell = "asking" if self.asking else "idle" if self.idle() else None
                 elif cmd == "continue":
                     self.asked_pause = False  # (a pause asked for that hasn't happened yet)
                 self.update()
                 self.cond.notify_all()
             if tell:
-                self.send({"event": "asking"})
+                self.send({"event": tell})
         elif cmd == "frame":
             stack, i = self.paused, msg.get("index")
             if stack is not None and isinstance(i, int) and 0 <= i < len(stack):
@@ -8366,7 +8379,10 @@ class Debugger:
     def step(self, frame, s, last):
         head = self.round(frame, s, last)
         if head is not None:
-            self.stop_at(frame, *head)
+            if self.since is not None and self.since[0] is frame:
+                self.since = None  # (round again: its lines can stop again, a loop written on one line's too)
+            if head[0] != s.line:
+                self.stop_at(frame, *head)
         if s.kind not in ("func", "kind"):  # (making a function or a kind isn't a step)
             self.stop_at(frame, s.line, s.col)
 
@@ -8403,24 +8419,33 @@ class Debugger:
         elif self.watching:
             self.show_line(frame, line, col)
 
-    def pause(self, frame, line, col, reason, error=None, frames=None, file=None):
+    def pause(self, frame, line, col, reason, error=None, frames=None, file=None, ends=None):
         """Stops the program here until TuffCode says how it goes on (this thread waits). frames: the call stack to
-        show, when it isn't the one now (an error's, see failed); file: the error's file."""
+        show, when it isn't the one now (an error's, see failed); file: the error's file; ends: whether the error ends
+        the program."""
         stack = (frames or self.frames)[::-1]
         with self.cond:
             if self.gone:
                 return
             self.asked_pause = False
             self.paused, self.shown, self.command = stack, 0, None
+            self.held_at = time.monotonic()
             self.update()
-        self.send(self.where("paused", stack, line, col, file, reason=reason, error=error))
+        self.send(self.where("paused", stack, line, col, file, reason=reason, error=error, ends=ends))
         with self.cond:
             while self.command is None and not self.gone:
                 self.cond.wait()
             cmd, self.command, self.paused = self.command, None, None
+            self.held_for += time.monotonic() - self.held_at
+            self.held_at = None
             self.since = (frame, line)
             self.go(cmd, len(self.frames))
         self.send({"event": "running"})
+
+    def held(self):
+        """The seconds the program has been paused so far, this pause too (see debug_paused)."""
+        at = self.held_at
+        return self.held_for + (time.monotonic() - at if at is not None else 0.0)
 
     def show_line(self, frame, line, col):
         """Watch it run: TuffCode shows the statement it's on (and the names), then it waits a moment before running it.
@@ -8450,19 +8475,30 @@ class Debugger:
             self.send({"event": "asking"})
 
     def top_done(self):
-        """A finish hook (the first): the program's top level has ended, and only its windows' functions run now."""
+        """A finish hook (the first): the program's top level has ended, and only its windows' functions run now. A
+        Pause that hasn't happened yet waits for one of them (TuffCode hears so)."""
         if self.frames:
             self.frames[0].stmt = None
+        self.top_ended = True
+        if self.asked_pause and self.idle():
+            self.send({"event": "idle"})
+
+    def idle(self):
+        """Nothing runs: the top level has ended and none of the program's functions is running, so it waits for
+        something to happen in its window."""
+        return self.top_ended and len(self.frames) == 1
 
     def failed(self, err):
         """report() is showing an error (pause on error): it pauses on the error's line first, with the names as they
-        were when it went wrong, then the program goes on to end (or a window's function to its end)."""
+        were when it went wrong, then the program goes on to end (err.ends, see ending), or a window's function to
+        its end and the program carries on."""
         if self.interp is None or self.gone or not err.line:
             return
         frames = [f for f in (getattr(err, "frames", None) or self.frames) if f.env is not None]
         if frames:
             try:
-                self.pause(frames[-1], err.line, err.col or 1, "error", err.msg, frames, err.file or self.main)
+                self.pause(frames[-1], err.line, err.col or 1, "error", err.msg, frames, err.file or self.main,
+                           getattr(err, "ends", False))
             except Exception:  # (the error is shown either way)
                 pass
 
@@ -8646,6 +8682,13 @@ def report(err, src):
             pass
         finally:
             SHOWING_BOX.clear()
+
+
+def ending(err):
+    """An error that ends the program, as run_file's do (1.5.0): the debugger's pause on error says Continue ends it.
+    One in a function a window calls is reported and the window carries on (see Runtime.call)."""
+    err.ends = True
+    return err
 
 
 WINDOWED = False
@@ -8853,17 +8896,17 @@ def run_file(path):
         for hook in interp.rt.finish_hooks:
             hook()
     except TuffError as err:
-        report(err, src)
+        report(ending(err), src)
         return 1
     except (ReturnSignal, BreakSignal, ContinueSignal) as sig:
         word = {"ReturnSignal": "return", "BreakSignal": "break", "ContinueSignal": "continue"}[type(sig).__name__]
-        report(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}.", sig.line, sig.col), src)
+        report(ending(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}.", sig.line, sig.col)), src)
         return 1
     except MemoryError:  # (1.4.1) a list or text growing without end, outside any function
-        report(TuffError("The program ran out of memory. Is a list or some text growing without end?"), src)
+        report(ending(TuffError("The program ran out of memory. Is a list or some text growing without end?")), src)
         return 1
     except OverflowError:  # (1.5.0) the maths says so itself, with the line; this is in case anything is missed
-        report(TuffError(TOO_BIG_NUMBER), src)
+        report(ending(TuffError(TOO_BIG_NUMBER)), src)
         return 1
     except KeyboardInterrupt:
         return 130
