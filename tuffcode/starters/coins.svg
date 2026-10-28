@@ -1,0 +1,11 @@
+<svg viewBox="0 0 120 72" xmlns="http://www.w3.org/2000/svg">
+  <ellipse class="td" cx="87" cy="53" rx="13" ry="5"/>
+  <ellipse class="t" cx="87" cy="49" rx="13" ry="5"/>
+  <ellipse class="td" cx="87" cy="45" rx="13" ry="5"/>
+  <ellipse class="t" cx="87" cy="41" rx="13" ry="5"/>
+  <circle class="td" cx="52" cy="37" r="21"/>
+  <circle class="t" cx="50" cy="35" r="21"/>
+  <circle class="tl" cx="50" cy="35" r="14"/>
+  <path class="t" d="M44 28h12v4h-4v13h-4V32h-4z"/>
+  <path class="p" d="M26 12l1.6 4.4L32 18l-4.4 1.6L26 24l-1.6-4.4L20 18l4.4-1.6zM98 14l1.2 3.3L102.5 18.5l-3.3 1.2L98 23l-1.2-3.3L93.5 18.5l3.3-1.2z"/>
+</svg>

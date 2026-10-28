@@ -1,0 +1,84 @@
+# Weather: the weather now, and for the next three days, in any city.
+# It asks Open-Meteo (open-meteo.com), a free weather service that needs no
+# sign-up or key, using tap. When there's no internet, try and catch let it say
+# so kindly instead of stopping.
+mention tap
+
+places_url = "https://geocoding-api.open-meteo.com/v1/search"
+weather_url = "https://api.open-meteo.com/v1/forecast"
+
+# The service sends the weather as a number: what each one means.
+kinds_of_weather = {
+    0: "Clear sky", 1: "Mostly clear", 2: "Partly cloudy", 3: "Cloudy",
+    45: "Fog", 48: "Icy fog",
+    51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle", 56: "Icy drizzle", 57: "Icy drizzle",
+    61: "Light rain", 63: "Rain", 65: "Heavy rain", 66: "Icy rain", 67: "Icy rain",
+    71: "Light snow", 73: "Snow", 75: "Heavy snow", 77: "Snow grains",
+    80: "Light showers", 81: "Showers", 82: "Heavy showers", 85: "Snow showers", 86: "Heavy snow showers",
+    95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Thunderstorm with hail"
+}
+week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+func describe(code):
+    return kinds_of_weather:get(code, "Some weather")
+
+# 0 -> "Today", 1 -> "Tomorrow", then the day of the week, like "Thursday".
+func day_name(days_ahead):
+    if days_ahead is 0:
+        return "Today"
+    if days_ahead is 1:
+        return "Tomorrow"
+    return week[(week:find(date()["weekday"]) + days_ahead) % 7]
+
+# The place called that (a dictionary with its name, country, latitude and
+# longitude), or nil when there's no such place.
+func find_place(name):
+    res = tap.get(f"{places_url}?name={name}&count=1&language=en&format=json")
+    if not res:ok:
+        return nil
+    found = res:json
+    if not found:has("results"):
+        return nil
+    return found["results"][0]
+
+func show_weather(place):
+    url = f"{weather_url}?latitude={place["latitude"]}&longitude={place["longitude"]}&timezone=auto&forecast_days=3"
+    url += "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m"
+    url += "&daily=weather_code,temperature_2m_max,temperature_2m_min"
+    res = tap.get(url)
+    if not res:ok:
+        say:color(f"The weather service said no (error {res:status}). Try again in a minute.", "orange")
+        return
+    forecast = res:json
+    current = forecast["current"]
+    say ""
+    say:color(f"{place["name"]}, {place:get("country", "")}", "sky", "bold")
+    say f"  Now: {describe(current["weather_code"])}, {current["temperature_2m"]:0}°C (feels like {current["apparent_temperature"]:0}°C)"
+    say f"  Wind {current["wind_speed_10m"]:0} km/h, humidity {current["relative_humidity_2m"]}%"
+    daily = forecast["daily"]
+    for i in range(0, len(daily["time"]) - 1):
+        say f"  {day_name(i):9} {describe(daily["weather_code"][i]):16} {daily["temperature_2m_min"][i]:0} to {daily["temperature_2m_max"][i]:0}°C"
+
+say:color("WEATHER", "sky", "bold")
+say "Type a city to see its weather, or press Enter to stop."
+while true:
+    say ""
+    city = input "Which city? "
+    city = city:trim()
+    if city is "":
+        break
+    try:
+        place = find_place(city)
+        if place is nil:
+            say f"I couldn't find a place called {city}. Check the spelling?"
+        else:
+            show_weather(place)
+    catch problem:
+        say:color(f"Couldn't get the weather: {problem}", "orange")
+        say "Check that the computer is on the internet, then try again."
+say "Bye!"
+
+# Ideas to try:
+# - Say what to wear: a coat under 10°C, sunglasses for a clear sky.
+# - Remember the last city with file.save, and offer it next time.
+# - Show the next 7 days (change forecast_days=3 to 7).

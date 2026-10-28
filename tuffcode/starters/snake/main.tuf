@@ -1,0 +1,104 @@
+# Snake: steer with the arrow keys, eat the * to grow, and don't hit the walls
+# or your own tail. Space plays again, and Q (or Esc) stops.
+# It plays in the Run window: if the keys don't reach the game, click it.
+mention tterm
+
+width = 30
+height = 16
+screen = tterm.screen(width, height)
+
+snake = []                  # the snake's parts, head first, each one [x, y]
+dx = 1                      # the way it goes: dx 1 is right, dy 1 is down
+dy = 0
+turn = "right"              # the last arrow key pressed
+food = [0, 0]
+score = 0
+best = file.load("best.json", 0)    # the best score, kept between games
+alive = true
+timer = 0                   # seconds since the snake last moved
+speed = 0.15                # seconds between moves: smaller is faster
+
+# A new game: a short snake in the middle, going right.
+func start():
+    snake = [[8, 8], [7, 8], [6, 8]]
+    dx = 1
+    dy = 0
+    turn = "right"
+    score = 0
+    speed = 0.15
+    alive = true
+    place_food()
+
+# Puts the food on a free spot inside the walls.
+func place_food():
+    food = [random(1, width - 2), random(1, height - 2)]
+    while snake:has(food):
+        food = [random(1, width - 2), random(1, height - 2)]
+
+# Runs about 20 times a second; dt is the seconds since the last time.
+func step(dt):
+    for key in ["up", "down", "left", "right"]:
+        if screen:pressed(key):
+            turn = key
+    if alive:
+        timer += dt
+        if timer >= speed:
+            timer = 0
+            move()
+    elif screen:pressed("space"):
+        start()
+    if screen:pressed("q"):
+        screen:stop()
+    draw()
+
+# Moves the snake one step. The keys only choose the turn, so it can't go
+# straight back into itself.
+func move():
+    if turn is "up" and dy is 0:
+        dx = 0
+        dy = -1
+    elif turn is "down" and dy is 0:
+        dx = 0
+        dy = 1
+    elif turn is "left" and dx is 0:
+        dx = -1
+        dy = 0
+    elif turn is "right" and dx is 0:
+        dx = 1
+        dy = 0
+    head = [snake[0][0] + dx, snake[0][1] + dy]
+    if head[0] < 1 or head[0] > width - 2 or head[1] < 1 or head[1] > height - 2 or snake:has(head):
+        alive = false
+        if score > best:
+            best = score
+            file.save("best.json", best)
+        return
+    snake = [head] + snake
+    if head == food:
+        score += 1
+        speed = max(0.06, speed - 0.005)   # a little faster after each bite
+        place_food()
+    else:
+        snake:pop()                         # it only grows when it eats
+
+func draw():
+    screen:clear()
+    screen:box(0, 0, width, height, "gray")
+    screen:text(2, 0, f" Score {score}  Best {best} ", "gold")
+    screen:put(food[0], food[1], "*", "red")
+    for part in snake:
+        screen:put(part[0], part[1], "o", "lime")
+    screen:put(snake[0][0], snake[0][1], "@", "lime")
+    if not alive:
+        screen:text(10, 6, "GAME OVER", "red")
+        screen:text(6, 8, "Space: play again", "white")
+        screen:text(10, 9, "Q: stop", "gray")
+
+start()
+screen:every_frame(step)            # runs step until screen:stop() or Esc
+say f"Thanks for playing! Your best is {best}."
+
+# Ideas to try:
+# - Walls in the middle: draw some # and end the game when the head hits one.
+# - A golden * worth 3 points that only stays for a few seconds.
+# - Wrap around the edges instead of stopping at the walls.

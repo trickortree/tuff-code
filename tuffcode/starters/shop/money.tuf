@@ -1,0 +1,20 @@
+# money.tuf: money helpers for the shop. main.tuf uses them after
+# import money.tuf , like money.as_money(2.5) or money.with_tax(10).
+
+tax_rate = 0.2                      # 20% tax on everything
+
+# 2.5 -> "$2.50" (the comment above a func is its help when you type money.)
+func as_money(amount):
+    return f"{amount:money}"
+
+# The tax on an amount, to the cent: tax_on(10) is 2 when the tax rate is 20%.
+func tax_on(amount):
+    return round(amount * tax_rate, 2)
+
+# An amount with its tax: with_tax(10) is 12 when the tax rate is 20%.
+func with_tax(amount):
+    return amount + tax_on(amount)
+
+# Changes the tax rate (another file can't change money.tax_rate itself).
+func set_tax_rate(rate):
+    tax_rate = rate

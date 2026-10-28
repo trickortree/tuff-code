@@ -1,0 +1,105 @@
+# Habit Tracker: tick off your habits each day, and watch your streaks grow.
+# This file makes the window with atgui. The habits themselves, and saving them
+# in habits.json, are in habits.tuf: a file of its own, used with import.
+mention atgui
+import habits.tuf
+
+months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+my_habits = habits.load()           # a list of Habits (see habits.tuf)
+
+app = atgui.window("Habit Tracker", 460, 640)
+app:accent "green"
+app:heading "My habits"
+summary = app:small ""
+done_bar = app:progress(0)
+
+row = app:row
+new_name = row:input "A new habit, like Stretch"
+new_name:grow
+row:button("Add", add_habit, "primary"):icon "plus"
+new_name:enter add_habit
+
+habit_list = app:list([])
+habit_list:change tick              # a click on a habit gives tick() its name
+menu = app:menu()
+menu:item("Delete", delete_habit, "danger")
+habit_list:menu menu                # right-click a habit for the menu
+app:small "Click a habit to tick it off for today, and again to untick it. Right-click one to delete it."
+
+app:divider
+app:text "The last 7 days"
+week = app:chart([0, 0, 0, 0, 0, 0, 0], "bar")
+
+refresh()
+
+# Rewrites the list, the summary and the chart from my_habits.
+func refresh():
+    day = today()
+    habit_list:clear
+    done_today = 0
+    for habit in my_habits:
+        item = habit_list:add(habit.name)
+        if habit:done_on(day):
+            done_today += 1
+            item:icon "check"
+        else:
+            item:icon "dot"
+        days_in_a_row = habit:streak(day)
+        if days_in_a_row is 1:
+            item:small "1 day in a row"
+        elif days_in_a_row > 1:
+            item:small f"{days_in_a_row} days in a row"
+        if days_in_a_row >= 7:
+            item:badge "On fire!"
+    d = date()
+    summary:set f"{d["weekday"]} {d["day"]} {months[d["month"] - 1]}: {done_today} of {len(my_habits)} done"
+    if len(my_habits) > 0:
+        done_bar:set(done_today / len(my_habits) * 100)
+    else:
+        done_bar:set(0)
+    week:set(habits.last_week(my_habits, day))
+
+# The habit with that name, or nil.
+func habit_called(name):
+    for habit in my_habits:
+        if habit.name is name:
+            return habit
+    return nil
+
+func add_habit():
+    name = new_name:value():trim()
+    if name is "":
+        app:toast("Type a habit first.", "warning")
+        return
+    for habit in my_habits:
+        if habit.name:lower() is name:lower():
+            app:toast(f"You already have {habit.name}.", "warning")
+            return
+    my_habits:add(habits.Habit(name))
+    habits.save(my_habits)
+    new_name:clear
+    refresh()
+
+func tick(name):
+    habit = habit_called(name)
+    if habit is nil:
+        return
+    habit:toggle(today())
+    habits.save(my_habits)
+    refresh()
+    if habit:done_on(today()):
+        app:toast(f"{habit.name}: done for today. Nice!", "success")
+
+func delete_habit(name):
+    habit = habit_called(name)
+    if habit is nil:
+        return
+    if app:confirm(f"Delete {name}, and the days it was done?"):
+        my_habits:remove(habit)
+        habits.save(my_habits)
+        refresh()
+
+# Ideas to try:
+# - Show the best streak each habit ever had.
+# - A switch that hides the habits done today.
+# - app:theme "light", or another app:accent colour.

@@ -1,0 +1,12 @@
+[
+  { "id": "blank", "name": "Blank", "about": "An empty main.tuf, ready for your own idea.", "tags": ["empty"], "color": "#8a919e", "project": "My Project" },
+  { "id": "hello", "name": "Hello", "about": "Say hello, ask questions and try the basics.", "tags": ["console"], "color": "#5b8def" },
+  { "id": "quiz", "name": "Quiz", "about": "Questions in a dictionary, with a score at the end.", "tags": ["console", "game"], "color": "#9b6cf0" },
+  { "id": "habits", "name": "Habit Tracker", "about": "Tick off habits each day and watch your streaks grow.", "tags": ["app", "saves"], "color": "#2fb3a0" },
+  { "id": "shop", "name": "Corner Shop", "about": "A shop in two files, with money.tuf and a kind.", "tags": ["console", "files"], "color": "#e8a33d" },
+  { "id": "snake", "name": "Snake", "about": "Steer with the arrow keys, eat the * and grow.", "tags": ["game", "terminal"], "color": "#63c74d" },
+  { "id": "coins", "name": "Coin Collector", "about": "Grab coins, dodge ladybirds, beat your best.", "tags": ["game", "2D"], "color": "#f0b429" },
+  { "id": "music", "name": "Music Box", "about": "Play tunes written as notes, or write your own.", "tags": ["music", "console"], "color": "#e85d9c" },
+  { "id": "drawing", "name": "Drawing", "about": "A pen that draws a rainbow spiral, a moon and stars.", "tags": ["drawing"], "color": "#f0643c" },
+  { "id": "weather", "name": "Weather", "about": "The weather in any city, from the internet.", "tags": ["web", "console"], "color": "#38b6d8" }
+]
