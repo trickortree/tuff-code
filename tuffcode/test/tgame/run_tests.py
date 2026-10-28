@@ -8222,6 +8222,60 @@ def learn_150_plays(cmds):
     return [(f, s.get("play", "-"), s.get("cell")) for f, s in frame_sets(cmds, pic)]
 
 
+def learn_150_png(data):
+    """An 8-bit PNG read the way the game window has to read it, every chunk's CRC checked and every row unfiltered:
+    (width, height, rows of pixels, how see-through a pixel is from 0 to 255), or None if it doesn't read. (tgame
+    itself only reads the header, so a run doesn't notice a broken picture: the window just shows nothing.)"""
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos, idat, head, trns = 8, b"", None, b""
+    while pos + 12 <= len(data):
+        n = struct.unpack(">I", data[pos:pos + 4])[0]
+        kind, body = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + n]
+        if data[pos + 8 + n:pos + 12 + n] != struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF):
+            return None
+        if kind == b"IHDR":
+            head = struct.unpack(">IIBBBBB", body)
+        elif kind == b"IDAT":
+            idat += body
+        elif kind == b"tRNS":
+            trns = body
+        pos += 12 + n
+    if not head or head[2] != 8 or head[3] not in (0, 2, 3, 4, 6) or head[6] != 0:
+        return None
+    w, h, ctype = head[0], head[1], head[3]
+    bpp = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[ctype]
+    try:
+        raw = zlib.decompress(idat)
+    except zlib.error:
+        return None
+    if len(raw) != h * (w * bpp + 1):
+        return None
+    rows, prev = [], bytearray(w * bpp)
+    for y in range(h):
+        start = y * (w * bpp + 1)
+        how, line = raw[start], bytearray(raw[start + 1:start + 1 + w * bpp])
+        for x in range(len(line)):
+            a, b = line[x - bpp] if x >= bpp else 0, prev[x]
+            c = prev[x - bpp] if x >= bpp else 0
+            if how > 4:
+                return None
+            if how == 4:
+                p = a + b - c
+                near = a if abs(p - a) <= abs(p - b) and abs(p - a) <= abs(p - c) else b if abs(p - b) <= abs(p - c) else c
+            else:
+                near = (0, a, b, (a + b) // 2)[how]
+            line[x] = (line[x] + near) & 255
+        rows.append([tuple(line[i:i + bpp]) for i in range(0, len(line), bpp)])
+        prev = line
+
+    def alpha(px):
+        if ctype == 3:
+            return trns[px[0]] if px[0] < len(trns) else 255
+        return px[-1] if ctype in (4, 6) else 255
+    return w, h, rows, alpha
+
+
 def t_learn_150(c):
     """1.5.0, headless: Learn's Section 1.7, the Workshop (text templates, kinds, actions, your own files, tmusic, tterm
     and sprite sheets). learn.js, in Node (learn_test.mjs), lists it after Toolbox. Every lesson's example, starter and
@@ -8277,8 +8331,15 @@ def t_learn_150(c):
     c.check({i: sorted(f) for i, f in own.items() if f} == {"workshop-files": ["money.tuf"], "workshop-sheets": ["walker.png"]},
             "two lessons have files of their own: money.tuf for your own files, walker.png for sprite sheets", {i: sorted(f) for i, f in own.items()})
     learn_150_write(folder, own["workshop-sheets"])
-    c.check(tuff_tgame.image_size(os.path.join(folder, "walker.png")) == (384, 96),
-            "walker.png is a picture 384 x 96: 4 frames side by side, each 96 x 96", tuff_tgame.image_size(os.path.join(folder, "walker.png")))
+    pic = learn_150_png(base64.b64decode(own["workshop-sheets"]["walker.png"]["base64"]))
+    c.check(pic is not None and pic[:2] == (384, 96) and tuff_tgame.image_size(os.path.join(folder, "walker.png")) == (384, 96),
+            "walker.png reads whole, as the game window reads it (every CRC and row): 384 x 96, 4 frames of 96 x 96", pic and pic[:2])
+    if pic:
+        w, h, rows, alpha = pic
+        frames = [[tuple(row[i * 96:(i + 1) * 96]) for row in rows] for i in range(4)]
+        shown = [sum(alpha(px) > 0 for row in f for px in row) for f in frames]
+        c.check(all(alpha(f[0][0]) == 0 and alpha(f[95][95]) == 0 for f in frames) and all(2000 < n < 6000 for n in shown)
+                and len(set(map(tuple, frames))) == 4, "...each frame see-through around a walker of its own (4 different frames)", shown)
 
     # Each lesson's code, next to its own files: --check, and a run in both runtimes.
     outputs = {}  # (lesson, part) -> what it said, for its check
@@ -8377,10 +8438,11 @@ def t_learn_150(c):
             "Start lesson on 'Your own files' makes lessons/, the lesson's file and money.tuf next to it, then opens the lesson", files)
     with open(os.path.join(lessons_dir, "money.tuf"), encoding="utf-8") as f:
         c.check(f.read() == own["workshop-files"]["money.tuf"], "...with the money.tuf the lesson has")
+    with open(os.path.join(lessons_dir, "walker.png"), "rb") as f:
+        same = f.read() == base64.b64decode(own["workshop-sheets"]["walker.png"]["base64"])
     c.check(sheet.get("calls") == [["writeFile", "lessons/workshop-07-sheets.tuf"], ["plugins.writeFile", "lessons/walker.png", "base64"],
-                                   ["refreshTree"], ["openFile", "lessons/workshop-07-sheets.tuf"]]
-            and tuff_tgame.image_size(os.path.join(lessons_dir, "walker.png")) == (384, 96),
-            "Start lesson on 'Animated pictures' writes walker.png (as base64, inside the project) next to its file", sheet)
+                                   ["refreshTree"], ["openFile", "lessons/workshop-07-sheets.tuf"]] and same,
+            "Start lesson on 'Animated pictures' writes walker.png (as base64, inside the project) next to its file", (sheet, same))
     c.check(plain.get("calls") == [["writeFile", "lessons/workshop-01-templates.tuf"], ["refreshTree"], ["openFile", "lessons/workshop-01-templates.tuf"]],
             "...and a lesson without files of its own writes only its file", plain)
     # The solutions, in the lesson files there: they find money.tuf and walker.png.
