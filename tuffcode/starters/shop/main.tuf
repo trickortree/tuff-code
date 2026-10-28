@@ -1,0 +1,86 @@
+# Corner Shop: a shop in two files. money.tuf has the money helpers, and this
+# file has the shop itself: a kind called Item for each thing on the shelf, and
+# a basket. Buy things by their number, then press Enter to pay.
+import money.tuf
+
+# Each thing on the shelf is an Item: a name, a price and how many are left.
+kind Item:
+    name = "?"
+    price = 0
+    stock = 0
+
+    # Takes some off the shelf. Gives back true when there were enough.
+    func take(how_many):
+        if how_many > my.stock:
+            return false
+        my.stock -= how_many
+        return true
+
+shelf = [Item("Apple", 0.45, 12), Item("Bread", 2.1, 4), Item("Milk", 1.25, 6), Item("Cheese", 3.8, 3), Item("Cookies", 1.99, 8)]
+basket = {}                         # an item's name -> how many are in the basket
+
+func show_shelf():
+    say ""
+    say:color("  #  Item          Price  Left", "gray")
+    shelf_number = 1
+    for thing in shelf:
+        say f"  {shelf_number}  {thing.name:10} {money.as_money(thing.price):>8}  {thing.stock:>4}"
+        shelf_number += 1
+
+# What's in the basket so far, before tax.
+func basket_total():
+    total = 0
+    for thing in shelf:
+        total += basket:get(thing.name, 0) * thing.price
+    return total
+
+# A line of the receipt: the words on the left, the money lined up on the right.
+func receipt_line(words, amount):
+    return f"{words:18} {money.as_money(amount):>8}"
+
+say:ascii("SHOP", "small", "gold")
+say "Welcome to the Corner Shop!"
+while true:
+    show_shelf()
+    choice = input "Buy which number? (Enter to pay) "
+    choice = choice:trim()
+    if choice is "":
+        break
+    picked = int(choice)
+    if picked is err or picked < 1 or picked > len(shelf):
+        say:color(f"There's no number {choice} on the shelf.", "orange")
+        continue
+    chosen = shelf[picked - 1]
+    how_many = int(input f"{chosen.name}: how many? ")
+    if how_many is err or how_many < 1:
+        say:color("Type how many you'd like, like 2.", "orange")
+    elif chosen:take(how_many):
+        basket[chosen.name] = basket:get(chosen.name, 0) + how_many
+        say:color(f"Added {how_many} x {chosen.name}. Basket so far: {money.as_money(basket_total())}", "lime")
+    else:
+        say:color(f"Sorry, there are only {chosen.stock} left.", "orange")
+
+say ""
+if len(basket) is 0:
+    say "Nothing in the basket. See you next time!"
+else:
+    receipt = [f"Corner Shop, {today()}", ""]
+    for thing in shelf:
+        count = basket:get(thing.name, 0)
+        if count > 0:
+            receipt:add(receipt_line(f"{count} x {thing.name}", count * thing.price))
+    subtotal = basket_total()
+    receipt:add("")
+    receipt:add(receipt_line("Subtotal", subtotal))
+    receipt:add(receipt_line(f"Tax ({money.tax_rate * 100:0}%)", money.tax_on(subtotal)))
+    receipt:add(receipt_line("Total", money.with_tax(subtotal)))
+    for line in receipt:
+        say line
+    file.write("receipt.txt", receipt:join("\n"))
+    say ""
+    say:color("Thanks for shopping! Your receipt is in receipt.txt.", "lime")
+
+# Ideas to try:
+# - Add a "discount" function to money.tuf, and a code people can type at the end.
+# - Give Item a field for its shelf, like "fruit", and show the shelves one by one.
+# - Save what's left on the shelf with file.save, so the shop remembers its stock.

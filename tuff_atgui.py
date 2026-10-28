@@ -1183,6 +1183,8 @@ class Lib:
         except self.error_type as err:
             if err.line is None and getattr(fn, "line", None):
                 err.line = fn.line
+                if hasattr(self.tuff, "file_of"):  # (1.5.0) the file it's written in: one of the program's own, maybe
+                    err.file = self.tuff.file_of(fn.env)
             self.report(err)
         except RecursionError:
             self.report(self.error_type(f"{getattr(fn, 'name', 'This function')}() called itself too many times.", getattr(fn, "line", None)))
@@ -1196,23 +1198,20 @@ class Lib:
         """fire(fn), for a function that has to finish within `seconds`: each Tuff statement it starts after then raises
         the error `why`, which stops it (reported once, with its line). For app:closed's function, which runs once the
         window has gone, so one that's stuck can't keep the program running where nobody can see it."""
-        interp = self.rt.interp
-        own = vars(interp).get("run")  # (normally none: the interpreter's own run runs each statement)
-        run = interp.run
+        hooks = self.rt.interp.step_hooks  # (1.5.0: run before each statement, by both of tuff.py's runtimes)
         deadline = time.monotonic() + seconds
+        # (1.5.0) The time the debugger keeps it paused (at a breakpoint in it, say) doesn't count.
+        paused = getattr(self.tuff, "debug_paused", None) or (lambda: 0.0)
+        was = paused()
 
         def timed(s, env):
-            if time.monotonic() > deadline:
+            if time.monotonic() - (paused() - was) > deadline:
                 raise self.error_type(why, s.line, s.col)
-            return run(s, env)
-        interp.run = timed
+        hooks.append(timed)
         try:
             return self.fire(fn)
         finally:
-            if own is None:
-                del interp.run
-            else:
-                interp.run = own
+            hooks.remove(timed)
 
     def report(self, err):
         key = (err.line, err.col, err.msg)

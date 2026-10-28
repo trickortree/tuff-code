@@ -4773,6 +4773,5933 @@ def t_pictures_up(c):
         c.check(got == want, f"running it, atgui's image_url gives {want[:44]!r}... for {label}", got)
 
 
+# ---------------------------------------------------------------- the compiled interpreter (1.5.0)
+
+# Runs one program for the differential test: random numbers start the same, now(), today(), date() and time() give
+# fixed answers, and wait() and animations take no time, so a program gives the same output every time. The rest is
+# tuff.py's own main(): TUFF_SLOW=1 (in the environment) runs the old tree walker, and without it the compiled runtime.
+INTERP_DRIVER = r'''import os, random, sys, time
+sys.path.insert(0, sys.argv[1])
+import tuff
+random.seed(5)
+time.sleep = lambda seconds: None
+init = tuff.Interpreter.__init__
+def fixed(self, *args, **kwargs):
+    init(self, *args, **kwargs)
+    when = {"now": lambda: "10:30:00", "today": lambda: "2026-10-26", "time": lambda: 1.25,
+            "date": lambda: {"year": 2026, "month": 10, "day": 26, "weekday": "Monday", "hour": 10, "minute": 30, "second": 0}}
+    for name, fn in when.items():
+        (self.own_names if name in tuff.OWN_NAME_BUILTINS else self.globals).vars[name].fn = fn
+def no_wait(self, seconds):
+    sys.stdout.flush()
+    max(0, float(seconds))
+    for hook in self.rt.wait_hooks:
+        hook()
+tuff.Interpreter.__init__ = fixed
+tuff.Interpreter.b_wait = no_wait
+sys.argv = ["tuff.py"] + sys.argv[2:]
+sys.exit(tuff.main())
+'''
+INTERP_ANSWERS = "Sam\n7\nyes\n3\nno\n12\n5\nquit\n"
+WINDOW_LIBRARY = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|atgui|tgame|tdraw|tap)\b", re.M)  # tap: the internet
+# Small programs for the corners: where an error is reported (line and column), try/catch, return, break and continue
+# in and out of loops and functions, what a function gives back, live lines, own-name built-ins, the two readings of
+# x[a:b], dictionaries, numbers and text. Most stop at an error at the end, so each one checks one more message.
+INTERP_CASES = [
+    'say nope', 'x = 1\nsay x + nope', 'func f(a):\n    return a + missing\nsay f(1)', 'func f(a):\n    return a * 2\nsay f(1, 2)',
+    'say len(1, 2)', 'say len(5)', 'items = [1, 2]\nsay items[5]', 'items = [1, 2]\nitems[2] = 3', 's = "hi"\ns[0] = "H"',
+    'd = {"a": 1}\nsay d["b"]', 'd = {"1": "one"}\nsay d[1]', 'say 1 / 0', 'x = 5 % 0', 'say (-8) ^ (1 / 3)', 'say 2 ^ 0.5',
+    'say "a" - 1', 'say true + 1', 'say [1] < [2]', 'x = 5\nx += "a"\nsay x\nx -= 1', 'for i in 5:\n    say i',
+    'for i in nil:\n    say i', 'x = 5\nx()', 'len = 3\nsay len("abc")', 'say num("x") + 1', 'n = int("abc")\nsay n * 2',
+    'say -"a"', 'say -[1]', 'say {[1]: 2}', 'k = {}\nk[true] = 1', 'x = nil\nsay "abc"[1:x]', 'say "abc"["a":2]',
+    'n = 5\nsay n[1:2]', 'x = 5\nsay x.y', 'say anims.loading', 'import nothing', 'mention anims\nsay anims.nope',
+    'items = [1]\nitems:append(2)', 'say "abc":nope()', 'x = 5\nsay x:upper()', 'say [[1], 2]:sort()',
+    'func by(x):\n    return [x]\nitems = [2, 1]\nitems:sort(by)', 'func by(a, b):\n    return a\nitems = [2, 1]\nitems:sort(by)',
+    'say [1, 2]:pop(0)', 'say []:pop()', 'x = [1]\nx:remove(5)', 'd = {}\nd:remove("a")', 'clear(-1)', 'say random(5, 1)',
+    'say sqrt(-1)', 'say tan(90)', 'say log(0)', 'say round("a")', 'say min()', 'say text(1, 200)', 'say range(1, 10, 0)',
+    'break', 'continue', 'return 5', 'say "before"\nfunc f():\n    break\nf()',
+    'func f():\n    continue\nfor i in range(1, 3):\n    say i\n    f()\n    say "never"',
+    'func forever(n):\n    return forever(n + 1)\nforever(1)', 'func a(n):\n    return b(n + 1)\nfunc b(n):\n    return a(n + 1)\nsay a(1)',
+    'x = 1\nif x:\n    y = 2\nsay y + z', 'say "a" * "b"', 'say "ab" * 3 + 3 * "c"', 'say "x" * 600000000',
+    'items = [1, 2, 3]\nsay items[1.5]', 'items = [1, 2, 3]\nsay items["a"]', 'say err + 1', 'x = err\nsay x:upper()',
+    'say input:color("Name? ", "gren")', 'say:color("hi", "nocolor")', 'print:pen("bogus")', 'l = say "hi"\nl:play("nothing")',
+    'l = say "hi"\nl:rewrite()', 'say 1 < "a"', 'x = [1, 2]\nx += 3', 'x = 4\nx /= 0', 'items = [1]\nitems[0] /= 0',
+    'd = {"a": 1}\nd["b"] += 1', 'd = {"a": 1}\nd[[1]] = 2', 'x = nil\nsay x + 1', 'say [1, 2] + [3]\nsay [1] + 2',
+    'say 1 < 2 < 3', 'func f():\n    for x in 5:\n        say x\nf()', 'x = 0\nwhile x < nope:\n    x += 1',
+    'if false:\n    say 1\nelif nil:\n    say 2\nelse:\n    say 3 + nil', 'func f(print):\n    print(1)\nf(5)',
+    'items = [1, 2]\nsay items[0] + items[1] * items[-1] - items[-2] / 2\nsay items[2 - 5]',
+    'try:\n    say 1 / 0\ncatch p:\n    say p\n    say nope', 'for i in range(1, 3):\n    say i\n    return',
+    'if true:\n    break', 'try:\n    break\ncatch:\n    say "no"', 'say 10 ^ 400 / 3', 'say 2 ^ 99999 * 1.5',
+    'func f():\n    return 1\nsay f()\nfunc f():\n    return 2\nsay f()', 'say later(2)\nfunc later(x):\n    return x * 3',
+    'if true:\n    func inner():\n        return 1\nsay inner()', 'x = 1\nsay x:nope', 'say {"a": 1}:sort()',
+    # what a function gives back
+    'func a():\n    x = 5\nfunc b():\n    if true:\n        7\nfunc c():\n    for i in range(1, 2):\n        i\nfunc d():\n    say "d"\n'
+    'func e():\n    return\nfunc g():\n    while false:\n        say 1\nfunc h():\n    try:\n        8\n    catch:\n        9\n'
+    'say a()\nsay b()\nsay c()\nsay d()\nsay e()\nsay g()\nsay h()',
+    'func f(n):\n    while true:\n        n += 1\n        if n > 5:\n            return n\nsay f(1)',
+    'func grade(s):\n    if s >= 90:\n        return "A"\n    elif s >= 80:\n        return "B"\n    else:\n        for i in range(1, 3):\n'
+    '            if i == 2:\n                return "C" + i\nsay grade(95)\nsay grade(85)\nsay grade(10)',
+    'func f():\n    try:\n        return 1 / 0\n    catch p:\n        return "caught " + p\nsay f()',
+    'func f(n):\n    for i in range(1, 10):\n        for j in range(1, 10):\n            if i * j == n:\n                return [i, j]\n    return nil\n'
+    'say f(12)\nsay f(97)',
+    # loops: break, continue, and the ones that come from a function called inside the loop (as before)
+    'for i in range(1, 3):\n    for j in range(1, 3):\n        if j == 2:\n            break\n        say i + " " + j',
+    'for i in range(1, 5):\n    try:\n        if i == 3:\n            break\n        say 10 / (i - 2)\n    catch p:\n        say "caught " + p',
+    'for i in range(1, 4):\n    try:\n        x = 1 / (i - 2)\n    catch:\n        continue\n    say i',
+    'n = 0\nfunc skip():\n    continue\nwhile n < 3:\n    n += 1\n    if n == 2:\n        skip()\n    say n',
+    'func by(x):\n    break\nfor i in range(1, 3):\n    say i\n    [2, 1]:sort(by)\nsay "out"',
+    'func stop():\n    break\nfor i in range(1, 5):\n    say "loop " + i\n    if i == 2:\n        stop()\nsay "after"',
+    'n = 0\nwhile true:\n    n += 1\n    if n % 2 == 0:\n        continue\n    if n > 9:\n        break\n    say n',
+    'items = [1, 2, 3]\nfor x in items:\n    items:add(x)\nsay items', 'for k in {"a": 1, "b": 2}:\n    say k',
+    'for ch in "hey":\n    say ch', 'for i in range(10, 1, -3):\n    say i\nfor i in range(3, 1):\n    say i\nsay range(5)',
+    'i = 100\nfunc f():\n    for i in range(1, 3):\n        say i\nf()\nsay i',
+    'x = 0\nwhile x < 3 and true:\n    x += 1\nsay x\nsay (nil or "default")\nsay (0 and 5)\nsay not ""\nsay not [1]\nsay 1 is not 2',
+    'total = 0\nfor i in range(1, 100000):\n    if i % 3 == 0 or i % 5 == 0:\n        total += i\nsay total',
+    's = ""\nfor i in range(1, 200):\n    s += text(i % 10)\nsay len(s)\nsay s[0:20]',
+    'if 1 < 2 then say "yes"\nwhile false: say "no"\nfor i in [1]: say i',
+    # names: rule 2, functions inside functions, own-name built-ins, try and catch as names
+    'total = 0\nfunc add(n):\n    total += n\nadd(5)\nadd(2)\nsay total',
+    'func make():\n    count = 0\n    func inc():\n        count += 1\n        return count\n    return inc\nc = make()\nsay c()\nsay c()',
+    'func f():\n    num = 5\n    return num\nsay f()\nsay num("3") + 1\nnum = 2\nsay num',
+    'func t():\n    time = 3\n    return time\nsay t()\nsay time()\ntime = 5\nsay time', 'err = "custom"\nsay err',
+    'problem = "old"\nfunc f():\n    try:\n        x = 1 / 0\n    catch problem:\n        say problem\nf()\nsay problem',
+    'func f(len):\n    return len\nsay f(3)\nsay len("ab")', 'func greet:\n    say "hi"\ngreet()',
+    'func perms(items):\n    if len(items) <= 1:\n        return [items]\n    out = []\n    for i in range(0, len(items) - 1):\n'
+    '        rest = []\n        for j in range(0, len(items) - 1):\n            if j != i:\n                rest:add(items[j])\n'
+    '        for p in perms(rest):\n            out:add([items[i]] + p)\n    return out\nsay perms([1, 2, 3])',
+    # values: numbers, text, lists, dictionaries, err, live lines
+    'say 1 == 1.0\nsay 1 is true\nsay "a" < "b"\nsay [1] == [1]\nsay {"a": 1} == {"a": 1}\nsay nil == nil\nsay 0.1 + 0.2\n'
+    'say 7 / 2\nsay 7 % 3\nsay -7 % 3\nsay 2 ^ 10\nsay 10 / 4 * 2\nsay 5 is 5.0\nsay "5" is 5\nsay true is 1\nsay nil is false',
+    'say 3.0\nsay 2 ^ 100\nsay 1 / 3\nsay round(2.5)\nsay round(3.14159, 2)\nsay floor(-2.5)\nsay 10 - 0.1\nsay 2 ^ -1\n'
+    'say (-2) ^ 2\nsay -2 ^ 2\nsay 0.1 * 3\nsay 1 - 1 - 1\nsay 2 * 3 + 4 * 5 - 6 / 3 % 4',
+    'x = 3\nx *= 2\nx /= 4\nx -= 0.5\nsay x\ns = "a"\ns += "b"\ns += 1\nsay s\ns *= 2\nsay s\nn = 7\nn -= 10\nsay n',
+    'say "a" + 1 + 2\nsay 1 + 2 + "a"\nsay "x" * 3\nsay "abc":upper()\nsay "  hi ":trim()\nsay "a,b":split(",")\n'
+    'say ["a", "b"]:join("-")\nsay "hello":find("l")\nsay "hello":count("l")\nsay "7":pad_left(3, "0")\nsay "a" * 0\nsay "ab" * -1',
+    's = "hello world"\nsay s[0:4]\nsay s[:4]\nsay s[6:]\nsay s[-5:]\nsay s[3:1]\nitems = [1, 2, 3, 4]\nsay items[1:2]\nsay items[-2:]\n'
+    'i = 1\nsay s[i + 1:i + 3]\nsay s[:s:find(" ") - 1]',
+    'board = ["", "", ""]\nmoves = [0, 2]\nboard[moves:pop] = "X"\nsay board\norder = [1]\nsay board[order:pop]\nstack = [nil]\nsay board[stack:pop]',
+    'd = {}\nd["a"] = 1\nd["a"] += 1\nd:set("b", 2)\nsay d\nsay d:get("c", 0)\nsay d:has("a")\nsay d:keys()\nsay d:values()\nsay len(d)\n'
+    'd:remove("a")\nsay d\ncounts = {}\nfor w in ["a", "b", "a"]:\n    if counts:has(w):\n        counts[w] += 1\n    else:\n'
+    '        counts[w] = 1\nsay counts\nsay counts:size()',
+    'd = {1: "one", 2.5: "x"}\nsay d[1]\nsay d[2.5]\nd[1.0] = "uno"\nsay d\nsay {"a": [1, {"b": nil}]}',
+    'items = [1, 2, 3]\nitems[-1] = 9\nitems[0] += 5\nsay items\ngrid = [[0, 0], [0, 0]]\ngrid[1][0] = 5\nsay grid\nsay grid[1][0] + 1',
+    'say [1, 2]:join(", ")\nsay [1, [2, 3]]\nl = [1]\nl:add(l)\nsay l\nx = [1, 2]\nsay x:add(3):add(4)',
+    'func by_len(w):\n    return len(w)\nwords = ["ccc", "a", "bb"]\nwords:sort(by_len)\nsay words\nwords:reverse()\nsay words\n'
+    'nums = [3, 1, 2]\nsay nums:sort()\nsay nums:find(2)\nsay nums:has(5)\nsay [true, 2, "b", "A"]:sort()',
+    'x = num("hi")\nif x is err:\n    say "not a number"\nsay x == err\nsay x != 5\nsay text(x)\nsay [x]\nsay int("4.7")\nsay number(" 8 ")',
+    'bar = say "Loading"\nfor i in range(1, 3):\n    bar:rewrite "Loading" + "." * i\nbar:append "!"\nsay bar\nsay bar:text()\n'
+    'x = bar + " ok"\nsay x\nbar:clear\nsay len(bar:text())\nbar:rewrite("Done", "lime")',
+    'l = say "hi"\nsay l == "hi"\nsay l is "hi"\nsay "hi" == l\nsay l < "z"\nn = say 5\nsay n + 1\nsay n * 2\nsay l[1]\nsay l[0:0]\n'
+    'say len(l)\nfor ch in l:\n    say ch\nd = {l: 1}\nsay d["hi"]\nsay -n',
+    'items = []\nitems:add say "added"\nsay items\nprint("a", 1, true, nil, [1, "b"])\nprint()',
+    'print:pen("red")\nsay "pen"\nx = input "With pen? "\nprint:pen()\nsay "plain"\nsay:color("c", "blue")\nsay:ascii("Hi")\nprint:ascii("Yo", "small")',
+    'name = input "Name? "\nage = number(input("Age? "))\nsay name + " " + age\nok = input\nsay ok\nx = input:color("Q? ", "green")\nsay x',
+    'say "a"\nsay "b"\nclear(1)\nsay "c"\nflush\nsay "d"\nclear(all)\nsay pi',
+    'mention anims\nanims.loading("Hi", 0.2)\nanims.bar("B", 0.1)\nl = anims.type("typed", 0)\nanims.countdown(2, "Go")\nsay l:text()',
+    'file.write("a.txt", "one")\nfile.add("a.txt", "two")\nsay file.read("a.txt")\nsay file.lines("a.txt")\nsay file.exists("a.txt")\n'
+    'file.save("d.json", {"x": [1, 2]})\nsay file.load("d.json")\nfile.delete("a.txt")\nsay file.exists("a.txt")\nsay file.read("a.txt")',
+    'say random(1, 6)\nsay random()\nsay random(0.5, 2.5)\nsay random(3)\nsay now()\nsay today()\nsay time()\nsay date()',
+    'say sin(30)\nsay cos(60)\nsay log(100, 10)\nsay log(8, 2)\nsay sqrt(2)\nsay abs(-3)\nsay ceil(2.1)\nsay min(3, 1, 2)\n'
+    'say max([4, 9])\nsay sum([1, 2])\nsay average(1, 2)\nwait(0)\nwait("x")',
+    'func d(n):\n    if n == 0:\n        return 0\n    return d(n - 1) + 1\nsay d(9000)\ntry:\n    say d(20000)\ncatch p:\n    say p',
+    'say ' + ' + '.join(['1'] * 400), 'say ' + '(' * 120 + '1' + ')' * 120, 'x = [' + ', '.join(str(i) for i in range(300)) + ']\nsay len(x)',
+    'catch = []\ncatch:add("trout")\nsay catch\ntry = [3]\ntry:add(4)\nsay try',
+    # the quick paths' edges: a number or text written in the program on either side, x += with each kind of value
+    'say 5 == "a"\nsay "a" == 5\nsay "5" != 5\nsay "a" < "b"\nsay "b" >= "a"\nsay "x" + 1\nsay 1 + "x"\nsay "a" + "b"\nsay nil == "a"\nsay "a" + nil',
+    'say "5" < 3', 'say 3 < "5"', 'say nil < 1', 'say 2 - "a"', 'say "a" * 2.5', 'say 7 % 0.0', 'say 0 / 0', 'x = 0\nsay 5 / x',
+    'n = 5\nn += "x"\nsay n\ns = "a"\ns += 1\nsay s\ns += nil\nsay s\ns -= 1', 'x = 2\nx /= 0', 'x = "a"\nx *= 3\nsay x\nx *= "b"',
+    'total = 0\nfunc add():\n    total += 1\n    total += "!"\nadd()\nsay total\nfunc more():\n    missing += 1\nmore()',
+    'x = true\nx += 1', 'l = say "hi"\nl += "!"\nsay l\nm = say 4\nm += 1\nsay m',
+    'say 5:has(1)', 'say [1]:upper()', 'say {"a": 1}:find("a")', 'd = {}\nsay d:has([1])', 'say "abc":has(1)\nsay "a1c":has(1)',
+    'l = say "hi"\nsay l:upper()', 'd = {"a": 1}\nsay d:get([1])', 'd = {"a": 1}\nsay d:get("b", 5)\nsay d:get("b")\nd:set("c", 3)\nsay d\nd:set([1], 2)',
+    'd = {"a": 1}\nsay d:keys(1)', 'say "Hi":lower()\nsay " x ":trim()\nsay "abc":starts("a")\nsay "abc":ends(1)\nsay "banana":count("a")\nsay "abc":find("z")',
+    'say len("a")\nsay len("a", "b")', 'say len()\nsay len("ab")', 'say random(1, 1)\nsay random(1, 2, 3)',
+    'func f(a):\n    return a\nsay f(1)\nsay f()', 'func f():\n    return 1\nx = f\nsay x()\nsay x(1)',
+    'items = [1, 2, 3]\nitems[1] = "b"\nitems[-3] = "a"\nsay items\nitems[3] = 0', 'd = {}\nd[1] = "one"\nd["1"] = "text"\nd[1.5] = "x"\nsay d',
+    's = "abc"\nsay s[0] + s[-1]\nsay s[3]', 'items = [[1, 2], [3, 4]]\nsay items[1][-1]\nsay items[2][0]',
+    'func outer():\n    for i in range(1, 3):\n        func inner():\n            return i * 10\n        say inner()\n    return "end"\nsay outer()',
+    'func f(n):\n    while true:\n        try:\n            if n > 2:\n                break\n            n += 1\n        catch:\n            say "no"\n    return n\nsay f(0)',
+    'func f():\n    for i in range(1, 3):\n        try:\n            return i / 0\n        catch p:\n            continue\n    return "after"\nsay f()',
+]
+# The quick check for speed: generous limits, and the compiled runtime at least twice as fast as the tree walker.
+INTERP_PERF = {
+    "while": "i = 0\ntotal = 0\nwhile i < 300000:\n    total += i % 7\n    i += 1\nsay total\n",
+    "for": "total = 0\nfor i in range(1, 1000000):\n    total += i % 7\nsay total\n",
+    "calls": "func fib(n):\n    if n < 2:\n        return n\n    return fib(n - 1) + fib(n - 2)\nsay fib(25)\n",
+}
+
+
+def interp_corpus():
+    """(name, program) for every console program there is: the repo's .tuf files, the guide's examples, Learn's lessons
+    (example, starter and solution), the toolbox, looks and recursion tests' programs and INTERP_CASES. tgame programs
+    come back separately, for the --scene preview. Programs that open a window or use the internet are left out."""
+    console, games = [], []
+
+    def add(name, code):
+        if not code or not code.strip():
+            return
+        if re.search(r"^[ \t]*(?:import|mention)[ \t]+tgame\b", code, re.M) and not re.search(
+                r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|atgui|tdraw|tap)\b", code, re.M):
+            games.append((name, code))
+        elif not WINDOW_LIBRARY.search(code):
+            console.append((name, code))
+
+    for root, dirs, files in os.walk(REPO):
+        dirs[:] = [d for d in dirs if d not in ("node_modules", "out", ".git", "dist", "build", ".claude")]
+        for n in sorted(files):
+            if n.endswith(".tuf"):
+                with open(os.path.join(root, n), encoding="utf-8") as f:
+                    add(os.path.relpath(os.path.join(root, n), REPO).replace(os.sep, "/"), f.read())
+    guide = open(os.path.join(REPO, "tuffcode", "mcp", "tuff-guide.md"), encoding="utf-8").read()
+    for i, code in enumerate(re.findall(r"```tuff\n(.*?)```", guide, re.S), 1):
+        add(f"guide {i}", code)
+    learn = os.path.join(REPO, "tuffcode", "renderer", "js", "learn.js")
+    load = ("const vm = require('vm'), fs = require('fs'); const el = {addEventListener() {}, querySelector: () => null, "
+            "querySelectorAll: () => [], classList: {add() {}, remove() {}, toggle() {}}, style: {}, appendChild() {}};"
+            "const window = {tuff: {}, addEventListener() {}};"
+            "const document = {querySelector: () => null, querySelectorAll: () => [], createElement: () => el, body: el, addEventListener() {}};"
+            "vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), {window, document, console, setTimeout, clearTimeout,"
+            " TuffIcon: () => '', localStorage: {getItem: () => null, setItem() {}}});"
+            "console.log(JSON.stringify(window.TuffLearn.sections()))")
+    try:
+        sections = json.loads(subprocess.run(["node", "-e", load, learn], capture_output=True, text=True, encoding="utf-8",
+                                             timeout=60).stdout)
+    except (FileNotFoundError, ValueError):
+        sections = None
+    for s in sections or []:
+        for lesson in s["lessons"]:
+            for part in ("example", "starter", "solution"):
+                add(f"learn {lesson['id']} {part}", lesson.get(part))
+    for name in ("TOOLBOX_PROGRAM", "TOOLBOX_FIXES", "LOOKS_PROGRAM", "DEEP_PROGRAM", "DEEP_RUNAWAY", "DEEP_SCENE", "NUMBERS_PROGRAM",
+                 "KINDS_PROGRAM", "KINDS_SAVE", "KINDS_HOOKS", "KINDS_SCENE", "TMUSIC_PROGRAM", "TMUSIC_GAME"):
+        add(name.lower(), globals()[name])
+    for i, mistake in enumerate(TMUSIC_MISTAKES):
+        add(f"tmusic_mistakes {i}", "mention tmusic\n" + mistake[0] + "\n")
+    for i, code in enumerate(TMUSIC_GOOD):
+        add(f"tmusic_good {i}", "mention tmusic\n" + code + "\n")
+    for name in ("TOOLBOX_MISTAKES", "TOOLBOX_FIXES_CHECKS", "LOOKS_CHECKS", "NUMBERS_ERRORS", "NUMBERS_CHECKS", "KINDS_ERRORS", "KINDS_CHECKS"):
+        for i, (code, *_) in enumerate(globals()[name]):
+            add(f"{name.lower()} {i}", code + "\n")
+    for i, code in enumerate(INTERP_CASES):
+        add(f"case {i}", code + "\n")
+    return console, games, sections is not None
+
+
+def interp_run(folder, code, slow, env=None, timeout=60, files=None, main="program.tuf"):
+    """Runs a program with INTERP_DRIVER in its own folder: (exit code, stdout, stderr), with the folder's path taken out.
+    files: more files to write there first (1.5.0: the program's own files it imports), and main: the program's name."""
+    os.makedirs(folder, exist_ok=True)
+    for rel, text in (files or {}).items():
+        os.makedirs(os.path.dirname(os.path.join(folder, rel)), exist_ok=True)
+        with open(os.path.join(folder, rel), "w", encoding="utf-8") as f:
+            f.write(text)
+    path = os.path.join(folder, main)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(code)
+    full = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW", "TUFF_NO_WRITES", "TUFF_BASE_DIR")}
+    full.update({"PYTHONIOENCODING": "utf-8", **(env or {})})
+    if slow:
+        full["TUFF_SLOW"] = "1"
+    try:
+        p = subprocess.run([sys.executable, "-c", INTERP_DRIVER, REPO, path], input=INTERP_ANSWERS, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=timeout, env=full, cwd=folder)
+        out = (p.returncode, p.stdout, p.stderr)
+    except subprocess.TimeoutExpired:
+        out = ("timeout", "", "")
+
+    def tidy(text):
+        if not isinstance(text, str):
+            return text
+        text = text.replace(folder, "<folder>").replace(folder.replace("\\", "/"), "<folder>")
+        # A Python crash (a bug in Tuff, like 10 ^ 400 / 3's OverflowError in 1.4.1) lists Python's own calls, which
+        # are different in each runtime: what matters is that both crash with the same error.
+        return re.sub(r"Traceback \(most recent call last\):\n(?:[ \t].*\n)*", "Traceback: ", text)
+    return tuple(tidy(x) for x in out)
+
+
+def t_interp(c):
+    """1.5.0's compiled interpreter: every console program there is (the repo's .tuf files, the guide's and Learn's
+    examples, the toolbox, looks and recursion tests' programs and the corner cases above) gives exactly the same
+    output, errors (line and column) and exit code as the old tree walker (TUFF_SLOW=1); so does Tuff Engine's --scene
+    preview of every tgame program (its line tracking too). Then the step hooks the debugger will use, atgui's
+    app:closed time limit, library callbacks (Runtime.call), and a quick check that it's faster."""
+    from concurrent.futures import ThreadPoolExecutor
+    console, games, learned = interp_corpus()
+    c.check(learned, "Learn's lessons were read from learn.js (with Node)")
+    c.check(len(console) >= 150 and len(games) >= 60, f"the corpus: {len(console)} console programs and {len(games)} tgame programs",
+            (len(console), len(games)))
+    folder = os.path.join(HERE, "out", "interp")
+
+    def both(job):
+        i, (name, code) = job
+        return name, [interp_run(os.path.join(folder, mode, str(i)), code, mode == "slow") for mode in ("slow", "fast")]
+
+    with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 2)) as pool:
+        results = list(pool.map(both, enumerate(console)))
+    differ = [(name, slow, fast) for name, (slow, fast) in results if slow != fast]
+    timeouts = [name for name, (slow, fast) in results if "timeout" in (slow[0], fast[0])]
+    c.check(not differ, f"{len(results)} console programs give the same output, errors and exit code in both runtimes",
+            ", ".join(name for name, _s, _f in differ) + "\n" + "\n".join(f"{name}:\n  slow {slow!r}\n  fast {fast!r}"[:700]
+                                                                     for name, slow, fast in differ[:2]))
+    c.check(not timeouts, "...and none of them hangs", timeouts)
+    errors = sum(1 for _, (slow, _f) in results if "Tuff error" in slow[2])
+    c.check(errors >= 100, f"...{errors} of them stop with a Tuff error, which is on the same line and column in both", errors)
+    crashes = [name for name, (slow, fast) in results if "Traceback" in slow[2] + fast[2]]
+    c.check(not crashes, "...and none of them crash in Python (10 ^ 400 / 3 and 2 ^ 99999 * 1.5 did, before 1.5.0's numbers fix)", crashes)
+    # 1.5.0: programs in several files (import money.tuf), the modules test's: the same output, and errors in the same file,
+    # line and column, in both.
+    projects = modules_projects()
+    runs = [(name, [interp_run(os.path.join(folder, "files_" + mode, str(i)), files["shop.tuf"], mode == "slow", files=files, main="shop.tuf")
+                    for mode in ("slow", "fast")]) for i, (name, files) in enumerate(projects)]
+    differ = [(name, slow, fast) for name, (slow, fast) in runs if slow != fast]
+    c.check(not differ and len(runs) >= 20, f"{len(runs)} programs in several files give the same output, errors and exit code in both runtimes",
+            "\n".join(f"{name}:\n  slow {slow!r}\n  fast {fast!r}"[:700] for name, slow, fast in differ[:2]))
+    # In TuffCode's Run panel (TUFF_IDE=1): the lines, rewrites, looks and prompts it's sent are the same too.
+    ide = [(n, code) for n, code in console if n in ("looks_program", "toolbox_program") or "rewrite" in code or "print:pen" in code][:40]
+    same = [n for i, (n, code) in enumerate(ide) if interp_run(os.path.join(folder, "ide_slow", str(i)), code, True, env={"TUFF_IDE": "1"})
+            != interp_run(os.path.join(folder, "ide_fast", str(i)), code, False, env={"TUFF_IDE": "1"})]
+    c.check(len(ide) >= 10 and not same, f"with TUFF_IDE=1, {len(ide)} programs send TuffCode the same lines in both", same[:5])
+
+    def preview(job):
+        i, (name, code) = job
+        dumps = []
+        for mode in ("slow", "fast"):
+            where = os.path.join(folder, "scene_" + mode, str(i))
+            os.makedirs(where, exist_ok=True)
+            for pic in ("star.png", "blip.wav"):
+                if os.path.exists(os.path.join(GAMES, pic)) and not os.path.exists(os.path.join(where, pic)):
+                    with open(os.path.join(GAMES, pic), "rb") as f, open(os.path.join(where, pic), "wb") as g:
+                        g.write(f.read())
+            path, out = os.path.join(where, "game.tuf"), os.path.join(where, "scene.json")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(code)
+            if os.path.exists(out):
+                os.remove(out)
+            env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+            env.pop("TUFF_TGAME_AUTOPILOT", None)
+            env.pop("TUFF_SLOW", None)
+            if mode == "slow":
+                env["TUFF_SLOW"] = "1"
+            p = subprocess.run([sys.executable, TUFF, "--scene", path, path, out], cwd=where, env=env, capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=60, stdin=subprocess.DEVNULL)
+            try:
+                with open(out, encoding="utf-8") as f:
+                    dumps.append((p.returncode, f.read().replace(where.replace("\\", "\\\\"), "<folder>").replace(where.replace("\\", "/"), "<folder>")))
+            except OSError:
+                dumps.append((p.returncode, None))
+        return name, dumps
+
+    with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 2)) as pool:
+        previews = list(pool.map(preview, enumerate(games)))
+    differ = [(name, d) for name, d in previews if d[0] != d[1] or d[0][1] is None]
+    c.check(not differ, f"Tuff Engine's --scene preview of {len(previews)} tgame programs makes the same things, from the same lines, in both",
+            "\n".join(f"{name}: {str(d[0])[:300]} / {str(d[1])[:300]}" for name, d in differ[:3]))
+    made = sum(1 for _, d in previews if d[1][1] and '"made"' in d[1][1])
+    c.check(made >= 30, f"...{made} of them say which line made each thing", made)
+    interp_hooks(c)
+    interp_speed(c)
+
+
+def interp_hooks(c):
+    """In this process: the step hooks (the debugger's hook point), atgui's app:closed limit, Runtime.call."""
+    import contextlib
+    import io
+    import tuff
+    import tuff_atgui
+    src = ("total = 0\nfunc add(n):\n    total += n\n    return total\nfor i in range(1, 3):\n    add(i)\n"
+           "func stuck():\n    n = 0\n    while true:\n        n += 1\nfunc two(a, b):\n    return a + b\nfunc bad():\n    return nope\n")
+    for slow in (True, False):
+        mode = "the tree walker" if slow else "the compiled runtime"
+        old = os.environ.pop("TUFF_SLOW", None)
+        if slow:
+            os.environ["TUFF_SLOW"] = "1"
+        try:
+            interp = tuff.Interpreter(src, HERE)
+        finally:
+            os.environ.pop("TUFF_SLOW", None)
+            if old is not None:
+                os.environ["TUFF_SLOW"] = old
+        c.check(interp.fast is not slow, f"TUFF_SLOW={'1' if slow else '(none)'} gives {mode}")
+        program = tuff.Parser(tuff.tokenize(src)).program()
+        seen = []
+        interp.step_hooks.append(lambda s, env: seen.append(s.line))
+        interp.run_block(program, interp.globals)
+        c.check(seen == [1, 2, 5, 6, 3, 4, 6, 3, 4, 6, 3, 4, 7, 11, 13] and interp.globals.vars["total"] == 6,
+                f"{mode}: a step hook sees every statement, in the order they run", seen)
+        interp.step_hooks.clear()
+
+        def stop_at_4(s, env):
+            if s.line == 4:
+                raise tuff.TuffError("Stopped by the debugger.")
+        interp.step_hooks.append(stop_at_4)
+        try:
+            interp.invoke(interp.globals.vars["add"], [1])
+            got = None
+        except tuff.TuffError as err:
+            got = (err.line, err.col, err.msg)
+        interp.step_hooks.remove(stop_at_4)
+        c.check(got == (4, 5, "Stopped by the debugger."), f"{mode}: a hook's error stops the program on the statement's line", got)
+        lib = tuff_atgui.Lib(interp.rt)
+        err = io.StringIO()
+        t0 = time.perf_counter()
+        with contextlib.redirect_stderr(err):
+            ok = lib.fire_by(interp.globals.vars["stuck"], 0.3, "app:closed's function took too long.")
+        secs = time.perf_counter() - t0
+        c.check(ok is False and secs < 5 and "app:closed's function took too long." in err.getvalue() and "line 10" in err.getvalue()
+                and not interp.step_hooks, f"{mode}: atgui stops app:closed's function after its time limit ({secs:.1f} s)", err.getvalue()[-300:])
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            calls = (interp.rt.call(interp.globals.vars["two"], 2, 3, 99), interp.rt.call(interp.globals.vars["bad"]))
+        c.check(calls == ((True, 5), (False, None)) and "Tuff error on line 14: I don't know what 'nope' is." in err.getvalue(),
+                f"{mode}: Runtime.call (library callbacks) drops extra inputs and reports errors", (calls, err.getvalue()[-200:]))
+
+
+def interp_speed(c):
+    folder = os.path.join(HERE, "out", "interp", "speed")
+    os.makedirs(folder, exist_ok=True)
+    for name, code in INTERP_PERF.items():
+        path = os.path.join(folder, f"{name}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code)
+        times, outs = {}, {}
+        for mode in ("slow", "fast"):
+            env = {**os.environ}
+            env.pop("TUFF_SLOW", None)
+            if mode == "slow":
+                env["TUFF_SLOW"] = "1"
+            t0 = time.perf_counter()
+            p = subprocess.run(tuff_cmd() + [path], capture_output=True, text=True, encoding="utf-8", timeout=120, env=env,
+                               stdin=subprocess.DEVNULL)
+            times[mode], outs[mode] = time.perf_counter() - t0, p.stdout.strip().splitlines()[:1]
+        c.check(outs["fast"] == outs["slow"] and times["fast"] < 5 and times["fast"] * 2 < times["slow"],
+                f"{name}: {times['slow']:.2f} s with the tree walker, {times['fast']:.2f} s compiled ({times['slow'] / max(times['fast'], 0.001):.1f}x)",
+                (outs, times))
+    # The debugger's hook point, off and on: in this process, the while loop without a step hook, then with one that
+    # does nothing (each of its 600,000 statements calls it).
+    import tuff
+    os.environ.pop("TUFF_SLOW", None)
+    src = INTERP_PERF["while"].replace("say total\n", "")
+    program = tuff.Parser(tuff.tokenize(src)).program()
+    secs = []
+    for hooked in (False, True):
+        interp = tuff.Interpreter(src, folder)
+        if hooked:
+            interp.step_hooks.append(lambda s, env: None)
+        t0 = time.perf_counter()
+        interp.run_block(program, interp.globals)
+        secs.append(time.perf_counter() - t0)
+    c.check(secs[0] < secs[1] and secs[0] < 2, f"with no step hook the loop takes {secs[0]:.2f} s, with a do-nothing one {secs[1]:.2f} s", secs)
+
+
+# ---------------------------------------------------------------- text templates (1.5.0)
+
+FSTRINGS_PROGRAM = r'''name = "Sam"
+score = 9
+say f"{name} has {score + 1} points"
+price = 6.375
+qty = 2
+say f"Total: {price * qty:money}"
+say f"{2.675:0.00}|{1.005:0.00}|{0.125:0.00}|{2.5:0}|{-2.5:0}|{82.25:0.0}|{-0.001:0.00}|{1 / 3:0.000}|{0.1 + 0.2:0.00}"
+say f"{7:000}|{-7:000}|{1234:000}|{7.6:000}|{5.5:000.00}|{2 ^ 70:0}"
+say f"{1234.5:money}|{-1.5:money}|{0:money}|{1000000:money}|{0.005:money}|{-0.004:money}"
+say f"[{name:6}][{score:4}][{name:>6}][{score:<4}][{"toolong":3}][{2.5:5}]"
+say f"{name:upper()} {name:lower} {{braces}} }}{{"
+ages = {"sam": 14}
+say f'{ages["sam"]}, {ages:get("ann", 0)}, { {"a": 1}["a"] }, {ages:get("sam"):000}'
+say f"{[1, "two", 3.5]} {nil} {true} {num("x")} {ages}"
+say f"tab\there \"quoted\" it's C:\{name}\files"
+say f"{f"{score:00}":>4}|{f'{name}'}|{"a:b"}|{"}"}"
+say f""
+say f"plain"
+say f"{name}"[0] + f"{score}":upper()
+say len(f"{name}{name}")
+words = ["a", "b"]
+say f"{words:join(", ")} and {words[0]:upper()}"
+func greet(who):
+    return f"Hi {who}!"
+say greet(f"{name}")
+f = 5
+say f + 1
+answer = input f"Price for {name}? "
+say f"You typed {num(answer):money}"
+'''
+FSTRINGS_OUTPUT = ["Sam has 10 points", "Total: $12.75", "2.68|1.01|0.13|3|-3|82.3|0.00|0.333|0.30",
+                   "007|-007|1234|008|005.50|1180591620717411303424", "$1,234.50|-$1.50|$0.00|$1,000,000.00|$0.01|$0.00",
+                   "[Sam   ][   9][   Sam][9   ][toolong][  2.5]", "SAM sam {braces} }{", "14, 0, 1, 014",
+                   '[1, "two", 3.5] nil true err {"sam": 14}', 'tab\there "quoted" it\'s C:\\Sam\\files', "  09|Sam|a:b|}", "",
+                   "plain", "S9", "6", "a, b and A", "Hi Sam!", "6", "Price for Sam? You typed $1,234.57"]
+# Mistakes in a template: (code, line, column, what the run says, what --check says: None for the same, "OK" when
+# only the run can tell). The column is inside the text, at the bad part, so the editor's squiggle lands there.
+FSTRINGS_ERRORS = [
+    ('name = "Sam"\nsay f"Hi {nmae}!"', 2, 11, "I don't know what 'nmae' is. Did you mean 'name'?", None),
+    ('name = "Sam"\nsay f"Hi {name"', 2, 10, "This { has no } to close it. To show a { itself, write {{.", None),
+    ('name = "Sam"\nsay f"Hi {name}', 2, 5, 'This text is missing its closing "', None),
+    ('say f"a } b"', 1, 9, "A } on its own can't go in a text template. To show one, write }}.", None),
+    ('say f"{}"', 1, 7, "These { } have nothing in them.", None),
+    ('x = 1.5\nsay f"{x:.2f}"', 2, 10, "'.2f' isn't a format. Formats look like 0.00", None),
+    ('x = 1.5\nsay f"{x:.2f}"', 2, 10, "Here, write {x:0.00}.", None),
+    ('n = 7\nsay f"{n:05d}"', 2, 10, "Here, write {n:00000}.", None),
+    ('x = 1\nsay f"{x:}"', 2, 9, "Put a format after the ':'", None),
+    ('say f"{1:2000}"', 1, 10, "2000 is too wide: a width can be up to 1000.", None),
+    ('x = "abc"\nsay f"{x:0.00}"', 2, 10, 'The format 0.00 only works on numbers, but this is text ("abc").',
+     "The format 0.00 only works on numbers, but x is text."),
+    ('x = 2\nsay f"{x + }"', 2, 12, "I expected a value here, but found }.", None),
+    ('x = 2\nsay f"{x y}"', 2, 10, "I didn't expect y here. The { } in a text template hold one value each", None),
+    ('say f"{len("ab"}"', 1, 11, "This ( needs a ) before the } that ends the { }.", None),
+    ('say f"{1 # note}"', 1, 10, "A # comment can't go inside the { } of a text template.", None),
+    ('x = 3\nsay f"{x:upper()}"', 2, 9, "A number doesn't have any :methods.", None),
+    ('say f"{f"{zz}"}"', 1, 11, "I don't know what 'zz' is.", None),
+    ('say f"ok" + f"{num("x"):0.00}"', 1, 25, "The value for the format 0.00 is err", "OK"),
+    ('func show(p):\n    say f"{p} costs {p:money}"\nshow("tea")', 2, 24, "The format money only works on numbers", "OK"),
+]
+# The checker on the code in templates: (code, part of what --check says, or "OK").
+FSTRINGS_CHECKS = [
+    ('a = input "Price? "\nsay f"{a:money}"', "a is text. input gives text, so turn it into a number first: {num(a):money}."),
+    ('func f2():\n    t = 1\nsay f"{t}"', "'t' is only set inside f2(), so it only exists there."),
+    ('x = [1]\nsay f"{x:size()}"', "A list doesn't have :size."),
+    ('say f"{len(1, 2)}"', "len() got the wrong number of inputs (2)."),
+    ('say f"{[1]:money} {true:000} {nil:0.0}"', "The format money only works on numbers, but this is a list."),
+    ('a = 1\nb = 2\nsay f"Total: " + a + b', 'or use a text template: f"Total: {a + b}"'),
+    ('x = "5"\nsay f"{num(x):0.00} {x:3} {x:>3}"', "OK"),
+    ('func g(n):\n    return f"{n:0.0}"\nsay g(2)', "OK"),
+    ('items = [1]\nfor i in items:\n    say f"{i:000}"', "OK"),
+    ('d = {}\nsay f"{d:get("k", 1):0.0} {nil:5}|{true:<6}"', "OK"),
+    ('f = 5\nsay f + 1', "OK"),
+    ('mention tgame\ngame = tgame.window("x")\nscore = 0\nlabel = game:text(f"Score: {score:000}", 300, 30)\nlabel:set f"Score: {score + 1}"', "OK"),
+]
+# The editor (renderer/js/tuff-lang.js): the code in a template's { } is code for completions and rename, its f has a
+# hover, and Monarch colours the { } as code and comes back to the root after the line.
+FSTRINGS_LANG = r"""
+const fs = require('fs'), vm = require('vm');
+const window = {}, ctx = { window };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+let monarch = null, hover = null, completion = null;
+const monaco = { Range: class { constructor(...a) { this.a = a; } }, editor: { defineTheme() {} }, languages: {
+  register() {}, setMonarchTokensProvider(_id, def) { monarch = def; }, setLanguageConfiguration() {},
+  registerHoverProvider(_id, p) { hover = hover || p; }, registerDefinitionProvider() {}, registerReferenceProvider() {},
+  registerRenameProvider() {}, registerDocumentSymbolProvider() {}, registerSignatureHelpProvider() {}, registerColorProvider() {},
+  registerCompletionItemProvider(_id, p) { completion = p; },
+  CompletionItemKind: new Proxy({}, { get: (_t, k) => k }), CompletionItemInsertTextRule: {}, IndentAction: {}, SymbolKind: {} } };
+window.defineTuffTheme = () => {};
+window.registerTuff(monaco, '#3574f0');
+const model = (src, col) => { const lines = src.split('\n'); return { getLinesContent: () => lines, getLineContent: (n) => lines[n - 1],
+  getValue: () => src, getWordUntilPosition: () => ({ startColumn: col || 1, endColumn: col || 1 }),
+  getWordAtPosition: ({ lineNumber, column }) => { for (const m of lines[lineNumber - 1].matchAll(/\w+/g))
+    if (m.index < column && column <= m.index + m[0].length) return { word: m[0], startColumn: m.index + 1, endColumn: m.index + 1 + m[0].length };
+    return null; } }; };
+const rules = (s) => monarch.tokenizer[s].flatMap((r) => (r.include ? rules(r.include.slice(1)) : [r]));
+function colours(src) { // the first rule that matches wins, as in Monarch
+  const stack = ['root'], out = [];
+  for (const line of src.split('\n')) {
+    const toks = [];
+    for (let i = 0; i < line.length;) {
+      const r = rules(stack[stack.length - 1]).find((x) => { const re = new RegExp(x[0].source.replace('@symbols', monarch.symbols.source), 'y'); re.lastIndex = i; const m = re.exec(line); return m && m[0].length && (x.m = m[0]); });
+      if (!r) { i++; continue; }
+      const a = r[1]?.cases ? r[1].cases['@default'] : r[1];
+      toks.push(`${r.m}=${Array.isArray(a) ? a.join('+') : a}`);
+      if (r[2] === '@pop') stack.pop(); else if (r[2]) stack.push(r[2].slice(1));
+      i += r.m.length;
+    }
+    out.push({ toks, state: stack.join('>') });
+  }
+  return out;
+}
+const ids = (src) => ctx.tuffIdents(model(src)).map((x) => `${x.name}@${x.start}`).join(' ');
+const c = colours('say f"Hi {name:upper()} {{x}} {score + 1:0.00} {d:get("k")}!" + "plain"\nx = 1');
+const c2 = colours(`say f'{ {"a": 1}["a"]:money}' + f"{f'{x}'}"\nx = 2`);
+const inside = completion.provideCompletionItems(model('say f"{name:', 13), { lineNumber: 1, column: 13 }).suggestions;
+console.log(JSON.stringify({
+  kinds: ctx.tuffScan('say f"a{x}b"').kinds.join(''),
+  code: ctx.insideStringOrComment('say f"Hi {name:'), text: ctx.insideStringOrComment('say f"Hi {name} '),
+  plain: ctx.insideStringOrComment('say "Hi {name:'), dict: ctx.insideStringOrComment('say f"{ {"a": 1}["a"] } '),
+  ids: ids('name = 1\nsay f"Hi {name} and {score + 1:0.00}"'), fvar: ids('f = 2\nsay f"f{f}"'), none: ids('say "{name}" + f"{{name}}"'),
+  hover: hover.provideHover(model('say f"Hi {name}"'), { lineNumber: 1, column: 5 })?.contents[0].value,
+  nohover: hover.provideHover(model('f = 1\nsay f + 1'), { lineNumber: 2, column: 5 }),
+  snippet: completion.provideCompletionItems(model(''), { lineNumber: 1, column: 1 }).suggestions.find((s) => s.label === 'f"..."')?.insertText,
+  methods: inside.some((s) => s.label === 'upper'),
+  colours: c[0].toks, states: [c[0].state, c[1].state, c2[0].state, c2[1].state], next: c2[1].toks[0],
+}));
+"""
+
+
+def t_fstrings(c):
+    """Console only, no window: 1.5.0's text templates (f"..."). A program with every format, {{ }}, quotes and
+    dictionaries in the { } and templates inside templates runs, and --check accepts it; each mistake stops the run
+    and --check with the same message, on its line and at its column inside the text; the checker walks the code in
+    the { }; Tuff Engine's --scene preview runs templates (and stops one that doubles its text); and the editor's
+    tuff-lang.js reads the { } as code (with Node)."""
+    folder = os.path.join(HERE, "out", "fstrings")
+    os.makedirs(folder, exist_ok=True)
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    env.pop("TUFF_IDE", None)
+
+    def write(name, code):
+        path = os.path.join(folder, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code + "\n")
+        return path
+
+    def where(stderr):
+        """The line, column and message of the first "Tuff error" (the column from the ^ under the line)."""
+        lines = stderr.splitlines()
+        first = next((i for i, x in enumerate(lines) if x.startswith("Tuff error on line ")), None)
+        if first is None:
+            return None, None, stderr.strip()
+        head, msg = lines[first][len("Tuff error on line "):].split(": ", 1)
+        gutter = f"  {head} | "
+        caret = lines[first + 2] if first + 2 < len(lines) and lines[first + 2].strip() == "^" else ""
+        return int(head), (caret.index("^") - len(gutter) + 1) if caret else None, msg
+
+    path = write("fstrings.tuf", FSTRINGS_PROGRAM.rstrip("\n"))
+    p = subprocess.run(tuff_cmd() + [path], input="1234.567\n", capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+    got = p.stdout.splitlines()
+    c.check(p.returncode == 0 and "Tuff error" not in p.stderr, "the templates program runs to the end", (p.stdout + p.stderr)[-600:])
+    for i, want in enumerate(FSTRINGS_OUTPUT):
+        c.check(i < len(got) and got[i] == want, f"line {i + 1}: {want}", got[i] if i < len(got) else "(missing)")
+    p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+    c.check(p.stdout.strip() == "OK", "--check accepts all of it", (p.stdout + p.stderr)[:600])
+
+    for i, (code, line, col, says, check_says) in enumerate(FSTRINGS_ERRORS):
+        bad = write(f"mistake{i}.tuf", code)
+        shown = code.splitlines()[line - 1].strip()
+        p = subprocess.run(tuff_cmd() + [bad], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env, stdin=subprocess.DEVNULL)
+        at = where(p.stderr)
+        c.check(p.returncode == 1 and at[:2] == (line, col) and says in at[2], f"running {shown!r} stops at {line}:{col}: {says[:60]!r}", at)
+        p = subprocess.run(tuff_cmd() + ["--check", bad], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+        if check_says == "OK":
+            c.check(p.stdout.strip() == "OK", f"--check can't know it before the run, and says OK: {shown!r}", (p.stdout + p.stderr)[:300])
+        else:
+            at = where(p.stderr)
+            c.check(p.returncode == 1 and at[:2] == (line, col) and (check_says or says) in at[2],
+                    f"--check on {shown!r} says it at {line}:{col} too", at)
+
+    for i, (code, want) in enumerate(FSTRINGS_CHECKS):
+        bad = write(f"check{i}.tuf", code)
+        p = subprocess.run(tuff_cmd() + ["--check", bad], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+        out = (p.stdout + p.stderr).strip()
+        shown = code.splitlines()[-1].strip()
+        if want == "OK":
+            c.check(out == "OK", f"--check accepts: {shown}", out[:300])
+        else:
+            c.check(p.returncode == 1 and want in out, f"--check on {shown!r} says {want[:50]!r}", out[:300])
+
+    # Tuff Engine's preview: a setup with templates, and one that keeps doubling its text with a template stops as too-much.
+    src = write("fstrings_scene.tuf", 'mention tgame\ngame = tgame.window("T", 300, 200)\nscore = 7\n'
+                                      'label = game:text(f"Score: {score:000}", 150, 30)\nsay f"made {score}"')
+    code, out, err, d, secs = scene(src)
+    c.check(code == 0 and d.get("error") is None and d.get("stopped") == "end" and "Score: 007" in json.dumps(d.get("batch")),
+            f"the --scene preview runs a setup with templates ({secs:.1f} s)", (d.get("error"), d.get("stopped"), err[-300:]))
+    src = write("fstrings_huge.tuf", 'mention tgame\ngame = tgame.window("Huge", 400, 300)\nfirst = game:box(10, 10)\n'
+                                     's = "ab"\nfor i in range(1, 40):\n    s = f"{s}{s}"\nlast = game:box(50, 50)')
+    code, out, err, d, secs = scene(src)
+    c.check(code == 0 and d.get("stopped") == "too-much" and [t.get("var") for t in d.get("things", [])] == ["first"] and secs < 4,
+            f"...and text doubled by a template stops it as too-much in {secs:.1f} s", (d.get("stopped"), d.get("error"), secs))
+
+    lang = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")
+    try:
+        p = subprocess.run(["node", "-e", FSTRINGS_LANG, lang], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the editor checks")
+        return
+    try:
+        t = json.loads(p.stdout)
+    except ValueError:
+        c.check(False, "the editor checks ran", (p.stdout + p.stderr)[-600:])
+        return
+    c.check(t["kinds"] == "ccccsssscsss", 'the editor reads say f"a{x}b" as code, text, then x as code', t["kinds"])
+    c.check(t["code"] is False and t["text"] is True and t["plain"] is True and t["dict"] is True,
+            "after f\"Hi {name: it's in code (so completions work), after the } it's text again", [t[k] for k in ("code", "text", "plain", "dict")])
+    c.check(t["methods"], 'typing f"{name: offers the methods', t["methods"])
+    c.check(t["ids"] == "name@1 name@11 score@22" and t["fvar"] == "f@1 f@9" and t["none"] == "",
+            "rename and find uses see the names in { } (not the f, plain text or {{ }})", [t["ids"], t["fvar"], t["none"]])
+    c.check('f"{name} has' in (t["hover"] or "") and t["nohover"] is None, "the f of a template has a hover, and a variable called f doesn't",
+            [t["hover"], t["nohover"]])
+    c.check(t["snippet"] == 'f"${1:Hello} {${2:name}\\}$0"', 'there is an f"..." snippet', t["snippet"])
+    toks = t["colours"]
+    c.check(all(x in toks for x in ('f"=string', "{=delimiter.curly", "name=identifier", ":upper=delimiter+method", "score=identifier",
+                                    ":0.00=string.escape", "{{=string.escape", "k=string", "!=string")),
+            "the colours: the code in { } as code, its format and {{ }} as escapes, a string inside as a string", toks)
+    c.check(t["states"] == ["root", "root", "root", "root"] and t["next"] == "x=identifier",
+            "after a template (with a dictionary or another template in it) the next line is code again", [t["states"], t["next"]])
+
+
+# ---------------------------------------------------------------- 1.5.0: sprite sheets (sprite:frames, :animation, :play)
+# games/hero_sheet.png is 4 frames across and 2 down, 32 x 32 pixels each, every frame its own colour (FRAME_COLORS)
+# with a white dot that moves along.
+FRAME_COLORS = ["#e5484d", "#f97316", "#e2a508", "#22a35a", "#14b8a6", "#3574f0", "#8b5cf6", "#ec4899"]
+
+FRAMES_SCENE = """mention tgame
+
+game = tgame.window("Frames", 600, 400)
+hero = game:image("hero_sheet.png", 100, 300, 64)
+hero:frames(4, 2)
+hero:animation("walk", [1, 2, 3, 4], 10)
+hero:animation("jump", range(5, 8), 12)
+hero:play("walk")
+hero:flip()
+coin = game:image("hero_sheet.png", 300, 100)
+coin:frames(4, 2)
+coin:frame(6)
+badge = game:hud():image("hero_sheet.png", 40, 40, 16)
+badge:frames(4)
+plain = game:image("hero_sheet.png", 500, 100)
+
+while game:open():
+    dt = game:frame()
+"""
+
+# Run headless (headless.py: every frame is 1/60 s): a walk played every frame carries on, a jump plays once and its
+# on_done function runs, stop holds the frame, and pausing holds everything, the page's canvases too.
+FRAMES_RUN = """mention tgame
+
+game = tgame.window("Flip", 400, 300)
+hero = game:image("hero_sheet.png", 100, 100, 64)
+hero:frames(4, 2)
+hero:animation("walk", [1, 2, 3, 4], 10)
+hero:animation("jump", [5, 6, 7, 8], 20)
+hero:play("walk")
+say "start " + hero:frame()
+coin = game:hud():image("hero_sheet.png", 30, 30)
+coin:frames(4, 2)
+coin:animation("spin", [5, 6], 4)
+coin:play("spin")
+paused_frames = 0
+stage = "walk"
+
+func landed(who, name):
+    say "done " + name + " " + who:frame() + " at " + round(game:time(), 2)
+    who:play("walk")
+    say "then " + who:frame()
+
+hero:on_done(landed)
+
+func step(dt):
+    if stage is "walk":
+        hero:play("walk")
+    if stage is "paused":
+        paused_frames += 1
+        if paused_frames is 30:
+            say "while paused " + hero:frame()
+            game:resume()
+            stage = "after pause"
+
+func check():
+    say "at 0.25 " + hero:frame()
+    stage = "jump"
+    hero:play("jump", false)
+    say "jump " + hero:frame()
+
+func halt():
+    hero:stop()
+    say "stopped " + hero:frame()
+
+func later():
+    say "still " + hero:frame()
+    hero:play("walk")
+    stage = "paused"
+    say "before pause " + hero:frame()
+    game:pause("Paused")
+
+func finish():
+    say "end " + coin:frame()
+    game:close()
+
+game:every_frame step
+game:after(0.25, check)
+game:after(0.82, halt)
+game:after(1.2, later)
+game:after(1.55, finish)
+"""
+
+# Mistakes when it runs (Tuff Engine's preview shows the same error, on the same line): (code after the hero is made
+# and cut into 4 x 2 frames, the line, the message).
+FRAMES_RUN_ERRORS = [
+    ('b = game:box(1, 2)\nb:frames(4)\n', 6, "Only pictures have frames (:frames)."),
+    ('b = game:box(1, 2)\nb:stop()\n', 6, "To stop a sprite moving, use sprite:speed(0, 0)."),
+    ('pic = game:image("hero_sheet.png", 1, 2)\npic:frame(2)\n', 6, ":frame needs the picture cut into frames first"),
+    ('hero:frames(0)\n', 5, ":frames needs how many frames across"),
+    ('hero:frames(10000, 2)\n', 5, ":frames can cut a picture into 10000 frames at most, not 20000."),
+    ('hero:frame(9)\n', 5, ":frame: this picture has 8 frames (1 to 8), so there's no frame 9."),
+    ('hero:frame(0)\n', 5, ":frame: frames are numbered from 1 (the top left one), so there's no frame 0."),
+    ('hero:animation("walk", [1, 9], 10)\n', 5, "there's no frame 9"),
+    ('hero:animation("walk", [], 10)\n', 5, ':animation needs at least one frame, like hero:animation("walk", [1, 2, 3, 4], 10).'),
+    ('hero:animation("walk", 3, 10)\n', 5, ':animation needs its frames as a list, like hero:animation("walk", [1, 2, 3, 4], 10).'),
+    ('hero:animation("walk", [1, 2], 0)\n', 5, ":animation's speed is how many frames a second, above 0"),
+    ('hero:animation(5, [1, 2], 10)\n', 5, ":animation needs a name as text first"),
+    ('hero:play("walk")\n', 5, 'There\'s no animation called "walk". Make it first, like hero:animation("walk", [1, 2, 3, 4], 10)'),
+    ('hero:animation("walk", [1, 2], 10)\nhero:play("wlak")\n', 6, 'There\'s no animation called "wlak". This picture has "walk". Did you mean "walk"?'),
+    ('hero:animation("walk", [1, 2], 10)\nhero:play("walk", "once")\n', 6, ":play's second input is true (again and again"),
+    ('hero:animation("jump", [5, 6], 10)\nhero:frames(4)\nhero:play("jump")\n', 7,
+     'The animation "jump" shows frame 5, but this picture has 4 frames now (1 to 4).'),
+    ('hero:on_done("landed")\n', 5, ":on_done needs a function name"),
+]
+
+# The checker: what it accepts (every :animation it can't read, or a file of the program's own, keeps it quiet about
+# :play's names), and the mistakes it's sure of. After a window and hero = game:image("hero_sheet.png", 100, 100, 64).
+FRAMES_GOOD = [
+    'hero:frames(4, 2)\nhero:animation("walk", [1, 2, 3, 4], 10)\nhero:play("walk")\n',
+    'hero:frames(4)\nhero:animation("walk", range(1, 4))\nhero:play("walk", false)\nhero:stop()\nn = hero:frame()\nhero:frame(n + 1)\n',
+    'hero:frames(4)\nfunc make(name):\n    hero:animation(name, [1, 2], 8)\nmake("walk")\nhero:play("walk")\n',
+    'hero:frames(4)\nfunc landed(who, name):\n    who:play("idle")\nhero:animation("idle", [1], 1)\nhero:on_done(landed)\n',
+    'hero:frames(4)\nfunc landed():\n    say "done"\nhero:on_done(landed)\n',
+    'hero:frames(4)\nhero:animation("walk", [1, 2], 10)\nstate = "walk"\nhero:play(state)\n',
+    'hero:frames(4)\nfor n in ["a", "b"]:\n    hero:animation(n, [1], 2)\nhero:play("c")\n',
+    'hero:frames(4)\nhero:animation("walk", [1, 2], 10)\nhero:play("walk", true)\nx = hero:frames(2):frame(2)\n',
+    'hero:frames(4)\nhero:animation("walk", [1, 2], 0.5)\nhero:animation("all", [4, 3, 2, 1, 2, 3])\n',
+    'hero:frames(4)\nname = "run"\nhero:animation(name, [1, 2], 8)\nhero:play(name)\n',
+    'hud = game:hud()\nicon = hud:image("hero_sheet.png", 30, 30)\nicon:frames(4, 2)\nicon:frame(8)\n',
+    'w = tgame.world("x")\nbadge = w:hud():image("hero_sheet.png", 40, 40)\nbadge:frames(4, 2)\nbadge:animation("spin", [5, 6], 4)\nbadge:play("spin")\n',
+]
+FRAMES_BAD = [
+    ('hero:frames(0)\n', "hero:frames needs how many frames across, then how many down (1 if you leave it out), as whole numbers from 1"),
+    ('hero:frames(4, -1)\n', "hero:frames needs how many frames across"),
+    ('hero:frames(2.5)\n', "hero:frames needs how many frames across"),
+    ('hero:frames(4)\nhero:frame(0)\n', "Frames are numbered from 1 (the top left one), so there's no frame 0."),
+    ('hero:frames(4)\nhero:animation("walk", [0, 1, 2], 10)\n', "so there's no frame 0."),
+    ('hero:frames(4)\nhero:animation("walk", [1, 1.5], 10)\n', "so there's no frame 1.5."),
+    ('hero:frames(4)\nhero:animation("walk", [], 10)\n', "An animation needs at least one frame"),
+    ('hero:frames(4)\nhero:animation("walk", [1, 2], 0)\n', "hero:animation's last input is how many frames a second, above 0"),
+    ('hero:frames(4)\nhero:animation("walk", [1, 2], -3)\n', "hero:animation's last input is how many frames a second, above 0"),
+    ('hero:frames(4)\nhero:animation(3, [1, 2], 10)\n', "hero:animation needs a name as text first"),
+    ('hero:frames(4)\nhero:animation("walk", 4, 10)\n', "hero:animation needs its frames as a list"),
+    ('hero:frames(4)\nhero:animation("walk", [1, 2], 10)\nhero:play("wlak")\n',
+     'There\'s no animation called "wlak". This program makes "walk". Did you mean "walk"?'),
+    ('hero:frames(4)\nhero:play("walk")\n', 'There\'s no animation called "walk". Make it first, like hero:animation("walk", [1, 2, 3, 4], 10)'),
+    ('hero:frames(4)\nname = "run"\nhero:animation(name, [1, 2], 8)\nhero:play("walk")\n', 'There\'s no animation called "walk". This program makes "run".'),
+    ('hero:frames(4)\nhero:animation("walk", [1, 2], 10)\nhero:play("walk", "once")\n', "hero:play's second input is true"),
+    ('hero:frames(4)\nfunc landed(a, b, c):\n    say a\nhero:on_done(landed)\n', "landed() needs 3 inputs, but hero:on_done gives it 2 inputs"),
+    ('hero:frames(4)\nhero:on_done(landed)\n', "I don't know what 'landed' is."),
+    ('hero:frames(4)\nhero:on_done(landed())\nfunc landed():\n    say 1\n', "Pass the function's name without brackets"),
+    ('hero:animate("walk")\n', "A sprite doesn't have :animate. Use :play instead."),
+    ('hero:sprite_sheet(4)\n', "A sprite doesn't have :sprite_sheet. Use :frames instead."),
+    ('hero:on_finish(done)\n', "A sprite doesn't have :on_finish. Use :on_done instead."),
+    ('hero:frames(4, 2, 1)\n', "sprite:frames got the wrong number of inputs (3)."),
+    ('hero:play()\n', "sprite:play got the wrong number of inputs (0)."),
+    ('hero:animation("walk")\n', "sprite:animation got the wrong number of inputs (1)."),
+    ('w = tgame.world("x")\nt = w:box(0, 0, 0)\nt:frames(4)\n', "An object doesn't have :frames."),
+]
+
+
+def headless(name, code, frames=0, events=None):
+    """Runs a tgame program with no window (headless.py): (exit code, its say lines, stderr, every frame's changes),
+    or None with --runtime (headless.py needs tuff.py)."""
+    if RUNTIME:
+        return None
+    folder = os.path.join(OUT, "frames")
+    path = os.path.join(folder, name + ".tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(code)
+    out = os.path.join(folder, name + ".json")
+    args = [sys.executable, os.path.join(HERE, "headless.py"), path, out, str(frames)]
+    if events:
+        with open(os.path.join(folder, name + ".events.json"), "w", encoding="utf-8") as f:
+            json.dump(events, f)
+        args.append(os.path.join(folder, name + ".events.json"))
+    p = subprocess.run(args, cwd=folder, capture_output=True, text=True, encoding="utf-8", timeout=120,
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    return p.returncode, [x for x in p.stdout.splitlines() if x.strip()], p.stderr, read_json(out) or []
+
+
+def frame_sets(cmds, node, keys=("cells", "cell", "play", "attrs")):
+    """[(the frame it went in, its changes)] for one object, keeping only these keys."""
+    out, frame = [], 0
+    for cmd in cmds:
+        if cmd[0] == "f":
+            frame = cmd[1] + 1
+        elif cmd[0] == "s" and cmd[1] == node and any(k in cmd[2] for k in keys):
+            out.append((frame, {k: v for k, v in cmd[2].items() if k in keys}))
+    return out
+
+
+def t_frames(c):
+    """1.5.0, headless (no window): sprite sheets. Tuff Engine's preview (--scene) sends the grid, the frame and the
+    animation playing; a run (headless.py, 1/60 s a frame) plays, carries on, plays once and runs on_done, stops and
+    pauses; the mistakes a run finds, and those the checker is sure of; the page's flip.js in Node; the editor's docs;
+    the guide's example; and Sprite Studio's "Use in code"."""
+    folder = os.path.join(OUT, "frames")
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(GAMES, "hero_sheet.png"), "rb") as f, open(os.path.join(folder, "hero_sheet.png"), "wb") as g:
+        g.write(f.read())
+    # Tuff Engine's preview: what the setup sends
+    src = os.path.join(folder, "frames_scene.tuf")
+    with open(src, "w", encoding="utf-8") as f:
+        f.write(FRAMES_SCENE)
+    code, out, err, d, secs = scene(src)
+    c.check(code == 0 and d.get("stopped") == "loop" and d.get("error") is None, f"--scene runs the setup ({secs:.1f} s)", (d.get("stopped"), d.get("error"), err[-300:]))
+    batch = d.get("batch") or []
+    things = {t.get("var"): t for t in d.get("things", [])}
+    ids = {name: (things.get(name, {}).get("ids") or [None])[0] for name in ("hero", "coin", "badge", "plain")}
+    sets = {name: [cmd[2] for cmd in batch if cmd[0] == "s" and cmd[1] == i] for name, i in ids.items()}
+    hero = sets["hero"][-1] if sets["hero"] else {}
+    c.check(hero.get("cells") == [4, 2] and hero.get("cell") == 1 and hero.get("play") == [[1, 2, 3, 4], 10, True]
+            and hero.get("w") == 64 and hero.get("h") == 64 and hero.get("sx") == -1,
+            "hero: 4 x 2 frames, walk playing at 10 a second, one frame 64 wide (and 64 high), and :flip still mirrors it", hero)
+    coin = sets["coin"][-1] if sets["coin"] else {}
+    c.check(coin.get("cells") == [4, 2] and coin.get("cell") == 6 and coin.get("play") is None and coin.get("w") == 32 and coin.get("h") == 32,
+            "coin (no width given): frame 6, one frame's own size (32 x 32)", coin)
+    badge = sets["badge"][-1] if sets["badge"] else {}
+    c.check(things.get("badge", {}).get("layer") == "hud" and badge.get("cells") == [4, 1] and badge.get("w") == 16 and badge.get("h") == 32,
+            "badge on the HUD: 4 frames in a row, 16 wide (and 32 high, the shape of one frame)", badge)
+    plain = [cmd for cmd in batch if cmd[0] in ("c", "s") and cmd[1] == ids["plain"]]
+    c.check(plain and not any(k in cmd[-1] for cmd in plain for k in ("cells", "cell", "play", "pic", "sized")),
+            "a picture never cut into frames sends what it always did", plain)
+    want = {"cells": [4, 2], "frame": 1, "playing": "walk", "loop": True,
+            "animations": {"walk": {"frames": [1, 2, 3, 4], "fps": 10}, "jump": {"frames": [5, 6, 7, 8], "fps": 12}}}
+    c.check(things.get("hero", {}).get("frames") == want and things.get("coin", {}).get("frames", {}).get("frame") == 6
+            and "frames" not in things.get("plain", {}), "the dump has each sheet's grid, frame and animations", things.get("hero", {}).get("frames"))
+    # Mistakes, when it runs
+    for i, (more, line, msg) in enumerate(FRAMES_RUN_ERRORS):
+        path = os.path.join(folder, f"run_error{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('mention tgame\ngame = tgame.window("x")\nhero = game:image("hero_sheet.png", 100, 100, 64)\nhero:frames(4, 2)\n' + more)
+        e = scene(path)[3].get("error") or {}
+        c.check(e.get("line") == line and msg in e.get("message", ""), f"running it: {msg[:70]}", e)
+    # A run, with no window
+    run = headless("frames_run", FRAMES_RUN)
+    if run is None:
+        c.check(True, "--runtime: skipped the headless run (it needs tuff.py)")
+    else:
+        rc, said, err, cmds = run
+        c.check(rc == 0 and "Tuff error" not in err and "Traceback" not in err, "the headless run ends cleanly", err[-500:])
+        c.check(said == ["start 1", "at 0.25 3", "jump 5", "done jump 8 at 0.45", "then 1", "stopped 4", "still 4", "before pause 1",
+                         "while paused 1", "end 5"],
+                "walk carries on when played every frame, jump plays once then on_done runs, stop holds, a pause holds (the frames it said)", said)
+        hero_id = next((cmd[1] for cmd in cmds if cmd[0] == "c" and cmd[3] == "image"), None)
+        got = frame_sets(cmds, hero_id)
+        walk, jump = [[1, 2, 3, 4], 10, True], [[5, 6, 7, 8], 20, False]
+        c.check([g[1].get("play", "-") for g in got] == [walk, jump, walk, None, walk],
+                "the page hears of each play once (not every frame), the end of the jump, the stop and the walk again", got)
+        c.check(len(got) == 5 and got[0][0] == 0 and got[1][0] == 16 and got[2][0] == 28 and got[2][1].get("cell") == 8 and got[3][1].get("cell") == 4,
+                "on the frames it happened in: the jump at 0.25 s, its end at 0.45 s (on frame 8), the stop on frame 4", got)
+        paused = [(f, cmd[1], cmd[2]["attrs"]) for f, cmd in enumerate_frames(cmds) if cmd[0] == "s" and "attrs" in cmd[2]]
+        c.check([p[2] for p in paused] == [{"data-paused": True}] * 2 + [{"data-paused": False}] * 2 and {p[1] for p in paused} == {1, 3}
+                and paused[0][0] == 73 and paused[2][0] == 102,
+                "pausing tells the game's canvas and the HUD's (data-paused), and resuming takes it off again", paused)
+        rc, said, err, cmds = headless("frames_still", 'mention tgame\ngame = tgame.window("x")\nb = game:box(1, 2)\nb:speed(10, 0)\n'
+                                                       'func step(dt):\n    nil\ngame:every_frame step\ngame:pause()\n', frames=20)
+        c.check(rc == 0 and not any(cmd[0] == "s" and "attrs" in cmd[2] for cmd in cmds),
+                "a game without sprite sheets sends nothing new when it pauses", [cmd for cmd in cmds if cmd[0] == "s"][:6])
+    # The checker
+    for i, src in enumerate(FRAMES_GOOD):
+        path = os.path.join(folder, f"good{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('mention tgame\ngame = tgame.window("x")\nhero = game:image("hero_sheet.png", 100, 100, 64)\n' + src)
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(p.returncode == 0 and p.stdout.strip() == "OK", f"--check accepts: {' / '.join(src.strip().splitlines())[:80]}", (p.stdout + p.stderr)[:400])
+    for i, (src, want) in enumerate(FRAMES_BAD):
+        path = os.path.join(folder, f"bad{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('mention tgame\ngame = tgame.window("x")\nhero = game:image("hero_sheet.png", 100, 100, 64)\n' + src)
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(p.returncode == 1 and want in p.stderr, f"--check catches: {want[:80]}", p.stderr[:400])
+    # A file of the program's own could make more animations: then :play's name isn't checked
+    with open(os.path.join(folder, "moves.tuf"), "w", encoding="utf-8") as f:
+        f.write('func add_moves(who):\n    who:animation("walk", [1, 2], 10)\n')
+    path = os.path.join(folder, "own_file.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('mention tgame\nimport moves\ngame = tgame.window("x")\nhero = game:image("hero_sheet.png", 100, 100, 64)\n'
+                'hero:frames(4)\nhero:play("walk")\n')
+    p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    c.check("no animation called" not in p.stderr, "with a file of its own imported, --check doesn't say :play's animation is missing", p.stderr[:300])
+    # The page's side, in Node
+    try:
+        p = subprocess.run(["node", os.path.join(HERE, "flip_test.mjs"), os.path.join(REPO, "tuff_view_web", "flip.js")],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        seen = json.loads(p.stdout or "{}")
+    except FileNotFoundError:
+        seen = None
+        c.check(True, "Node isn't installed: skipped flip.js and the editor's docs")
+    if seen is not None:
+        c.check(seen.get("whole") is None and seen.get("cell6") == [32, 32, 32, 32] and seen.get("not_loaded") is None
+                and seen.get("own_frame") == [10, 20, 30, 40],
+                "flip.js: frame 6 of 4 x 2 is the second row's second (32, 32); a picture not cut (or not loaded) is drawn whole", seen)
+        c.check([seen.get(k) for k in ("start", "at_025", "paused", "after_pause")] == [1, 3, 3, 1] and seen.get("rect_025") == [64, 0, 32, 32]
+                and seen.get("dirty_while_paused") is False,
+                "flip.js: walk at 10 a second shows frame 3 at 0.25 s, holds still while paused, and goes on after", seen)
+        c.check([seen.get(k) for k in ("jump_start", "jump_mid", "jump_end", "playing_after_jump", "after_end")] == [5, 7, 8, 0, 8],
+                "flip.js: a jump played once stays on its last frame and stops stepping", seen)
+        c.check(seen.get("after_gap") == 2, "flip.js: after a 5 s gap (a hidden window) it steps 0.1 s, not 5", seen.get("after_gap"))
+        c.check(seen.get("info") == {"playing": 2, "shown": [[2, 2], [3, 1]]} and seen.get("info_gone") == {"playing": 0, "shown": []},
+                "flip.js: its stats list the sheets and their frames, and let removed ones go", (seen.get("info"), seen.get("info_gone")))
+        # engine.js itself, in a pretend page: tgame's commands in, drawImage calls out
+        p = subprocess.run(["node", os.path.join(HERE, "engine_flip_test.mjs"), os.path.join(REPO, "tuff_view_web", "engine.js")],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        try:
+            page = json.loads(p.stdout or "{}")
+        except ValueError:
+            page = {}
+        src = lambda name: (page.get(name) or [None] * 9)[1:5]  # noqa: E731 (the part of the picture it drew)
+        c.check(page.get("errors") == [] and len(page.get("whole") or []) == 5, "engine.js draws a picture never cut into frames whole, as before",
+                (page.get("whole"), page.get("errors"), p.stderr[-300:]))
+        c.check(src("cell6") == [32, 32, 32, 32] and (page.get("cell6") or [0] * 9)[7:] == [64, 64],
+                "engine.js draws frame 6's part of the picture, 64 x 64 on screen", page.get("cell6"))
+        c.check(src("walk_025") == [64, 0, 32, 32] and src("after_pause") == [96, 0, 32, 32] and page.get("paused_same") is True
+                and page.get("paused_draws") == 1, "engine.js steps the walk to frame 3, holds still (drawing nothing new) while the canvas is "
+                "paused, then goes on to frame 4", page)
+        c.check(src("stopped") == [64, 32, 32, 32] and page.get("stats") == {"playing": 0, "shown": [[2, 7]]},
+                "engine.js shows the frame a stop gives (7), and its stats say so", (page.get("stopped"), page.get("stats")))
+        # The editor's hover docs and completions
+        p = subprocess.run(["node", "-e", LOAD_LANG, os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        t = json.loads(p.stdout)
+        docs = t["methods"]
+        c.check(all(docs.get(m, ["", ""])[1].startswith("tgame") for m in ("frames", "animation", "on_done"))
+                and all(m in t["games"] and m not in t["plain"] for m in ("frames", "animation", "on_done")),
+                "frames, animation and on_done have tgame hover docs, offered after ':' in tgame files only", {m: docs.get(m) for m in ("frames", "animation", "on_done")})
+        c.check("hero:frame(3)" in docs["frame"][1] and docs["frame"][0] == "game:frame()" and 'hero:play("jump", false)' in docs["play"][1]
+                and docs["play"][1].startswith("Plays an animation on a line") and "hero:stop()" in docs["stop"][1] and docs["stop"][0] == "spinner:stop",
+                "frame, play and stop keep their docs and add a sprite sheet's", {m: docs[m] for m in ("frame", "play", "stop")})
+        import tuff_tgame
+        sprite = sorted(tuff_tgame.tables()["kinds"]["sprite"])
+        c.check(not [m for m in sprite if m not in docs], "every sprite method has hover docs", [m for m in sprite if m not in docs])
+    # The guide's example: --check, and a headless run where Space jumps and right walks
+    guide = open(os.path.join(REPO, "tuffcode", "mcp", "tuff-guide.md"), encoding="utf-8").read()
+    start = guide.find("\n#### Animated pictures (sprite sheets)")
+    blocks = re.findall(r"```tuff\n(.*?)```", guide[start:guide.find("\n#### ", start + 1)], re.S) if start >= 0 else []
+    c.check(len(blocks) == 1 and ":frames(" in blocks[0], "the guide's tgame section has a sprite sheet example", len(blocks))
+    if blocks:
+        path = os.path.join(folder, "guide_sheet.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(blocks[0])
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        c.check(p.returncode == 0, "the guide's sprite sheet example passes --check", (p.stdout + p.stderr)[:400])
+        run = headless("guide_sheet", blocks[0], frames=90, events={"10": [{"type": "keydown", "code": "Space"}], "12": [{"type": "keyup", "code": "Space"}],
+                                                                    "40": [{"type": "keydown", "code": "ArrowRight"}], "70": [{"type": "keyup", "code": "ArrowRight"}]})
+        if run is not None:
+            rc, said, err, cmds = run
+            hero_id = next((cmd[1] for cmd in cmds if cmd[0] == "c" and cmd[3] == "image"), None)
+            plays = [(f, s.get("play", "-"), s.get("cell")) for f, s in frame_sets(cmds, hero_id)]
+            jump, walk = [[5, 6, 7, 8], 12, False], [[1, 2, 3, 4], 10, True]
+            c.check(rc == 0 and "Tuff error" not in err, "and runs headless for 90 frames", err[-400:])
+            c.check(plays == [(0, None, 1), (10, jump, None), (30, None, 1), (40, walk, None), (70, None, 1)],
+                    "standing on frame 1, Space jumps once (landed after its 4 frames at 12 a second: 20 frames), right walks, "
+                    "letting go stands (and standing every frame sends nothing new)", plays)
+    # Sprite Studio's "Use in code" for a game: the sheet, cut into frames and played (not a timer swapping pictures)
+    panel = open(os.path.join(REPO, "tuffcode", "plugins", "sprite-studio", "panel.js"), encoding="utf-8").read()
+    c.check(":frames(${n})" in panel and ":animation(${q(info.name)}, ${list}, ${fps})" in panel and ":play(${q(info.name)})" in panel,
+            "Sprite Studio writes :frames, :animation and :play for a game", None)
+    code = 'walk = game:image("walk_sheet.png", 300, 200, 64)\nwalk:frames(4)\nwalk:animation("walk", [1, 2, 3, 4], 8)\nwalk:play("walk")\n'
+    with open(os.path.join(folder, "walk_sheet.png"), "wb") as f, open(os.path.join(GAMES, "hero_sheet.png"), "rb") as g:
+        f.write(g.read())
+    path = os.path.join(folder, "studio.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('mention tgame\n\ngame = tgame.window("Walk", 600, 400)\n' + code)
+    p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    c.check(p.returncode == 0, "the code it writes passes --check", (p.stdout + p.stderr)[:300])
+
+
+def enumerate_frames(cmds):
+    """(the frame each command went in, the command), leaving out the frame markers."""
+    frame = 0
+    for cmd in cmds:
+        if cmd[0] == "f":
+            frame = cmd[1] + 1
+        else:
+            yield frame, cmd
+
+
+def t_frames_window(c):
+    """1.5.0, in a real window: games/frames.tuf shows the frame tgame says it shows (each frame of hero_sheet.png is its
+    own colour), the page steps a walk by itself while Python's frame() follows the same clock, a jump plays once
+    and on_done runs, and a pause holds the page's frames still."""
+    r = play("frames", game("frames.tuf"), [
+        {"at": 0.4, "call": "hold"}, {"at": 0.7, "shot": "frames_hold.png"},
+        {"at": 0.8, "call": "walk"}, {"at": 1.3, "dump": "frames_walk1.json"}, {"at": 1.55, "dump": "frames_walk2.json"},
+        {"at": 1.8, "dump": "frames_walk3.json"},
+        {"at": 2.0, "call": "pause"}, {"at": 2.2, "dump": "frames_paused1.json"}, {"at": 3.2, "dump": "frames_paused2.json"},
+        {"at": 3.3, "shot": "frames_paused.png"}, {"at": 3.4, "call": "resume"},
+        {"at": 3.6, "call": "jump"}, {"at": 4.5, "dump": "frames_jumped.json"}, {"at": 4.6, "shot": "frames_jumped.png"},
+        {"at": 4.8, "close": True}])
+    first_line_is_notice(c, r)
+    clean_exit(c, r)
+    hero_box = (0.4, 0.3, 0.6, 0.7)
+    hold = r.shots.get("frames_hold.png")
+    c.check(hold and color_share(hold, hexrgb(FRAME_COLORS[1]), 40, hero_box) > 0.4,
+            "hero:frame(2) shows frame 2 (orange) and only that part of the picture", hold and color_share(hold, hexrgb(FRAME_COLORS[1]), 40, hero_box))
+    c.check(hold and color_share(hold, hexrgb(FRAME_COLORS[5]), 40, (0.02, 0.04, 0.16, 0.22)) > 0.2,
+            "the HUD's coin shows frame 6 (blue)", hold and color_share(hold, hexrgb(FRAME_COLORS[5]), 40, (0.02, 0.04, 0.16, 0.22)))
+
+    def frames_of(name):
+        d = r.dumps.get(name, {})
+        py = {f[0]: f[1] for f in d.get("frames", [])}
+        page = {s[0]: s[1] for s in ((d.get("page") or {}).get("flip") or {}).get("shown", [])}
+        return py, page
+
+    walk = [frames_of(f"frames_walk{i}.json") for i in (1, 2, 3)]
+    hero_id = min((k for py, _ in walk for k in py), default=None)
+    pairs = [(py.get(hero_id), page.get(hero_id)) for py, page in walk]
+    order = [1, 2, 3, 4]
+    near = all(a in order and b in order and (order.index(a) - order.index(b)) % 4 in (0, 1, 3) for a, b in pairs)
+    c.check(near and len({p[1] for p in pairs}) >= 2, "walking, the page steps by itself and Python's hero:frame() agrees (within a frame)", pairs)
+    p1, p2 = frames_of("frames_paused1.json"), frames_of("frames_paused2.json")
+    c.check(p1[1].get(hero_id) is not None and p1[1].get(hero_id) == p2[1].get(hero_id) and p1[0].get(hero_id) == p2[0].get(hero_id),
+            "paused for a second, the page's frame and Python's stay where they were", (p1, p2))
+    c.check(any(line.startswith("done jump") for line in r.lines), "the jump played once and on_done ran", r.lines)
+    jumped = frames_of("frames_jumped.json")
+    shot = r.shots.get("frames_jumped.png")
+    c.check(jumped[0].get(hero_id) == 8 and jumped[1].get(hero_id) == 8 and shot and color_share(shot, hexrgb(FRAME_COLORS[7]), 40, hero_box) > 0.4,
+            "after the jump it stays on frame 8 (pink), in Python, in the page and on screen", jumped)
+
+
+# ---------------------------------------------------------------- numbers and library calls (1.5.0)
+
+TOO_BIG_SUM = "That number is too big to work out. Whole numbers can be any size"
+# Maths that stopped with a Python traceback (OverflowError) before 1.5.0, or with "round() failed: cannot convert
+# float infinity to integer" and the like: (code, (line, column, how the error starts)), the same in both runtimes.
+NUMBERS_ERRORS = [
+    ("say 10 ^ 400 / 3", (1, 14, TOO_BIG_SUM)), ("say 2 ^ 99999 * 1.5", (1, 15, TOO_BIG_SUM)),
+    ("x = 2 ^ 99999\nx *= 1.5", (2, 1, TOO_BIG_SUM)), ("x = 2 ^ 99999\nx += 0.5", (2, 1, TOO_BIG_SUM)),
+    ("x = 10 ^ 400\nx /= 3", (2, 1, TOO_BIG_SUM)), ("x = 10 ^ 400\nsay x - 0.5", (2, 7, TOO_BIG_SUM)),
+    ("x = 10 ^ 400\nsay x % 1.5", (2, 7, TOO_BIG_SUM)), ("x = 10 ^ 400\nsay 1.5 % x", (2, 9, TOO_BIG_SUM)),
+    ("x = 10 ^ 400\nsay x + 0.5 * 2", (2, 7, TOO_BIG_SUM)), ("say 10.0 ^ 400", (1, 10, TOO_BIG_SUM)),
+    ("x = 10 ^ 400\nsay x ^ 0.5", (2, 7, TOO_BIG_SUM)), ('say "Total: " + 10 ^ 400 / 3', (1, 26, TOO_BIG_SUM)),
+    ("func f(n):\n    return n * 1.5\nsay f(2 ^ 99999)", (2, 14, TOO_BIG_SUM)),
+    ('say f"{2 ^ 99999 * 1.5:0.00}"', (1, 18, TOO_BIG_SUM)), ("n = 10 ^ 400\nfor i in [1, 2]:\n    n /= 2", (3, 5, TOO_BIG_SUM)),
+    ("big = [10 ^ 400]\nbig[0] /= 3", (2, 1, TOO_BIG_SUM)), ('d = {"x": 10 ^ 400}\nd["x"] *= 1.5', (2, 1, TOO_BIG_SUM)),
+    ("say [2 ^ 99999 * 0.5]", (1, 16, TOO_BIG_SUM)), ("say -(2 ^ 99999) / 7", (1, 18, TOO_BIG_SUM)),
+    ("say 0 ^ -1", (1, 7, "0 ^ -1 has no answer: it's the same as dividing by zero.")),
+    ("say 0.0 ^ -2.5", (1, 9, "0 ^ -2.5 has no answer")),
+    ("say round(10.0 ^ 308 * 10)", (1, 10, "That number is too big for round() to work out.")),
+    ("say int(10.0 ^ 308 * 10)", (1, 8, "That number is too big for int() to work out.")),
+    ("say floor(10.0 ^ 308 * 10)", (1, 10, "That number is too big for floor() to work out.")),
+    ("say sqrt(2 ^ 99999)", (1, 9, "That number is too big for sqrt() to work out.")),
+    ("say sum(2 ^ 99999, 0.5)", (1, 8, "That number is too big for sum() to work out.")),
+    ("say average(2 ^ 99999, 1)", (1, 12, "That number is too big for average() to work out.")),
+    ("say range(2 ^ 99999)", (1, 10, "That number is too big for range() to work out.")),
+    ("wait(2 ^ 99999)", (1, 5, "That number is too big for wait() to work out.")),
+    ("say random(0.5, 2 ^ 99999)", (1, 11, "That number is too big for random() to work out.")),
+    ("say sin(2 ^ 99999)", (1, 8, "That number is too big for sin() to work out.")),
+    ("say sin(10.0 ^ 308 * 10)", (1, 8, "sin(inf) has no answer.")),
+    ("x = [1, 2]\nsay x[2 ^ 99999]", (2, 6, "That position is far outside this list (it has 2 items, starting at 0).")),
+    ('say "ab" * 2 ^ 99999', (1, 10, "That text would be far too long to make.")),
+]
+# Big numbers that work: whole numbers of any size, every digit of them, and catch getting the message.
+NUMBERS_PROGRAM = '''say 2 ^ 100
+say text(10 ^ 25, 2)
+say text(-7, 3)
+say len(text(2 ^ 99999))
+say text(2 ^ 99999, 1):ends(".0")
+say "" * 2 ^ 99999 + "empty"
+say len("ab" * 0)
+say number("1.0e999") is err
+say num("2.5e3")
+say 2 ^ 99999 > 1.5
+say 2 ^ 99999 / 2 ^ 99998
+say 2 ^ -99999
+say min(2 ^ 99999, 0.5)
+say log(2 ^ 99999, 2)
+say (2 ^ 99999) % 7
+say round(2 ^ 99999 * 1) == 2 ^ 99999
+say f"{2 ^ 70:000}"
+try:
+    say 10 ^ 400 / 3
+catch problem:
+    say problem:starts("That number is too big to work out.")
+total = 0
+for i in range(1, 3):
+    try:
+        total += 10 ^ 400 / 3
+    catch:
+        total += 1
+say total
+'''
+NUMBERS_OUTPUT = ["1267650600228229401496703205376", "10000000000000000000000000.00", "-7.000", "30103", "true", "empty", "0",
+                  "true", "2500", "true", "2", "0", "0.5", "99999", "1", "true", "1180591620717411303424", "true", "3"]
+# The checker: a sum of numbers written in the program that's too big is certain to stop the program (code, what
+# --check says first, or "OK"). In try: it may be on purpose, and with a variable only the run can tell.
+NUMBERS_CHECKS = [
+    ("say 10 ^ 400 / 3", (1, 14, TOO_BIG_SUM)),
+    ("x = 2 ^ 99999 * 1.5 + 1", (1, 15, TOO_BIG_SUM)),
+    ("func half():\n    return -(10 ^ 400) / 2\nsay half()", (2, 24, TOO_BIG_SUM)),
+    ('say "Big: " + 10.0 ^ 400', (1, 20, TOO_BIG_SUM)),
+    ("try:\n    say 10 ^ 400 / 3\ncatch problem:\n    say problem", "OK"),
+    ("say 2 ^ 99999\nsay 10 ^ 300 * 10\nsay 1 / 3 * 2 ^ 1000\nsay 2 ^ -5000", "OK"),
+    ("x = 10 ^ 400\nsay x / 3", "OK"),
+    ("say 2 ^ 2000000 * 1.5", "OK"),  # (too long to work out while checking: the run says so)
+]
+
+
+def numbers_runtime(slow):
+    """A tuff.Interpreter for the tree walker (slow) or the compiled runtime."""
+    import tuff
+    old = os.environ.pop("TUFF_SLOW", None)
+    if slow:
+        os.environ["TUFF_SLOW"] = "1"
+    try:
+        return tuff.Interpreter("", HERE)
+    finally:
+        os.environ.pop("TUFF_SLOW", None)
+        if old is not None:
+            os.environ["TUFF_SLOW"] = old
+
+
+def numbers_run(code, slow, names=None):
+    """Runs code in this process: (line, column, message) of its Tuff error, or None. names: values to start with."""
+    import tuff
+    interp = numbers_runtime(slow)
+    interp.globals.vars.update(names or {})
+    try:
+        interp.run_block(tuff.Parser(tuff.tokenize(code)).program(), interp.globals)
+    except tuff.TuffError as err:
+        return err.line, err.col, err.msg
+    return None
+
+
+def numbers_library(rt):
+    """A headless stand-in for a library: a window and a sprite with methods (new functions for each object, as tgame
+    makes them), a method of a Python object, a function wrapped like tdraw's guard, and a library function."""
+    import functools
+    import tuff
+    seen = {"frames": 0, "x": 0}
+
+    class Box:
+        def x(self):
+            return seen["x"]
+
+    def frame():
+        seen["frames"] += 1
+        return True
+
+    def move(dx, dy=0):
+        seen["x"] += dx
+
+    def guarded(fn):
+        @functools.wraps(fn)
+        def run(*args):
+            return fn(*args)
+        return run
+
+    def make(text, color="white"):
+        return text
+
+    return seen, {"game": rt.native("window", {"frame": frame}), "player": rt.native("sprite", {"move": move, "x": Box().x}),
+                  "pen": rt.native("pen", {"go": guarded(lambda steps: steps)}),
+                  "lib": tuff.Module("lib", {"make": rt.builtin("lib.make", make)})}
+
+
+def t_numbers(c):
+    """1.5.0's two rough edges. Numbers: a sum too big for a decimal (10 ^ 400 / 3, 2 ^ 99999 * 1.5) and the maths
+    built-ins given one stop with a Tuff error on the right line and column in both runtimes (they were a Python
+    traceback), whole numbers show every digit, and --check finds a too-big sum of numbers written in the program.
+    Library calls: how many inputs a library's function takes is worked out once (fits_inputs), with the same answers
+    as inspect.signature and the same messages, and game:frame() and player:move() are several times quicker."""
+    import functools
+    import inspect
+    import tuff
+    for code, (line, col, msg) in NUMBERS_ERRORS:
+        got = [numbers_run(code, slow) for slow in (True, False)]
+        c.check(got[0] == got[1] and got[0] and got[0][:2] == (line, col) and got[0][2].startswith(msg),
+                f"{code.splitlines()[-1]!r} stops on line {line}, column {col}: {msg[:50]}", got)
+    folder = os.path.join(HERE, "out", "numbers")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, "numbers.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(NUMBERS_PROGRAM)
+    for slow in (True, False):
+        env = {k: v for k, v in os.environ.items() if k != "TUFF_SLOW"}
+        if slow:
+            env["TUFF_SLOW"] = "1"
+        p = subprocess.run(tuff_cmd() + [path], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env,
+                           stdin=subprocess.DEVNULL)
+        got = p.stdout.splitlines()
+        c.check(p.returncode == 0 and got[:len(NUMBERS_OUTPUT)] == NUMBERS_OUTPUT,
+                f"{'the tree walker' if slow else 'the compiled runtime'}: big whole numbers work and show every digit, and catch gets the message",
+                [(i + 1, want, got[i] if i < len(got) else None) for i, want in enumerate(NUMBERS_OUTPUT)
+                 if i >= len(got) or got[i] != want][:4] or p.stderr[-400:])
+    bad = os.path.join(folder, "too_big.tuf")
+    with open(bad, "w", encoding="utf-8") as f:
+        f.write("say 10 ^ 400 / 3\n")
+    p = subprocess.run(tuff_cmd() + [bad], capture_output=True, text=True, encoding="utf-8", timeout=60, stdin=subprocess.DEVNULL)
+    c.check(p.returncode == 1 and "Traceback" not in p.stderr and p.stderr.startswith(f"Tuff error on line 1: {TOO_BIG_SUM}")
+            and "               ^" in p.stderr, "tuff.py: say 10 ^ 400 / 3 is a Tuff error with the line and a ^ under the /", p.stderr[-500:])
+    # the checker
+    p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    c.check(p.stdout.strip() == "OK", "--check accepts the big numbers program", (p.stdout + p.stderr)[:600])
+    for code, want in NUMBERS_CHECKS:
+        problems = tuff.Checker(tuff.Parser(tuff.tokenize(code)).program(), folder).run()
+        if want == "OK":
+            c.check(not problems, f"--check says nothing about {code.splitlines()[-1]!r}", problems)
+        else:
+            run = numbers_run(code, False)
+            c.check(problems and problems[0][:2] == want[:2] and problems[0][2].startswith(want[2]) and run and run[:2] == want[:2],
+                    f"--check on {code.splitlines()[-1]!r}: line {want[0]}, column {want[1]} (where the run stops too)", (problems, run))
+    # fits_inputs: the same answers as inspect.signature(fn).bind(...), for every shape a library's function can have
+    def by_inspect(fn, n):
+        try:
+            inspect.signature(fn).bind(*([None] * n))
+            return True
+        except TypeError:
+            return False
+        except ValueError:
+            return None
+
+    class K:
+        def m0(self): pass
+        def m2(self, a, b=1): pass
+        def mv(self, *a): pass
+        def mk(self, *, k): pass
+        def mkd(self, *, k=1): pass
+        @classmethod
+        def cm(cls, a): pass
+
+    def wrap(fn):
+        @functools.wraps(fn)
+        def run(*args):
+            return fn(*args)
+        return run
+
+    def tagged(a, b):
+        pass
+
+    def bare():
+        pass
+
+    tagged.note = "an attribute of its own"
+    late = lambda a, b: 0  # noqa: E731
+    late.__defaults__ = (5,)
+    shapes = [lambda: 0, lambda a: 0, lambda a, b=2: 0, lambda *a: 0, lambda a, *b: 0, lambda a, /, b: 0, lambda a, *, k: 0,
+              lambda a, *, k=1: 0, lambda a=1, b=2, c=3: 0, lambda **kw: 0, lambda a, **kw: 0, K().m0, K().m2, K().mv, K().mk,
+              K().mkd, K().cm, K.m2, wrap(lambda a, b=1: 0), wrap(K().m2), wrap(wrap(lambda a: 0)), tagged, late, bare,
+              types_method(bare), len, print, functools.partial(lambda a, b: 0, 1), [].append, int, K()]
+    differ = [(fn, n, by_inspect(fn, n), tuff.fits_inputs(fn, n)) for fn in shapes for n in range(5)
+              if tuff.fits_inputs(fn, n) not in (None, by_inspect(fn, n)) or tuff.accepts(fn, n) != (by_inspect(fn, n) is not False)]
+    known = sum(1 for fn in shapes if tuff.fits_inputs(fn, 1) is not None)
+    c.check(not differ and known >= 24, f"fits_inputs agrees with inspect.signature on {len(shapes)} kinds of function, "
+            f"{known} of them without asking it", differ[:4])
+    # Library objects' methods and library functions, in both runtimes: right answers, the same messages for a wrong
+    # number of inputs, and inspect.signature isn't asked (it was, on every call)
+    loop = "i = 0\nwhile i < 300:\n    game:frame()\n    player:move(2)\n    say lib.make(\"hi\") + pen:go(3) + player:x()\n    i += 1\n"
+    calls = []
+    signature = inspect.signature
+    inspect.signature = lambda *a, **k: calls.append(a) or signature(*a, **k)
+    try:
+        for slow in (True, False):
+            mode = "the tree walker" if slow else "the compiled runtime"
+            interp = numbers_runtime(slow)
+            seen, names = numbers_library(interp.rt)
+            interp.globals.vars.update(names)
+            interp.console.say = lambda text, *a, **k: None
+            del calls[:]
+            interp.run_block(tuff.Parser(tuff.tokenize(loop)).program(), interp.globals)
+            c.check(seen == {"frames": 300, "x": 600} and not calls,
+                    f"{mode}: 1,500 library calls, and inspect.signature isn't asked once", (seen, len(calls)))
+            wrong = [numbers_run(code, slow, numbers_library(numbers_runtime(slow).rt)[1]) for code in
+                     ("x = 1\nplayer:move()", "game:frame(1)", "say lib.make()", "say pen:go(1, 2)", "player:move(1, 2, 3)")]
+            c.check(wrong == [(2, 7, "sprite:move got the wrong number of inputs (0)."), (1, 5, "window:frame got the wrong number of inputs (1)."),
+                              (1, 13, "lib.make() got the wrong number of inputs (0)."), (1, 8, "pen:go got the wrong number of inputs (2)."),
+                              (1, 7, "sprite:move got the wrong number of inputs (3).")],
+                    f"{mode}: a wrong number of inputs gives the same message as before, on the same line", wrong)
+    finally:
+        inspect.signature = signature
+    # Speed: 200,000 library method calls with fits_inputs, and (a tenth as many) the old way, asking inspect each
+    # time, less the time the same loop takes with no calls in it
+    keep = tuff.fits_inputs
+
+    def timed(slow, n, body, old=False):
+        interp = numbers_runtime(slow)
+        interp.globals.vars.update(numbers_library(interp.rt)[1])
+        program = tuff.Parser(tuff.tokenize(f"i = 0\nwhile i < {n}:\n{body}    i += 1\n")).program()
+        if old:
+            tuff.fits_inputs = lambda fn, count: None
+        try:
+            t0 = time.perf_counter()
+            interp.run_block(program, interp.globals)
+            return time.perf_counter() - t0
+        finally:
+            tuff.fits_inputs = keep
+
+    calls = "    game:frame()\n    player:move(1, 2)\n"
+    for slow in (True, False):
+        new = (timed(slow, 200_000, calls) - timed(slow, 200_000, "")) / 400_000 * 1e6
+        old = (timed(slow, 20_000, calls, old=True) - timed(slow, 20_000, "")) / 40_000 * 1e6
+        c.check(new * 2 < old, f"{'the tree walker' if slow else 'the compiled runtime'}: a library method call takes "
+                f"{new:.2f} us, and {old:.2f} us asking inspect each time as before ({old / max(new, 0.01):.1f}x)", (new, old))
+
+
+def types_method(fn):
+    """fn as a method of some object (here one with no place for the object, which inspect can't make a signature for)."""
+    import types
+    return types.MethodType(fn, object())
+
+
+# ---------------------------------------------------------------- 1.5.0: your own files as libraries (import money.tuf)
+
+# A shop in five files: money.tuf and tax.tuf next to it, and fmt.tuf and table.tuf in libs/ (table.tuf imports fmt.tuf
+# from there). (A library's name winning over a file is in MODULES_ERRORS: --check says so.)
+MODULES_FILES = {
+    "shop.tuf": '''import money.tuf
+mention tax.tuf
+import fmt.tuf
+import table.tuf
+import anims
+say money.as_money(6.375)
+say money.rate
+say tax.total(10)
+money.set_rate(0.5)
+say money.rate
+say tax.total(10)
+rate = 99
+say money.with_tax(10)
+say money
+say anims
+say tax.money is money
+say fmt.stars(3) + " " + table.row(["a", "b"])
+prices = [3, 10, 7]
+prices:sort(money.biggest_first)
+say prices
+func shout(t):
+    return t:upper() + "!"
+say money.apply(shout, "hi")
+func later():
+    import fmt.tuf
+    return fmt.stars(2)
+say later()
+try:
+    import extras.tuf
+catch problem:
+    say problem
+say money.counter()
+say money.counter()
+say money.count
+say f"{money.rate:0.00} and {rate}"
+''',
+    "money.tuf": '''# Money helpers for the shop
+say "money.tuf starts"
+rate = 0.2
+count = 0
+
+# 6.375 -> "$6.38"
+func as_money(x):
+    return f"{x:money}"
+
+func with_tax(price):
+    scratch = price * rate
+    return price + scratch
+
+func set_rate(new_rate):
+    rate = new_rate
+
+func biggest_first(n):
+    return -n
+
+func apply(f, x):
+    return f(x)
+
+func counter():
+    count += 1
+    return count
+''',
+    "tax.tuf": 'import money.tuf\nsay "tax.tuf starts"\nfunc total(x):\n    return money.as_money(money.with_tax(x))\n',
+    "libs/fmt.tuf": 'func stars(n):\n    return "*" * n\n',
+    "libs/table.tuf": 'import fmt.tuf\nfunc row(cells):\n    return fmt.stars(1) + " " + cells:join(" | ")\n',
+}
+MODULES_OUTPUT = ["money.tuf starts", "tax.tuf starts", "$6.38", "0.2", "$12.00", "0.5", "$15.00", "15", "<file money.tuf>",
+                  "<library anims>", "true", "*** * a | b", "[10, 7, 3]", "HI!", "**",
+                  "There's no extras.tuf next to shop.tuf (or in a libs folder there), and extras isn't one of Tuff's libraries "
+                  "(anims, tgui, mtgui, tap, atgui, tgame, tdraw, tterm, tmusic).", "1", "2", "2", "0.50 and 99"]
+MONEY = 'rate = 0.2\nfunc as_money(x):\n    return f"{x:money}"\nfunc show():\n    secret = 1\n    return secret\n'
+# Mistakes: (the files, where the run stops: (the file it names, line, column, part of the message), or "OK", and part of
+# what --check on shop.tuf says, or "OK" when only the run can know). shop.tuf is the program.
+MODULES_ERRORS = [
+    ({"shop.tuf": 'say 1\nimport nothere.tuf\n'}, ("", 2, 1, "There's no nothere.tuf next to shop.tuf (or in a libs folder there), and "
+                                                         "nothere isn't one of Tuff's libraries"), None),
+    ({"shop.tuf": 'import mony.tuf\n', "money.tuf": MONEY}, ("", 1, 1, "There's no mony.tuf next to shop.tuf (or in a libs folder there). "
+                                                                   "Did you mean money (money.tuf)?"), None),
+    ({"shop.tuf": 'import Money.tuf\n', "money.tuf": MONEY}, ("", 1, 1, "There's no Money.tuf next to shop.tuf (or in a libs folder there). "
+                                                                    "Did you mean money (money.tuf)?"), None),
+    ({"shop.tuf": 'import tgaem\n'}, ("", 1, 1, "Did you mean Tuff's library tgame?"), None),
+    ({"shop.tuf": 'import random\n', "random.tuf": 'x = 1\n'}, ("", 1, 1, "random is one of Tuff's built-in functions, so a file called "
+                                                                          "random.tuf can't be imported by that name."), None),
+    ({"shop.tuf": 'import random\n'}, ("", 1, 1, "random is built into Tuff, so there's nothing to import: use it straight away, like random()."), None),
+    ({"shop.tuf": 'import math\n'}, ("", 1, 1, "and Tuff doesn't need math: sqrt, floor"), None),
+    ({"shop.tuf": 'import money.tuf\nsay 1\n', "money.tuf": 'import shop.tuf\n'},
+     ("money.tuf", 1, 1, "shop.tuf and money.tuf import each other (shop.tuf → money.tuf → shop.tuf), so neither can finish loading."), None),
+    ({"shop.tuf": 'import shop.tuf\n'}, ("", 1, 1, "shop.tuf imports itself."), None),
+    ({"shop.tuf": 'import money.tuf\n', "money.tuf": 'x = 1\nimport tax.tuf\n', "tax.tuf": 'import money.tuf\n'},
+     ("tax.tuf", 1, 1, "money.tuf and tax.tuf import each other (money.tuf → tax.tuf → money.tuf)"), None),
+    ({"shop.tuf": 'import money.tuf\nimport tax.tuf\n', "money.tuf": 'import tax.tuf\n', "tax.tuf": 'import fmt.tuf\n', "fmt.tuf": 'import money.tuf\n'},
+     ("fmt.tuf", 1, 1, "These files import each other in a circle (money.tuf → tax.tuf → fmt.tuf → money.tuf)"), None),
+    ({"shop.tuf": 'import money.tuf\nmoney.go()\n', "money.tuf": 'func go():\n    import shop.tuf\n'},
+     ("money.tuf", 2, 5, "shop.tuf and money.tuf import each other (shop.tuf → money.tuf → shop.tuf)"), "OK"),
+    ({"shop.tuf": 'import money.tuf\n', "money.tuf": 'x = 1\nfunc f(:\n'},
+     ("money.tuf", 2, 8, "Function inputs must be simple names."), "money.tuf has a mistake on line 2, so import money.tuf stops the program there: "
+                                                                    "Function inputs must be simple names."),
+    ({"shop.tuf": 'say 1\nimport money.tuf\n', "money.tuf": 'x = 1\ny = x / 0\n'}, ("money.tuf", 2, 7, "You can't divide by zero."), "OK"),
+    ({"shop.tuf": 'import money.tuf\nsay money.half("a")\n', "money.tuf": 'func half(n):\n    return n / 2\n'},
+     ("money.tuf", 2, 14, "Can't divide text and a number."), "OK"),
+    ({"shop.tuf": 'import money.tuf\nfunc bad(x):\n    return x + nope\nsay money.apply(bad, 1)\n', "money.tuf": 'func apply(f, x):\n    return f(x)\n'},
+     ("", 3, 16, "I don't know what 'nope' is."), None),
+    ({"shop.tuf": 'import money.tuf\nsay money.as_mony(1)\n', "money.tuf": MONEY}, ("", 2, 10, "money.tuf doesn't have 'as_mony'. Did you mean 'as_money'?"), None),
+    ({"shop.tuf": 'import money.tuf\nsay money.secret\n', "money.tuf": MONEY}, ("", 2, 10, "money.tuf doesn't have 'secret'. It has: as_money, rate, show."), None),
+    ({"shop.tuf": 'import money.tuf\nsay money.as_money(1, 2)\n', "money.tuf": MONEY},
+     ("", 2, 19, "as_money() needs 1 input, but got 2."), "money.as_money() needs 1 input, but got 2."),
+    ({"shop.tuf": 'import money.tuf\nsay money.rate()\n', "money.tuf": MONEY},
+     ("", 2, 15, "0.2 isn't a function, so it can't be called with ( )."), "money.rate is a number in money.tuf, not a function, so it can't be called"),
+    ({"shop.tuf": 'import money.tuf\nmoney.rate = 2\n', "money.tuf": MONEY},
+     ("", 2, 1, "money.rate belongs to money.tuf, so it can't be changed from this file. Give money.tuf a function that changes it, "
+                "like func set_rate(new_rate):"), None),
+    ({"shop.tuf": 'import money.tuf\nsay rate\n', "money.tuf": MONEY}, ("", 2, 5, "I don't know what 'rate' is."), None),
+    ({"shop.tuf": 'total = 5\nimport money.tuf\nsay money.show_total()\n', "money.tuf": 'func show_total():\n    return total\n'},
+     ("money.tuf", 2, 12, "I don't know what 'total' is."), "OK"),
+    ({"shop.tuf": 'import money.tuf\n', "money.tuf": 'say "in money"\nreturn 5\n'},
+     ("money.tuf", 2, 1, "'return' can only be used inside a function."), "OK"),
+    ({"shop.tuf": 'import anims\nsay anims\n', "anims.tuf": 'say "mine"\n'},
+     "OK", "OK"),  # (import anims is the library; import anims.tuf would be the file)
+    ({"shop.tuf": 'mention file\nsay file.exists("x.txt")\n', "file.tuf": 'say "mine"\n'},
+     "OK", "OK"),
+    ({"shop.tuf": 'try:\n    import extras.tuf\ncatch:\n    say "no extras"\n'}, "OK", "OK"),
+]
+# What --check accepts in a program that uses its files (with MODULES_FILES' money.tuf and libs/fmt.tuf).
+MODULES_GOOD = [
+    'import money.tuf\nsay money.as_money(1) + money.as_money(money.rate)\n',
+    'import money.tuf\nx = money.with_tax(2) + 1\nsay x\n',
+    'import money.tuf\nf = money.as_money\nsay f(2)\n',
+    'import money.tuf\nfunc go():\n    return money.counter()\nsay go()\n',
+    'import fmt.tuf\nsay fmt.stars(2)\n',
+    'import money.tuf\nsay "Rate: " + (money.rate + 1)\n',
+    'import money.tuf\nprices = [1, 2]\nprices:sort(money.biggest_first)\nsay prices\n',
+    'mention tax.tuf\nsay tax.money.rate\n',
+]
+
+# The editor: tuff-lang.js with a stand-in TuffIDE that reads a project's files (shop.tuf open, money.tuf on disk).
+MODULES_LANG = r"""
+const fs = require('fs'), vm = require('vm');
+const files = JSON.parse(process.argv[2]);
+const window = { TuffIDE: {
+  readText: async (p) => (Object.hasOwn(files, p) ? files[p] : null),
+  readDir: async (dir) => Object.keys(files).filter((p) => p.slice(0, p.lastIndexOf('\\')) === dir).map((p) => ({ name: p.slice(p.lastIndexOf('\\') + 1), isDir: false }))
+    .concat(Object.keys(files).some((p) => p.startsWith(dir + '\\libs\\')) && !dir.endsWith('libs') ? [{ name: 'libs', isDir: true }] : []),
+} }, ctx = { window };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+let monarch = null, hover = null, completion = null, signature = null;
+const monaco = { Range: class { constructor(...a) { this.a = a; } }, editor: { defineTheme() {} }, languages: {
+  register() {}, setMonarchTokensProvider(_id, def) { monarch = def; }, setLanguageConfiguration() {},
+  registerHoverProvider(_id, p) { hover = hover || p; }, registerDefinitionProvider() {}, registerReferenceProvider() {},
+  registerRenameProvider() {}, registerDocumentSymbolProvider() {}, registerSignatureHelpProvider(_id, p) { signature = p; }, registerColorProvider() {},
+  registerCompletionItemProvider(_id, p) { completion = p; },
+  CompletionItemKind: new Proxy({}, { get: (_t, k) => k }), CompletionItemInsertTextRule: {}, IndentAction: {}, SymbolKind: {} } };
+window.defineTuffTheme = () => {};
+window.registerTuff(monaco, '#3574f0');
+const SHOP = 'C:\\proj\\shop.tuf';
+const model = (src, col) => { const lines = src.split('\n'); return { uri: { scheme: 'file', fsPath: SHOP }, getLinesContent: () => lines,
+  getLineContent: (n) => lines[n - 1], getValue: () => src, getWordUntilPosition: () => ({ startColumn: col || 1, endColumn: col || 1 }),
+  getWordAtPosition: ({ lineNumber, column }) => { for (const m of lines[lineNumber - 1].matchAll(/\w+/g))
+    if (m.index < column && column <= m.index + m[0].length) return { word: m[0], startColumn: m.index + 1, endColumn: m.index + 1 + m[0].length };
+    return null; } }; };
+(async () => {
+  const src = 'import money.tuf\nimport fmt.tuf\nsay money.';
+  const after = await completion.provideCompletionItems(model(src, 11), { lineNumber: 3, column: 11 });
+  const asMoney = after.suggestions.find((s) => s.label === 'as_money');
+  const libs = await completion.provideCompletionItems(model('import fmt.tuf\nsay fmt.', 9), { lineNumber: 2, column: 9 });
+  const imports = await completion.provideCompletionItems(model('import ', 8), { lineNumber: 1, column: 8 });
+  const onHover = await hover.provideHover(model('import money.tuf\nsay money.as_money(1)'), { lineNumber: 2, column: 12 });
+  const valueHover = await hover.provideHover(model('import money.tuf\nsay money.rate'), { lineNumber: 2, column: 12 });
+  const sig = await signature.provideSignatureHelp(model('import money.tuf\nsay money.as_money('), { lineNumber: 2, column: 20 });
+  const plain = await completion.provideCompletionItems(model('say nothing.', 13), { lineNumber: 1, column: 13 });
+  const toks = [];
+  const rule = monarch.tokenizer.root.find((r) => String(r[0]) === String(/(import|mention)(\s+)([a-zA-Z_]\w*)/));
+  console.log(JSON.stringify({
+    labels: after.suggestions.map((s) => s.label), doc: asMoney && asMoney.documentation, detail: asMoney && asMoney.detail,
+    insert: asMoney && asMoney.insertText, libs: libs.suggestions.map((s) => s.label + '|' + s.detail),
+    imports: imports.suggestions.map((s) => s.label), hover: onHover && onHover.contents.map((c) => c.value).join(' / '),
+    valueHover: valueHover && valueHover.contents.map((c) => c.value).join(' / '),
+    sig: sig && sig.value.signatures[0].label, sigDoc: sig && sig.value.signatures[0].documentation, plain: plain.suggestions.length,
+    wants: [window.tuffWantsSuggest(model('import money.tuf\nmoney.'), { lineNumber: 2, column: 7 }), window.tuffWantsSuggest(model('x = 1\nx.'), { lineNumber: 2, column: 3 })],
+    rule: rule ? rule[1] : null, importDoc: window.TUFF_DOCS.import[1],
+  }));
+})();
+"""
+
+
+def modules_project(name, files):
+    """Writes a project's files into out/modules/<name> (a fresh folder): its full path."""
+    import shutil
+    folder = os.path.join(HERE, "out", "modules", name)
+    shutil.rmtree(folder, ignore_errors=True)
+    for rel, code in files.items():
+        path = os.path.join(folder, *rel.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code)
+    return folder
+
+
+def modules_projects():
+    """(name, files) for every project above, for the interp test's differential runs."""
+    return [("modules shop", MODULES_FILES)] + [(f"modules mistake {i}", files) for i, (files, _r, _c) in enumerate(MODULES_ERRORS)]
+
+
+def first_error(stderr):
+    """The first "Tuff error ...": (the file it names, or "" for the program, line, column from the ^, message)."""
+    lines = stderr.splitlines()
+    first = next((i for i, x in enumerate(lines) if x.startswith("Tuff error")), None)
+    if first is None:
+        return None
+    m = re.match(r"Tuff error(?: in (.+?))? on line (\d+): (.*)$", lines[first])
+    if not m:
+        return ("", None, None, lines[first])
+    gutter = f"  {m.group(2)} | "
+    caret = lines[first + 2] if first + 2 < len(lines) and lines[first + 2].strip() == "^" else ""
+    return (m.group(1) or "", int(m.group(2)), (caret.index("^") - len(gutter) + 1) if caret else None, m.group(3))
+
+
+def t_modules(c):
+    """Console only, no window: 1.5.0's own files as libraries. A shop in five files runs the same in both runtimes (each
+    file has its own top level and runs once, values are read live, libs/ works, a library's name wins); every mistake
+    (no file, a built-in's name, files that import each other, errors inside an imported file, names it doesn't have,
+    money.rate = 2) stops the run on the right file, line and column, and --check says what it can be sure of (and --as
+    checks a copy as if it were the real file); TuffCode's error protocol names the file; TUFF_BASE_DIR, tuff_check and
+    tuff_run through the MCP server, Tuff Engine's --scene preview, with_imports, the editor (Node) and Build exe
+    (build_exe_pack_test.mjs, no PyInstaller and no windows)."""
+    env = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW", "TUFF_BASE_DIR", "TUFF_NO_WRITES")}
+    env["PYTHONIOENCODING"] = "utf-8"
+
+    def run(folder, file="shop.tuf", slow=False, more=None, args=()):
+        e = {**env, **({"TUFF_SLOW": "1"} if slow else {}), **(more or {})}
+        return subprocess.run(tuff_cmd() + list(args) + [os.path.join(folder, file)], cwd=folder, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=60, env=e, stdin=subprocess.DEVNULL)
+
+    def check_out(folder, file="shop.tuf", args=None):
+        """--check on a file of the folder (or with these inputs): (exit code, what it says)."""
+        p = subprocess.run(tuff_cmd() + ["--check"] + (list(args) if args else [os.path.join(folder, file)]), cwd=folder, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=60, env=env)
+        return p.returncode, (p.stdout + p.stderr).strip()
+
+    shop = modules_project("shop", MODULES_FILES)
+    for slow in (False, True):
+        p = run(shop, slow=slow)
+        got = p.stdout.splitlines()
+        c.check(p.returncode == 0 and got == MODULES_OUTPUT, f"the shop in five files runs ({'tree walker' if slow else 'compiled'}): "
+                "money.tuf starts once, money.rate is read live, shop.tuf's rate is its own, libs/ and a library's name win",
+                [x for x in got if x not in MODULES_OUTPUT] or (p.stdout + p.stderr)[-800:])
+    for rel in MODULES_FILES:
+        code, out = check_out(os.path.dirname(os.path.join(shop, *rel.split("/"))), os.path.basename(rel))
+        c.check(code == 0 and out == "OK", f"--check accepts {rel}, checked on its own", out[:400])
+    for i, code_text in enumerate(MODULES_GOOD):
+        folder = modules_project(f"good{i}", {**{k: v for k, v in MODULES_FILES.items() if k != "shop.tuf"}, "shop.tuf": code_text})
+        code, out = check_out(folder)
+        c.check(code == 0 and out == "OK", f"--check accepts: {code_text.splitlines()[-1]}", out[:300])
+
+    for i, (files, ran, checks) in enumerate(MODULES_ERRORS):
+        folder = modules_project(f"mistake{i}", files)
+        shown = files["shop.tuf"].strip().splitlines()[-1]
+        both = [run(folder, slow=slow) for slow in (False, True)]
+        if ran == "OK":
+            c.check(all(p.returncode == 0 and "Tuff error" not in p.stderr for p in both), f"{shown!r} runs (in both runtimes)",
+                    both[0].stderr[-300:])
+        else:
+            at = [first_error(p.stderr) for p in both]
+            ok = all(a is not None and a[:3] == ran[:3] and ran[3] in a[3] for a in at) and at[0] == at[1]
+            c.check(ok and all(p.returncode == 1 for p in both),
+                    f"{shown!r} stops in {ran[0] or 'shop.tuf'} at {ran[1]}:{ran[2]}: {ran[3][:70].replace('→', '->')!r} (the same in both runtimes)", at)
+        code, out = check_out(folder)
+        if checks == "OK":
+            c.check(code == 0 and out == "OK", f"...and --check can't be sure of it, so it says OK", out[:300])
+        else:
+            want = checks or ran[3]
+            c.check(code == 1 and want in out, f"...and --check says {want[:70].replace('→', '->')!r}", out[:400])
+
+    # --as: TuffCode checks a copy of the editor's text (a temp file) as if it were the real file, so imports resolve.
+    folder = modules_project("as", {"shop.tuf": "", "money.tuf": MONEY})
+    os.makedirs(OUT, exist_ok=True)
+    copy = os.path.join(OUT, "modules_copy.tuf")
+    with open(copy, "w", encoding="utf-8") as f:
+        f.write('import money.tuf\nsay money.as_mony(1)\n')
+    code, out = check_out(folder, args=(copy, "--as", os.path.join(folder, "shop.tuf")))
+    c.check(code == 1 and "money.tuf doesn't have 'as_mony'. Did you mean 'as_money'?" in out, "--check copy --as shop.tuf finds money.tuf next to shop.tuf", out[:300])
+    tmp = tempfile.mkdtemp(prefix="tuff-modules-")
+    try:
+        lone = os.path.join(tmp, "check.tuf")
+        with open(lone, "w", encoding="utf-8") as f:
+            f.write('import money.tuf\nsay money.as_mony(1)\nimport random\n')
+        code, out = check_out(tmp, args=(lone,))
+        c.check(code == 1 and "random is built into Tuff" in out and "money" not in out,
+                "a temp file with no --as can't know its folder: only a built-in's name is flagged", out[:300])
+        # TUFF_BASE_DIR (tuff_run's snippets): a program in a temp folder imports the project's files.
+        with open(lone, "w", encoding="utf-8") as f:
+            f.write('import money.tuf\nsay money.as_money(2)\n')
+        p = run(tmp, "check.tuf", more={"TUFF_BASE_DIR": shop})
+        c.check(p.returncode == 0 and p.stdout.splitlines() == ["money.tuf starts", "$2.00"], "with TUFF_BASE_DIR, a snippet imports the project's money.tuf",
+                (p.stdout + p.stderr)[-300:])
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # TuffCode's Run panel (TUFF_IDE=1): an error in money.tuf adds money.tuf's full path to the error message's escape
+    # code (ide.js marks that file); one in the program has no path, exactly as before.
+    folder = modules_project("ide", MODULES_ERRORS[14][0])
+    p = run(folder, more={"TUFF_IDE": "1"})
+    m = re.search(r"\x1b\]tuff;error;([^\x07]*)\x07", p.stdout)
+    parts = m.group(1).split(";") if m else []
+    c.check(len(parts) == 4 and parts[:2] == ["2", "14"] and base64.b64decode(parts[3]).decode() == os.path.join(folder, "money.tuf")
+            and base64.b64decode(parts[2]).decode() == "Can't divide text and a number.",
+            "TUFF_IDE=1: the error's escape code has its line, column, message and money.tuf's path", parts)
+    folder = modules_project("ide_main", MODULES_ERRORS[15][0])
+    p = run(folder, more={"TUFF_IDE": "1"})
+    m = re.search(r"\x1b\]tuff;error;([^\x07]*)\x07", p.stdout)
+    c.check(m and len(m.group(1).split(";")) == 3 and m.group(1).startswith("3;16;"), "...and one in the program itself has no path (as in 1.4)",
+            m and m.group(1))
+
+    # In this process: with_imports (what decides whether a program needs the window engine's thread) reads the files a
+    # program imports, and the ones they import; the debugger's step hooks see each file's statements, and file_of names the file.
+    import tuff
+    folder = modules_project("threads", {"game.tuf": "import level.tuf\nsay 1\n", "level.tuf": "import libs_too.tuf\nmention tgame\n",
+                                         "libs/libs_too.tuf": "import tgui\n", "other.tuf": "mention atgui\n"})
+    every = tuff.with_imports(os.path.join(folder, "game.tuf"), "import level.tuf\nsay 1\n")
+    c.check(tuff.VIEW_IMPORT.search(every) and tuff.TK_IMPORT.search(every) and "atgui" not in every,
+            "with_imports: a tgame or tgui import in a file the program imports (or that file imports) counts, and others don't", every)
+    old = os.environ.pop("TUFF_SLOW", None)
+    try:
+        for slow in (False, True):
+            if slow:
+                os.environ["TUFF_SLOW"] = "1"
+            path = os.path.join(shop, "shop.tuf")
+            src = 'import money.tuf\nsay money.with_tax(1)\n'
+            interp = tuff.Interpreter(src, shop)
+            interp.path = path
+            seen = []
+            interp.step_hooks.append(lambda s, e: seen.append((os.path.basename(tuff.file_of(e)) or "shop.tuf", s.line)))
+            import contextlib
+            import io
+            with contextlib.redirect_stdout(io.StringIO()):
+                interp.run_block(tuff.Parser(tuff.tokenize(src)).program(), interp.globals)
+            c.check(("money.tuf", 11) in seen and ("money.tuf", 12) in seen and seen[0] == ("shop.tuf", 1) and seen[-1][0] == "money.tuf",
+                    f"{'the tree walker' if slow else 'compiled'}: a step hook sees money.tuf's statements, and file_of says they're money.tuf's", seen[:8])
+            os.environ.pop("TUFF_SLOW", None)
+    finally:
+        if old is not None:
+            os.environ["TUFF_SLOW"] = old
+
+    # Tuff Engine's --scene preview: a game whose things are made by a function in its own level.tuf; an error in that
+    # file names it; and a file it imports that opens another kind of window stops the preview before anything runs.
+    folder = modules_project("scene", {"mods_game.tuf": 'mention tgame\nimport level.tuf\ngame = tgame.window("Mods", 400, 300)\nlevel.build(game)\nsay "made"\n',
+                                       "level.tuf": 'func build(game):\n    game:box(10, 10)\n    game:box(50, 50)\n'})
+    code, out, err, d, secs = scene(os.path.join(folder, "mods_game.tuf"))
+    things = [(t.get("kind"), t.get("made")) for t in d.get("things", [])]
+    c.check(code == 0 and d.get("error") is None and d.get("stopped") == "end" and things == [("box", [4, 2]), ("box", [4, 3])],
+            f"--scene runs a game whose level.tuf makes its things, made by the game's line 4 ({secs:.1f} s)", (things, d.get("error"), d.get("stopped"), err[-300:]))
+    folder = modules_project("scene_error", {"mods_error.tuf": 'mention tgame\nimport level.tuf\ngame = tgame.window("Mods", 400, 300)\nlevel.build(game)\n',
+                                             "level.tuf": 'func build(game):\n    game:box(10, 10)\n    x = nope\n'})
+    code, out, err, d, secs = scene(os.path.join(folder, "mods_error.tuf"))
+    c.check((d.get("error") or {}).get("message", "").startswith("In level.tuf, line 3: I don't know what 'nope' is.") and (d.get("error") or {}).get("line") is None,
+            "...an error in level.tuf says it's in level.tuf (and gives no line of the game's own)", d.get("error"))
+    folder = modules_project("scene_window", {"mods_window.tuf": 'mention tgame\nimport menus.tuf\ngame = tgame.window("Mods", 400, 300)\n',
+                                              "menus.tuf": 'import tgui\nwin = tgui.window("Not in a preview")\n'})
+    code, out, err, d, secs = scene(os.path.join(folder, "mods_window.tuf"))
+    c.check(d.get("stopped") == "other-window", "...and a file it imports that uses tgui stops the preview before it runs (no window)", d.get("stopped"))
+
+    # The MCP server (agents): tuff_check of a "code" snippet checks its imports in the project, and tuff_run runs one.
+    mcp = os.path.join(REPO, "tuffcode", "mcp", "tuff-mcp.js")
+    calls = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
+             {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "tuff_check", "arguments": {"code": "import money.tuf\nsay money.as_mony(1)\n"}}},
+             {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "tuff_run", "arguments": {"code": "import money.tuf\nsay money.as_money(3)\n"}}}]
+    try:
+        p = subprocess.Popen(["node", mcp], stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=shop, text=True, encoding="utf-8",
+                             env={**env, "TUFF_CMD": json.dumps(tuff_cmd())})
+    except FileNotFoundError:
+        p = None
+        c.check(True, "Node isn't installed: skipped the MCP checks")
+    if p is not None:
+        replies = {}
+        try:
+            for x in calls:
+                p.stdin.write(json.dumps(x) + "\n")
+            p.stdin.flush()
+            deadline = time.time() + 90
+            while time.time() < deadline and not (2 in replies and 3 in replies):  # the server quits when its input ends
+                line = p.stdout.readline()
+                if not line:
+                    break
+                reply = json.loads(line)
+                replies[reply.get("id")] = reply
+        finally:
+            p.stdin.close()
+            p.wait(10)
+        text = lambda i: (((replies.get(i) or {}).get("result") or {}).get("content") or [{}])[0].get("text", "")
+        c.check("money.tuf doesn't have 'as_mony'. Did you mean 'as_money'?" in text(2), "MCP tuff_check: a snippet's imports are checked in the project", text(2)[:300])
+        c.check("money.tuf starts\n$3.00" in text(3), "MCP tuff_run: a snippet imports the project's money.tuf", text(3)[:300])
+
+    # The editor (renderer/js/tuff-lang.js, in Node): money. offers money.tuf's functions (their comments as the docs)
+    # and values, import offers the project's files, and the hover and signature help know them too.
+    lang = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")
+    project = {"C:\\proj\\shop.tuf": "import money.tuf\n", "C:\\proj\\money.tuf": MODULES_FILES["money.tuf"],
+               "C:\\proj\\libs\\fmt.tuf": "# Stars in a row\nfunc stars(n):\n    return \"*\" * n\n", "C:\\proj\\notes.txt": "",
+               "C:\\proj\\random.tuf": "", "C:\\proj\\tgame.tuf": ""}
+    try:
+        p = subprocess.run(["node", "-e", MODULES_LANG, lang, json.dumps(project)], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        t = json.loads(p.stdout)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the editor checks")
+        t = None
+    except ValueError:
+        c.check(False, "the editor checks ran", (p.stdout + p.stderr)[-600:])
+        t = None
+    if t:
+        c.check(t["labels"] == ["as_money", "with_tax", "set_rate", "biggest_first", "apply", "counter", "rate", "count"],
+                "money. offers money.tuf's functions, then its values", t["labels"])
+        c.check(t["doc"] == '6.375 -> "$6.38"' and t["detail"] == "money.as_money(x)" and t["insert"] == "as_money($0)",
+                "...with the comment above each function as its doc", [t["doc"], t["detail"], t["insert"]])
+        c.check(t["libs"] == ["stars|fmt.stars(n)"], "fmt. finds libs/fmt.tuf", t["libs"])
+        c.check(t["imports"][:3] == ["money.tuf", "tgame.tuf", "fmt.tuf"] and "shop.tuf" not in t["imports"] and "random.tuf" not in t["imports"]
+                and t["imports"].count("tgame") == 1 and "anims" in t["imports"],
+                "import offers money.tuf, tgame.tuf and fmt.tuf (from libs/), not shop.tuf itself or a built-in's name, then the libraries",
+                t["imports"])
+        c.check("money.as_money(x)" in (t["hover"] or "") and '6.375 -> "$6.38"' in t["hover"] and "money.tuf, line 7" in t["hover"],
+                "hovering money.as_money shows how to call it, its doc and where it is", t["hover"])
+        c.check("money.rate" in (t["valueHover"] or ""), "...and money.rate is a value", t["valueHover"])
+        c.check(t["sig"] == "money.as_money(x)" and t["sigDoc"] == '6.375 -> "$6.38"', "typing money.as_money( shows its inputs", [t["sig"], t["sigDoc"]])
+        c.check(t["plain"] == 0 and t["wants"] == [True, False], "money. opens the list (x. doesn't, and nothing. offers nothing)", [t["plain"], t["wants"]])
+        c.check(t["rule"] == ["keyword", "", "library"] and "money.tuf" in t["importDoc"], "import money.tuf colours money like a library, and import's doc tells of files",
+                [t["rule"], t["importDoc"][:120]])
+
+    # The guide's example (money.tuf and shop.tuf, written to their own files) runs and gives what its comments say.
+    guide = open(os.path.join(REPO, "tuffcode", "mcp", "tuff-guide.md"), encoding="utf-8").read()
+    start = guide.find("\n## Your own files")
+    section = guide[start:guide.find("\n## ", start + 1)] if start >= 0 else ""
+    blocks = re.findall(r"```tuff\n(.*?)```", section, re.S)
+    named = {re.match(r"# (\w+\.tuf)", b).group(1): b for b in blocks if re.match(r"# (\w+\.tuf)", b)}
+    folder = modules_project("guide", named)
+    p = run(folder) if "shop.tuf" in named else None
+    want = [x.split("#")[1].strip() for x in named.get("shop.tuf", "").splitlines() if x.startswith("say") and "#" in x]
+    c.check(p is not None and p.returncode == 0 and p.stdout.splitlines() == want and len(want) >= 4,
+            f"the guide's money.tuf and shop.tuf run and say what their comments say ({len(want)} lines)", p and (p.stdout + p.stderr)[-400:])
+    code, out = check_out(folder) if named else (1, "")
+    c.check(code == 0 and out == "OK", "...and --check accepts them", out[:300])
+
+    # Build exe: build_exe_pack_test.mjs packs a program that imports its files (no PyInstaller, nothing opens).
+    try:
+        p = subprocess.run(["node", os.path.join(HERE, "build_exe_pack_test.mjs")], capture_output=True, text=True, encoding="utf-8", timeout=300,
+                           env={k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_BASE_DIR")})
+        section = p.stdout[p.stdout.find("== Build exe: a program that imports its own files"):]
+        section = section[:section.find("build_exe_pack:")]
+        c.check(p.returncode == 0 and section.count("  ok  ") >= 6 and "FAIL" not in section,
+                "Build exe packs the files a program imports, runs it in the app, and stops on a mistake in one (build_exe_pack_test.mjs)",
+                (section or p.stdout)[-900:] + p.stderr[-300:])
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped Build exe")
+
+
+# ---------------------------------------------------------------- 1.5.0: kinds, your own objects (kind Pet:)
+
+KINDS_PROGRAM = '''say Pet("Early")
+kind Pet:
+    name = "?"
+    hunger = 5
+    toys = []
+    friend = nil
+    func feed(amount):
+        my.hunger -= amount
+        if my.hunger < 0:
+            my.hunger = 0
+        return my.hunger
+    func play(toy):
+        my.toys:add(toy)
+        my:feed(-1)
+    func hello():
+        if my.friend is nil:
+            return f"{my.name} has no friend yet"
+        return f"{my.name} and {my.friend.name} are friends"
+    func later():
+        func shout():
+            return my.name:upper()
+        return shout()
+kind Counter:
+    func count_to(n):
+        total = 0
+        for i in range(1, n):
+            if i == 3:
+                continue
+            if i > 5:
+                break
+            total += i
+        return total
+    func risky():
+        try:
+            return 1 / 0
+        catch problem:
+            return "caught: " + problem
+rex = Pet("Rex")
+ann = Pet("Ann", 2)
+say rex:feed(3)
+rex.hunger += 1
+ann:play("ball")
+ann:play("rope")
+say rex
+say ann
+say rex.toys
+rex.friend = ann
+say rex:hello()
+say ann:hello()
+say rex.friend.toys:join(", ")
+rex.friend.hunger = 9
+say ann.hunger
+best = rex
+best.name = "Rexy"
+say rex.name
+say rex is best
+say rex is Pet("Rexy")
+say [rex, ann]:has(ann)
+say [ann, rex]:find(rex)
+say Counter():count_to(10)
+say Counter():risky()
+say rex:later()
+pets = [Pet("Cat", 7), rex, Pet("Bo", 1)]
+func by_hunger(p):
+    return p.hunger
+pets:sort(by_hunger)
+say pets[0].name + " " + pets[-1].name
+say f"{rex.name:6}|{rex.hunger:>3}|{ann}"
+say "Pet: " + Pet("Z")
+say text(Pet("Y", 0))
+rex.friend = rex
+say rex
+kind = "dog"
+say kind:upper()
+my = [4]
+my:add(5)
+say my
+func check(p):
+    p.name = p.name + "!"
+    return p.name
+say check(ann)
+groups = {"pets": [Pet("Q")]}
+say groups["pets"][0].name
+groups["pets"][0].toys:add("bone")
+say groups["pets"][0].toys[0]
+say Pet("A") != Pet("A")
+say Counter()
+'''
+KINDS_OUTPUT = ['Pet(name: "Early", hunger: 5, toys: [], friend: nil)', "2", 'Pet(name: "Rex", hunger: 3, toys: [], friend: nil)',
+                'Pet(name: "Ann", hunger: 4, toys: ["ball", "rope"], friend: nil)', "[]", "Rex and Ann are friends",
+                "Ann has no friend yet", "ball, rope", "9", "Rexy", "true", "false", "true", "1", "12",
+                "caught: You can't divide by zero.", "REXY", "Bo Cat",
+                'Rexy  |  3|Pet(name: "Ann", hunger: 9, toys: ["ball", "rope"], friend: nil)', 'Pet: Pet(name: "Z", hunger: 5, toys: [], friend: nil)',
+                'Pet(name: "Y", hunger: 0, toys: [], friend: nil)', 'Pet(name: "Rexy", hunger: 3, toys: [], friend: Pet(...))', "DOG",
+                "[4, 5]", "Ann!", "Q", "bone", "true", "Counter()"]
+# Mistakes: (code, line, column, what the run says, what --check says: None for the same, "OK" when only the run can tell).
+KINDS_PET = 'kind Pet:\n    name = "?"\n    hunger = 5\n    func feed():\n        my.hunger -= 1\n    func eat(food):\n        my.hunger -= food\n'
+KINDS_ERRORS = [
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex.hungr', 9, 8, "Pet doesn't have a field 'hungr'. Did you mean 'hunger'?", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nrex.hungr = 3', 9, 1, "Pet doesn't have a field 'hungr'. Did you mean 'hunger'?", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nrex:fead()', 9, 4, "Pet doesn't have an action 'fead'. Did you mean 'feed'?", None),
+    (KINDS_PET + 'rex = Pet("Rex", 2, 3)', 8, 10, "Pet has 2 fields (name and hunger), so Pet() takes up to 2 inputs, one for each field in order, but got 3.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nrex:feed(1)', 9, 4, "rex:feed() needs 0 inputs, but got 1.", None),
+    (KINDS_PET + 'pets = [Pet()]\npets[0]:eat()', 9, 8, "pets[0]:eat() needs 1 input, but got 0.", "OK"),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex:feed - 1', 9, 8, "rex:feed doesn't take an input, so what comes after it was read as one. Write rex:feed() instead.", None),
+    ('kind Node:\n    value = 0\n    next = Node()\nsay Node(1, nil)\nsay Node()', 3, 16, "Node() was made inside itself too many times. Does a field of Node start with a new Node()?", "OK"),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex:hunger()', 9, 8, "hunger is a field of Pet, not an action, so it's read with a dot, like rex.hunger", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex.feed', 9, 8, "feed is an action of Pet, so it's called with ':', like rex:feed()", None),
+    (KINDS_PET + 'say Pet.name', 8, 8, "Pet is a kind, not an object made from it. Make one first, like pet = Pet(...), then use pet.name.", None),
+    (KINDS_PET + 'Pet:feed()', 8, 4, "Pet is a kind, not an object made from it.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay len(rex)', 9, 8, "len() needs text, a list or a dictionary, not a Pet.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex["name"]', 9, 8, "Can't use [ ] on a Pet. Use its fields with a dot, like rex.name.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nrex["hunger"] = 1', 9, 1, "You can only set items in a list, not in a Pet. Use its fields with a dot, like rex.hunger = ...", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex + 1', 9, 9, "Can't add a Pet and a number.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex < 1', 9, 9, "Can't compare a Pet with a number using <.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nfor x in rex:\n    say x', 9, 1, "Can't loop over a Pet.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nsay rex[0:1]', 9, 8, "Only text and lists have parts like [1:3], not a Pet.", None),
+    (KINDS_PET + 'rex = Pet("Rex")\nd = {"best": rex}\nd[rex] = 1', 10, 1, "A dictionary's keys can be text or numbers, not a Pet.",
+     "A dictionary's keys can be text or numbers, not a Pet."),  # (--check points at the key, as for any key)
+    (KINDS_PET + 'say [Pet("a"), Pet("b")]:sort()', 8, 25, "The list has a Pet, which can't be sorted.", "OK"),
+    ('kind Pet:\n    name = "?"\n    func f():\n        say name\nPet():f()', 4, 13, "I don't know what 'name' is. To use this Pet's field, write my.name", None),
+    ('say my.x', 1, 5, "I don't know what 'my' is. my is the object itself, so it only works inside a kind's actions", None),
+    ('func f(p):\n    return p.nmae\nkind Pet:\n    name = "?"\nsay f(Pet())', 2, 13, "Pet doesn't have a field 'nmae'. Did you mean 'name'?",
+     "Nothing in this program has a field 'nmae'. Did you mean 'name'?"),
+    ('func f(p):\n    p:fead()\nkind Pet:\n    func feed():\n        say 1\nf(Pet())', 2, 6, "Pet doesn't have an action 'fead'. Did you mean 'feed'?",
+     "Nothing in Tuff has :fead. Did you mean :feed?"),
+    ('kind Pet:\n    func f():\n        return my:g()\nPet():f()', 3, 18, "Pet doesn't have an action 'g'. Its actions are: f.", None),
+    ('kind Box:\n    func f():\n        return 1\nsay Box(1)', 4, 8, "Box has no fields, so Box() takes no inputs, but got 1.", None),
+    ('kind Owl:\n    n = 1\nsay Owl() - 1', 3, 11, "Can't subtract an Owl and a number.", None),
+    ('kind Pet:\n    items = nope\nPet()', 2, 13, "I don't know what 'nope' is.", None),
+    ('x = 5\nx.y = 3', 2, 1, "Only objects made from a kind have fields to set with '.', and this is a number.", None),
+    ('d = {}\nd.y = 3', 2, 1, 'A dictionary\'s values are set with [ ], like d["y"] = ...', None),
+    ('kind Owl:\n    n = 1\no = Owl()\no.n = o\nfile.save("o.json", o)', 5, 10, "file.save can't save an Owl that holds itself.", "OK"),
+    ('kind Owl:\n    n = 1\nfile.save("o.json", Owl)', 3, 10, "file.save keeps text, numbers, true/false, nil, lists, dictionaries and objects made from a kind, not the kind Owl.", "OK"),
+    ('kind Pet:\n    name = "?"\nrex = Pet()\nsay rex()', 4, 8, "isn't a function, so it can't be called with ( ).", "'rex' is a Pet, not a function"),
+    # what the parser says (the run and --check alike)
+    ('kind Pet:\n    name = "?"\nkind Pet:\n    age = 1', 3, 6, "There are two kinds called Pet. This one would replace the one on line 1.", None),
+    ('func f():\n    kind Pet:\n        name = "?"', 2, 5, "Make a kind at the top of the program, not inside a function or a block.", None),
+    ('kind Pet:\n    say "hi"', 2, 5, "A kind holds fields (like name = \"?\") and actions (like func feed():), and nothing else.", None),
+    ('kind Pet:\n    hunger += 1', 2, 5, "A field gets the value a new Pet starts with, using =, like hunger = 0.", None),
+    ('kind Pet:\n    name = 1\n    name = 2', 3, 5, "Pet already has a field called name.", None),
+    ('kind Pet:\n    name = 1\n    func name():\n        return 1', 3, 5, "Pet already has a field called name.", None),
+    ('kind Pet:\n    func f():\n        my = 3', 3, 9, "Inside an action, my is this Pet itself, so it can't be given a value.", None),
+    ('kind Pet:\n    func f(my):\n        say 1', 2, 5, "An action's inputs can't be called my", None),
+    ('kind Pet:\n    func f():\n        for my in [1]:\n            say my', 3, 9, "Inside an action, my is this Pet itself", None),
+    ('kind Pet(Animal):\n    name = 1', 1, 9, "A kind can't be made from another kind: Tuff has no inheritance.", None),
+    ('kind text:\n    name = 1', 1, 6, "text is Tuff's own function, so a kind can't be called that. Give it a name of its own, like Text.", None),
+    ('kind tgame:\n    name = 1', 1, 6, "tgame is Tuff's own library", None),
+    ('class Pet:\n    name = 1', 1, 1, "Tuff has no classes. To make your own kind of object, write: kind Pet:", None),
+    ('kind Pet\n    name = 1', 1, 9, "Expected ':' after the kind's name, like: kind Pet:", None),
+]
+# The checker: (code, part of what --check says, or "OK": correct code it must never flag).
+KINDS_CHECKS = [
+    ('kind Pet:\n    name = "?"\nfunc show(p):\n    say p.name\n    p.name = "x"\nshow(Pet())', "OK"),
+    ('kind Pet:\n    name = "?"\nfor p in [Pet()]:\n    say p.name', "OK"),
+    ('kind Pet:\n    func feed():\n        say 1\nfunc f(p):\n    p:feed()\nf(Pet())', "OK"),
+    ('rex = Pet("Rex")\nsay rex.name\nkind Pet:\n    name = "?"', "OK"),
+    ('kind Bag:\n    items = []\n    func add(x):\n        my.items:add(x)\n    func play(x):\n        return my.items:has(x)\nb = Bag()\nb:add(1)\nsay b:play(1)', "OK"),
+    ('kind Note:\n    text = ""\n    len = 0\nn = Note("hi", 2)\nsay n.text + n.len\nsay len(n.text)', "OK"),
+    ('kind Pet:\n    name = "?"\nx = Pet()\nx = {"name": 1}\nsay x["name"]', "OK"),
+    ('kind Pet:\n    name = "?"\n    toys = []\nrex = Pet()\nrex.toys:add(1)\nsay rex.toys[0] + 1\nsay f"{rex}" + rex', "OK"),
+    ('kind Pet:\n    name = "?"\n    func later():\n        func shout():\n            return my.name:upper()\n        return shout()\nsay Pet():later()', "OK"),
+    ('kind = "dog"\nsay kind:upper()\nmy = [1]\nmy:add(2)\nsay my', "OK"),
+    ('kind = {"a": 1}\nsay kind["a"]\nfunc f(my):\n    return my + 1\nsay f(1)', "OK"),
+    ('kind Pet:\n    name = "?"\nsay Pet() is nil\nsay [Pet()]:has(Pet())', "OK"),
+    ('mention tgame\ngame = tgame.window("x")\nkind Enemy:\n    x = 0\n    body = nil\n    func spawn():\n        my.body = game:box(my.x, 10, 5, 5)\n'
+     '        my.body:move(1, 0)\ne = Enemy(5)\ne:spawn()', "OK"),
+    ('kind Pet:\n    name = "?"\nd = file.load("x.json", {})\nsay d.name', "OK"),
+    ('kind Pet:\n    hunger = 5\n    func feed():\n        my.hunger -= 1\n        hunger = 2\n        return hunger', "OK"),
+    ('kind Pet:\n    name = "?"\nrex = Pet()\nrex.name = 5\nsay rex.name - 1', "OK"),
+    # mistakes only --check finds this way
+    ('kind Pet:\n    name = "?"\nPet = 5\nsay Pet("x")', "Pet is a kind, and giving it a value replaces it"),
+    ('kind Pet:\n    name = "?"\nfunc Pet():\n    return 1', "There's a kind called Pet on line 1, and a function with the same name"),
+    ('kind Pet:\n    name = "?"\nsay self.name', "Tuff has no classes: make a kind (kind Pet:), and in its actions the object itself is my"),
+    ('kind Pet:\n    name = "?"\nrex = Pet()\nsay number(rex)', "number() needs text or a number, not a Pet."),
+    ('kind Pet:\n    name = "?"\nsay feed()', "I don't know what 'feed' is."),
+]
+# Saved objects: a program with the kind gets objects back (a field the file doesn't have starts with its kind's
+# value), one without it gets the dictionary.
+KINDS_SAVE = '''kind Pet:
+    name = "?"
+    hunger = 5
+    toys = []
+pets = [Pet("Rex", 2), Pet("Ann")]
+pets[1].toys:add("ball")
+file.save("pets.json", {"pets": pets, "count": 2})
+data = file.load("pets.json")
+say data["pets"][1]
+say data["pets"][0].hunger + 1
+say data["count"]
+'''
+KINDS_SAVE_FILE = {"pets": [{"$kind": "Pet", "name": "Rex", "hunger": 2, "toys": []}, {"$kind": "Pet", "name": "Ann", "hunger": 5, "toys": ["ball"]}],
+                   "count": 2}
+KINDS_LOAD_NEWER = 'kind Pet:\n    name = "?"\n    age = 1\nsay file.load("pets.json")["pets"][0]\nsay file.load("pets.json")["pets"][1].age + 1\n'
+KINDS_LOAD_NONE = 'd = file.load("pets.json")\nsay d["pets"][0]\nsay d["pets"][0]["$kind"]\nfile.save("again.json", d)\n'
+KINDS_HOOKS = 'kind Pet:\n    hunger = 5\n    func feed():\n        my.hunger -= 1\n        return my.hunger\nrex = Pet()\nrex:feed()\n'
+KINDS_SCENE = '''mention tgame
+game = tgame.window("Kinds", 400, 300)
+kind Enemy:
+    x = 0
+    hp = 3
+    body = nil
+    func spawn():
+        my.body = game:box(my.x, 100, 20, 20, "red")
+        return my
+enemies = []
+for i in range(1, 3):
+    enemies:add(Enemy(i * 100):spawn())
+say len(enemies)
+'''
+# The editor (renderer/js/tuff-lang.js), with Node: rex. offers Pet's fields and rex: its actions, a kind's name has
+# a hover with its fields, kind and my are Tuff's words only where they mean that, and (when monaco-editor is
+# installed) Monaco's own Monarch tokenizer accepts the colours and gives them.
+KINDS_LANG = r"""
+const fs = require('fs'), vm = require('vm'), path = require('path'), url = require('url');
+const window = {}, ctx = { window };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+let monarch = null, hovers = [], completion = null, signature = null, symbols = null, definition = null;
+const monaco = { Range: class { constructor(...a) { this.a = a; } }, editor: { defineTheme() {} }, languages: {
+  register() {}, setMonarchTokensProvider(_id, def) { monarch = def; }, setLanguageConfiguration() {},
+  registerHoverProvider(_id, p) { hovers.push(p); }, registerDefinitionProvider(_id, p) { definition = p; }, registerReferenceProvider() {},
+  registerRenameProvider() {}, registerDocumentSymbolProvider(_id, p) { symbols = p; }, registerSignatureHelpProvider(_id, p) { signature = p; },
+  registerColorProvider() {}, registerCompletionItemProvider(_id, p) { completion = p; },
+  CompletionItemKind: new Proxy({}, { get: (_t, k) => k }), CompletionItemInsertTextRule: {}, IndentAction: {}, SymbolKind: new Proxy({}, { get: (_t, k) => k }) } };
+window.defineTuffTheme = () => {};
+window.registerTuff(monaco, '#3574f0');
+const model = (src, col) => { const lines = src.split('\n'); return { getLinesContent: () => lines, getLineContent: (n) => lines[n - 1],
+  getValue: () => src, getLineMaxColumn: (n) => lines[n - 1].length + 1, uri: 'x', getWordUntilPosition: () => ({ startColumn: col || 1, endColumn: col || 1 }),
+  getWordAtPosition: ({ lineNumber, column }) => { for (const m of lines[lineNumber - 1].matchAll(/\w+/g))
+    if (m.index < column && column <= m.index + m[0].length) return { word: m[0], startColumn: m.index + 1, endColumn: m.index + 1 + m[0].length };
+    return null; } }; };
+const SRC = 'kind Pet:\n    name = "?"\n    hunger = 5\n    func feed():\n        my.hunger -= 1\n    func eat(food):\n        my.hunger -= food\n'
+  + 'kind Owl:\n    wise = true\nrex = Pet("Rex")\nrex:feed()\nsay rex.hunger\nfunc show(p):\n    say p.name\n';
+const n = SRC.split('\n').length; // the line after SRC
+const labels = (src, line, col) => completion.provideCompletionItems(model(src, col), { lineNumber: line, column: col }).suggestions.map((s) => s.label);
+const hover = (src, line, col) => { for (const h of hovers) { const r = h.provideHover(model(src), { lineNumber: line, column: col }); if (r) return r.contents.map((c) => c.value).join('\n'); } return null; };
+const ids = (src) => ctx.tuffIdents(model(src)).map((x) => `${x.name}@${x.line}:${x.start}`).join(' ');
+const sig = (src, line, col) => signature.provideSignatureHelp(model(src), { lineNumber: line, column: col })?.value.signatures[0].label;
+const out = {
+  kinds: ctx.tuffKinds(model(SRC)).map((k) => `${k.name}[${k.fields.map((f) => f.name + '=' + f.value)}|${k.actions.map((a) => a.name + '(' + a.params + ')')}]${k.line}-${k.end}`),
+  fieldsRex: labels(SRC + 'say rex.', n, 9), fieldsMy: labels(SRC.replace('my.hunger -= 1', 'my.'), 5, 12),
+  fieldsAny: labels(SRC + 'say p.', n, 7), actionsRex: labels(SRC + 'rex:', n, 5),
+  actionsAny: labels(SRC + 'p:', n, 3).filter((l) => ['feed', 'eat', 'upper', 'add'].includes(l)),
+  top: labels(SRC, n, 1).filter((l) => ['Pet', 'Owl', 'feed', 'eat', 'show'].includes(l)),
+  hoverKind: hover(SRC, 10, 8), hoverField: hover(SRC, 12, 10), hoverAction: hover(SRC, 11, 6), hoverMy: hover(SRC, 5, 9),
+  hoverWord: hover('kind Pet:\n    x = 1', 1, 2), hoverOwnKind: hover('kind = "dog"\nsay kind', 2, 6),
+  ids: ids(SRC), own: ids('kind = "dog"\nsay kind\nmy = 2\nsay my'), rename: ids('name = 1\nkind Pet:\n    name = name\nsay name'),
+  wants: [window.tuffWantsSuggest(model(SRC + 'say rex.'), { lineNumber: n, column: 9 }), window.tuffWantsSuggest(model('say rex.'), { lineNumber: 1, column: 9 })],
+  sigKind: sig(SRC + 'x = Pet(', n, 9), sigAction: sig(SRC + 'rex:eat(', n, 9),
+  def: definition.provideDefinition(model(SRC), { lineNumber: 10, column: 8 })?.range.a,
+  symbols: symbols.provideDocumentSymbols(model(SRC)).map((s) => `${s.name}:${s.kind}`),
+  snippet: completion.provideCompletionItems(model(''), { lineNumber: 1, column: 1 }).suggestions.find((s) => s.label === 'kind')?.insertText,
+  words: [!!window.TUFF_DOCS.kind, !!window.TUFF_DOCS.my, window.TUFF_KEYWORDS.includes('kind'), window.TUFF_KEYWORDS.includes('my')],
+};
+async function real() { // Monaco's own Monarch: the tokenizer compiles, and colours these lines
+  const dir = process.argv[2];
+  if (!dir || !fs.existsSync(path.join(dir, 'esm'))) return null;
+  const base = path.join(dir, 'esm', 'vs', 'editor', 'standalone', 'common', 'monarch');
+  const { compile } = await import(url.pathToFileURL(path.join(base, 'monarchCompile.js')).href);
+  const { MonarchTokenizer } = await import(url.pathToFileURL(path.join(base, 'monarchLexer.js')).href);
+  const here = (x) => (x && x.constructor && x.constructor.name === 'RegExp' ? new RegExp(x.source, x.flags) // (made in the vm's realm)
+    : Array.isArray(x) ? x.map(here) : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, here(v)])) : x);
+  const t = new MonarchTokenizer({}, {}, 'tuff', compile('tuff', here(monarch)), { getValue: () => 20000, onDidChangeConfiguration: () => ({ dispose() {} }) });
+  let state = t.getInitialState();
+  const lines = [];
+  for (const line of ['kind Pet:', '        my.hunger -= 1', 'rex = Pet("Rex")', 'say rex.hunger', 'w = tgame.window("x")', 'kind = "dog"',
+    'say kind:upper()', 'my = 3', 'say f"{my.name}"']) {
+    const r = t.tokenize(line, true, state);
+    state = r.endState;
+    lines.push(r.tokens.map((tok, i) => `${line.slice(tok.offset, r.tokens[i + 1]?.offset ?? line.length)}=${tok.type.replace(/\.tuff$/, '')}`)
+      .filter((x) => !/^\s*=/.test(x)).join(' '));
+  }
+  return lines;
+}
+real().then((r) => { out.real = r; console.log(JSON.stringify(out)); }, (e) => { out.real = 'ERROR ' + e.message; console.log(JSON.stringify(out)); });
+"""
+
+
+def t_kinds(c):
+    """Console only, no window: 1.5.0's kinds (kind Pet:, Pet("Rex"), rex.hunger, rex:feed(), my). A program with
+    fields, actions, my, objects in lists, sorting and the soft words used as variables runs the same in both
+    runtimes and --check accepts it; each mistake stops the run and --check with the same message at the same place;
+    correct code the checker can't see the kind of is never flagged; objects save and load (a program with the kind
+    gets objects back, one without it a dictionary); the step hooks see actions; Tuff Engine's --scene preview runs a
+    kind's actions; and the editor's tuff-lang.js knows kinds (with Node)."""
+    folder = os.path.join(HERE, "out", "kinds")
+    os.makedirs(folder, exist_ok=True)
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    for k in ("TUFF_IDE", "TUFF_SLOW", "TUFF_NO_WRITES"):
+        env.pop(k, None)
+
+    def write(name, code):
+        path = os.path.join(folder, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code if code.endswith("\n") else code + "\n")
+        return path
+
+    def run(path, slow=False, extra=None, check=False):
+        e = {**env, **({"TUFF_SLOW": "1"} if slow else {}), **(extra or {})}
+        return subprocess.run(tuff_cmd() + (["--check"] if check else []) + [path], capture_output=True, text=True, encoding="utf-8",
+                              timeout=60, env=e, cwd=folder, stdin=subprocess.DEVNULL)
+
+    def where(stderr):
+        """The line, column and message of the first "Tuff error" (the column from the ^ under the line)."""
+        lines = stderr.splitlines()
+        first = next((i for i, x in enumerate(lines) if x.startswith("Tuff error on line ")), None)
+        if first is None:
+            return None, None, stderr.strip()
+        head, msg = lines[first][len("Tuff error on line "):].split(": ", 1)
+        caret = lines[first + 2] if first + 2 < len(lines) and lines[first + 2].strip() == "^" else ""
+        return int(head), (caret.index("^") - len(f"  {head} | ") + 1) if caret else None, msg
+
+    path = write("kinds.tuf", KINDS_PROGRAM)
+    for slow in (False, True):
+        p = run(path, slow)
+        got = p.stdout.splitlines()
+        mode = "the tree walker" if slow else "the compiled runtime"
+        c.check(p.returncode == 0 and got == KINDS_OUTPUT, f"{mode} runs the kinds program: {len(KINDS_OUTPUT)} lines as expected",
+                [(i + 1, a, b) for i, (a, b) in enumerate(zip(got + [None] * 40, KINDS_OUTPUT)) if a != b][:4] or (p.stdout + p.stderr)[-500:])
+    p = run(path, check=True)
+    c.check(p.stdout.strip() == "OK", "--check accepts all of it", (p.stdout + p.stderr)[:600])
+
+    for i, (code, line, col, says, check_says) in enumerate(KINDS_ERRORS):
+        bad = write(f"mistake{i}.tuf", code)
+        shown = code.splitlines()[line - 1].strip()
+        runs = [where(run(bad, slow).stderr) for slow in (False, True)]
+        c.check(runs[0] == runs[1] and runs[0][:2] == (line, col) and says in runs[0][2],
+                f"running {shown!r} stops at {line}:{col} in both runtimes: {says[:60]!r}", runs)
+        p = run(bad, check=True)
+        if check_says == "OK":
+            c.check(p.stdout.strip() == "OK", f"--check can't know it before the run, and says OK: {shown!r}", (p.stdout + p.stderr)[:300])
+        else:
+            at = where(p.stderr)
+            c.check(p.returncode == 1 and at[0] == line and (check_says or says) in at[2] and (check_says is not None or at[1] == col),
+                    f"--check on {shown!r} says it on line {line} too" + ("" if check_says else f" (at {line}:{col})"), at)
+
+    for i, (code, want) in enumerate(KINDS_CHECKS):
+        p = run(write(f"check{i}.tuf", code), check=True)
+        out = (p.stdout + p.stderr).strip()
+        shown = code.splitlines()[-1].strip()
+        if want == "OK":
+            c.check(out == "OK", f"--check accepts: {shown}", out[:300])
+        else:
+            c.check(p.returncode == 1 and want in out, f"--check on {shown!r} says {want[:50]!r}", out[:300])
+
+    # Saving and loading objects, with writes on and in memory (TUFF_NO_WRITES, like tuff_run).
+    for name in ("pets.json", "again.json"):
+        if os.path.exists(os.path.join(folder, name)):
+            os.remove(os.path.join(folder, name))
+    p = run(write("save.tuf", KINDS_SAVE))
+    c.check(p.stdout.splitlines() == ['Pet(name: "Ann", hunger: 5, toys: ["ball"])', "3", "2"],
+            "file.load gives back Pet objects in a program that has kind Pet", (p.stdout + p.stderr)[-400:])
+    c.check(same_json(read_json(os.path.join(folder, "pets.json")), KINDS_SAVE_FILE),
+            'file.save keeps each object as a dictionary that starts with "$kind"', read_json(os.path.join(folder, "pets.json")))
+    p = run(write("newer.tuf", KINDS_LOAD_NEWER))
+    c.check(p.stdout.splitlines() == ['Pet(name: "Rex", age: 1)', "2"],
+            "a kind that changed since (a new field, one gone) loads old saves: the new field starts with its value", (p.stdout + p.stderr)[-400:])
+    p = run(write("nokind.tuf", KINDS_LOAD_NONE))
+    c.check(p.stdout.splitlines() == ['{"$kind": "Pet", "name": "Rex", "hunger": 2, "toys": []}', "Pet"]
+            and same_json(read_json(os.path.join(folder, "again.json")), KINDS_SAVE_FILE),
+            "in a program without the kind it's a dictionary, and saving it again keeps it the same", (p.stdout + p.stderr)[-400:])
+    os.remove(os.path.join(folder, "pets.json"))
+    for slow in (False, True):
+        p = run(os.path.join(folder, "save.tuf"), slow, {"TUFF_NO_WRITES": "1"})
+        c.check(p.stdout.splitlines() == ['Pet(name: "Ann", hunger: 5, toys: ["ball"])', "3", "2"] and not os.path.exists(os.path.join(folder, "pets.json")),
+                f"with writes kept in memory (TUFF_NO_WRITES=1, {'the tree walker' if slow else 'compiled'}) objects save and load too",
+                (p.stdout + p.stderr)[-300:])
+
+    # The debugger's hook point sees the statements in an action, in both runtimes.
+    import tuff
+    for slow in (True, False):
+        old = os.environ.pop("TUFF_SLOW", None)
+        if slow:
+            os.environ["TUFF_SLOW"] = "1"
+        try:
+            interp = tuff.Interpreter(KINDS_HOOKS, folder)
+        finally:
+            os.environ.pop("TUFF_SLOW", None)
+            if old is not None:
+                os.environ["TUFF_SLOW"] = old
+        seen = []
+        interp.step_hooks.append(lambda s, env: seen.append(s.line))
+        interp.run_block(tuff.Parser(tuff.tokenize(KINDS_HOOKS)).program(), interp.globals)
+        rex = interp.globals.vars["rex"]
+        c.check(seen == [1, 6, 7, 4, 5] and rex.fields == {"hunger": 4},
+                f"{'the tree walker' if slow else 'the compiled runtime'}: a step hook sees the action's statements as they run", (seen, rex.fields))
+
+    # Tuff Engine's preview runs a kind's actions, which make the game's things.
+    code, out, err, d, secs = scene(write("kinds_scene.tuf", KINDS_SCENE))
+    c.check(code == 0 and d.get("error") is None and d.get("stopped") == "end" and len(d.get("things", [])) == 3,
+            f"the --scene preview runs actions that make boxes ({secs:.1f} s)", (d.get("error"), d.get("stopped"), len(d.get("things", [])), err[-300:]))
+
+    lang = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")
+    monaco_dir = os.environ.get("TUFF_MONACO") or os.path.join(REPO, "tuffcode", "node_modules", "monaco-editor")
+    try:
+        p = subprocess.run(["node", "-e", KINDS_LANG, lang, monaco_dir], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the editor checks")
+        return
+    try:
+        t = json.loads(p.stdout)
+    except ValueError:
+        c.check(False, "the editor checks ran", (p.stdout + p.stderr)[-600:])
+        return
+    c.check(t["kinds"] == ['Pet[name="?",hunger=5|feed(),eat(food)]1-7', "Owl[wise=true|]8-9"],
+            "tuffKinds reads each kind's fields (with their starting values) and actions", t["kinds"])
+    c.check(t["fieldsRex"] == ["name", "hunger"] and t["fieldsMy"] == ["name", "hunger"] and t["fieldsAny"] == ["name", "hunger", "wise"],
+            "after rex. (and my. in an action) come Pet's fields; after p. every kind's", [t["fieldsRex"], t["fieldsMy"], t["fieldsAny"]])
+    c.check(t["actionsRex"] == ["feed", "eat"] and t["actionsAny"][:2] == ["feed", "eat"] and {"upper", "add"} <= set(t["actionsAny"]),
+            "after rex: come only Pet's actions; after p: the actions first, then the other methods", [t["actionsRex"], t["actionsAny"]])
+    c.check(t["top"] == ["show", "Pet", "Owl"], "a line's completions offer the kinds (Pet(...)) and functions, not the actions", t["top"])
+    c.check("kind Pet:" in (t["hoverKind"] or "") and "hunger = 5" in t["hoverKind"] and "func eat(food)" in t["hoverKind"],
+            "hovering a kind's name shows its fields and actions", t["hoverKind"])
+    c.check("A field of Pet" in (t["hoverField"] or "") and "rex:feed()" in (t["hoverAction"] or "") and "This Pet itself" in (t["hoverMy"] or ""),
+            "hovering rex.hunger, rex:feed and my says what they are", [t["hoverField"], t["hoverAction"], t["hoverMy"]])
+    c.check("kind Pet:" in (t["hoverWord"] or "") and t["hoverOwnKind"] is None,
+            "the word kind has a hover, and a variable called kind doesn't", [t["hoverWord"], t["hoverOwnKind"]])
+    c.check(t["ids"] == "Pet@1:6 food@6:14 food@7:22 Owl@8:6 rex@10:1 Pet@10:7 rex@11:1 rex@12:5 show@13:6 p@13:11 p@14:9"
+            and t["own"] == "kind@1:1 kind@2:5 my@3:1 my@4:5" and t["rename"] == "name@1:1 Pet@2:6 name@3:12 name@4:5",
+            "rename and find uses: kind and my are names only outside kinds, and a field isn't the variable with its name",
+            [t["ids"], t["own"], t["rename"]])
+    c.check(t["wants"] == [True, False], "typing rex. opens the list in a file with kinds (and not in one without)", t["wants"])
+    c.check(t["sigKind"] == "Pet(name, hunger)" and t["sigAction"] == "Pet:eat(food)", "Pet( and rex:eat( show their inputs",
+            [t["sigKind"], t["sigAction"]])
+    c.check(t["def"] == [1, 6, 1, 9] and t["symbols"] == ["Pet:Class", "Pet:feed:Method", "Pet:eat:Method", "Owl:Class", "rex:Variable", "show:Function"],
+            "go to definition finds kind Pet:, and the outline lists kinds and their actions", [t["def"], t["symbols"]])
+    c.check(t["snippet"] == 'kind ${1:Pet}:\n    ${2:name} = ${3:"?"}\n    func ${4:feed}():\n        $0' and t["words"] == [True, True, True, True],
+            "there is a kind snippet, and kind and my are Tuff's words with docs", [t["snippet"], t["words"]])
+    if t["real"] is None:
+        c.check(True, "monaco-editor isn't installed here: skipped the Monarch check")
+        return
+    want = ["kind=keyword Pet=function.decl :=source", "my=keyword .=delimiter hunger=identifier -==operator 1=number",
+            'rex=identifier Pet=function (=delimiter.parenthesis "Rex"=string )=delimiter.parenthesis', "say=keyword rex=identifier .=delimiter hunger=identifier",
+            'w=identifier tgame=library .=delimiter window=function (=delimiter.parenthesis "x"=string )=delimiter.parenthesis',
+            'kind=identifier "dog"=string', "say=keyword kind=identifier :=delimiter upper=method ()=delimiter.parenthesis", "my=identifier 3=number",
+            'say=keyword f"=string {=delimiter.curly my=keyword .=delimiter name=identifier }=delimiter.curly "=string']
+    c.check(t["real"] == want, "Monaco's Monarch colours kind Pet: and my.hunger as Tuff's words, a field as a name, and a variable called kind as a variable",
+            [(a, b) for a, b in zip(t["real"] if isinstance(t["real"], list) else [t["real"]], want) if a != b])
+
+
+# ---------------------------------------------------------------- 1.5.0: tterm, terminal games
+# A program that moves with keys from screen:press: right on frames 1 and 2, down held on frame 5, space and right on
+# frame 9, q (which stops it) on frame 20.
+TTERM_PROGRAM = """mention tterm
+screen = tterm.screen(12, 5)
+x = 1
+y = 2
+jumps = 0
+frames = 0
+total = 0
+func step(dt):
+    frames += 1
+    total += dt
+    if screen:pressed("right"):
+        x += 1
+    if screen:held("down"):
+        y += 1
+    if screen:pressed("space"):
+        jumps += 1
+    screen:clear()
+    screen:box(0, 0, 12, 5, "gray")
+    screen:text(1, 0, f"{jumps}", "gold")
+    screen:put(x, y, "@", "lime")
+    if screen:pressed("q"):
+        screen:stop()
+screen:press("right")
+screen:press("right")
+screen:press("down", 5)
+screen:press("space", 9)
+screen:press("right", 9)
+screen:press("q", 20)
+screen:every_frame(step)
+say f"x {x} y {y} jumps {jumps} frames {frames} time {total:0.00}"
+say screen:get(x, y) + screen:get(0, 0) + screen:get(99, 0) + "|" + screen
+"""
+TTERM_FRAME = ["┌1─────────┐", "│          │", "│          │", "│   @      │", "└──────────┘"]
+TTERM_AFTER = ["x 4 y 3 jumps 1 frames 20 time 1.00", "@┌|<screen 12x5>"]
+# Mistakes the run stops at, on their line: (program, line, what it says).
+TTERM_ERRORS = [
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nscreen:put(1, 1, "ab")', 3, "screen:put draws one character"),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nscreen:text(1, 1, "hi", "limme")', 3, 'doesn\'t know the colour "limme". Did you mean "lime"?'),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nsay screen:held("spcae")', 3, 'isn\'t a key tterm knows. Did you mean "space"?'),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nscreen:every_frame("step")', 3, "screen:every_frame needs a function's name"),
+    ('mention tterm\nscreen = tterm.screen(0, 4)', 2, "tterm.screen's width goes from 1 to 200"),
+    ('mention tterm\nscreen = tterm.screen("big", 4)', 2, "tterm.screen's width needs a number, not text"),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nscreen:put("a", 1, "@")', 3, "screen:put needs numbers for x and y, not text"),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nscreen:press("any")', 3, "screen:press needs a real key"),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nfunc step(dt):\n    screen:put(2, 1, "@")\n    say nope\nscreen:every_frame(step)', 5,
+     "I don't know what 'nope' is"),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nfunc step(dt):\n    screen:every_frame(step)\nscreen:every_frame(step)', 4,
+     "screen:every_frame is already running"),
+    ('mention tterm\nscreen = tterm.screen(10, 4)\nscreen:draw(1, 1)', 3, "A screen doesn't have :draw."),
+]
+# --check: (code after a screen and a step function, what it says, or "OK").
+TTERM_HEAD = "mention tterm\nscreen = tterm.screen(20, 10)\nfunc step(dt):\n    screen:clear()\n"
+TTERM_CHECKS = [
+    ('screen:draw(1, 2, "@")', "A screen doesn't have :draw."), ("screen:put(1, 2)", "screen:put got the wrong number of inputs (2)."),
+    ('screen:put(1, 2, "@", "limme")', 'screen:put doesn\'t know the colour "limme". Did you mean "lime"?'),
+    ('screen:box(0, 0, 5, 5, "grey9")', 'screen:box doesn\'t know the colour "grey9"'),
+    ('say screen:pressed("spcae")', '"spcae" isn\'t a key tterm knows. Did you mean "space"?'),
+    ('say screen:held("shift")', "a terminal doesn't tell a program about shift on its own"),
+    ('say screen:pressed("escape")', 'Esc ends screen:every_frame, so screen:pressed("escape") is never true'),
+    ('screen:press("any")', "screen:press needs a real key"), ('screen:put(1, 1, "ab")', "screen:put draws one character"),
+    ('screen:put(1, 1, "")', "screen:put needs a character to draw"),
+    ("screen:every_frame(step())", "Pass the function's name without brackets: step, not step()"),
+    ('screen:every_frame("step")', "This needs a function name, not text."),
+    ("func two(a, b):\n    say a\nscreen:every_frame(two)", "two() needs 2 inputs, but screen:every_frame only gives it 1"),
+    ("n = 5\nscreen:every_frame(n)", "screen:every_frame needs a function's name"),
+    ("screen:every_frame(screen:clear())", "screen:clear runs right away here"),
+    ("s = tterm.screen(0, 10)", "tterm.screen's width goes from 1 to 200"), ("s = tterm.screen(20, -3)", "tterm.screen's height goes from 1 to 100"),
+    ("s = tterm.scren(20, 10)", "tterm doesn't have 'scren'. It has: screen."), ("s = tterm.screen(1, 2, 3)", "tterm.screen() got the wrong number of inputs (3)."),
+    ("screen()", "'screen' is a tterm screen, not a function"), ("screen:stop 5", "Write screen:stop() instead."),
+    ("x = tterm.screen\nx:put(1, 1, \"@\")", "is the function tterm.screen itself"),
+    ("screen:every_frame(step)", "OK"), ('screen:put(1.5, 2, "é", "#ff8800")', "OK"), ('screen:put(1, 2, "🐍")', "OK"),
+    ('screen:put(1, 2, "👍🏽")', "OK"), ('screen:text(0, 0, f"x {1}", "dark green")', "OK"), ('say screen:get(1, 1) + "!"', "OK"),
+    ('if screen:pressed("any"):\n    say 1', "OK"), ('screen:press("down", 30)', "OK"), ('screen:press(" ")', "OK"), ("screen:stop()", "OK"),
+    ("screen:stop", "OK"), ("screen:clear", "OK"), ("s = tterm.screen()", "OK"), ("func one():\n    say 1\nscreen:every_frame(one)", "OK"),
+    ('k = "x"\nsay screen:held(k)', "OK"), ("say screen", "OK"), ("screen:box(-1, -1, 100, 3)", "OK"), ('say screen:pressed("Left")', "OK"),
+    ("func make():\n    return step\nscreen:every_frame(make())", "OK"), ("screen:every_frame(print)", "OK"),
+]
+# The editor (tuff-lang.js, with Node): the library, hovers, completions in a tterm file and in another, and the snippet.
+TTERM_LANG = r"""
+const fs = require('fs'), vm = require('vm');
+const window = {}, ctx = { window };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+let hover = null, completion = null, monarch = null;
+const monaco = { Range: class { constructor(...a) { this.a = a; } }, editor: { defineTheme() {} }, languages: {
+  register() {}, setMonarchTokensProvider(_id, def) { monarch = def; }, setLanguageConfiguration() {},
+  registerHoverProvider(_id, p) { hover = hover || p; }, registerDefinitionProvider() {}, registerReferenceProvider() {},
+  registerRenameProvider() {}, registerDocumentSymbolProvider() {}, registerSignatureHelpProvider() {}, registerColorProvider() {},
+  registerCompletionItemProvider(_id, p) { completion = p; },
+  CompletionItemKind: new Proxy({}, { get: (_t, k) => k }), CompletionItemInsertTextRule: {}, IndentAction: {}, SymbolKind: {} } };
+window.defineTuffTheme = () => {};
+window.registerTuff(monaco, '#3574f0');
+const model = (src, col) => { const lines = src.split('\n'); return { getLinesContent: () => lines, getLineContent: (n) => lines[n - 1],
+  getValue: () => src, getWordUntilPosition: () => ({ startColumn: col || 1, endColumn: col || 1 }),
+  getWordAtPosition: ({ lineNumber, column }) => { for (const m of lines[lineNumber - 1].matchAll(/\w+/g))
+    if (m.index < column && column <= m.index + m[0].length) return { word: m[0], startColumn: m.index + 1, endColumn: m.index + 1 + m[0].length };
+    return null; } }; };
+const names = (src) => { const lines = src.split('\n'); const col = lines[lines.length - 1].length + 1;
+  return completion.provideCompletionItems(model(src, col), { lineNumber: lines.length, column: col }).suggestions.map((s) => s.label); };
+const hoverAt = (src, column) => { const h = hover.provideHover(model(src), { lineNumber: 1, column }); return h ? h.contents.map((x) => x.value).join(' | ') : null; };
+const term = names('mention tterm\nscreen = tterm.screen(40, 20)\nscreen:');
+const plain = names('items = [1]\nitems:');
+const game = names('mention tgame\ngame = tgame.window("G")\ngame:');
+const snippet = completion.provideCompletionItems(model('', 1), { lineNumber: 1, column: 1 }).suggestions.find((s) => s.label === 'tterm game');
+console.log(JSON.stringify({
+  libs: Object.keys(window.TUFF_LIBS), lib: window.TUFF_LIBS.tterm, doc: window.TUFF_DOCS.tterm,
+  libNames: names('mention tterm\ns = tterm.'), mentions: names('mention '),
+  term, plain, game, snippet: snippet && snippet.insertText, highlighted: monarch.libs.includes('tterm'),
+  hoverPut: hoverAt('screen:put(1, 2, "@")', 9), hoverPressed: hoverAt('screen:pressed("a")', 10),
+  hoverScreen: hoverAt('s = tterm.screen(4, 4)', 12),
+}));
+"""
+# The Run panel's side (tterm.js, with Node and a stand-in for the page): a live screen takes the keys at once, sends
+# each one over stdin as a line (down, again as it repeats, up), Esc lets go, clicking elsewhere lets go, the second
+# player's copy and an ended game take none, and the IDE's own shortcuts (Ctrl+...) pass through.
+TTERM_PANEL = r"""
+const fs = require('fs'), vm = require('vm');
+let active = null;
+const document = { get activeElement() { return active; }, querySelectorAll: (sel) => spans.filter((s) => sel === '.tscreen.live' && s.classList.has('live') && s.classList.has('tscreen')) };
+const spans = [];
+function makeSpan() {
+  const handlers = {};
+  const classes = new Set();
+  const span = { dataset: {}, tabIndex: 0, handlers,
+    classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c), has: (c) => classes.has(c),
+                 toggle: (c, on) => { if (on === undefined ? !classes.has(c) : on) classes.add(c); else classes.delete(c); return classes.has(c); } },
+    addEventListener: (k, fn) => { handlers[k] = fn; },
+    focus() { if (active !== span) { active = span; handlers.focus?.(); } },
+    blur() { if (active === span) { active = null; handlers.blur?.(); } } };
+  span.classList.has = (c) => classes.has(c);
+  spans.push(span);
+  return span;
+}
+const window = {};
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), { window, document });
+const T = window.TuffTerm;
+const sent = [];
+const send = (line) => sent.push(line.replace('\x1b', 'ESC').replace('\x07', 'BEL').trim());
+const key = (span, kind, k, code, extra = {}) => { const e = { key: k, code, preventDefault() { this.prevented = true; }, stopPropagation() {}, ...extra };
+  span.handlers[kind](e); return !!e.prevented; };
+const out = {};
+const a = makeSpan();
+T.screen(a, { screen: 1, live: 1 }, send);
+out.autoFocus = active === a;
+out.hintPlaying = a.dataset.hint;
+out.left = key(a, 'keydown', 'ArrowLeft', 'ArrowLeft');
+key(a, 'keydown', 'ArrowLeft', 'ArrowLeft', { repeat: true });
+key(a, 'keyup', 'ArrowLeft', 'ArrowLeft');
+key(a, 'keydown', 'A', 'KeyA');
+key(a, 'keyup', 'a', 'KeyA');
+key(a, 'keydown', ' ', 'Space');
+out.ctrlPassed = !key(a, 'keydown', 's', 'KeyS', { ctrlKey: true });
+out.f10Passed = !key(a, 'keydown', 'F10', 'F10');
+out.shiftPassed = !key(a, 'keydown', 'Shift', 'ShiftLeft');
+a.blur();
+out.hintAfterBlur = a.dataset.hint;
+a.handlers.mousedown({ preventDefault() {} });
+out.clickFocus = active === a;
+key(a, 'keydown', 'Escape', 'Escape');
+out.escLetGo = active !== a;
+out.sent = sent.slice();
+T.screen(a, { screen: 1 }, send);
+out.notLive = !a.classList.has('live') && a.dataset.hint === undefined && a.tabIndex === -1;
+sent.length = 0;
+out.deadKey = !key(a, 'keydown', 'ArrowUp', 'ArrowUp') && sent.length === 0;
+const b = makeSpan();
+T.screen(b, { screen: 1, live: 1 }, null);
+out.secondPlayer = !b.classList.has('live') && active !== b;
+const c = makeSpan();
+T.screen(c, { screen: 1, live: 1 }, send);
+T.ended();
+out.ended = !c.classList.has('live') && active !== c;
+out.keyNames = ['ArrowUp', 'Enter', 'Tab', 'Backspace', 'Delete', '7', '!', 'é', 'Shift', 'F5', 'Escape'].map((k) => T.keyName({ key: k }));
+console.log(JSON.stringify(out));
+"""
+
+
+def tterm_run(code, name, env=None, stdin="", slow=False):
+    """Runs a tterm program with no one to press keys (stdout and stdin are pipes): (exit code, stdout, stderr, seconds)."""
+    folder = os.path.join(HERE, "out", "tterm")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, name)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(code)
+    full = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW")}
+    full.update({"PYTHONIOENCODING": "utf-8", **(env or {})})
+    if slow:
+        full["TUFF_SLOW"] = "1"
+    t0 = time.perf_counter()
+    p = subprocess.run(tuff_cmd() + [path], input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=60, env=full, cwd=folder)
+    return p.returncode, p.stdout, p.stderr, time.perf_counter() - t0
+
+
+def tterm_messages(raw):
+    """The Run panel's messages in some output: [(kind, id, text, look or None)]."""
+    out = []
+    for kind, rest in re.findall(r"\x1b\]tuff;(\w+);([^\x07]*)\x07", raw):
+        parts = rest.split(";")
+        text = base64.b64decode(parts[1]).decode("utf-8") if kind in ("say", "rewrite") and len(parts) > 1 else ""
+        look = None
+        if len(parts) > 2 and parts[2].startswith("rich:"):
+            look = json.loads(base64.b64decode(parts[2][5:]).decode("utf-8"))
+        out.append((kind, parts[0], text, look))
+    return out
+
+
+def tterm_in_process(c):
+    """tuff_tterm.py's own parts, in this process: the keys a terminal sends, Windows' key codes, held from repeats,
+    wide characters, a terminal's drawing (only what changed), and the keys the Run panel sends."""
+    import tuff
+    import tuff_tterm as tt
+    c.check(tt.term_keys("\x1b[A\x1b[B\x1b[C\x1b[D\x1bOA\x1b[3~ \r\t\x7fqQ\x1b") ==
+            ["up", "down", "right", "left", "up", "delete", "space", "enter", "tab", "backspace", "q", "q", "escape"],
+            "a Mac or Linux terminal's keys: arrows (both ways), delete, space, enter, tab, backspace, letters and Esc",
+            tt.term_keys("\x1b[A\x1b[B\x1b[C\x1b[D\x1bOA\x1b[3~ \r\t\x7fqQ\x1b"))
+    c.check(tt.term_keys("\x1b[1;2A\x1bx") == ["up", "x"], "...shift+up is up, and Alt with a key (ESC x) is the key, not Esc",
+            tt.term_keys("\x1b[1;2A\x1bx"))
+    c.check([tt.vk_key(v, ch) for v, ch in ((0x25, ""), (0x26, ""), (0x20, " "), (0x0D, "\r"), (0x1B, "\x1b"), (0x41, "A"), (0x31, "!"),
+                                             (0x31, ""), (0x63, "3"), (0x10, ""), (0xBA, ";")) ] ==
+            ["left", "up", "space", "enter", "escape", "a", "!", "1", "3", None, ";"],
+            "Windows' console keys: arrows, space, enter, Esc, letters (Shift doesn't change them), what a key types, the number pad, not Shift")
+    r = tt.Repeats()
+    first = r.events(["right"], 10.0)
+    still = r.events([], 10.2)
+    again = r.events(["right"], 10.25)
+    gone = r.events([], 10.5)
+    c.check(first == [("down", "right")] and still == [] and again == [("down", "right")] and gone == [("up", "right")],
+            "in a terminal a key counts as held until a moment after it last came (it comes again as it repeats)", (first, still, again, gone))
+    c.check(tt.glyphs("a🐍é́👍🏽中\x07") == [("a", 1), ("🐍", 2), ("é́", 1), ("👍🏽", 2), ("中", 2), (" ", 1)],
+            "text in cells: an emoji or a Chinese letter is two cells wide, accents and skin tones stay with their letter, a control character is a space",
+            tt.glyphs("a🐍é́👍🏽中\x07"))
+    for word, want in (("Space", "space"), (" ", "space"), ("ArrowLeft", "left"), ("esc", "escape"), ("Q", "q"), ("any", "any"),
+                       ("shift", None), ("", None), ("ab", None)):
+        c.check(tt.key_name(word) == want, f"the key {word!r} is {want!r}", tt.key_name(word))
+    # A terminal's drawing, with the console's writes kept here.
+    interp = tuff.Interpreter("", HERE)
+    written = []
+    interp.console.write = written.append
+    lib = tt.Lib(interp.rt)
+    lib.place = "terminal"
+    s = tt.Screen(lib, 6, 3)
+    s.put(1, 1, "@", "lime")
+    s.put(0, 2, "🐍")
+    s.put(1, 2, "x")
+    s.show()
+    first = "".join(written)
+    lime = tuff.ansi_color(tuff.TEXT_COLORS["lime"])
+    c.check(first.startswith("\x1b[2J\x1b[H") and f"\x1b[2;1H {lime}@\x1b[39m    \x1b[0m\x1b[K" in first and first.endswith("\x1b[4;1H")
+            and "\x1b[3;1H🐍    \x1b[0m\x1b[K" in first and interp.console.rows == 3,
+            "a terminal: the first frame clears it and draws each row in its colours (an emoji covers two cells); the cursor waits below", repr(first))
+    written.clear()
+    s.show()
+    c.check(written == [], "...an unchanged screen draws nothing", written)
+    s.put(4, 0, "#", "red")
+    s.show()
+    again = "".join(written)
+    c.check(again.startswith("\x1b7\x1b[1;1H") and again.endswith("\x1b8") and "\x1b[2;1H" not in again and "\x1b[2J" not in again,
+            "...a change draws only its row, and the cursor goes back where it was", repr(again))
+    written.clear()
+    interp.console.rows = 0  # what the program's clear() leaves
+    s.show()
+    c.check(written == [], "...after the program's clear() it stays away until it changes", written)
+    s.put(5, 0, "!")
+    s.show()
+    c.check("".join(written).startswith("\x1b[2J"), "...and then it's drawn whole again", repr("".join(written))[:200])
+    s.press("a")
+    s.press("b", 5)
+    s.press("c")
+    s.press("d", 3)
+    c.check([k for _, k in s.queue] == ["a", "d", "b", "c"] and [f for f, _ in s.queue] == [1, 3, 5, 6],
+            "screen:press: the next frame without a key, or the one it says (in frame order)", s.queue)
+    m = [tt.KEY_LINE.fullmatch(x) for x in ("\x1b]tuff;key;down;left\x07", "\x1b]tuff;key;up;;\x07", "\x1b]tuff;key;none\x07", "typed")]
+    c.check(m[0].groups() == ("down", "left") and m[1].groups() == ("up", ";") and m[2].groups() == ("none", None) and m[3] is None,
+            "the Run panel's key lines (the ; key too), and a typed answer isn't one", [x and x.groups() for x in m])
+    if os.name == "nt":
+        import ctypes
+        rec = tt.console_record()
+        key = rec._fields_[1][1]._fields_[0][1]
+        c.check(ctypes.sizeof(rec) == 20 and rec.event.offset == 4 and ctypes.sizeof(key) == 16 and key.vk.offset == 6 and key.char.offset == 10
+                and key.state.offset == 12, "Windows' console input record has the layout Windows gives it (20 bytes, the key's code at 6)",
+                (ctypes.sizeof(rec), rec.event.offset, ctypes.sizeof(key)))
+        r, w = os.pipe()
+        os.write(w, b"abc")
+        waiting = tt.pipe_waiting(r)
+        os.read(r, 3)
+        os.close(w)
+        closed = tt.pipe_waiting(r)
+        os.close(r)
+        c.check(waiting == 3 and closed is None, "Windows: a pipe's waiting bytes are counted without waiting, and its end is seen", (waiting, closed))
+
+    # The game loop as in a terminal, with keys from a stand-in for the terminal: right held for 3 frames, then let go.
+    class Keys:
+        gone = False
+
+        def __init__(self):
+            self.polls, self.started, self.stopped = 0, False, False
+
+        def start(self):
+            self.started = True
+
+        def poll(self):
+            self.polls += 1
+            return {3: [("down", "right")], 6: [("up", "right")]}.get(self.polls, [])
+
+        def stop(self):
+            self.stopped = True
+    src = ('mention tterm\nscreen = tterm.screen(8, 2)\nx = 0\nn = 0\nfunc step(dt):\n    n += 1\n    if screen:held("right"):\n'
+           '        x += 1\n    screen:clear()\n    screen:put(x, 0, "@")\n    if n is 8:\n        screen:stop()\nscreen:every_frame(step)\n')
+    interp = tuff.Interpreter(src, HERE)
+    written = []
+    interp.console.write = written.append
+    program = tuff.Parser(tuff.tokenize(src)).program()
+    interp.run_block(program[:1], interp.globals)
+    lib = interp.globals.vars["tterm"].members["screen"].fn.__self__
+    lib.place, keys = "terminal", Keys()
+    lib.input = keys
+    t0 = time.perf_counter()
+    interp.run_block(program[1:], interp.globals)
+    secs = time.perf_counter() - t0
+    shown = "".join(written)
+    c.check(interp.globals.vars["x"] == 3 and interp.globals.vars["n"] == 8 and keys.started and keys.stopped and 0.3 < secs < 2
+            and shown.count("@") >= 3 and lib.running is None,
+            f"a terminal's game loop: 20 frames a second ({secs:.2f} s for 8), a held key moves it, and the keys are put back when it stops",
+            (interp.globals.vars["x"], interp.globals.vars["n"], keys.started, keys.stopped, secs))
+
+
+def t_tterm(c):
+    """Console only, no window: 1.5.0's tterm (terminal games). With no one to press keys (a pipe), screen:press gives
+    frames their keys, the frames don't wait for the clock and only the final screen shows, in both runtimes; a game
+    with no stop ends by itself; mistakes stop the run on their line and --check finds the certain ones; in TuffCode's
+    Run panel protocol (TUFF_IDE=1, keys sent over stdin) it moves with held keys, Esc ends it and input() gets the
+    answer typed during it; with stdin closed (tuff_run) it runs at once and says the screen once; the Snake starter;
+    tuff_tterm.py's parts in this process; the editor and the Run panel's side with Node; and Build exe packs it."""
+    if hasattr(sys.stdout, "reconfigure"):  # box lines and emoji in what it prints, on a console that can't show them
+        sys.stdout.reconfigure(errors="backslashreplace")
+    code, out, err, secs = tterm_run(TTERM_PROGRAM, "moves.tuf")
+    lines = out.splitlines()
+    c.check(code == 0 and lines[:5] == [r.rstrip() for r in TTERM_FRAME] and lines[5:] == TTERM_AFTER,
+            f"a pipe: the keys from screen:press move it, and only the final screen shows, as text ({secs:.1f} s)", out + err)
+    slow = interp_run(os.path.join(HERE, "out", "tterm", "slow"), TTERM_PROGRAM, True)
+    fast = interp_run(os.path.join(HERE, "out", "tterm", "fast"), TTERM_PROGRAM, False)
+    c.check(slow == fast and slow[0] == 0, "...the same in the tree walker (TUFF_SLOW=1) and the compiled runtime", (slow, fast))
+
+    idle = "mention tterm\nscreen = tterm.screen(5, 2)\nn = 0\nfunc step(dt):\n    n += 1\nscreen:every_frame(step)\nsay n\n"
+    code, out, err, secs = tterm_run(idle, "idle.tuf")
+    c.check(code == 0 and out.strip().splitlines()[-1] == "100" and secs < 10, f"a game that never stops ends by itself after 100 frames ({secs:.1f} s)", out + err)
+    busy = idle.replace("    n += 1\n", "    n += 1\n    screen:press(\"x\")\n")
+    code, out, err, secs = tterm_run(busy, "busy.tuf")
+    c.check(code == 0 and out.strip().splitlines()[-1] == "5000" and secs < 30, f"...and one that presses a key every frame ends after 5000 ({secs:.1f} s)", out + err)
+    later = idle.replace("screen:every_frame", 'screen:press("x", 150)\nscreen:every_frame')
+    code, out, err, secs = tterm_run(later, "later.tuf")
+    c.check(code == 0 and out.strip().splitlines()[-1] == "250", "...100 frames after the last key (one on frame 150)", out + err)
+    loop = ("mention tterm\nscreen = tterm.screen(8, 1)\nfor i in range(0, 7):\n    screen:clear()\n    screen:put(i, 0, \"*\")\n"
+            "    wait(0.01)\nsay \"done\"\n")
+    code, out, err, secs = tterm_run(loop, "loop.tuf")
+    c.check(code == 0 and out.splitlines() == ["done", "       *"], "a loop of its own (with wait) shows only how it ended, when the program ends", out + err)
+
+    for i, (prog, line, says) in enumerate(TTERM_ERRORS):
+        runs = [tterm_run(prog + "\n", f"error{i}.tuf", slow=slow) for slow in (False, True)]
+        code, out, err, _ = runs[0]
+        shown = prog.splitlines()[line - 1].strip()
+        c.check(code == 1 and f"Tuff error on line {line}: " in err and says in err and runs[0][:3] == runs[1][:3],
+                f"{shown!r} stops on line {line}: {says[:50]!r} (in both runtimes)", (err, runs[1][2]))
+    code, out, err, _ = tterm_run(TTERM_ERRORS[8][0] + "\n", "error_frame.tuf")
+    c.check(out.splitlines()[:2] == ["", "  @"], "...an error inside the game shows the screen as it was first", out)
+
+    # The Run panel (TUFF_IDE=1): keys come over stdin as lines, as tterm.js sends them.
+    ide_prog = ('mention tterm\nscreen = tterm.screen(16, 3)\nx = 1\nhits = 0\nfunc step(dt):\n    if screen:held("right"):\n        x += 1\n'
+                '    if screen:pressed("space"):\n        hits += 1\n    screen:clear()\n    screen:put(x, 1, "@", "lime")\n'
+                'screen:every_frame(step)\nsay f"moved {x > 4} hits {hits}"\nname = input "Name? "\nsay "hi " + name\n')
+    folder = os.path.join(HERE, "out", "tterm")
+    path = os.path.join(folder, "ide.tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(ide_prog)
+    env = {**{k: v for k, v in os.environ.items() if k != "TUFF_SLOW"}, "TUFF_IDE": "1", "PYTHONIOENCODING": "utf-8"}
+    p = subprocess.Popen(tuff_cmd() + [path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=folder)
+    got = []
+    import threading
+    reader = threading.Thread(target=lambda: got.append(p.stdout.read()), daemon=True)
+    reader.start()
+
+    def send(line):
+        p.stdin.write(line.encode("utf-8"))
+        p.stdin.flush()
+    try:
+        time.sleep(1.0)
+        send("\x1b]tuff;key;down;right\x07\n")
+        time.sleep(0.5)
+        send("\x1b]tuff;key;up;right\x07\n\x1b]tuff;key;down;space\x07\n\x1b]tuff;key;up;space\x07\n")
+        time.sleep(0.3)
+        send("Sam\n")
+        time.sleep(0.2)
+        send("\x1b]tuff;key;down;escape\x07\n")
+        p.wait(15)
+    except (subprocess.TimeoutExpired, OSError):
+        p.kill()
+    reader.join(5)
+    p.stdin.close()
+    p.stderr.close()
+    raw = got[0].decode("utf-8", errors="replace") if got else ""
+    msgs = tterm_messages(raw)
+    screens = [m for m in msgs if m[3] and m[3].get("screen")]
+    said = [m[2] for m in msgs if m[0] == "say" and not (m[3] and m[3].get("screen"))]
+    c.check(p.returncode == 0 and screens and screens[0][0] == "say" and screens[0][3].get("live") == 1 and screens[0][3]["w"] == 16
+            and all(m[0] == "rewrite" and m[1] == screens[0][1] for m in screens[1:]),
+            "the Run panel: the screen is a say line marked as a live screen (16 across), rewritten in place", [m[:2] for m in screens[:5]])
+    c.check(screens and "live" not in screens[-1][3] and screens[-1][3].get("runs") and screens[-1][3]["runs"][0][3] == tuff_tterm_lime(),
+            "...the last frame isn't live any more (the panel lets go of the keys), and its colours are runs", screens[-1][3] if screens else None)
+    c.check(said[:1] == ["moved true hits 1"] and said[1:] == ["hi Sam"],
+            "...a held key moves it, a press counts once, Esc ends the game, and input() gets the answer typed while it ran", said)
+    c.check(len(screens) < 120, f"...it only sends a frame that changed ({len(screens)} for about 2 seconds)", len(screens))
+
+    # tuff_run: TUFF_IDE=1 with the answers given and stdin closed. No one can press a key, so it runs at once.
+    code, out, err, secs = tterm_run(TTERM_PROGRAM, "tuff_run.tuf", env={"TUFF_IDE": "1", "TUFF_ECHO_INPUT": "1"}, stdin="Sam\n")
+    msgs = tterm_messages(out)
+    screens = [m for m in msgs if m[3] and m[3].get("screen")]
+    c.check(code == 0 and len(screens) == 1 and [r.rstrip() for r in screens[0][2].split("\n")] == [r.rstrip() for r in TTERM_FRAME]
+            and "live" not in screens[0][3] and secs < 10,
+            f"tuff_run (stdin closed): it runs at once and says the final screen once ({secs:.1f} s)", [m[:3] for m in msgs])
+
+    # The Snake starter: down on frame 2 turns it, it goes down to the wall and the game is over; Esc stops it.
+    with open(os.path.join(GAMES, "tterm_snake.tuf"), encoding="utf-8") as f:
+        snake = f.read()
+    c.check(subprocess.run(tuff_cmd() + ["--check", os.path.join(GAMES, "tterm_snake.tuf")], capture_output=True, text=True,
+                           encoding="utf-8").stdout.strip() == "OK", "--check accepts the Snake starter (games/tterm_snake.tuf)")
+    turned = snake.replace("draw()\nscreen:every_frame(step)", 'screen:press("down", 2)\ndraw()\nscreen:every_frame(step)')
+    code, out, err, _ = tterm_run(turned, "snake_down.tuf")
+    rows = out.splitlines()
+    c.check(code == 0 and len(rows) >= 18 and rows[14][8] == "@" and rows[13][8] == "o" and rows[12][8] == "o" and "GAME OVER" in rows[8]
+            and rows[-1] == "Game over! You scored 0." and rows[16].strip() == "arrows: steer   esc: stop",
+            "the Snake starter: a key turns it down, it hits the bottom wall and the game is over", out + err)
+    stopped = snake.replace("draw()\nscreen:every_frame(step)", 'screen:press("escape", 4)\ndraw()\nscreen:every_frame(step)')
+    code, out, err, _ = tterm_run(stopped, "snake_esc.tuf")
+    c.check(code == 0 and out.splitlines()[-1] == "You stopped with 0 points." and "GAME OVER" not in out, "...and Esc stops it", out + err)
+
+    folder = os.path.join(HERE, "out", "tterm")
+    for i, (code_, want) in enumerate(TTERM_CHECKS):
+        path = os.path.join(folder, f"check{i}.tuf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(TTERM_HEAD + code_ + "\n")
+        p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        shown = code_.splitlines()[-1].strip()
+        if want == "OK":
+            c.check(p.returncode == 0 and p.stdout.strip() == "OK", f"--check accepts: {shown}", (p.stdout + p.stderr)[:300])
+        else:
+            c.check(p.returncode == 1 and want in p.stderr, f"--check on {shown!r} says {want[:55]!r}", p.stderr[:300])
+
+    console, _games, _learned = interp_corpus()
+    names = [n for n, src in console if "mention tterm" in src]
+    c.check("tuffcode/test/tgame/games/tterm_snake.tuf" in names and sum(n.startswith("guide ") for n in names) >= 2,
+            "the interp test's corpus runs the Snake starter and the guide's tterm examples in both runtimes", names)
+
+    tterm_in_process(c)
+
+    try:
+        p = subprocess.run(["node", "-e", TTERM_LANG, os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        q = subprocess.run(["node", "-e", TTERM_PANEL, os.path.join(REPO, "tuffcode", "renderer", "js", "tterm.js")],
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the editor and Run panel checks")
+        p = q = None
+    if p is not None:
+        try:
+            t = json.loads(p.stdout)
+        except ValueError:
+            t = None
+        c.check(t is not None, "the editor checks ran", (p.stdout + p.stderr)[-600:])
+        t = t or {}
+        c.check("tterm" in t.get("libs", []) and t.get("highlighted") and "tterm" in t.get("mentions", []) and t.get("libNames") == ["screen"],
+                "the editor knows tterm: highlighted, offered after mention, and tterm. offers screen", [t.get("mentions"), t.get("libNames")])
+        want = {"put", "text", "box", "clear", "get", "pressed", "held", "press", "every_frame", "stop"}
+        c.check(want <= set(t.get("term", [])), "screen: in a tterm file offers all ten methods", sorted(want - set(t.get("term", []))))
+        c.check(not {"put", "press"} & set(t.get("plain", [])) and not {"put", "press"} & set(t.get("game", [])),
+                "...and tterm's own (put, press) don't crowd other files", [x for x in ("put", "press") if x in t.get("plain", []) + t.get("game", [])])
+        c.check((t.get("hoverPut") or "").startswith("```tuff\nscreen:put(x, y, \"@\", \"lime\")") and "In tterm, screen:pressed" in (t.get("hoverPressed") or "")
+                and "A grid of letters" in (t.get("hoverScreen") or ""),
+                "hovers: screen:put, screen:pressed (after tgame's) and tterm.screen", [t.get("hoverPut"), t.get("hoverPressed"), t.get("hoverScreen")])
+        snip = t.get("snippet") or ""
+        if snip:
+            snip_code = re.sub(r"\$\{\d+:([^}]*)\}", r"\1", snip).replace("$0", "")
+            path = os.path.join(folder, "snippet.tuf")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(snip_code)
+            chk = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60)
+            run = tterm_run(snip_code, "snippet_run.tuf")
+        c.check(snip and chk.stdout.strip() == "OK" and run[0] == 0 and "@" in run[1], "the 'tterm game' snippet passes --check and runs", snip)
+    if q is not None:
+        try:
+            u = json.loads(q.stdout)
+        except ValueError:
+            u = None
+        c.check(u is not None, "the Run panel checks ran", (q.stdout + q.stderr)[-600:])
+        u = u or {}
+        c.check(u.get("autoFocus") and u.get("hintPlaying") == "Esc to let go", "the Run panel: a game that starts takes the keys at once", u)
+        c.check(u.get("sent") == ["ESC]tuff;key;down;leftBEL", "ESC]tuff;key;down;leftBEL", "ESC]tuff;key;up;leftBEL", "ESC]tuff;key;down;aBEL",
+                                  "ESC]tuff;key;up;aBEL", "ESC]tuff;key;down;spaceBEL", "ESC]tuff;key;noneBEL", "ESC]tuff;key;down;escapeBEL",
+                                  "ESC]tuff;key;noneBEL"] and u.get("left"),
+                "...each key goes over stdin: down (and again as it repeats), up, letters in lower case, none when it lets go, and Esc", u.get("sent"))
+        c.check(u.get("ctrlPassed") and u.get("f10Passed") and u.get("shiftPassed"), "...Ctrl+S, F10 and Shift go on to the IDE", u)
+        c.check(u.get("hintAfterBlur") == "Click to play" and u.get("clickFocus") and u.get("escLetGo"),
+                "...clicking elsewhere lets go (\"Click to play\"), a click takes the keys again, and Esc lets go", u)
+        c.check(u.get("notLive") and u.get("deadKey") and u.get("secondPlayer") and u.get("ended"),
+                "...a finished game, the second player's copy and an ended run take no keys", u)
+        c.check(u.get("keyNames") == ["up", "enter", "tab", "backspace", "delete", "7", "!", "é", None, None, "escape"],
+                "...key names as tuff_tterm.py's: what a key types, or its name; none for Shift and F5", u.get("keyNames"))
+
+    build = open(os.path.join(REPO, "tuffcode", "build.js"), encoding="utf-8").read()
+    pkg = json.load(open(os.path.join(REPO, "tuffcode", "package.json"), encoding="utf-8"))
+    html = open(os.path.join(REPO, "tuffcode", "renderer", "index.html"), encoding="utf-8").read()
+    c.check("'tuff_tterm.py'" in build and "'--hidden-import', 'tuff_tterm'" in build and "&& !usesTerm" in build,
+            "Build exe packs tuff_tterm.py for a tterm game, as a console app", None)
+    c.check(all("--hidden-import tuff_tterm" in pkg["scripts"][s] for s in ("build:runtime", "build:runtime:mac"))
+            and any(r.get("from") == "../tuff_tterm.py" for r in pkg["build"]["extraResources"]),
+            "TuffCode's own runtime has tuff_tterm (and Build exe's copy of the files)", None)
+    c.check(html.index("js/tterm.js") < html.index("js/ide.js"), "index.html loads tterm.js before ide.js", None)
+
+
+def tuff_tterm_lime():
+    import tuff
+    return tuff.TEXT_COLORS["lime"]
+
+
+# ---------------------------------------------------------------- tmusic, music from notes (1.5.0)
+
+# No test here makes a sound: TUFF_NO_SOUND=1 for everything these tests run, and a program's output goes to a pipe,
+# where tmusic plays nothing anyway. Songs are made in out/music, not in the temporary folder's tuff-music.
+os.environ.setdefault("TUFF_NO_SOUND", "1")
+os.environ.setdefault("TUFF_MUSIC_DIR", os.path.join(OUT, "music"))
+
+TMUSIC_PROGRAM = '''mention tmusic
+song = tmusic.song(120)
+say song
+song:track("piano", "C4 E4 G4 E4 | F4 A4 C5 .")
+song:track("bass", "C2*4 | F2*4", 60)
+song:track("drums", "kick hat snare hat | kick+crash hat snare hat")
+say song
+say song:length()
+say tmusic.song(90):track("pluck", "C4 D4/2 E4/2 F4*1.5 G4*3/2"):length()
+fast = tmusic.song(400)
+fast:track("chip", "c#5 Eb5 b4+d5")
+say fast:length()
+tmusic.play("C4 E4 G4")
+tmusic.play("A3 . A3*2", "organ", 200)
+tmusic.play(fast)
+song:play()
+song:loop()
+song:stop()
+song:save("theme.wav")
+say file.exists("theme.wav")
+quiet = tmusic.song(60)
+quiet:track("flute", ". . .")
+say quiet:length()
+try:
+    tmusic.play("C4 C9# G4")
+catch problem:
+    say problem
+try:
+    empty = tmusic.song()
+    empty:play()
+catch problem:
+    say problem
+say "end"
+'''
+TMUSIC_OUTPUT = ["<song: 0 tracks, 0 seconds>", "<song: 3 tracks, 4 seconds>", "4", "3.333", "0.45", "true", "3",
+                 "\"C9#\" (note 2) has its # after the octave (it goes before, like C#4), and there's no octave 9: octaves go "
+                 "from 0 to 8 (C4 is middle C).",
+                 'This song has no tracks yet. Add one first, like song:track("piano", "C4 E4 G4").', "end"]
+# The note reader: (notes, drums?, how many beats, the notes as (start, beats, pitches)), with fractions as text.
+TMUSIC_NOTES = [
+    ("C4 D4 E4 F4 G4 A4 B4 C5", False, "8", [(str(i), "1", (p,)) for i, p in enumerate([60, 62, 64, 65, 67, 69, 71, 72])]),
+    ("c#4 Db4 e#4 Fb4 B#3 Cb5", False, "6", [(str(i), "1", (p,)) for i, p in enumerate([61, 61, 65, 64, 60, 71])]),
+    ("A0 C8 A4", False, "3", [("0", "1", (21,)), ("1", "1", (108,)), ("2", "1", (69,))]),
+    ("C4 E4/2 .*2 G4+B4*3/2", False, "5", [("0", "1", (60,)), ("1", "1/2", (64,)), ("7/2", "3/2", (67, 71))]),
+    ("| C4*1.5 | . |\n E4/4 |", False, "11/4", [("0", "3/2", (60,)), ("5/2", "1/4", (64,))]),
+    ("kick+hat snare/2 . CRASH*2", True, "9/2", [("0", "1", ("kick", "hat")), ("1", "1/2", ("snare",)), ("5/2", "2", ("crash",))]),
+    (". . .", False, "3", []),
+]
+# Mistakes in notes: (notes, drums?, who, what tmusic says, where in the text the note starts).
+TMUSIC_NOTE_ERRORS = [
+    ("C4 E4 C9# G4", False, "tmusic.play", "\"C9#\" (note 3) has its # after the octave (it goes before, like C#4), and there's no "
+                                           "octave 9: octaves go from 0 to 8 (C4 is middle C).", 6),
+    ("C4#", False, "tmusic.play", '"C4#" has its # after the octave: write C#4.', 0),
+    ("C9", False, "tmusic.play", "\"C9\": octaves go from 0 to 8 (C4 is middle C), so there's no C9.", 0),
+    ("E4 G", False, "tmusic.play", '"G" (note 2) needs its octave after it, like G4 (C4 is middle C).', 3),
+    ("H4", False, "tmusic.play", '"H4" isn\'t a note. A note is a letter from A to G, then # (sharp) or b (flat) if it needs one', 0),
+    ("C4, E4", False, "tmusic.play", '"C4," (note 1): put spaces between notes, not commas, like "C4 E4 G4".', 0),
+    ("C4*", False, "tmusic.play", '"C4*": put a number after the *, like C4*2 (twice as long) or C4/2 (half as long).', 0),
+    ("C4/0", False, "tmusic.play", '"C4/0" would last 0 beats.', 0),
+    ("C4 *2", False, "tmusic.play", '"*2" (note 2) needs a note before the *, like C4*2 (or .*2 for a rest).', 3),
+    ("C4+", False, "tmusic.play", '"C4+": a chord needs a note on each side of its +, like C4+E4+G4.', 0),
+    ("C4+.", False, "tmusic.play", "\"C4+.\": a rest (.) can't be part of a chord.", 0),
+    ("C##4", False, "tmusic.play", '"C##4" has more than one # or b. A note has one at most, like C#4 or Db4.', 0),
+    ("C4.", False, "tmusic.play", '"C4." isn\'t a note. For a note one and a half times as long, write C4*1.5.', 0),
+    ("C4*2E4", False, "tmusic.play", '"C4*2E4": put a space between two notes, like "C4*2 E4".', 0),
+    ("C4 kick", False, "tmusic.play", '"kick" (note 2) is a drum. Drums go in a track of their own, like tmusic.play("kick hat snare hat", "drums").', 3),
+    ("C4 snare", False, "song:track", 'like song:track("drums", "kick hat snare hat").', 3),
+    ("", False, "tmusic.play", 'tmusic.play needs some notes, like tmusic.play("C4 E4 G4").', 0),
+    (" | | ", False, "song:track", 'song:track needs some notes, like song:track("piano", "C4 E4 G4").', 0),
+    ("kick C4", True, "song:track", '"C4" (note 2) is a note, but this is a drums track. Drums are kick, snare, hat, clap, tom and crash', 5),
+    ("kick kik", True, "song:track", '"kik" (note 2) isn\'t a drum. Did you mean "kick"?', 5),
+]
+# The test song for the .wav: every instrument and every drum, 9 beats at 150 beats a minute (3.6 seconds). Its
+# SHA-256 only changes when the synth does (then tuff_tmusic.SYNTH goes up too).
+TMUSIC_SONG = [("piano", "C4 E4 G4 E4 | F4+A4 C5/2 B4/2 . C5*2", 100), ("chip", "c#5/2 Eb5/2 G5 . b4*1.5 D5/2", 60),
+               ("bass", "C2*2 F2*2 | G1*3/2 C2*5/2", 80), ("pluck", "G3 . B3 D4 | G4*4", 90),
+               ("bell", "E6 . B5*2 | .*2 E6/3 G6/3 B6/3", 50), ("organ", "C4+E4+G4*4 | B3+D4+G4*4", 40),
+               ("flute", ". . G5*2 | A5 G5 E5*2", 70), ("drums", "kick hat snare hat | kick+crash clap tom hat/2 hat/2", 100)]
+TMUSIC_SONG_HASH = "02effbde46c073972ec66059a4580f9ce40b7deaf1de2460c51efd0f355150a9"
+# Mistakes in a program: (code after "mention tmusic", line, column, what the run and --check say, whether the run can
+# be tried here (a game's can't: it opens a window), whether --check finds it too).
+TMUSIC_MISTAKES = [
+    ('tmusic.play("C4 E4 C9# G4")', 2, 20, '"C9#" (note 3) has its # after the octave', True, True),
+    ('tmusic.play("C4 E4 G")', 2, 20, '"G" (note 3) needs its octave after it, like G4', True, True),
+    ('tmusic.play("C4 E4", "guitar")', 2, 22, 'tmusic doesn\'t have the instrument "guitar". Did you mean "pluck"?', True, True),
+    ('tmusic.play("piano", "C4 E4")', 2, 12, 'tmusic.play takes the notes first, then the instrument', True, True),
+    ('tmusic.play("C4", "piano", 900)', 2, 28, "tmusic.play can be from 20 to 400 beats a minute (120 is a usual speed), so 900 is too fast.", True, True),
+    ('tmusic.play(5)', 2, 13, 'tmusic.play needs the notes as text, like tmusic.play("C4 E4 G4"), not a number.', True, True),
+    ('tmusic.song("fast")', 2, 13, "tmusic.song needs a speed in beats a minute, as a number, like tmusic.song(120), not text.", True, True),
+    ('tmusic.song(5)', 2, 13, "tmusic.song can be from 20 to 400 beats a minute (120 is a usual speed), so 5 is too slow.", True, True),
+    ('song = tmusic.song(120)\nsong:track("drums", "kick snare C4")', 3, 33, '"C4" (note 3) is a note, but this is a drums track.', True, True),
+    ('song = tmusic.song(120)\nsong:track("piano", "C4 E4", 150)', 3, 30, "A track's volume goes from 0 to 100 (100 if you leave it out), not 150.", True, True),
+    ('song = tmusic.song(120)\nsong:track("piano", "C4", "loud")', 3, 27, "A track's volume is a number from 0 to 100", True, True),
+    ('song = tmusic.song(120)\nsong:track("C4 E4", "piano")', 3, 5, "song:track takes the instrument first, then the notes", True, True),
+    ('song = tmusic.song(120)\nsong:track(5, "C4")', 3, 12, "song:track needs the instrument's name as text first", True, True),
+    ('song = tmusic.song(120)\nsong:save("theme.mp3")', 3, 11, 'song:save makes a .wav file, like song:save("theme.wav"), not "theme.mp3".', True, True),
+    ('song = tmusic.song(120)\nsong:shuffle()', 3, 5, "A song doesn't have :shuffle. Try one of: track, play, loop, stop, save, length.", True, True),
+    ('song = tmusic.song(120)\nsong:lop()', 3, 5, "A song doesn't have :lop. Did you mean :loop?", True, True),
+    ('song = tmusic.song(120)\nsong:track("piano")', 3, 5, "song:track got the wrong number of inputs (1).", True, True),
+    ('tune = "C4 E4 G#9"\ntmusic.play(tune, "bell")', 3, 13, "\"G#9\" (note 3): octaves go from 0 to 8 (C4 is middle C), so there's no G#9.", True, True),
+    ('tmusic.plya("C4")', 2, 7, "tmusic doesn't have 'plya'. It has: play, song.", True, True),
+    ('song = tmusic.song(120)\nsong:track("piano", "C4*1000 C4*1000")', 3, 1,
+     "These notes would play for 16 minutes 40 seconds: song:track makes songs up to 5 minutes long.", True, False),
+    ('song = tmusic.song()\nsong:play()', 3, 1, 'This song has no tracks yet. Add one first, like song:track("piano", "C4 E4 G4").', True, False),
+    ('mention tgame\ngame = tgame.window("x")\nsong = tmusic.song()\nsong:track("chip", "C5")\nfunc step(dt):\n    song:play()\ngame:every_frame(step)',
+     7, 9, "song:play waits until the music ends, so the game freezes until then. Play a song in a game with game:sound(song)", False, True),
+    ('mention tgame\ngame = tgame.window("x")\nfunc hit(x, y):\n    tmusic.play("C5 G5")\ngame:clicked(hit)',
+     5, 16, "tmusic.play waits until the music ends, so the game freezes until then.", False, True),
+]
+# Programs --check has to accept (each after "mention tmusic").
+TMUSIC_GOOD = [
+    'func jam(s, notes):\n    s:track("piano", notes)\n    s:loop()\nsong = tmusic.song(100)\njam(song, "C4 E4")\nsong:stop()',
+    'kit = "drums"\nbeat = tmusic.song()\nbeat:track(kit, "kick snare")\nbeat:track("Drums", "kick+hat . clap/2 tom/2")',
+    'for name in ["piano", "chip"]:\n    tmusic.play("C4 E4", name)',
+    'song = tmusic.song(120):track("bell", "C5 E5")\nsay song:length() + 1\ntmusic.play(song)\ntmusic.play(song:track("bass", "C2"))',
+    'notes = "C4"\nnotes += " Z9"\ntmusic.play(notes)',
+    'try:\n    tmusic.play("C9#")\n    song = tmusic.song(999)\ncatch problem:\n    say problem',
+    'mention tgame\ngame = tgame.window("x")\nsong = tmusic.song()\nsong:track("chip", "C5")\ngame:music(song)\ngame:sound(song)\nsong:save("a.wav")\n'
+    'func step(dt):\n    game:sound(song)\ngame:every_frame(step)',
+    'speed = 90\nsong = tmusic.song(speed)\nsong:track("organ", "c4 e4 g4", speed - 40)\nsong:save("Out.WAV")',
+]
+# Tuff Engine's preview and a run with no window (headless.py) of a game with a song.
+TMUSIC_GAME = '''mention tgame
+mention tmusic
+game = tgame.window("Tune", 300, 200)
+theme = tmusic.song(140)
+theme:track("chip", "E5 G5 A5 G5 | E5 D5 C5 .")
+theme:track("drums", "kick hat snare hat | kick hat snare hat")
+ding = tmusic.song(240)
+ding:track("bell", "E6 B6*2")
+game:music(theme)
+count = 0
+while game:open():
+    game:frame()
+    count += 1
+    if count == 3:
+        game:sound(ding)
+    if count == 5:
+        game:close()
+say "frames " + count
+'''
+# The editor (renderer/js/tuff-lang.js): tmusic's functions, a song's methods in a file that mentions tmusic, the
+# snippet, and the hover on a note in a tmusic string.
+TMUSIC_LANG = r"""
+const fs = require('fs'), vm = require('vm');
+const window = {}, ctx = { window };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+let monarch = null, hover = null, completion = null;
+const monaco = { Range: class { constructor(...a) { this.a = a; } }, editor: { defineTheme() {} }, languages: {
+  register() {}, setMonarchTokensProvider(_id, def) { monarch = def; }, setLanguageConfiguration() {},
+  registerHoverProvider(_id, p) { hover = hover || p; }, registerDefinitionProvider() {}, registerReferenceProvider() {},
+  registerRenameProvider() {}, registerDocumentSymbolProvider() {}, registerSignatureHelpProvider() {}, registerColorProvider() {},
+  registerCompletionItemProvider(_id, p) { completion = p; },
+  CompletionItemKind: new Proxy({}, { get: (_t, k) => k }), CompletionItemInsertTextRule: {}, IndentAction: {}, SymbolKind: {} } };
+window.defineTuffTheme = () => {};
+window.registerTuff(monaco, '#3574f0');
+const model = (src, col) => { const lines = src.split('\n'); return { getLinesContent: () => lines, getLineContent: (n) => lines[n - 1],
+  getValue: () => src, getWordUntilPosition: () => ({ startColumn: col || 1, endColumn: col || 1 }),
+  getWordAtPosition: ({ lineNumber, column }) => { for (const m of lines[lineNumber - 1].matchAll(/\w+/g))
+    if (m.index < column && column <= m.index + m[0].length) return { word: m[0], startColumn: m.index + 1, endColumn: m.index + 1 + m[0].length };
+    return null; } }; };
+const line = 'song:track("piano", "C#4 Bb3*2 | . C4+E4+G4/2 kick")';
+const at = (s) => line.indexOf(s) + 1;
+const tip = (src, col) => { const h = hover.provideHover(model(src), { lineNumber: 1, column: col }); return h ? [h.contents[1].value, h.range.a] : null; };
+const labels = (src, col, ln = 1) => completion.provideCompletionItems(model(src, col), { lineNumber: ln, column: col }).suggestions.map((s) => s.label);
+console.log(JSON.stringify({
+  sharp: tip(line, at('#4')), flat: tip(line, at('Bb3') + 3), rest: tip(line, at('. C4')), chord: tip(line, at('E4+')),
+  drum: tip(line, at('kick')), instrument: tip(line, at('piano')), play: tip('tmusic.play("C4 E4")', 14), plain: tip('say "C4 E4"', 7),
+  lib: tip('mention tmusic', 10), fn: tip('tmusic.play("C4")', 9),
+  song: labels('mention tmusic\nsong = tmusic.song(120)\nsong:', 6, 3), other: labels('x = [1]\nx:', 3, 2),
+  funcs: labels('mention tmusic\ntmusic.', 8, 2), mention: labels('mention ', 9),
+  snippet: completion.provideCompletionItems(model(''), { lineNumber: 1, column: 1 }).suggestions.find((s) => s.label === 'tmusic')?.insertText,
+  libs: monarch.libs,
+}));
+"""
+
+
+def tmusic_run(folder, name, code, env=None, args=(), timeout=60):
+    """Runs a program (or --check) through a pipe, so no sound: (exit code, stdout, stderr, seconds)."""
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, name)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(code)
+    full = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW", "TUFF_NO_WRITES")}
+    full.update({"PYTHONIOENCODING": "utf-8", **(env or {})})
+    full = {k: v for k, v in full.items() if v is not None}
+    t0 = time.perf_counter()
+    p = subprocess.run(tuff_cmd() + [*args, path], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                       env=full, cwd=folder, stdin=subprocess.DEVNULL)
+    return p.returncode, p.stdout, p.stderr, time.perf_counter() - t0
+
+
+def tuff_error_at(stderr):
+    """The first Tuff error's (line, column, message): the column from the ^ under the line, or None."""
+    lines = stderr.splitlines()
+    first = next((i for i, x in enumerate(lines) if x.startswith("Tuff error on line ")), None)
+    if first is None:
+        return None, None, stderr.strip()
+    head, msg = lines[first][len("Tuff error on line "):].split(": ", 1)
+    caret = lines[first + 2] if first + 2 < len(lines) and lines[first + 2].strip() == "^" else ""
+    return int(head), (caret.index("^") - len(f"  {head} | ") + 1) if caret else None, msg
+
+
+def tmusic_players(c, tm):
+    """A terminal's players, with stand-ins for winsound and afplay, so nothing plays: winsound's one sound at a time
+    (a tune cuts a loop off, and the loop comes back after it), the loops stopping at the program's end (after a game's
+    window), and afplay on a thread of its own. Then where the sound goes for a pipe, TUFF_NO_SOUND and the preview."""
+    import threading
+    import types
+    calls, waits, hooks = [], [], []
+    rt = types.SimpleNamespace(finish_hooks=hooks, on_finish=hooks.append,
+                               interp=types.SimpleNamespace(b_wait=waits.append, console=types.SimpleNamespace(write=calls.append)))
+    fake = types.ModuleType("winsound")
+    fake.SND_FILENAME, fake.SND_ASYNC, fake.SND_NODEFAULT, fake.SND_LOOP = 0x20000, 1, 2, 8
+    fake.PlaySound = lambda path, flags: calls.append((path, flags & 8 and "loop"))
+    real = sys.modules.get("winsound")
+    old_where = tm.Player.where
+    sys.modules["winsound"] = fake
+    try:
+        tm.Player.where = lambda self: "winsound"
+        p = tm.Player(rt)
+        p.play("s1", "loop.wav", 2, loop=True)
+        p.play("s2", "tune.wav", 1.5)
+        c.check(calls == [("loop.wav", "loop"), ("tune.wav", 0), ("loop.wav", "loop")] and waits == [1.5],
+                "winsound: a loop, then a tune played once (waiting 1.5 s), then the loop comes back", (calls, waits))
+        del calls[:]
+        p.stop("s1")
+        p.play("s2", "tune.wav", 1)
+        c.check(calls == [(None, 0), ("tune.wav", 0)] and not p.loops, "...and once the loop is stopped, it doesn't come back", calls)
+        p.play("s1", "loop.wav", 2, loop=True)
+        del calls[:]
+        later = lambda: calls.append("the game's window ran")
+        hooks.append(later)
+        for hook in hooks:  # the program's end, as run_file goes through them
+            hook()
+        c.check(calls == ["the game's window ran", (None, 0)] and not p.loops,
+                "at the program's end the loop stops, after a game's window that was added after it", calls)
+        procs = []
+
+        class Proc:
+            def __init__(self, args, **_kw):
+                self.args, self.done = args, threading.Event()
+                procs.append(self)
+
+            def wait(self):
+                self.done.wait(5)
+
+            def poll(self):
+                return 0 if self.done.is_set() else None
+
+            def terminate(self):
+                self.done.set()
+        old_popen = tm.subprocess.Popen
+        tm.subprocess.Popen = Proc
+        try:
+            tm.Player.where = lambda self: "afplay"
+            q = tm.Player(rt)
+            q.play("s1", "loop.wav", 2, loop=True)
+            for _ in range(100):
+                if procs:
+                    break
+                time.sleep(0.01)
+            q.stop("s1")
+            time.sleep(0.1)
+            c.check(len(procs) == 1 and procs[0].args == ["afplay", "loop.wav"] and procs[0].done.is_set() and not q.running,
+                    "afplay plays a loop on a thread of its own, and song:stop() stops it", [x.args for x in procs])
+        finally:
+            tm.subprocess.Popen = old_popen
+    finally:
+        tm.Player.where = old_where
+        if real is not None:
+            sys.modules["winsound"] = real
+        else:
+            sys.modules.pop("winsound", None)
+    saved = {k: os.environ.get(k) for k in ("TUFF_NO_SOUND", "TUFF_SCENE")}
+    try:
+        modes = []
+        for env in ({"TUFF_NO_SOUND": "1"}, {"TUFF_SCENE": "1"}, {}):
+            for k in saved:
+                os.environ.pop(k, None)
+            os.environ.update(env)
+            modes.append(tm.Player(rt).mode if not sys.stdout.isatty() or env else None)
+        c.check(modes == [None, None, None], "no sound with TUFF_NO_SOUND=1, in Tuff Engine's preview, or in a pipe", modes)
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+
+def t_tmusic(c):
+    """1.5.0, console only (no window and no sound: a pipe and TUFF_NO_SOUND=1): tmusic. The note reader, its mistakes
+    and a fuzz of it; the synth's .wav (its format, its length and a hash that stays the same); songs kept by their
+    notes; a program in both runtimes; the mistakes the run and --check find (at the note itself) and programs --check
+    accepts; a pipe doesn't wait; the Run panel's music messages (TUFF_IDE=1, still a pipe); a game's music (headless.py
+    and --scene); the window's shared folder; the editor's docs and hovers (Node); and the guide's examples."""
+    import fractions
+    import hashlib
+    import random as rnd
+    import shutil
+    import urllib.request
+    import wave
+    import tuff_tmusic as tm
+    folder = os.path.join(OUT, "tmusic")
+    shutil.rmtree(folder, ignore_errors=True)
+    os.makedirs(folder)
+    music = os.path.join(folder, "music")
+    F = fractions.Fraction
+
+    # ---- the notes
+    for text, drums, beats, want in TMUSIC_NOTES:
+        events, total = tm.read_notes(text, drums)
+        got = [(str(s), str(b), p) for s, b, p in events]
+        c.check(got == want and total == F(beats), f"the notes {text!r} read as they should ({beats} beats)", (got, total))
+    for text, drums, who, says, at in TMUSIC_NOTE_ERRORS:
+        try:
+            tm.read_notes(text, drums, who)
+            got = None
+        except tm.MusicError as err:
+            got = (err.msg, err.at)
+        c.check(got is not None and says in got[0] and got[1] == at, f"{text!r} stops with: {says[:70]}", got)
+    c.check(tm.find_instrument(" Piano ") == "piano" and tm.find_instrument("DRUMS") == "drums", "instruments in any case, with spaces around")
+    try:
+        tm.find_instrument("guitar")
+        got = None
+    except tm.MusicError as err:
+        got = err.msg
+    c.check(got == 'tmusic doesn\'t have the instrument "guitar". Did you mean "pluck"? Instruments: piano, chip, bass, pluck, bell, organ, flute and drums.',
+            "an instrument it doesn't have: the closest one, and all of them", got)
+    # A fuzz: anything typed gives notes or a MusicError (never a crash), and notes made at random read back as made.
+    rng = rnd.Random(15)
+    crashes = []
+    for i in range(3000):
+        text = "".join(rng.choice("ABCDEFGabcdefg#b0123456789*/.+|, x-kh") for _ in range(rng.randint(0, 14)))
+        for drums in (False, True):
+            try:
+                tm.read_notes(text, drums)
+            except tm.MusicError as err:
+                if err.at is None or not 0 <= err.at <= len(text):
+                    crashes.append((text, "at", err.at))
+            except Exception as exc:
+                crashes.append((text, repr(exc)))
+    c.check(not crashes, "a fuzz of 6,000 random note texts: notes or a clear mistake, never a crash", crashes[:5])
+    wrong = []
+    for i in range(400):
+        words, beats, pitches = [], F(0), []
+        for _ in range(rng.randint(1, 12)):
+            if rng.random() < 0.15:
+                word, ps = ".", []
+            else:
+                ps = [(rng.choice("CDEFGAB"), rng.choice(["", "#", "b"]), rng.randint(0, 8)) for _ in range(rng.choice([1, 1, 1, 3]))]
+                word = "+".join(f"{l}{a}{o}" for l, a, o in ps)
+            k = rng.choice(["", "*2", "/2", "*1.5", "/3", "*3/2"])
+            words.append(word + k)
+            beats += {"": F(1), "*2": F(2), "/2": F(1, 2), "*1.5": F(3, 2), "/3": F(1, 3), "*3/2": F(3, 2)}[k]
+            pitches += [12 * (o + 1) + "C D EF G A B".index(l) + {"#": 1, "b": -1, "": 0}[a] for l, a, o in ps]
+        text = rng.choice([" ", "  ", " | "]).join(words)
+        events, total = tm.read_notes(text)
+        if total != beats or [p for _s, _b, ps in events for p in ps] != pitches:
+            wrong.append(text)
+    c.check(not wrong, "400 random tunes (notes, chords, rests, lengths) read back exactly as they were made", wrong[:3])
+
+    # ---- the synth's .wav
+    tracks = []
+    for instrument, notes, volume in TMUSIC_SONG:
+        events, beats = tm.read_notes(notes, instrument == "drums", "song:track")
+        tracks.append((instrument, volume / 100, events, beats))
+    t0 = time.perf_counter()
+    data = tm.wav_bytes(tm.render(tracks, 150))
+    secs = time.perf_counter() - t0
+    with wave.open(io.BytesIO(data)) as w:
+        shape = (w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes(), w.getcomptype())
+    c.check(data[:4] == b"RIFF" and data[8:16] == b"WAVEfmt " and shape == (1, 2, 22050, 79380, "NONE"),
+            "the test song is a .wav: mono, 16-bit, 22,050 a second, 3.6 seconds (9 beats at 150)", shape)
+    c.check(hashlib.sha256(data).hexdigest() == TMUSIC_SONG_HASH, "...and it's the same sound as always (its SHA-256)", hashlib.sha256(data).hexdigest())
+    c.check(tm.wav_bytes(tm.render(tracks, 150)) == data and secs < 5, f"...and the same again when it's made again ({secs:.2f} s)", secs)
+    peak = max(abs(v) for v in tm.render(tracks, 150))
+    c.check(27000 < peak <= 27852, "the loudest moment is turned down to 85% of the most a .wav holds", peak)
+    long_song = [("piano", 1.0, *tm.read_notes("C4 E4 G4 C5 | F4 A4 C5 . " * 15, False)),
+                 ("drums", 1.0, *tm.read_notes("kick hat snare hat " * 30, True)),
+                 ("bass", 0.8, *tm.read_notes("C2*4 F2*4 " * 15, False))]
+    t0 = time.perf_counter()
+    pcm = tm.render(long_song, 120)
+    secs = time.perf_counter() - t0
+    c.check(len(pcm) == 60 * 22050 and secs < 10, f"a minute of music with three tracks takes {secs:.2f} s to make", (len(pcm), secs))
+
+    # ---- a program, in both runtimes, through a pipe
+    outs = {}
+    for slow in (True, False):
+        where = os.path.join(folder, "slow" if slow else "fast")
+        code, out, err, secs = tmusic_run(where, "song.tuf", TMUSIC_PROGRAM, {"TUFF_SLOW": "1" if slow else None, "TUFF_MUSIC_DIR": music})
+        outs[slow] = (code, out, err)
+        if slow:
+            continue
+        c.check(code == 0 and out.splitlines() == TMUSIC_OUTPUT, f"the tmusic program runs and says what it should ({secs:.1f} s)", (out + err)[-800:])
+        saved = os.path.join(where, "theme.wav")
+        made = sorted(os.listdir(music)) if os.path.isdir(music) else []
+        c.check(os.path.isfile(saved) and len(made) == 1 and open(saved, "rb").read() == open(os.path.join(music, made[0]), "rb").read(),
+                "song:save wrote theme.wav, the song tmusic made once and keeps (only that one: in a pipe, play makes nothing)", made)
+    c.check(outs[True] == outs[False], "the tree walker (TUFF_SLOW=1) gives exactly the same", outs[True][1:])
+    code, out, err, _s = tmusic_run(folder, "song.tuf", TMUSIC_PROGRAM, args=["--check"])
+    c.check(code == 0 and out.strip() == "OK", "--check accepts the program (its mistakes are inside try: blocks)", (out + err)[:400])
+    # The same notes again make no new file; the file's name is the notes', and the folder keeps the newest songs.
+    again = 'mention tmusic\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4 E4 | F4 A4 C5 .")\nsong:track("bass", "C2*4 | F2*4", 60)\n' \
+            'song:track("drums", "kick  hat snare hat | kick+crash hat snare hat")\nsong:save("again.wav")\n'
+    tmusic_run(folder, "again.tuf", again, {"TUFF_MUSIC_DIR": music})
+    c.check(len(os.listdir(music)) == 1 and os.path.isfile(os.path.join(folder, "again.wav")),
+            "the same notes in another run (spaced differently) use the song tmusic made before", os.listdir(music))
+    crowd = os.path.join(folder, "crowd")
+    os.makedirs(crowd)
+    for i in range(tm.KEEP + 5):
+        with open(os.path.join(crowd, f"song-{i:02}.wav"), "wb") as f:
+            f.write(b"x")
+        os.utime(os.path.join(crowd, f"song-{i:02}.wav"), (1_000_000 + i, 1_000_000 + i))
+    with open(os.path.join(crowd, "mine.wav"), "wb") as f:
+        f.write(b"x")
+    tm.tidy(crowd, os.path.join(crowd, "song-44.wav"))
+    left = sorted(os.listdir(crowd))
+    c.check(len(left) == tm.KEEP + 1 and "mine.wav" in left and "song-04.wav" not in left and "song-05.wav" in left,
+            f"the songs' folder keeps the newest {tm.KEEP} songs (and nothing that isn't one of tmusic's)", left[:3])
+    # Agents' tuff_run (TUFF_NO_WRITES=1) and Tuff Engine's preview write nothing.
+    tmusic_run(folder, "nowrite.tuf", 'mention tmusic\ns = tmusic.song()\ns:track("bell", "C5")\ns:save("never.wav")\n',
+               {"TUFF_NO_WRITES": "1", "TUFF_MUSIC_DIR": os.path.join(folder, "music_nowrite")})
+    c.check(not os.path.exists(os.path.join(folder, "never.wav")) and not os.path.exists(os.path.join(folder, "music_nowrite")),
+            "with TUFF_NO_WRITES=1 (tuff_run), song:save writes nothing and makes nothing")
+
+    # ---- mistakes: the run and --check say the same
+    for i, (code_text, line, col, says, run_it, check_it) in enumerate(TMUSIC_MISTAKES):
+        src = "mention tmusic\n" + code_text + "\n"
+        shown = code_text.splitlines()[line - 2].strip()
+        if run_it:
+            code, out, err, _s = tmusic_run(folder, f"bad{i}.tuf", src, {"TUFF_MUSIC_DIR": music})
+            at = tuff_error_at(err)
+            c.check(code == 1 and at[0] == line and says in at[2], f"running {shown!r} stops on line {line}: {says[:60]!r}", at)
+        code, out, err, _s = tmusic_run(folder, f"bad{i}.tuf", src, args=["--check"])
+        at = tuff_error_at(err)
+        if check_it:
+            c.check(code == 1 and at[:2] == (line, col) and says in at[2], f"--check on {shown!r} says it at {line}:{col}", at)
+        else:
+            c.check(out.strip() == "OK", f"--check can't know {shown!r} before the run, and says OK", (out + err)[:300])
+    for i, code_text in enumerate(TMUSIC_GOOD):
+        code, out, err, _s = tmusic_run(folder, f"good{i}.tuf", "mention tmusic\n" + code_text + "\n", args=["--check"])
+        c.check(code == 0 and out.strip() == "OK", f"--check accepts: {code_text.splitlines()[-1][:60]}", (out + err)[:300])
+
+    # ---- where the sound goes: nowhere in a pipe, a message to the Run panel in TuffCode
+    quiet = os.path.join(folder, "music_pipe")
+    long_play = 'mention tmusic\nlong = tmusic.song(60)\nlong:track("piano", "C4*60")\nlong:play()\ntmusic.play("C4*30", "bell", 60)\n' \
+                'long:loop()\nlong:stop()\nsay "done"\n'
+    code, out, err, secs = tmusic_run(folder, "pipe.tuf", long_play, {"TUFF_NO_SOUND": None, "TUFF_MUSIC_DIR": quiet})
+    c.check(code == 0 and out.strip() == "done" and secs < 5 and not os.path.exists(quiet),
+            f"in a pipe, a minute of music plays nothing and doesn't wait: done in {secs:.1f} s, with no sound made", (out + err, secs))
+    ide = 'mention tmusic\nsay "start"\ntmusic.play("C5 E5 G5", "chip", 240)\nsay "after"\nbeat = tmusic.song(240)\n' \
+          'beat:track("drums", "kick hat")\nbeat:loop()\nbeat:stop()\n'
+    code, out, err, secs = tmusic_run(folder, "ide.tuf", ide, {"TUFF_NO_SOUND": None, "TUFF_IDE": "1", "TUFF_MUSIC_DIR": music})
+    sent = re.findall(r"\x1b\]tuff;music;(\w+);([^;\x07]*)(?:;([^;\x07]*);(\d))?\x07", out)
+    files = [base64.b64decode(m[2]).decode("utf-8") for m in sent if m[0] == "play"]
+    lengths = []
+    for f in files:
+        try:
+            with wave.open(f) as w:
+                lengths.append(w.getnframes() / w.getframerate())
+        except (OSError, EOFError, wave.Error):
+            lengths.append(None)
+    said = re.findall(r"\x1b\]tuff;say;\d+;([^;\x07]*)", out)
+    c.check(code == 0 and [(m[0], m[1], m[3]) for m in sent] == [("play", "s1", "0"), ("play", "s2", "1"), ("stop", "s2", "")]
+            and [base64.b64decode(s).decode() for s in said] == ["start", "after"],
+            "with TUFF_IDE=1, TuffCode's Run panel is sent music;play for the tune, music;play to loop the song, then music;stop",
+            (sent, out[-300:], err[-300:]))
+    c.check(all(os.path.isabs(f) and os.path.dirname(f) == music for f in files) and len(lengths) == 2 and abs(lengths[0] - 0.75) < 0.001 and lengths[1] == 0.5,
+            "...with each song's .wav (made in tmusic's folder, 0.75 and 0.5 seconds long)", (files, lengths))
+    c.check(0.75 <= secs < 5, f"...and tmusic.play waited until its tune ended ({secs:.2f} s for 0.75 s of notes)", secs)
+    tmusic_players(c, tm)
+
+    # ---- a game's music: --scene makes nothing, a run with no window (headless.py) sends the page the songs
+    game_dir = os.path.join(folder, "game")
+    os.makedirs(game_dir)
+    src = os.path.join(game_dir, "tune_game.tuf")
+    with open(src, "w", encoding="utf-8") as f:
+        f.write(TMUSIC_GAME)
+    preview_music = os.path.join(folder, "music_scene")
+    code, out, err, d, secs = scene(src, env={"TUFF_MUSIC_DIR": preview_music})
+    c.check(code == 0 and d.get("error") is None and d.get("stopped") == "loop" and not os.path.exists(preview_music)
+            and not any(cmd[0] == "k" and "sound" in cmd[2] for cmd in d.get("batch", [])),
+            f"Tuff Engine's preview runs a game with songs, and makes and plays none ({secs:.1f} s)", (d.get("error"), d.get("stopped"), err[-300:]))
+    os.makedirs(os.path.join(OUT, "frames"), exist_ok=True)
+    run = headless("tmusic_game", TMUSIC_GAME, 20)
+    if run is None:
+        c.check(True, "--runtime: skipped the headless run (it needs tuff.py)")
+    else:
+        rc, lines, err, cmds = run
+        sounds = [cmd[3] for cmd in cmds if cmd[0] == "k" and cmd[2] == "sound"]
+        names = [s[1].split("/")[-1] for s in sounds]
+        c.check(rc == 0 and lines == ["frames 5"] and len(sounds) == 2 and sounds[0][0] == "music" and sounds[0][2:] == [0.6, True]
+                and sounds[1][0].startswith("s") and sounds[1][2:] == [1, False] and all(s[1].startswith("shared:music/song-") for s in sounds),
+                "game:music(song) loops the song in the game's page, and game:sound(song) plays one once", (sounds, err[-300:]))
+        c.check(all(os.path.isfile(os.path.join(os.environ["TUFF_MUSIC_DIR"], n)) for n in names), "...as the .wav files tmusic made", names)
+    # The window's file server: a shared folder's files, by name, and nothing outside it.
+    import tuff_view
+    files = tuff_view._file_server()
+    token = "tmusic-test"
+    files.roots[token] = (tuff_view.WEB_DIR, None)
+    tuff_view.share("music", os.environ["TUFF_MUSIC_DIR"])
+    song_file = sorted(n for n in os.listdir(os.environ["TUFF_MUSIC_DIR"]) if n.endswith(".wav"))[0]
+    view = object.__new__(tuff_view.View)
+    view._base = f"http://127.0.0.1:{files.server_address[1]}/{token}/"
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def fetch(url):
+        try:
+            with opener.open(url, timeout=10) as r:
+                return r.status, r.headers.get("Content-Type"), r.read()
+        except urllib.error.HTTPError as err:
+            return err.code, None, b""
+    status, kind, body = fetch(view.shared_url("music", song_file))
+    with open(os.path.join(os.environ["TUFF_MUSIC_DIR"], song_file), "rb") as f:
+        c.check(status == 200 and kind == "audio/wav" and body == f.read(), "the game's page gets a song's .wav from the shared folder", (status, kind))
+    outside = [fetch(view._base + p)[0] for p in ("shared/music/../tmusic/song.tuf", "shared/music/%2e%2e/tmusic/song.tuf", "shared/nope/" + song_file)]
+    c.check(outside == [404, 404, 404], "...and nothing outside it, or from a folder that isn't shared", outside)
+    try:
+        view.shared_url("music", "../game/tune_game.tuf")
+        refused = False
+    except tuff_view.ViewError:
+        refused = True
+    c.check(refused and tuff_view.Recorder().shared_url("music", song_file) == f"shared:music/{song_file}",
+            "shared_url refuses a file outside the folder, and the preview's recorder names it shared:music/...")
+    del files.roots[token]
+
+    # ---- the editor and the guide
+    lang = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")
+    try:
+        p = subprocess.run(["node", "-e", TMUSIC_LANG, lang], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        t = json.loads(p.stdout)
+    except FileNotFoundError:
+        t = None
+        c.check(True, "Node isn't installed: skipped the editor checks")
+    except ValueError:
+        t = None
+        c.check(False, "the editor checks ran", (p.stdout + p.stderr)[-600:])
+    if t:
+        c.check(t["sharp"] == ["C sharp in octave 4 (277.2 Hz), 1 beat.", [1, 22, 1, 25]] and t["flat"][0] == "B flat in octave 3 (233.1 Hz), 2 beats."
+                and t["rest"][0] == "A rest: 1 beat of quiet." and t["drum"][0] == "The kick drum, 1 beat."
+                and t["chord"][0].startswith("A chord: C in octave 4 (261.6 Hz, middle C), E in octave 4") and t["chord"][0].endswith("0.5 beats."),
+                "hovering a note in a song:track string says what it is: C#4, Bb3*2, a rest, a chord, a drum", [t[k] for k in ("sharp", "flat", "rest", "chord", "drum")])
+        c.check(t["play"][0].startswith("C in octave 4") and t["instrument"] is None and t["plain"] is None,
+                "...and in tmusic.play's notes, but not on the instrument or in other text", [t["play"], t["instrument"], t["plain"]])
+        c.check(t["lib"] and "Music from notes" in t["lib"][0] and t["fn"] and "waits until they end" in t["fn"][0],
+                "mention tmusic and tmusic.play have hovers", [t["lib"], t["fn"]])
+        c.check(set(tm.tables()["kinds"]["song"]) <= set(t["song"]) and not {"track", "loop", "length"} & set(t["other"]),
+                "a file that mentions tmusic is offered a song's methods after ':', and other files aren't offered tmusic's own", (t["song"][:8], t["other"][:8]))
+        c.check(t["funcs"] == ["play", "song"] and "tmusic" in t["mention"] and "tmusic" in t["libs"] and "tmusic.song(" in (t["snippet"] or ""),
+                "tmusic. offers play and song, mention offers tmusic, it's coloured as a library, and there's a snippet", [t["funcs"], t["snippet"]])
+    guide = open(os.path.join(REPO, "tuffcode", "mcp", "tuff-guide.md"), encoding="utf-8").read()
+    start = guide.find("\n### tmusic")
+    section = guide[start:guide.find("\n### ", start + 1)] if start >= 0 else ""
+    blocks = re.findall(r"```tuff\n(.*?)```", section, re.S)
+    c.check(len(blocks) >= 2 and "is middle C" in section and "In a file or a pipe" in section, f"the guide has a tmusic section ({len(blocks)} examples)")
+    for i, code_text in enumerate(blocks, 1):
+        where = os.path.join(folder, f"guide{i}")
+        code, out, err, _s = tmusic_run(where, "guide.tuf", code_text, args=["--check"])
+        c.check(code == 0 and out.strip() == "OK", f"the guide's tmusic example {i} passes --check", (out + err)[:300])
+        if "tgame" in code_text:
+            code, out, err, d, secs = scene(os.path.join(where, "guide.tuf"))
+            c.check(code == 0 and d.get("error") is None, f"...and Tuff Engine's preview runs it ({secs:.1f} s)", (d.get("error"), err[-300:]))
+        else:
+            code, out, err, secs = tmusic_run(where, "guide.tuf", code_text, {"TUFF_MUSIC_DIR": music})
+            c.check(code == 0 and "Tuff error" not in err and os.path.isfile(os.path.join(where, "theme.wav")),
+                    f"...and runs, saving theme.wav ({secs:.1f} s)", (out + err)[-300:])
+
+
+# ---------------------------------------------------------------- the debugger (1.5.0)
+
+# A shop in two files: a kind, a list, a dictionary, a function called in a loop, and money.tuf with a top level of
+# its own. The line numbers matter: the checks below name them.
+DEBUG_MAIN = '''import money.tuf
+kind Pet:
+    name = "?"
+    hunger = 5
+    toys = []
+    func feed(amount):
+        my.hunger -= amount
+        return my.hunger
+
+total = 0
+items = ["milk", "eggs"]
+ages = {"sam": 14, "ann": 12}
+rex = Pet("Rex")
+func add(n):
+    total += n
+    return total
+
+for i in range(1, 3):
+    add(i)
+rex:feed(2)
+say money.with_tax(10)
+say total
+'''
+DEBUG_MONEY = '''rate = 0.2
+
+func with_tax(price):
+    extra = price * rate
+    return price + extra
+'''
+# Step Into from the start, then into, over and out of functions, an action and the other file: (the step, the
+# file and line it stops on). A loop going round again stops on its own line (18) before its first statement.
+DEBUG_STEPS = [("stepIn", "main", 1), ("stepIn", "money", 1), ("stepOut", "main", 10), ("next", "main", 11), ("next", "main", 12),
+               ("next", "main", 13), ("next", "main", 18), ("next", "main", 19), ("stepIn", "main", 15), ("stepOut", "main", 18),
+               ("next", "main", 19), ("next", "main", 18), ("next", "main", 19), ("next", "main", 20), ("stepIn", "main", 7),
+               ("next", "main", 8), ("next", "main", 21), ("stepIn", "money", 4), ("stepOut", "main", 22)]
+DEBUG_COUNT = 'count = 3\nwhile count > 0:\n    say count\n    count -= 1\nsay "Liftoff!"\n'
+DEBUG_ERROR = 'func half(x):\n    y = x * 2\n    return y + nope\nitems = [1, 2, 3]\nsay "start"\nsay half(items[0])\nsay "never"\n'
+DEBUG_ASK = 'name = input "Name? "\nsay "Hi " + name\nsize = len(name)\nsay size\n'
+
+
+class DebugLink:
+    """TuffCode's side of the debugger, for one run of a program: a server on this computer that the program connects
+    to (TUFF_DEBUG, or --debug with arg=True), the commands it's sent and the messages it sends back. Every wait has a
+    time limit, so a run that gets stuck fails its checks instead of hanging the tests."""
+
+    def __init__(self, folder, main, slow=False, env=None, arg=False):
+        import queue
+        import socket
+        import threading
+        self.srv = socket.socket()
+        self.srv.bind(("127.0.0.1", 0))
+        self.srv.listen(1)
+        self.srv.settimeout(30)
+        port = str(self.srv.getsockname()[1])
+        full = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW", "TUFF_DEBUG", "TUFF_NO_WRITES", "TUFF_BASE_DIR")}
+        full.update({"PYTHONIOENCODING": "utf-8", "TUFF_NO_SOUND": "1", **(env or {})})
+        if slow:
+            full["TUFF_SLOW"] = "1"
+        if not arg:
+            full["TUFF_DEBUG"] = port
+        path = os.path.join(folder, main)
+        self.proc = subprocess.Popen(tuff_cmd() + (["--debug", port] if arg else []) + [path], cwd=folder, env=full,
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                     encoding="utf-8", errors="replace")
+        self.out, self.err, self.log = [], [], []
+        for stream, into in ((self.proc.stdout, self.out), (self.proc.stderr, self.err)):
+            threading.Thread(target=lambda s=stream, i=into: i.extend(s), daemon=True).start()
+        self.msgs = queue.Queue()
+        try:
+            self.conn, _ = self.srv.accept()
+        except OSError:
+            self.conn = None
+            return
+        threading.Thread(target=self.read, daemon=True).start()
+
+    def read(self):
+        try:
+            for line in self.conn.makefile("r", encoding="utf-8"):
+                self.msgs.put(json.loads(line))
+        except (OSError, ValueError):
+            pass
+        self.msgs.put(None)
+
+    def send(self, cmd, **fields):
+        try:
+            self.conn.sendall((json.dumps({"cmd": cmd, **fields}) + "\n").encode("utf-8"))
+        except (OSError, AttributeError):
+            pass
+
+    def answer(self, text):
+        """Types an answer for input()."""
+        self.proc.stdin.write(text + "\n")
+        self.proc.stdin.flush()
+
+    def next(self, *events, timeout=20):
+        """The next message that's one of these events (the others go in self.log too), or None after timeout s."""
+        import queue
+        end = time.monotonic() + timeout
+        while self.conn is not None:
+            try:
+                m = self.msgs.get(timeout=max(0.01, end - time.monotonic()))
+            except queue.Empty:
+                return None
+            if m is None:
+                self.msgs.put(None)
+                return None
+            self.log.append(m)
+            if m.get("event") in events:
+                return m
+        return None
+
+    def finish(self, timeout=30):
+        """Waits for the program to end: (exit code, what it said, its errors). One still running is stopped (None)."""
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+        try:
+            code = self.proc.wait(timeout)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            code = None
+        time.sleep(0.1)  # (the last of its output)
+        self.close()
+        return code, "".join(self.out), "".join(self.err)
+
+    def close(self):
+        for s, shut in ((self.conn, True), (self.srv, False)):
+            try:
+                if s and shut:
+                    s.shutdown(2)  # (SHUT_RDWR: read()'s file of it would keep it open)
+                if s:
+                    s.close()
+            except OSError:
+                pass
+        if self.proc.poll() is None:
+            self.proc.kill()
+
+
+def debug_names(msg, scope=-1):
+    """{name: value as shown} of one of a paused (or watch, or scopes) message's scopes: the last is the file's top level."""
+    scopes = (msg or {}).get("scopes") or []
+    return {v["name"]: v["value"] for v in scopes[scope]["vars"]} if scopes else {}
+
+
+def debug_var(msg, name, scope=-1):
+    scopes = (msg or {}).get("scopes") or []
+    return next((v for v in scopes[scope]["vars"] if v["name"] == name), None) if scopes else None
+
+
+def debug_where(msg, folder):
+    """(the file's name without .tuf, the line) a message is at, like ("main", 15)."""
+    if not msg:
+        return None
+    return os.path.splitext(os.path.relpath(msg["file"], folder))[0].replace(os.sep, "/"), msg["line"]
+
+
+def debug_project(name, files):
+    folder = os.path.join(OUT, "debug", name)
+    os.makedirs(folder, exist_ok=True)
+    for rel, code in files.items():
+        with open(os.path.join(folder, rel), "w", encoding="utf-8", newline="") as f:
+            f.write(code)
+    return folder
+
+
+def debug_steps(c, slow, mode):
+    """The shop, stepped through: into money.tuf's top level and out of it, over and into functions, an action, the
+    other file's function, and a loop going round."""
+    folder = debug_project(f"steps_{mode}", {"main.tuf": DEBUG_MAIN, "money.tuf": DEBUG_MONEY})
+    link = DebugLink(folder, "main.tuf", slow)
+    got, at = [], {}
+    link.send("stepIn")
+    msg = link.next("paused")
+    for i, (cmd, file, line) in enumerate(DEBUG_STEPS):
+        where = debug_where(msg, folder)
+        got.append(where)
+        at[where] = msg
+        if where != (file, line) or i + 1 == len(DEBUG_STEPS):
+            break
+        link.send(DEBUG_STEPS[i + 1][0])
+        msg = link.next("paused")
+    want = [(file, line) for _cmd, file, line in DEBUG_STEPS]
+    c.check(got == want, f"{mode}: Step Into, Over and Out stop where they should, in both files and as the loop goes round", (got, want))
+    feed = at.get(("main", 7))
+    c.check(feed and [f["name"] for f in feed["stack"]] == ["Pet:feed", "main.tuf"] and feed["stack"][1]["line"] == 20
+            and debug_names(feed, 0).get("amount") == "2" and (debug_var(feed, "my", 0) or {}).get("type") == "Pet",
+            f"{mode}: in an action, the call stack has it and the line that called it, and its names have my (a Pet)", feed and (feed["stack"], feed["scopes"][0]))
+    tax = at.get(("money", 4))
+    c.check(tax and [f["name"] for f in tax["stack"]] == ["with_tax", "main.tuf"] and debug_names(tax, 0) == {"price": "10"}
+            and debug_names(tax) == {"rate": "0.2"} and tax["scopes"][-1]["name"] == "money.tuf",
+            f"{mode}: in money.tuf's function, its names and then money.tuf's own top level (not main.tuf's)", tax and tax["scopes"])
+    top = at.get(("money", 1))
+    c.check(top and [f["name"] for f in top["stack"]] == ["money.tuf", "main.tuf"] and top["stack"][0]["top"],
+            f"{mode}: money.tuf's top-level code is in the call stack while it's imported", top and top["stack"])
+    loop = at.get(("main", 18))
+    c.check(loop and debug_names(loop).get("i") == "3" and debug_names(loop).get("total") == "3",
+            f"{mode}: on the loop's own line as it goes round, i is the next item already", loop and debug_names(loop))
+    link.send("continue")
+    end = link.next("ended")
+    code, out, err = link.finish()
+    c.check(end and end.get("code") == 0 and code == 0 and out.splitlines() == ["12", "6"],
+            f"{mode}: Continue runs it to the end, with its output as usual", (end, code, out, err[-300:]))
+
+
+def debug_breakpoints(c, slow, mode, crlf=False):
+    """Breakpoints in both files, the Variables panel's values (kinds' objects, lists and dictionaries open up), the
+    call stack's frames, and breakpoints changed while it runs."""
+    nl = "\r\n" if crlf else "\n"
+    folder = debug_project(f"breaks_{mode}{'_crlf' if crlf else ''}", {"main.tuf": DEBUG_MAIN.replace("\n", nl),
+                                                                       "money.tuf": DEBUG_MONEY.replace("\n", nl)})
+    main, money = os.path.join(folder, "main.tuf"), os.path.join(folder, "money.tuf")
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("setBreakpoints", file=main, lines=[15])
+    link.send("continue")
+    first = link.next("paused")
+    names = debug_names(first)
+    c.check(first and first["reason"] == "breakpoint" and debug_where(first, folder) == ("main", 15) and first["col"] == 5,
+            f"{mode}{' (CRLF lines)' if crlf else ''}: it stops at a breakpoint in a function, on the editor's line", first and (first["reason"], first["file"], first["line"]))
+    if crlf:
+        link.close()
+        return
+    c.check(first and [(f["name"], f["line"]) for f in first["stack"]] == [("add", 15), ("main.tuf", 19)],
+            f"{mode}: the call stack is the function and the line that called it", first and first["stack"])
+    c.check(debug_names(first, 0) == {"n": "1"} and names.get("total") == "0" and names.get("items") == '["milk", "eggs"]'
+            and names.get("ages") == '{"sam": 14, "ann": 12}' and names.get("rex") == 'Pet(name: "Rex", hunger: 5, toys: [])'
+            and "add" not in names and "Pet" not in names and "print" not in names and names.get("money") == "<file money.tuf>",
+            f"{mode}: the function's names, then the file's own top-level ones as say shows them (not its functions, kinds or built-ins)", (first or {}).get("scopes"))
+    kinds = {k: (debug_var(first, k) or {}).get("type") for k in ("total", "items", "ages", "rex", "money")}
+    sizes = {k: (debug_var(first, k) or {}).get("more") for k in ("items", "ages", "rex")}
+    c.check(kinds == {"total": "number", "items": "list", "ages": "dictionary", "rex": "Pet", "money": "file"}
+            and sizes == {"items": 2, "ages": 2, "rex": 3}, f"{mode}: each value says what it is, and how much is inside it", (kinds, sizes))
+    link.send("expand", path=["top", "rex"], open=True)
+    opened = link.next("scopes")
+    rex = debug_var(opened, "rex") or {}
+    c.check([(k["name"], k["value"], k["type"]) for k in rex.get("kids", [])] == [("name", "Rex", "text"), ("hunger", "5", "number"), ("toys", "[]", "list")],
+            f"{mode}: an object opens to show its fields (its text as say shows it)", rex)
+    link.send("expand", path=["top", "items"], open=True)
+    link.send("expand", path=["top", "ages"], open=True)
+    link.next("scopes")
+    opened = link.next("scopes")
+    items, ages = debug_var(opened, "items") or {}, debug_var(opened, "ages") or {}
+    c.check([(k["name"], k["value"]) for k in items.get("kids", [])] == [("0", "milk"), ("1", "eggs")]
+            and [(k["name"], k["value"]) for k in ages.get("kids", [])] == [('"sam"', "14"), ('"ann"', "12")],
+            f"{mode}: a list opens to its items and a dictionary to its keys", (items, ages))
+    link.send("frame", index=1)
+    frame = link.next("scopes")
+    c.check(frame and frame["frame"] == 1 and len(frame["scopes"]) == 1 and debug_names(frame).get("i") == "1",
+            f"{mode}: another frame of the call stack shows its own names", frame)
+    link.send("continue")
+    again = link.next("paused")
+    c.check(again and debug_where(again, folder) == ("main", 15) and debug_names(again, 0) == {"n": "2"} and debug_names(again)["total"] == "1"
+            and (debug_var(again, "rex") or {}).get("kids"), f"{mode}: Continue stops there again the next time, with the new values (and rex still open)",
+            again and again["scopes"])
+    link.send("setBreakpoints", file=main, lines=[])
+    link.send("setBreakpoints", file=money, lines=[4])
+    link.send("continue")
+    tax = link.next("paused")
+    c.check(tax and debug_where(tax, folder) == ("money", 4) and debug_names(tax, 0) == {"price": "10"} and debug_names(tax) == {"rate": "0.2"},
+            f"{mode}: breakpoints changed while it runs: it goes on past the old one and stops in money.tuf", tax and (tax["file"], tax["line"], tax["scopes"]))
+    link.send("continue")
+    end = link.next("ended")
+    code, out, _err = link.finish()
+    c.check(end and code == 0 and out.splitlines() == ["12", "6"], f"{mode}: ...then it ends as usual", (end, code, out))
+
+
+def debug_errors(c, slow, mode):
+    """Pause on error: in a function, in another file and at the top level it stops on the error's line with the
+    names as they were; an error caught by try doesn't stop it."""
+    folder = debug_project(f"errors_{mode}", {"main.tuf": DEBUG_ERROR})
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("continue")
+    msg = link.next("paused")
+    c.check(msg and msg["reason"] == "error" and (msg["line"], msg["col"]) == (3, 16) and "I don't know what 'nope' is" in msg.get("error", "")
+            and [(f["name"], f["line"]) for f in msg["stack"]] == [("half", 3), ("main.tuf", 6)]
+            and debug_names(msg, 0) == {"x": "1", "y": "2"} and debug_names(msg).get("items") == "[1, 2, 3]" and msg.get("ends") is True,
+            f"{mode}: an error pauses on its line before the program ends (and says it ends it), with the function's names still there", msg)
+    err_now = "".join(link.err)
+    c.check("Tuff error on line 3" in err_now, f"{mode}: ...and the error is already in the Run window while it's paused", err_now[-300:])
+    link.send("continue")
+    end = link.next("ended")
+    code, out, err = link.finish()
+    c.check(end and end["code"] == 1 and code == 1 and out.splitlines() == ["start"] and "Tuff error on line 3" in err,
+            f"{mode}: Continue then ends it, as the error would have", (end, code, out, err[-200:]))
+
+    bad_money = DEBUG_MONEY.replace("price + extra", "price + extra + oops")
+    folder = debug_project(f"errors_file_{mode}", {"main.tuf": DEBUG_MAIN, "money.tuf": bad_money})
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("continue")
+    msg = link.next("paused")
+    c.check(msg and msg["reason"] == "error" and debug_where(msg, folder) == ("money", 5) and debug_names(msg, 0) == {"price": "10", "extra": "2"}
+            and debug_names(msg) == {"rate": "0.2"} and msg.get("ends") is True, f"{mode}: an error in money.tuf pauses there, with its names",
+            msg and (msg["file"], msg["line"], msg["scopes"], msg.get("ends")))
+    link.send("continue")
+    code, _out, err = link.finish()
+    c.check(code == 1 and "Tuff error in money.tuf on line 5" in err, f"{mode}: ...and is reported in money.tuf", err[-200:])
+
+    folder = debug_project(f"errors_top_{mode}", {"main.tuf": 'n = 5\nsay n\nsay n + "x" * nope\n',
+                                                  "caught.tuf": 'try:\n    say 1 / 0\ncatch problem:\n    say "caught"\nsay "after"\n'})
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("continue")
+    msg = link.next("paused")
+    c.check(msg and msg["reason"] == "error" and msg["line"] == 3 and debug_names(msg) == {"n": "5"} and len(msg["scopes"]) == 1 and msg.get("ends") is True,
+            f"{mode}: an error at the top level pauses too", msg)
+    link.send("continue")
+    link.finish()
+    link = DebugLink(folder, "caught.tuf", slow)
+    link.send("continue")
+    end = link.next("paused", "ended")
+    code, out, _err = link.finish()
+    c.check(end and end["event"] == "ended" and code == 0 and out.splitlines() == ["caught", "after"],
+            f"{mode}: an error that try catches doesn't pause", (end, out))
+
+
+def debug_input(c, slow, mode):
+    """input() while debugging: the answer is typed in the Run window as usual, and Pause while it waits says so."""
+    folder = debug_project(f"input_{mode}", {"main.tuf": DEBUG_ASK})
+    main = os.path.join(folder, "main.tuf")
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("setBreakpoints", file=main, lines=[3])
+    link.send("continue")
+    time.sleep(0.3)
+    link.answer("Sam")
+    msg = link.next("paused")
+    c.check(msg and msg["line"] == 3 and debug_names(msg) == {"name": "Sam"} and (debug_var(msg, "name") or {}).get("type") == "text",
+            f"{mode}: input() gets its answer while debugging, and the Variables panel shows it as text, as say does", msg and msg["scopes"])
+    link.send("continue")
+    code, out, _err = link.finish()
+    c.check(code == 0 and "Hi Sam" in out and out.splitlines()[-1] == "3", f"{mode}: ...and the program goes on as usual", out)
+
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("continue")
+    time.sleep(0.4)
+    link.send("pause")
+    asking = link.next("asking", "paused", timeout=5)
+    c.check(asking and asking["event"] == "asking", f"{mode}: Pause while input() waits says it's waiting for an answer", asking)
+    link.answer("Ann")
+    msg = link.next("paused")
+    c.check(msg and msg["reason"] == "pause" and msg["line"] == 2 and debug_names(msg) == {"name": "Ann"},
+            f"{mode}: ...and pauses on the next line once there is one", msg)
+    link.send("continue")
+    code, out, _err = link.finish()
+    c.check(code == 0 and "Hi Ann" in out, f"{mode}: ...then goes on", out)
+
+
+def debug_watch(c, slow, mode):
+    """Watch it run: every statement in turn at a readable speed, the loop's own line each time round, the names as
+    they change; Pause and Continue in it, and its speed changed while it runs."""
+    folder = debug_project(f"watch_{mode}", {"main.tuf": DEBUG_COUNT, "long.tuf": "n = 0\nwhile n < 100000:\n    n += 1\nsay n\n"})
+    link = DebugLink(folder, "main.tuf", slow)
+    link.send("watch", delay=0.01)
+    seen = []
+    while True:
+        msg = link.next("watch", "paused", "ended")
+        if not msg or msg["event"] != "watch":
+            break
+        seen.append((msg["line"], debug_names(msg).get("count")))
+    code, out, _err = link.finish()
+    c.check([line for line, _n in seen] == [1, 2, 3, 4, 2, 3, 4, 2, 3, 4, 5] and msg and msg["event"] == "ended",
+            f"{mode}: it shows every line as it runs, and the while line each time the loop goes round", seen)
+    c.check([n for line, n in seen if line == 3] == ["3", "2", "1"] and seen[0][1] is None,
+            f"{mode}: ...with the Variables panel's values as they change", seen)
+    c.check(code == 0 and out.splitlines() == ["3", "2", "1", "Liftoff!"], f"{mode}: ...and its output as usual", out)
+
+    link = DebugLink(folder, "long.tuf", slow)
+    link.send("watch", delay=0.3)
+    first = link.next("watch")
+    t0 = time.monotonic()
+    second = link.next("watch")
+    gap = time.monotonic() - t0
+    c.check(first and second and gap > 0.2, f"{mode}: slow is slow enough to read: {gap:.2f} s a line at 0.3", gap)
+    link.send("watch", delay=0.02)
+    time.sleep(0.6)
+    link.send("pause")
+    msg = link.next("paused", timeout=10)
+    shown = sum(1 for m in link.log if m.get("event") == "watch")
+    c.check(msg and msg["reason"] == "pause" and msg["line"] in (2, 3) and 5 <= shown <= 120,
+            f"{mode}: faster when the speed changes ({shown} lines in 0.6 s), and Pause stops it where it is", (msg and msg["line"], shown))
+    link.send("watch", delay=0)
+    still = link.next("running", "watch", timeout=0.5)
+    c.check(still is None, f"{mode}: turning Watch it run off while paused keeps it paused", still)
+    link.send("continue")
+    end = link.next("ended", timeout=30)
+    later = sum(1 for m in link.log if m.get("event") == "watch") - shown
+    code, out, _err = link.finish()
+    c.check(end and code == 0 and out.strip() == "100000" and later == 0, f"{mode}: ...and Continue then runs it at full speed", (end, later, out))
+
+
+def debug_loops(c, slow, mode):
+    """A loop written on one line (while n < 3: n += 1): a breakpoint on it stops each time round, as on a loop
+    written over several lines, and Step Over goes round it once a step."""
+    folder = debug_project(f"loops_{mode}", {"while.tuf": "n = 0\nwhile n < 3: n += 1\nsay n\n",
+                                             "for.tuf": "total = 0\nfor i in range(1, 3): total += i\nsay total\n"})
+    for name, var, want, said in (("while", "n", ["0", "1", "2"], "3"), ("for", "total", ["0", "1", "3"], "6")):
+        link = DebugLink(folder, name + ".tuf", slow)
+        link.send("setBreakpoints", file=os.path.join(folder, name + ".tuf"), lines=[2])
+        link.send("continue")
+        hits = []
+        for _i in range(6):
+            msg = link.next("paused", "ended")
+            if not msg or msg["event"] == "ended":
+                break
+            hits.append((msg["reason"], msg["line"], debug_names(msg).get(var)))
+            link.send("continue")
+        code, out, _err = link.finish()
+        c.check(hits == [("breakpoint", 2, v) for v in want] and code == 0 and out.strip() == said,
+                f"{mode}: a breakpoint on a {name} loop written on one line stops each time round", (hits, code, out))
+    link = DebugLink(folder, "while.tuf", slow)
+    link.send("stepIn")
+    steps = []
+    for _i in range(8):
+        msg = link.next("paused", "ended")
+        if not msg or msg["event"] == "ended":
+            break
+        steps.append((msg["line"], debug_names(msg).get("n")))
+        link.send("next")
+    code, out, _err = link.finish()
+    c.check(steps == [(1, None), (2, "0"), (2, "1"), (2, "2"), (3, "3")] and code == 0 and out.strip() == "3",
+            f"{mode}: ...and Step Over goes round it once a step", (steps, code, out))
+    deeper = (("a loop's later line", "total = 0\nfor i in range(1, 3):\n    total += i\n    say total\nsay \"done\"\n",
+               4, "total", ["1", "3", "6"], "1\n3\n6\ndone"),
+              ("a loop in a function", "func count(n):\n    i = 0\n    while i < n:\n        i += 1\n        say i\n    return i\n\ncount(3)\n",
+               5, "i", ["1", "2", "3"], "1\n2\n3"),
+              ("a loop in a loop", "for a in range(2):\n    for b in range(2):\n        c = a * 10 + b\n        say c\n",
+               4, "c", ["11", "12", "21", "22"], "11\n12\n21\n22"),
+              ("an if in a loop", "for a in range(1, 3):\n    b = a * 2\n    if b > 0: say b\n", 3, "b", ["2", "4", "6"], "2\n4\n6"))
+    for i, (what, src, line, var, want, said) in enumerate(deeper):
+        name = f"deeper{i}.tuf"
+        folder = debug_project(f"loops_{mode}", {name: src})
+        link = DebugLink(folder, name, slow)
+        link.send("setBreakpoints", file=os.path.join(folder, name), lines=[line])
+        link.send("continue")
+        hits = []
+        for _i in range(8):
+            msg = link.next("paused", "ended")
+            if not msg or msg["event"] == "ended":
+                break
+            hits.append((msg["reason"], msg["line"], debug_names(msg, 0).get(var)))
+            link.send("continue")
+        code, out, _err = link.finish()
+        c.check(hits == [("breakpoint", line, v) for v in want] and code == 0 and out.strip() == said,
+                f"{mode}: a breakpoint on {what}, not its first, stops each time round too (Continue, not just once)", (hits, code, out))
+
+
+def debug_more(c):
+    """Pause and Stop in a busy loop and in wait(), a function deep inside itself, tterm and tmusic programs, TuffCode
+    going away, --debug, no TuffCode to connect to, and the connect message."""
+    folder = debug_project("more", {
+        "busy.tuf": "n = 0\nwhile true:\n    n += 1\n",
+        "slow.tuf": 'say "waiting"\nwait(30)\nsay "done"\n',
+        "deep.tuf": "func down(n):\n    if n is 0:\n        return 0\n    return down(n - 1) + 1\nsay down(100)\n",
+        "term.tuf": "mention tterm\nscreen = tterm.screen(5, 2)\nn = 0\nfunc step(dt):\n    n += 1\n    if n is 3:\n        screen:put(0, 0, nope)\n"
+                    "screen:every_frame(step)\nsay n\n",
+        "count.tuf": DEBUG_COUNT,
+        "music.tuf": 'mention tmusic\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4")\ntmusic.play("C4 E4")\nsay song:length()\n',
+    })
+    link = DebugLink(folder, "busy.tuf")
+    link.send("continue")
+    time.sleep(0.4)
+    link.send("pause")
+    msg = link.next("paused", timeout=5)
+    c.check(msg and msg["reason"] == "pause" and msg["line"] in (2, 3) and int(debug_names(msg).get("n", "0")) > 0,
+            "Pause stops a loop that never ends, where it is", msg and (msg["line"], debug_names(msg)))
+    t0 = time.monotonic()
+    link.send("stop")
+    end = link.next("ended", timeout=5)
+    code, _out, _err = link.finish(timeout=10)
+    c.check(end and code == 130 and time.monotonic() - t0 < 5, f"Stop ends it at once ({time.monotonic() - t0:.1f} s)", (end, code))
+
+    link = DebugLink(folder, "slow.tuf")
+    link.send("continue")
+    time.sleep(0.5)
+    t0 = time.monotonic()
+    link.send("pause")
+    msg = link.next("paused", timeout=5)
+    c.check(msg and msg["line"] == 2 and time.monotonic() - t0 < 2, f"Pause stops wait(30) on its line straight away ({time.monotonic() - t0:.1f} s)", msg)
+    link.send("stop")
+    code, out, _err = link.finish(timeout=10)
+    c.check(code == 130 and "done" not in out, "...and Stop ends it", (code, out))
+
+    deep = os.path.join(folder, "deep.tuf")
+    link = DebugLink(folder, "deep.tuf")
+    link.send("setBreakpoints", file=deep, lines=[3])
+    link.send("continue")
+    msg = link.next("paused")
+    stack = (msg or {}).get("stack", [])
+    c.check(len(stack) == 40 and msg.get("hidden") == 62 and stack[0]["name"] == "down" and stack[-1]["name"] == "deep.tuf"
+            and stack[1]["line"] == 4 and debug_names(msg, 0) == {"n": "0"},
+            "a function 101 calls deep: the call stack lists the newest 39 and the program's own top level, and says how many more", (len(stack), msg and msg.get("hidden")))
+    link.send("frame", index=5)
+    frame = link.next("scopes")
+    c.check(frame and debug_names(frame, 0) == {"n": "5"}, "...and each of them has its own n", frame)
+    link.send("continue")
+    code, out, _err = link.finish()
+    c.check(code == 0 and out.strip() == "100", "...then it ends as usual", out)
+
+    term = os.path.join(folder, "term.tuf")
+    link = DebugLink(folder, "term.tuf")
+    link.send("setBreakpoints", file=term, lines=[5])
+    link.send("continue")
+    msg = link.next("paused")
+    c.check(msg and msg["line"] == 5 and [f["name"] for f in msg["stack"]] == ["step", "term.tuf"] and msg["stack"][1]["line"] == 8
+            and debug_names(msg, 0) == {"dt": debug_names(msg, 0).get("dt")} and debug_names(msg).get("n") == "0",
+            "tterm: a breakpoint in a game's frame function stops it there, called by screen:every_frame", msg and (msg["stack"], msg["scopes"]))
+    link.send("setBreakpoints", file=term, lines=[])
+    link.send("continue")
+    msg = link.next("paused")
+    c.check(msg and msg["reason"] == "error" and msg["line"] == 7 and debug_names(msg).get("n") == "3" and msg.get("ends") is True,
+            "tterm: an error in the frame function pauses there, with n as it was (it ends the game)", msg and (msg["reason"], msg["line"], debug_names(msg), msg.get("ends")))
+    link.send("continue")
+    code, _out, err = link.finish()
+    c.check(code == 1 and "Tuff error on line 7" in err, "...then the game ends with its error", err[-200:])
+
+    music = os.path.join(folder, "music.tuf")
+    link = DebugLink(folder, "music.tuf", env={"TUFF_MUSIC_DIR": os.path.join(folder, "music")})
+    link.send("setBreakpoints", file=music, lines=[5])
+    link.send("continue")
+    msg = link.next("paused")
+    song = debug_var(msg, "song") or {}
+    c.check(msg and msg["line"] == 5 and song.get("type") == "song", "tmusic: it stops after the music played, and a song is a song", msg and msg["scopes"])
+    link.send("continue")
+    code, out, _err = link.finish()
+    c.check(code == 0 and out.strip(), "...and goes on to the end", out)
+
+    count = os.path.join(folder, "count.tuf")
+    link = DebugLink(folder, "count.tuf")
+    link.send("setBreakpoints", file=count, lines=[3])
+    link.send("continue")
+    msg = link.next("paused")
+    link.conn.shutdown(2)  # TuffCode closed (or crashed) while the program was paused
+    code, out, _err = link.finish()
+    c.check(msg and code == 0 and out.splitlines() == ["3", "2", "1", "Liftoff!"], "TuffCode going away while it's paused: the program runs on to its end",
+            (msg and msg["line"], code, out))
+
+    link = DebugLink(folder, "count.tuf", arg=True)
+    link.send("watch", delay=0.001)
+    end = link.next("ended")
+    code, out, _err = link.finish()
+    c.check(end and code == 0 and out.splitlines()[-1] == "Liftoff!" and sum(m["event"] == "watch" for m in link.log) == 11,
+            "tuff.py --debug PORT file.tuf works the same as TUFF_DEBUG", (end, code, out))
+
+    full = {**os.environ, "PYTHONIOENCODING": "utf-8", "TUFF_DEBUG": "1"}
+    full.pop("TUFF_IDE", None)
+    p = subprocess.run(tuff_cmd() + [count], cwd=folder, env=full, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=60, stdin=subprocess.DEVNULL)
+    c.check(p.returncode == 0 and p.stdout.splitlines() == ["3", "2", "1", "Liftoff!"] and
+            p.stderr.strip() == "The debugger couldn't start, so the program runs as usual.",
+            "with nothing to connect to, the program runs as usual (and says so once)", (p.returncode, p.stdout, p.stderr))
+
+
+def debug_places(c):
+    """Where a breakpoint stops (the breakpoints message): a blank line, a func line and an action's, a kind and its
+    fields, and the lines a list goes on over."""
+    folder = debug_project("places", {"main.tuf": DEBUG_MAIN, "money.tuf": DEBUG_MONEY,
+                                      "list.tuf": 'numbers = [\n    1,\n    2\n]\nsay numbers\n# the end\n\n'})
+    main, lst = os.path.join(folder, "main.tuf"), os.path.join(folder, "list.tuf")
+    link = DebugLink(folder, "main.tuf")
+    link.send("setBreakpoints", file=main, lines=[2, 3, 6, 9, 14, 17, 22, 99])
+    link.send("setBreakpoints", file=lst, lines=[2, 3, 5, 6])
+    a, b = link.next("breakpoints"), link.next("breakpoints")
+    c.check(a and a["lines"] == [[2, None], [3, None], [6, 7], [9, 10], [14, 15], [17, 18], [22, 22], [99, None]],
+            "breakpoints stop on the next statement from a blank line, inside a func from its line, and nowhere on a kind", a)
+    c.check(b and b["lines"] == [[2, 1], [3, 1], [5, 5], [6, None]], "...on a list's first line from the lines it goes on over, and nowhere after the end", b)
+    hits = []
+    for _i in range(12):
+        link.send("continue")
+        msg = link.next("paused", "ended")
+        if not msg or msg["event"] == "ended":
+            break
+        hits.append((msg["line"], msg["reason"]))
+    code, _out, _err = link.finish()
+    c.check([line for line, _r in hits] == [10, 18, 15, 18, 15, 18, 15, 7, 22] and all(r == "breakpoint" for _l, r in hits) and code == 0,
+            "...and they stop there as it runs: the for line each time round, the function's and the action's first lines", hits)
+
+
+def debug_speed(c):
+    """In this process: no debugger, no step hook; with one, a loop's statements are checked quickly (with no
+    breakpoints, or many on other lines)."""
+    import contextlib
+    import io
+    import tuff
+    folder = debug_project("speed", {"plain.tuf": 'x = 1\nsay x\n'})
+    made = []
+    init = tuff.Interpreter.__init__
+
+    def spy(self, *args, **kwargs):
+        init(self, *args, **kwargs)
+        made.append(self)
+    tuff.Interpreter.__init__ = spy
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            tuff.run_file(os.path.join(folder, "plain.tuf"))
+    finally:
+        tuff.Interpreter.__init__ = init
+    c.check(tuff.DEBUGGER is None and len(made) == 1 and type(made[0]) is tuff.Interpreter and not made[0].step_hooks,
+            "with no debugger, a program gets the usual interpreter, with no step hook", [(type(m).__name__, m.step_hooks) for m in made])
+
+    class Quiet:
+        """Stands in for TuffCode's line: takes every message, sends none."""
+
+        def sendall(self, data):
+            pass
+
+        def makefile(self, *args, **kwargs):
+            return io.StringIO("")
+
+        def close(self):
+            pass
+
+    src = INTERP_PERF["while"].replace("say total\n", "")
+    program = tuff.Parser(tuff.tokenize(src)).program()
+    secs = []
+    for many in (None, False, True):
+        if many is None:
+            interp = tuff.Interpreter(src, folder)
+        else:
+            dbg = tuff.Debugger(Quiet())
+            time.sleep(0.05)  # (its reader thread finds nothing and goes)
+            dbg.gone, dbg.started = False, True
+            dbg.go("continue", 1)
+            interp = tuff.DebugInterpreter(src, folder)
+            interp.path = os.path.join(folder, "loop.tuf")
+            if many:
+                dbg.set_breakpoints(interp.path, list(range(10, 600)))
+            dbg.attach(interp)
+        t0 = time.perf_counter()
+        interp.run_block(program, interp.globals)
+        secs.append(time.perf_counter() - t0)
+    c.check(secs[1] < secs[0] * 4 + 0.2 and secs[2] < secs[1] * 1.5 + 0.2,
+            f"600,000 statements: {secs[0]:.2f} s with no debugger, {secs[1]:.2f} s with it, {secs[2]:.2f} s with 590 breakpoints elsewhere", secs)
+
+
+def debug_values(c):
+    """In this process: a value in the Variables panel is shown as say shows it (text as it is, and in quotes inside
+    a list or a dictionary), on one line, and cut short when it's long."""
+    import tuff
+    values = ["Sam", "5", "", ["milk", 5, True], {"sam": "14", "n": [1.5, None]}, [["a"], {}]]
+    shown = [tuff.debug_text(v) for v in values]
+    c.check(shown == [tuff.to_text(v) for v in values] and shown[:2] == ["Sam", "5"] and shown[3] == '["milk", 5, true]',
+            "values as say shows them: text as it is, and in quotes inside a list or a dictionary", shown)
+    c.check(tuff.debug_text("two\nlines\tand a tab") == "two\\nlines\\tand a tab" and tuff.debug_text("x" * 500) == "x" * tuff.DEBUG_TEXT + "…"
+            and tuff.debug_text(["y" * 500]) == '["' + "y" * (tuff.DEBUG_TEXT - 2) + "…",
+            "...on one line, and cut short when long", (tuff.debug_text("two\nlines\tand a tab"), tuff.debug_text(["y" * 500])[-8:]))
+
+
+def debug_windows(c):
+    """In this process, with no window: the functions a window calls. An error in one (a tgui button's, through
+    Runtime.call) pauses there and says the program carries on; Pause while nothing runs (the window waiting for a
+    click) says so, and pauses in the next function the window calls; and the time limits a window puts on its
+    closed function (atgui's, and tuff_view's once the window has gone) leave out the time it was paused."""
+    import contextlib
+    import io
+    import queue
+    import socket
+    import threading
+    import tuff
+    import tuff_atgui
+    import tuff_view
+    src = 'func clicked():\n    say "clicked"\n    say nope\nfunc closed():\n    n = 1\n    n += 1\nsay "ready"\n'
+    path = os.path.join(debug_project("windows", {"main.tuf": src}), "main.tuf")
+    ide, prog = socket.socketpair()
+    msgs, hold = queue.Queue(), [0.0]
+
+    def tuffcode():  # TuffCode's side: it continues each pause, hold[0] s later
+        try:
+            for line in ide.makefile("r", encoding="utf-8"):
+                msg = json.loads(line)
+                msgs.put(msg)
+                if msg.get("event") == "paused":
+                    time.sleep(hold[0])
+                    ide.sendall(b'{"cmd": "continue"}\n')
+        except (OSError, ValueError):
+            pass
+
+    def until(event, timeout=10):
+        """The messages from the program up to the next one of this event (all of them, after timeout s)."""
+        seen, end = [], time.monotonic() + timeout
+        while not seen or seen[-1].get("event") != event:
+            try:
+                seen.append(msgs.get(timeout=max(0.01, end - time.monotonic())))
+            except queue.Empty:
+                break
+        return seen
+
+    def brief(seen):
+        return [(m.get("event"), m.get("reason"), m.get("line"), m.get("ends")) for m in seen]
+
+    dbg = tuff.Debugger(prog)
+    threading.Thread(target=tuffcode, daemon=True).start()
+    ide.sendall(b'{"cmd": "continue"}\n')
+    tuff.DEBUGGER = dbg
+    said = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(said), contextlib.redirect_stderr(io.StringIO()):
+            dbg.begin()
+            code = tuff.run_file(path)  # (its top level ends: a window would wait for clicks now)
+            interp = dbg.interp
+            until("running")
+            ide.sendall(b'{"cmd": "pause"}\n')
+            idle = until("idle", timeout=5)
+            clicked = interp.rt.call(interp.globals.vars["clicked"])  # a click, the way tgui calls a button's function
+            click = until("running") + until("running")
+            ide.sendall((json.dumps({"cmd": "setBreakpoints", "file": path, "lines": [5]}) + "\n").encode("utf-8"))
+            until("breakpoints")
+            hold[0], before = 0.5, tuff.debug_paused()
+            closed = tuff_atgui.Lib(interp.rt).fire_by(interp.globals.vars["closed"], 0.3, "closed() ran too long")
+            closing = until("running")
+            held, hold[0] = tuff.debug_paused() - before, 0.0
+            view = tuff_view.View.__new__(tuff_view.View)  # (no window: only its close's clock)
+            view._close_finished = False
+            view._close_started = time.monotonic() - tuff_view.CLOSE_LIMIT - tuff_view.CLOSE_GRACE - 0.2
+            view._close_paused = before  # (closed() was paused 0.5 s since)
+            spared = not view._close_overdue()
+            view._close_paused = tuff.debug_paused()
+            overdue = view._close_overdue()
+    finally:
+        tuff.DEBUGGER = None
+        dbg.end(0)
+        ide.close()
+    c.check(code == 0 and brief(idle) == [("idle", None, None, None)], "Pause while nothing runs (a window waiting for a click) says so", idle)
+    c.check(brief(click) == [("paused", "pause", 2, None), ("running", None, None, None), ("paused", "error", 3, False), ("running", None, None, None)]
+            and [f["name"] for f in click[0]["stack"]] == ["clicked"],
+            "...it pauses in the next function the window calls (the top level has ended), and an error there pauses and says the program carries on",
+            (brief(click), click and click[0].get("stack")))
+    c.check(clicked == (False, None) and said.getvalue().split() == ["ready", "clicked"], "...and the program does carry on, as the window would",
+            (clicked, said.getvalue()))
+    c.check(closed is True and brief(closing) == [("paused", "breakpoint", 5, None), ("running", None, None, None)] and held >= 0.5,
+            f"atgui's time limit on app:closed's function leaves out the {held:.2f} s it was paused at a breakpoint", (closed, brief(closing)))
+    c.check(spared and overdue, "...and so does tuff_view's, once the window has gone (a function still running past it ends the program)",
+            (spared, overdue))
+
+
+DEBUG_RELAY = r"""
+// main.js's side (debug.js), with a real program: it connects, gets its first messages, and what it says comes back.
+const { spawn } = require('child_process');
+const net = require('net');
+const path = require('path');
+const debug = require(process.argv[1]);
+const [python, tuffPy, folder] = process.argv.slice(2);
+const main = path.join(folder, 'main.tuf');
+const events = [];
+let child = null;
+const done = (out) => { console.log(JSON.stringify({ ...out, events })); process.exit(0); };
+setTimeout(() => { if (child) child.kill(); done({ timeout: true }); }, 30000);
+const refused = (port) => new Promise((resolve) => {
+  const sock = net.connect(port, '127.0.0.1', () => { sock.destroy(); resolve(false); });
+  sock.on('error', () => resolve(true));
+});
+(async () => {
+  const oldPort = await debug.open([{ cmd: 'continue' }], () => events.push('old'));  // a run replaced before its program connects
+  const port = await debug.open([{ cmd: 'setBreakpoints', file: main, lines: [15] }, { cmd: 'continue' }], (msg) => {
+    events.push(msg.event + (msg.line ? ':' + msg.line : ''));
+    if (msg.event === 'paused') { debug.send({ cmd: 'setBreakpoints', file: main, lines: [] }); debug.send({ cmd: 'continue' }); }
+  });
+  const oldGone = await refused(oldPort);
+  let out = '';
+  child = spawn(python, [tuffPy, main], { cwd: folder, env: { ...process.env, TUFF_DEBUG: String(port), PYTHONIOENCODING: 'utf-8' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  child.stdout.on('data', (d) => (out += d));
+  child.on('close', (code) => setTimeout(async () => done({ code, out, oldGone, sent: debug.send({ cmd: 'continue' }), closed: await refused(port) }), 300));
+})();
+"""
+
+
+def debug_relay(c):
+    """main.js's side, with Node: debug.js's server gives the program its first messages and passes on what it says."""
+    folder = debug_project("relay", {"main.tuf": DEBUG_MAIN, "money.tuf": DEBUG_MONEY})
+    relay = os.path.join(REPO, "tuffcode", "debug.js")
+    if RUNTIME:
+        c.check(True, "debug.js with Node: skipped with --runtime (it runs tuff.py)")
+        return
+    try:
+        p = subprocess.run(["node", "-e", DEBUG_RELAY, relay, sys.executable, TUFF, folder], capture_output=True, text=True,
+                           encoding="utf-8", timeout=60, env={**os.environ, "TUFF_NO_SOUND": "1"})
+        got = json.loads(p.stdout.strip().splitlines()[-1])
+    except (FileNotFoundError, ValueError, IndexError, subprocess.TimeoutExpired) as exc:
+        got = {"error": str(exc), "stderr": locals().get("p") and p.stderr[-400:]}
+    c.check(not got.get("timeout") and got.get("code") == 0 and got.get("events") == ["breakpoints", "running", "paused:15", "breakpoints",
+                                                                                     "running", "ended"] and got.get("out", "").split() == ["12", "6"],
+            "debug.js: the program connects, gets its breakpoints and the start, pauses, is sent Continue, and ends", got)
+    c.check(got.get("oldGone") is True and got.get("closed") is True and got.get("sent") is False,
+            "...a new run closes the last one's server, a server takes one program, and nothing is sent once it's gone", got)
+
+
+# The renderer's side (renderer/js/debugger.js), with Node and stand-ins for the page, Monaco and TuffIDE, and Design
+# Studio's own studio.js: breakpoints from the gutter and F9 (a widget's own line left to Studio's gear, its other
+# lines and a red dot to the debugger's click, whichever listener goes first), moving with the code and kept while a
+# tab is closed, and going with a file or folder renamed in the project tree; Debug's first messages; the paused line,
+# the Variables panel and the call stack; the toolbar's commands; where the program says breakpoints stop; Watch it
+# run and the eye; pause on error (an error that ends the program, and one a window carries on after); Pause while
+# nothing runs; the code changed while it's debugged; and a run without the debugger.
+DEBUG_UI = r"""
+const fs = require('fs'), vm = require('vm');
+const MAIN = 'C:\\proj\\main.tuf', MONEY = 'C:\\proj\\money.tuf', SHOP = 'C:\\proj\\shop.tuf';
+class ClassList {
+  constructor(el) { this.el = el; }
+  get set() { return new Set(this.el.className.split(/\s+/).filter(Boolean)); }
+  contains(c) { return this.set.has(c); }
+  add(...cs) { const s = this.set; cs.forEach((c) => s.add(c)); this.el.className = [...s].join(' '); }
+  remove(...cs) { const s = this.set; cs.forEach((c) => s.delete(c)); this.el.className = [...s].join(' '); }
+  toggle(c, on) { if (on === undefined ? !this.contains(c) : on) this.add(c); else this.remove(c); }
+}
+class El {
+  constructor(tag) { this.tagName = tag; this.className = ''; this.classList = new ClassList(this); this.dataset = {}; this.children = []; this.listeners = {};
+    this.attrs = {}; this.innerHTML = ''; this.textContent = ''; this.title = ''; this.disabled = false; this.style = { setProperty() {} }; }
+  append(...cs) { cs.forEach((c) => this.children.push(c)); }
+  appendChild(c) { this.children.push(c); return c; }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
+  fire(type, target) { (this.listeners[type] || []).forEach((fn) => fn({ target, preventDefault() {} })); }
+}
+const target = (cls, dataset) => ({ closest: (sel) => (sel.includes(cls) ? { dataset, disabled: false } : null) });
+const byId = { 'run-split': new El('div'), 'btn-debug': new El('button') };
+const rootStyle = new Map([['--bottom-h', '230px']]);
+const document = { createElement: (t) => new El(t), getElementById: (id) => byId[id] || null, querySelector: () => null, addEventListener() {},
+  documentElement: { style: { getPropertyValue: (k) => rootStyle.get(k) || '', setProperty: (k, v) => rootStyle.set(k, v) } } };
+const listeners = {};
+const sent = [], runs = [], opened = [], toasts = [], commands = {};
+let onEvent = null, runId = 6;
+class Model {
+  constructor(path, n, text = '') { this.uri = { scheme: 'file', fsPath: path }; this.n = n; this.text = text; this.ver = 1; this.decos = new Map(); this.seq = 0;
+    this.disposed = false; this.bye = []; this.changes = []; this.subscribed = 0; }
+  isDisposed() { return this.disposed; }
+  getLineCount() { return this.n; }
+  getValue() { return this.text; }
+  getVersionId() { return this.ver; }
+  getAlternativeVersionId() { return this.ver; }
+  getLanguageId() { return 'tuff'; }
+  deltaDecorations(old, add) { old.forEach((id) => this.decos.delete(id)); return add.map((d) => { const id = 'd' + ++this.seq; this.decos.set(id, d); return id; }); }
+  getDecorationRange(id) { const d = this.decos.get(id); return d ? { startLineNumber: d.range.a[0] } : null; }
+  getLineDecorations(n) { return [...this.decos.values()].filter((d) => d.range.a[0] === n).map((d) => ({ options: d.options })); }
+  onDidChangeContent(fn) { this.changes.push(fn); this.subscribed++; return { dispose: () => { this.changes = this.changes.filter((f) => f !== fn); } }; }
+  edit(by = 1) { this.ver += by; this.changes.forEach((fn) => fn()); } // (by -1: the edit undone)
+  onWillDispose(fn) { this.bye.push(fn); }
+  dispose() { this.bye.forEach((fn) => fn()); this.disposed = true; }
+  shift(from, by) { for (const d of this.decos.values()) if (d.range.a[0] >= from) d.range.a[0] += by; }
+  classes() { return [...this.decos.values()].map((d) => [d.range.a[0], d.options.glyphMarginClassName || '', d.options.className || '']); }
+}
+const created = [];
+let models = [new Model(MAIN, 22)];
+// The editor: its listeners in the order they were added, as Monaco calls them. Design Studio's customizer can't be
+// drawn here (it throws once it starts to): it's seen opening by the change listener it puts on the model first.
+const ed = { model: models[0], pos: { lineNumber: 1, column: 1 }, on: { down: [], move: [], leave: [], model: [] }, errors: [], actions: [], focused: 0,
+  getModel() { return this.model; }, onMouseDown(fn) { this.on.down.push(fn); }, onMouseMove(fn) { this.on.move.push(fn); },
+  onMouseLeave(fn) { this.on.leave.push(fn); }, onDidChangeModel(fn) { this.on.model.push(fn); },
+  fire(type, ev) { for (const fn of this.on[type]) { try { fn(ev); } catch (err) { if (!String(fn).includes('openCustomizer')) this.errors.push(String(err.stack || err)); } } },
+  deltaDecorations(old, add) { return this.model.deltaDecorations(old, add); },
+  addAction(a) { this.actions.push(a); }, getPosition() { return this.pos; },
+  setPosition(p) { this.pos = p; }, revealLineInCenterIfOutsideViewport() {}, focus() { this.focused++; } };
+const monaco = { Range: class { constructor(...a) { this.a = a; } },
+  editor: { TrackedRangeStickiness: { NeverGrowsWhenTypingAtEdges: 1 }, MouseTargetType: { GUTTER_GLYPH_MARGIN: 2 }, OverviewRulerLane: { Full: 7 },
+    getModels: () => models.filter((m) => !m.disposed), onDidCreateModel: (fn) => created.push(fn) } };
+const newModel = (path, n, text) => { const m = new Model(path, n, text); models.push(m); created.forEach((fn) => fn(m)); return m; };
+// Tabs renamed in the project tree: the tab's path changes, its model (and the model's uri) stays, as in ide.js.
+const renamed = new Map();
+const pathOf = (m) => renamed.get(m) || m.uri.fsPath;
+const settings = {};
+let overlay = false, shown = null; // a dialog open (TuffIDE.overlayOpen), and Design Studio or Tuff Engine on screen
+const ide = { settings: () => settings, saveSettings: (p) => Object.assign(settings, p), toast: (m) => toasts.push(m), runTarget: () => MAIN,
+  studioVisible: () => shown === 'studio', engineVisible: () => shown === 'engine', overlayOpen: () => overlay,
+  pathOf: (m) => (models.includes(m) && !m.disposed ? pathOf(m) : null),
+  runFile: async (p, opts) => { runs.push([p, opts]); return ++runId; }, stopRun: () => sent.push({ stop: true }),
+  openFile: async (p, line, opts) => { opened.push([p, line, opts && opts.focus]); ed.model = models.find((m) => pathOf(m) === p && !m.disposed) || newModel(p, 5); return {}; },
+  addCommand: (id, def) => { commands[id] = def; }, monacoReady: async () => monaco, editor: () => ed, activeFile: () => pathOf(ed.model) };
+const window = { tuff: { platform: 'win32', debug: { send: async (m) => sent.push(m), onEvent: (fn) => { onEvent = fn; } } },
+  addEventListener: (t, fn) => { (listeners[t] = listeners[t] || []).push(fn); } };
+const ctx = { window, document, console, setTimeout, clearTimeout, TuffIcon: (n) => `<svg data-i="${n}"></svg>`,
+  getComputedStyle: () => ({ getPropertyValue: () => '#3574f0' }), requestAnimationFrame: (fn) => fn(), addEventListener() {}, removeEventListener() {} };
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), ctx); // studio.js, then debugger.js, as index.html has them
+vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+const D = window.TuffDebug;
+const tick = () => new Promise((r) => setTimeout(r, 5));
+const glyph = async (n) => { ed.fire('down', { target: { type: 2, position: { lineNumber: n } } }); await tick(); };
+const hover = (n) => ed.fire('move', { target: { type: 2, position: { lineNumber: n } } });
+const fire = (type, detail) => (listeners[type] || []).forEach((fn) => fn({ detail }));
+const split = byId['run-split'];
+const pane = () => split.children.find((c) => c.className.includes('') && c.tagName === 'section');
+const part = (cls) => pane().children.find((c) => c.className.split(' ').includes(cls));
+const body = () => part('dbg-body');
+const list = (i) => body().children[i].children[1];
+const bar = () => part('dbg-bar');
+const button = (act) => bar().children.find((b) => b.dataset.act === act);
+const click = (act) => bar().fire('click', target('[data-act]', { act }));
+const enabled = () => Object.fromEntries(bar().children.filter((b) => b.dataset.act).map((b) => [b.dataset.act, !b.disabled]));
+const lit = (m) => m.classes().filter((c) => c[2].includes('dbg-line'));
+const dots = (m) => m.classes().filter((c) => c[1].includes('dbg-bp')).map((c) => c[0] + ':' + c[1]);
+const status = () => part('dbg-status').innerHTML;
+const out = {};
+(async () => {
+  window.TuffStudio.init(ide);
+  await D.init(ide);
+  await tick();
+  out.commands = Object.fromEntries(Object.entries(commands).map(([id, c]) => [id, c.sc || '']));
+  out.action = ed.actions.map((a) => a.label);
+  out.hidden = pane().classList.contains('hidden');
+  await glyph(15);
+  out.click = D.breakpoints();
+  out.dot = models[0].classes().filter((c) => c[0] === 15);
+  ed.pos = { lineNumber: 19, column: 1 };
+  commands.toggleBreakpoint.run();
+  out.f9 = D.breakpoints();
+  commands.toggleBreakpoint.run();
+  out.f9off = D.breakpoints();
+  models[0].shift(10, 2);
+  out.moved = D.breakpoints();
+  models[0].shift(12, -2);
+  models[0].dispose();
+  out.closed = D.breakpoints();
+  const again = newModel(MAIN, 22);
+  ed.model = again;
+  out.reopened = again.classes().filter((c) => c[1].includes('dbg-bp'));
+  commands.debug.run();
+  await tick();
+  out.first = runs[0];
+  fire('tuff:run-started', { id: runId, file: MAIN, debug: true });
+  out.shown = !pane().classList.contains('hidden') && byId['btn-debug'].classList.contains('on');
+  out.starting = status();
+  const stack = [{ index: 0, name: 'add', file: MAIN, line: 15, col: 5, top: false }, { index: 1, name: 'main.tuf', file: MAIN, line: 19, col: 5, top: true }];
+  const scopes = [{ name: 'add', top: false, vars: [{ name: 'n', value: '1', type: 'number' }] },
+    { name: 'main.tuf', top: true, vars: [{ name: 'total', value: '0', type: 'number' }, { name: 'items', value: '["milk", "eggs"]', type: 'list', more: 2 },
+      { name: 'rex', value: 'Pet(name: "Rex", hunger: 5, toys: [])', type: 'Pet', more: 3 }] }];
+  onEvent({ id: runId - 1, event: 'paused', reason: 'step', file: MAIN, line: 2, stack, scopes });
+  out.otherRun = status();
+  onEvent({ id: runId, event: 'paused', reason: 'breakpoint', file: MAIN, line: 15, col: 5, stack, scopes, frame: 0 });
+  await tick();
+  out.paused = { status: status(), vars: list(0).innerHTML, stack: list(1).innerHTML, line: lit(again), on: enabled() };
+  click('next');
+  list(0).fire('click', target('.dbg-var', { i: '3' }));
+  list(1).fire('click', target('.dbg-frame', { i: '1' }));
+  await tick();
+  out.sentPaused = sent.slice();
+  out.frameLine = lit(again);
+  onEvent({ id: runId, event: 'scopes', frame: 1, scopes: [scopes[1]] });
+  out.frameVars = list(0).innerHTML;
+  onEvent({ id: runId, event: 'running' });
+  out.running = { status: status(), line: lit(again).length, vars: list(0).innerHTML };
+  const changed = [{ name: 'add', top: false, vars: [{ name: 'n', value: '2', type: 'number' }] }, scopes[1]];
+  onEvent({ id: runId, event: 'paused', reason: 'step', file: MONEY, line: 4, col: 5, stack: [{ index: 0, name: 'with_tax', file: MONEY, line: 4, top: false }, stack[1]],
+    scopes: changed });
+  await tick();
+  out.money = { opened: opened.slice(-1)[0], line: lit(models.find((m) => m.uri.fsPath === MONEY)),
+    changed: (list(0).innerHTML.match(/dbg-var[^"]*changed/g) || []).length };
+  ed.model = again;
+  sent.length = 0;
+  await glyph(9);
+  await glyph(3);
+  out.sentLive = sent.slice();
+  onEvent({ id: runId, event: 'breakpoints', file: MAIN, lines: [[3, null], [9, 10], [15, 15]] });
+  out.placed = { bps: D.breakpoints(), classes: dots(again) };
+  sent.length = 0;
+  commands.watchRun.run();
+  onEvent({ id: runId, event: 'watch', file: MAIN, line: 18, col: 1, stack: [stack[1]], scopes: [scopes[1]] });
+  await tick();
+  out.watch = { sent: sent.slice(), status: status(), line: lit(again), focus: opened.slice(-1)[0] };
+  onEvent({ id: runId, event: 'paused', reason: 'error', file: MAIN, line: 16, col: 12, error: "I don't know what 'nope' is.", ends: true, stack, scopes });
+  await tick();
+  out.error = { status: status(), cls: part('dbg-status').className, on: enabled(), line: lit(again) };
+  sent.length = 0;
+  commands.debugContinue.run();
+  out.continueWatching = sent.slice();
+  onEvent({ id: runId, event: 'paused', reason: 'error', file: MAIN, line: 16, col: 12, error: "I don't know what 'nope' is.", ends: false, stack, scopes });
+  await tick();
+  out.carriesOn = status();
+  onEvent({ id: runId, event: 'ended', code: 1 });
+  out.ended = { status: status(), line: lit(again).length, close: !button('close').classList.contains('hidden'),
+    debugOn: byId['btn-debug'].classList.contains('on'), eye: button('watch').classList.contains('on'), state: D.state() };
+  onEvent({ id: runId, event: 'breakpoints', file: MAIN, lines: [[3, 3]] });
+  out.solid = dots(again);
+  onEvent({ id: runId, event: 'watch', file: MAIN, line: 18, col: 1, stack: [stack[1]], scopes: [scopes[1]] });
+  out.late = { state: D.state().state, line: lit(again).length };
+  fire('tuff:run-started', { id: runId + 1, file: MAIN, debug: false });
+  out.normalRun = pane().classList.contains('hidden');
+  commands.stepOver.run();
+  await tick();
+  out.stepStart = runs[runs.length - 1];
+
+  // ---- the eye: a run that's watched, ended, and the eye again
+  const before = runs.length;
+  click('watch');
+  await tick();
+  fire('tuff:run-started', { id: runId, file: MAIN, debug: true });
+  out.eye = { run: runs.length - before, first: runs[runs.length - 1][1].debug.first.slice(-1)[0], on: button('watch').classList.contains('on') };
+  onEvent({ id: runId, event: 'watch', file: MAIN, line: 18, col: 1, stack: [stack[1]], scopes: [scopes[1]] });
+  await tick();
+  click('watch'); // off while it runs
+  onEvent({ id: runId, event: 'watch', file: MAIN, line: 19, col: 5, stack: [stack[1]], scopes: [scopes[1]] }); // (on its way already)
+  await tick();
+  out.eyeOff = { sent: sent.slice(-1)[0], watching: D.state().watching, line: lit(again).length, status: status(), vars: list(0).innerHTML };
+  click('watch'); // on again
+  onEvent({ id: runId, event: 'ended', code: 0 });
+  out.eyeEnded = { on: button('watch').classList.contains('on'), watching: D.state().watching };
+  click('watch');
+  await tick();
+  out.eyeAgain = { runs: runs.length - before, first: runs[runs.length - 1][1].debug.first.slice(-1)[0] };
+  fire('tuff:run-started', { id: runId, file: MAIN, debug: true });
+
+  // ---- Pause while nothing runs (a window waiting for a click), and Continue calling it off
+  onEvent({ id: runId, event: 'running' });
+  click('watch'); // (Watch it run off)
+  sent.length = 0;
+  click('pause');
+  out.pausing = { status: status(), on: enabled() };
+  onEvent({ id: runId, event: 'idle' });
+  out.idle = { status: status(), on: enabled() };
+  click('continue');
+  out.calledOff = { sent: sent.slice(), status: status(), on: enabled() };
+  sent.length = 0;
+  click('pause');
+  commands.debugContinue.run(); // (F5 too)
+  out.f5Off = sent.slice();
+
+  // ---- the code changed while it's debugged
+  onEvent({ id: runId, event: 'paused', reason: 'breakpoint', file: MAIN, line: 15, col: 5, stack, scopes });
+  await tick();
+  again.edit();
+  out.edited = status();
+  sent.length = 0;
+  const dotsBefore = D.breakpoints();
+  await glyph(20);
+  out.editedSent = { sent: sent.slice(), bps: D.breakpoints(), before: dotsBefore };
+  onEvent({ id: runId, event: 'breakpoints', file: MAIN, lines: [[20, null]] });
+  out.editedPlaced = dots(again);
+  again.edit(-1); // undone: the code the program runs again
+  out.undone = status();
+  await glyph(20);
+  out.undoneSent = sent.slice();
+  onEvent({ id: runId, event: 'ended', code: 0 });
+
+  // ---- a file and a folder renamed in the project tree
+  const tools = newModel('C:\\proj\\lib\\tools.tuf', 10);
+  ed.model = tools;
+  await glyph(3);
+  renamed.set(tools, 'C:\\proj\\kit\\tools.tuf');
+  fire('tuff:renamed', { from: 'C:\\proj\\lib', to: 'C:\\proj\\kit' });
+  await glyph(5);
+  out.renamedDir = D.breakpoints().filter((b) => /tools/.test(b.path));
+  renamed.set(tools, 'C:\\proj\\kit\\gears.tuf');
+  fire('tuff:renamed', { from: 'C:\\proj\\kit\\tools.tuf', to: 'C:\\proj\\kit\\gears.tuf' });
+  out.renamedFile = D.breakpoints().filter((b) => /tools|gears/.test(b.path));
+  ide.runTarget = () => 'C:\\proj\\kit\\gears.tuf';
+  commands.debug.run();
+  await tick();
+  out.renamedRun = runs[runs.length - 1][1].debug.first.filter((m) => /tools|gears/.test(m.file || ''));
+  fire('tuff:run-started', { id: runId, file: 'C:\\proj\\kit\\gears.tuf', debug: true });
+  onEvent({ id: runId, event: 'paused', reason: 'breakpoint', file: 'C:\\proj\\kit\\gears.tuf', line: 3, col: 1,
+    stack: [{ index: 0, name: 'gears.tuf', file: 'C:\\proj\\kit\\gears.tuf', line: 3, top: true }], scopes: [] });
+  await tick();
+  out.renamedLit = { line: lit(tools), status: status() };
+  onEvent({ id: runId, event: 'ended', code: 0 });
+  tools.dispose();
+  const back = newModel('C:\\proj\\kit\\gears.tuf', 10);
+  out.renamedReopened = dots(back);
+  ide.runTarget = () => MAIN;
+
+  // ---- Design Studio's gear: a widget's own line is Studio's (its customizer), its other lines take breakpoints
+  const shop = newModel(SHOP, 6, 'import tgui\nwin = tgui.window("Shop")\ntitle = win:heading("Hi")\ntitle:color "red"\nbtn = win:button("Buy")\nwin:show()\n');
+  ed.model = shop;
+  const customizer = async (fn) => { const was = shop.subscribed; await fn(); return shop.subscribed > was; };
+  const gear = () => shop.classes().filter((c) => c[1].includes('tuff-gear')).map((c) => c[0]);
+  hover(3);
+  out.gear = { on: gear(), hint: dots(shop) };
+  out.gearClick = { customizer: await customizer(() => glyph(3)), bps: D.breakpoints().filter((b) => b.path === SHOP) };
+  hover(4);
+  out.propClick = { gear: gear(), hint: dots(shop), customizer: await customizer(() => glyph(4)), bps: D.breakpoints().filter((b) => b.path === SHOP) };
+  ed.pos = { lineNumber: 5, column: 1 };
+  commands.toggleBreakpoint.run(); // F9 on the button's own line
+  hover(5);
+  out.dotLine = { gear: gear(), customizer: await customizer(() => glyph(5)), bps: D.breakpoints().filter((b) => b.path === SHOP) };
+  commands.toggleBreakpoint.run();
+  ed.on.down.reverse(); // (the debugger's listener first: the same either way)
+  out.reversed = { customizer: await customizer(() => glyph(5)), bps: D.breakpoints().filter((b) => b.path === SHOP) };
+  out.studioWidget = { customizer: await customizer(() => glyph(3)), bps: D.breakpoints().filter((b) => b.path === SHOP) };
+  ed.on.down.reverse();
+
+  // ---- a pause while a dialog is open (New Project, Search Everywhere...): the line is lit, the keyboard stays there
+  commands.debug.run();
+  await tick();
+  fire('tuff:run-started', { id: runId, file: MAIN, debug: true });
+  const money = models.find((m) => m.uri.fsPath === MONEY && !m.disposed);
+  const at = (line) => ({ index: 0, name: 'money.tuf', file: MONEY, line, top: true });
+  overlay = true;
+  const focused = ed.focused;
+  onEvent({ id: runId, event: 'paused', reason: 'breakpoint', file: MONEY, line: 2, col: 1, stack: [at(2)], scopes: [] });
+  await tick();
+  out.dialog = { opened: opened.slice(-1)[0], focused: ed.focused - focused, line: lit(money), pos: ed.pos, status: status() };
+  onEvent({ id: runId, event: 'paused', reason: 'step', file: MONEY, line: 3, col: 1, stack: [at(3)], scopes: [] }); // (the file on screen)
+  await tick();
+  out.dialogSame = { focused: ed.focused - focused, line: lit(money), pos: ed.pos };
+  overlay = false;
+  onEvent({ id: runId, event: 'paused', reason: 'step', file: MONEY, line: 4, col: 1, stack: [at(4)], scopes: [] });
+  await tick();
+  out.noDialog = { focused: ed.focused - focused, line: lit(money) };
+
+  // ---- F9 while Design Studio or Tuff Engine shows (the code editor hidden): only a toast
+  ed.model = again;
+  ed.pos = { lineNumber: 7, column: 1 };
+  const bpsBefore = JSON.stringify(D.breakpoints());
+  const toastsAt = toasts.length;
+  shown = 'studio';
+  commands.toggleBreakpoint.run();
+  const studioSame = JSON.stringify(D.breakpoints()) === bpsBefore;
+  shown = 'engine';
+  commands.toggleBreakpoint.run();
+  shown = null;
+  out.hiddenF9 = { same: [studioSame, JSON.stringify(D.breakpoints()) === bpsBefore], toasts: toasts.splice(toastsAt) };
+  commands.toggleBreakpoint.run();
+  out.shownF9 = D.breakpoints().find((b) => b.path === MAIN).lines;
+  commands.toggleBreakpoint.run();
+
+  // ---- Auto Code Sort puts each breakpoint back on its line (TuffDebug.setLines, ide.js)
+  onEvent({ id: runId, event: 'breakpoints', file: MAIN, lines: [[3, null]] }); // (hollow: the program never stops there)
+  sent.length = 0;
+  D.setLines(MAIN, [4, 12, 12, 21]);
+  out.setLines = { bps: D.breakpoints().find((b) => b.path === MAIN).lines, dots: dots(again), sent: sent.slice() };
+  again.edit();
+  sent.length = 0;
+  D.setLines(MAIN, [5]);
+  out.setLinesEdited = { bps: D.breakpoints().find((b) => b.path === MAIN).lines, sent: sent.slice() };
+  again.edit(-1);
+
+  // ---- another folder opened (New Project, Open Folder): the program being debugged stops
+  sent.length = 0;
+  fire('tuff:folder-opened', { dir: 'C:\\other' });
+  out.folder = { sent: sent.slice(), state: D.state().state, status: status(), line: lit(money).length };
+  const openedAt = opened.length;
+  onEvent({ id: runId, event: 'paused', reason: 'breakpoint', file: MONEY, line: 2, col: 1, stack: [at(2)], scopes: [] }); // (on its way already)
+  await tick();
+  out.folderLate = { state: D.state().state, opened: opened.length - openedAt, line: lit(money).length };
+  sent.length = 0;
+  fire('tuff:folder-opened', { dir: 'C:\\another' });
+  out.folderIdle = sent.slice();
+  out.toasts = toasts;
+  out.errors = ed.errors;
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.log(JSON.stringify({ crash: String(e.stack || e) })); });
+"""
+
+
+def debug_ui(c):
+    """The renderer's side of the debugger (renderer/js/debugger.js, with studio.js), with Node (see DEBUG_UI)."""
+    js = os.path.join(REPO, "tuffcode", "renderer", "js")
+    try:
+        p = subprocess.run(["node", "-e", DEBUG_UI, os.path.join(js, "debugger.js"), os.path.join(js, "studio.js")], capture_output=True, text=True,
+                           encoding="utf-8", timeout=60)
+        got = json.loads(p.stdout.strip().splitlines()[-1])
+    except (FileNotFoundError, ValueError, IndexError, subprocess.TimeoutExpired) as exc:
+        got = {"crash": str(exc), "stderr": locals().get("p") and p.stderr[-500:]}
+    if not c.check("crash" not in got, "debugger.js runs with Node's stand-ins for the page, Monaco and TuffIDE (and Design Studio's studio.js)", got.get("crash")):
+        return
+    main, money, shop = "C:\\proj\\main.tuf", "C:\\proj\\money.tuf", "C:\\proj\\shop.tuf"
+    gears = "C:\\proj\\kit\\gears.tuf"
+    c.check(got["commands"] == {"debug": "Shift+F9", "watchRun": "", "debugContinue": "F5", "stepOver": "F10", "stepInto": "F11",
+                                "stepOut": "Shift+F11", "debugPause": "", "toggleBreakpoint": "F9"} and got["action"] == ["Toggle Breakpoint"] and got["hidden"],
+            "its commands and keys (Debug, Watch it run, F5, F10, F11, Shift+F11, Pause, F9) and the editor's menu entry; the pane starts hidden",
+            (got["commands"], got["action"]))
+    c.check(got["click"] == [{"path": main, "lines": [15]}] and got["dot"] == [[15, "dbg-bp", ""]],
+            "a click in the gutter's glyph margin puts a red dot (a breakpoint) on that line", (got["click"], got["dot"]))
+    c.check(got["f9"] == [{"path": main, "lines": [15, 19]}] and got["f9off"] == got["click"], "F9 adds and takes away one on the cursor's line",
+            (got["f9"], got["f9off"]))
+    c.check(got["moved"] == [{"path": main, "lines": [17]}] and got["closed"] == got["click"] and [r[0] for r in got["reopened"]] == [15],
+            "breakpoints move with their lines as the code changes, and stay while the tab is closed and opened again", (got["moved"], got["closed"], got["reopened"]))
+    c.check(got["first"] == [main, {"debug": {"first": [{"cmd": "setBreakpoints", "file": main, "lines": [15]}, {"cmd": "continue"}]}}],
+            "Debug runs the file with the debugger: its breakpoints first, then continue", got["first"])
+    c.check(got["shown"] and "Starting the debugger" in got["starting"] and "Starting" in got["otherRun"],
+            "the debug pane opens and the Debug button lights up; messages from another run are left alone", (got["shown"], got["starting"], got["otherRun"]))
+    pz = got["paused"]
+    c.check("Stopped at a breakpoint on line 15 of main.tuf." in pz["status"] and pz["line"] == [[15, "dbg-at paused", "dbg-line paused"]]
+            and pz["on"] == {"continue": True, "next": True, "stepIn": True, "stepOut": True, "pause": False, "stop": True, "watch": True, "close": False},
+            "paused: it says where and why, lights the line, and the toolbar's Continue and steps work (not Pause)", pz)
+    c.check("In add()" in pz["vars"] and "main.tuf&#39;s top level" in pz["vars"] and ">n<" in pz["vars"] and ">rex<" in pz["vars"] and "▸" in pz["vars"]
+            and "list (2)" in pz["vars"] and "Pet(name: &quot;Rex&quot;" in pz["vars"],
+            "the Variables panel: the function's names, then the file's top level, and the values that open", pz["vars"][:800])
+    c.check("add()" in pz["stack"] and "main.tuf:15" in pz["stack"] and "top level" in pz["stack"] and "main.tuf:19" in pz["stack"] and 'dbg-frame sel" data-i="0"' in pz["stack"],
+            "the call stack: the function and its line, then the top level and the line that called it", pz["stack"])
+    c.check(got["sentPaused"] == [{"cmd": "next"}, {"cmd": "expand", "path": ["top", "rex"], "open": True}, {"cmd": "frame", "index": 1}]
+            and got["frameLine"] == [[19, "dbg-at frame", "dbg-line frame"]] and "In add()" not in got["frameVars"],
+            "Step Over, opening rex, and another frame of the call stack (its line lit, its names shown) go to the program", (got["sentPaused"], got["frameLine"]))
+    c.check("Running" in got["running"]["status"] and got["running"]["line"] == 0 and "show here when the program pauses" in got["running"]["vars"],
+            "running again: the line goes dark and the names wait for the next pause", got["running"])
+    mo = got["money"]
+    c.check(mo["opened"] == [money, 0, True] and mo["line"] == [[4, "dbg-at paused", "dbg-line paused"]] and mo["changed"] == 1,
+            "paused in money.tuf: that file opens with the line lit, and a value that changed is marked", mo)
+    c.check(got["sentLive"] == [{"cmd": "setBreakpoints", "file": main, "lines": [9, 15]}, {"cmd": "setBreakpoints", "file": main, "lines": [3, 9, 15]}],
+            "breakpoints changed while debugging go to the program at once", got["sentLive"])
+    c.check(got["placed"]["bps"] == [{"path": main, "lines": [3, 10, 15]}] and "3:dbg-bp off" in got["placed"]["classes"] and "10:dbg-bp" in got["placed"]["classes"],
+            "where the program says they stop: one on a blank line moves to the next statement, one where it never stops is hollow", got["placed"])
+    w = got["watch"]
+    c.check(w["sent"] == [{"cmd": "watch", "delay": 0.5}] and "Watching it run: line 18 of main.tuf." in w["status"] and w["line"] == [[18, "dbg-at watch", "dbg-line watch"]],
+            "Watch it run: on at the slider's speed, each line lit as it runs, without taking the keyboard", w)
+    e = got["error"]
+    c.check("Stopped by an error on line 16 of main.tuf: I don&#39;t know what &#39;nope&#39; is." in e["status"] and "Continue ends the program." in e["status"]
+            and "error" in e["cls"] and e["on"]["continue"] and not e["on"]["next"] and not e["on"]["stepIn"] and e["line"] == [[16, "dbg-at error", "dbg-line error"]],
+            "pause on error: the error and its line in red, with Continue (to end it) and no steps", e)
+    c.check(got["continueWatching"] == [{"cmd": "watch", "delay": 0.5}], "Continue while watching goes on watching", got["continueWatching"])
+    c.check("Continue lets the program carry on: its window keeps running." in got["carriesOn"] and "Continue ends" not in got["carriesOn"],
+            "...and an error in a function the program's window calls says Continue lets the program carry on", got["carriesOn"])
+    en = got["ended"]
+    c.check("The program has ended." in en["status"] and en["line"] == 0 and en["close"] and not en["debugOn"] and not en["eye"] and not en["state"]["watching"],
+            "ended: it says so, the line goes dark, the eye goes out, and the pane can be closed", en)
+    c.check("3:dbg-bp" in got["solid"] and "3:dbg-bp off" not in got["solid"], "a hollow breakpoint is a red dot again once the program says it stops there", got["solid"])
+    c.check(got["late"] == {"state": "ended", "line": 0}, "a message that comes after the run has ended is left alone", got["late"])
+    c.check(got["normalRun"] and got["stepStart"][1]["debug"]["first"][-1] == {"cmd": "next"} and not got["toasts"],
+            "a run without the debugger closes the pane, and F10 with nothing debugged starts and pauses on the first line", (got["normalRun"], got["stepStart"]))
+    c.check(got["eye"] == {"run": 1, "first": {"cmd": "watch", "delay": 0.5}, "on": True},
+            "the eye, with nothing debugged, starts a run that's watched, and lights up", got["eye"])
+    off = got["eyeOff"]
+    c.check(off["sent"] == {"cmd": "watch", "delay": 0} and not off["watching"] and off["line"] == 0 and "Running. It stops" in off["status"]
+            and "show here when the program pauses" in off["vars"],
+            "the eye again while it runs: Watch it run goes off, and a line it had sent already isn't shown", off)
+    c.check(got["eyeEnded"] == {"on": False, "watching": False} and got["eyeAgain"] == {"runs": 2, "first": {"cmd": "watch", "delay": 0.5}},
+            "once a watched run has ended the eye goes out, and the eye starts the next one", (got["eyeEnded"], got["eyeAgain"]))
+    nothing = {"continue": True, "next": False, "stepIn": False, "stepOut": False, "pause": True, "stop": True, "watch": True, "close": False}
+    c.check(got["pausing"]["status"] == "Pausing…" and got["pausing"]["on"] == nothing
+            and got["idle"]["status"] == "Your program is waiting for something to happen in its window. It pauses on the next line it runs."
+            and got["idle"]["on"] == nothing, "Pause while nothing runs: it says the program waits for its window, and Continue can call the Pause off",
+            (got["pausing"], got["idle"]))
+    co = got["calledOff"]
+    c.check(co["sent"] == [{"cmd": "pause"}, {"cmd": "continue"}] and "Running. It stops" in co["status"] and not co["on"]["continue"]
+            and got["f5Off"] == [{"cmd": "pause"}, {"cmd": "continue"}], "...Continue (or F5) calls it off, and it runs on", (co, got["f5Off"]))
+    es = got["editedSent"]
+    c.check("You&#39;ve changed the code since it started. Debug again to run your changes." in got["edited"] and es["sent"] == []
+            and es["bps"] == [{"path": main, "lines": [3, 10, 15, 20]}] and "20:dbg-bp" in got["editedPlaced"],
+            "the code changed while it's debugged: it says so, and breakpoints put in it wait for the next Debug (the program runs it as it was)",
+            (got["edited"], es, got["editedPlaced"]))
+    c.check("changed the code" not in got["undone"] and got["undoneSent"] == [{"cmd": "setBreakpoints", "file": main, "lines": [3, 10, 15, 20]},
+                                                                            {"cmd": "setBreakpoints", "file": main, "lines": [3, 10, 15]}],
+            "...the change undone, they go to the program again", (got["undone"], got["undoneSent"]))
+    c.check(got["renamedDir"] == [{"path": "C:\\proj\\kit\\tools.tuf", "lines": [3, 5]}] and got["renamedFile"] == [{"path": gears, "lines": [3, 5]}],
+            "breakpoints go with a folder or a file renamed in the project tree, and are put on and taken off at its new path", (got["renamedDir"], got["renamedFile"]))
+    c.check(got["renamedRun"] == [{"cmd": "setBreakpoints", "file": gears, "lines": [3, 5]}] and got["renamedLit"]["line"] == [[3, "dbg-at paused", "dbg-line paused"]]
+            and "line 3 of gears.tuf" in got["renamedLit"]["status"] and got["renamedReopened"] == ["3:dbg-bp", "5:dbg-bp"],
+            "...Debug sends them for the renamed file, its paused line is lit in the renamed tab, and they're there when it opens again",
+            (got["renamedRun"], got["renamedLit"], got["renamedReopened"]))
+    c.check(got["gear"] == {"on": [3], "hint": []} and got["gearClick"] == {"customizer": True, "bps": []},
+            "Design Studio: a widget's own line has its gear, and a click there opens its customizer, not a breakpoint", (got["gear"], got["gearClick"]))
+    c.check(got["propClick"] == {"gear": [], "hint": ["4:dbg-bp hint"], "customizer": False, "bps": [{"path": shop, "lines": [4]}]},
+            "...on a line that sets something on it (title:color) a click puts a breakpoint, and doesn't open the customizer", got["propClick"])
+    c.check(got["dotLine"] == {"gear": [], "customizer": False, "bps": [{"path": shop, "lines": [4]}]},
+            "...a red dot put on its own line with F9 has no gear, and a click takes it away (no customizer)", got["dotLine"])
+    c.check(got["reversed"] == {"customizer": False, "bps": [{"path": shop, "lines": [4]}]}
+            and got["studioWidget"] == {"customizer": True, "bps": [{"path": shop, "lines": [4]}]},
+            "...the same with the debugger's listener first", (got["reversed"], got["studioWidget"]))
+    dl = got["dialog"]
+    c.check(dl["opened"] == [money, 0, False] and dl["focused"] == 0 and dl["line"] == [[2, "dbg-at paused", "dbg-line paused"]]
+            and dl["pos"] == {"lineNumber": 2, "column": 1} and "Stopped at a breakpoint on line 2 of money.tuf." in dl["status"],
+            "a pause while a dialog is open (New Project, Search Everywhere, What's New...) opens the file, lights the line and fills the pane, "
+            "and leaves the keyboard in the dialog", dl)
+    c.check(got["dialogSame"] == {"focused": 0, "line": [[3, "dbg-at paused", "dbg-line paused"]], "pos": {"lineNumber": 3, "column": 1}}
+            and got["noDialog"] == {"focused": 1, "line": [[4, "dbg-at paused", "dbg-line paused"]]},
+            "...in the file on screen too; with no dialog open the keyboard goes to the paused line", (got["dialogSame"], got["noDialog"]))
+    c.check(got["hiddenF9"] == {"same": [True, True], "toasts": ["Show the code (click its tab) to put a breakpoint on a line."] * 2} and got["shownF9"] == [3, 7, 10, 15],
+            "F9 while Design Studio or Tuff Engine shows (the code editor hidden) only says to show the code; with the code on screen it puts a breakpoint",
+            (got["hiddenF9"], got["shownF9"]))
+    c.check(got["setLines"] == {"bps": [4, 12, 21], "dots": ["4:dbg-bp", "12:dbg-bp", "21:dbg-bp"], "sent": [{"cmd": "setBreakpoints", "file": main, "lines": [4, 12, 21]}]}
+            and got["setLinesEdited"] == {"bps": [5], "sent": []},
+            "TuffDebug.setLines (Auto Code Sort putting breakpoints back on their lines) draws them, none hollow, and sends them while it's debugged "
+            "(not once the code has changed since it started)", (got["setLines"], got["setLinesEdited"]))
+    fo = got["folder"]
+    c.check(fo["sent"] == [{"stop": True}] and fo["state"] == "ended" and "The program was stopped." in fo["status"] and fo["line"] == 0
+            and got["folderLate"] == {"state": "ended", "opened": 0, "line": 0} and got["folderIdle"] == [],
+            "another folder opened (New Project, Open Folder) stops the program being debugged, a pause on its way after is left alone, "
+            "and with nothing debugged nothing happens", (fo, got["folderLate"], got["folderIdle"]))
+    c.check(got["errors"] == [], "nothing the debugger does throws", got["errors"])
+
+
+# A file's whole new text in one go (ide.js's editsTo: a reload after another program changed the file, Replace in
+# Files, a plugin's replaceAll, and Auto Code Sort), with Monaco's own text model and undo in Node: breakpoints (made as
+# debugger.js makes them) and the cursor stay on the lines they're on, and one undo takes it back. ide.js's own
+# editsTo and autoSort are taken from its source. One edit over the whole file put every dot on whatever line then
+# held its old place in the text.
+DEBUG_EDITS = r"""
+const fs = require('fs'), path = require('path'), url = require('url');
+const [ideFile, sortFile, dir] = process.argv.slice(1);
+(async () => {
+  if (!dir || !fs.existsSync(path.join(dir, 'esm'))) { console.log(JSON.stringify({ real: null })); return; }
+  const imp = (p) => import(url.pathToFileURL(path.join(dir, 'esm', 'vs', p)).href);
+  const { TextModel } = await imp('editor/common/model/textModel.js');
+  const { Range } = await imp('editor/common/core/range.js');
+  const { UndoRedoService } = await imp('platform/undoRedo/common/undoRedoService.js');
+  const any = () => new Proxy(function () {}, { get: (t, k) => (k === Symbol.toPrimitive ? () => '' : k === 'then' ? undefined : k === 'dispose' ? () => {} : k === 'languageId' ? 'tuff' : any()),
+    apply: () => any(), construct: () => any() });
+  const undo = new UndoRedoService({}, {});
+  const make = (text) => new TextModel(text, 'tuff', TextModel.DEFAULT_CREATION_OPTIONS, null, undo, any(), any(), { createInstance: (C, ...a) => new C(...a, any(), any(), any(), any()) });
+  // ide.js's own functions, from its source: each from its first line to the } under it
+  const src = fs.readFileSync(ideFile, 'utf8').replace(/\r\n/g, '\n');
+  const fn = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n  }\n', at) + 4); };
+  const out = { real: true, found: [!!fn('function editsTo('), !!fn('async function autoSort(')] };
+  const DOT = { glyphMarginClassName: 'dbg-bp', stickiness: 1 }; // (NeverGrowsWhenTypingAtEdges, as debugger.js has it)
+  const dots = (m, lines, old = []) => m.deltaDecorations(old, lines.map((n) => ({ range: new Range(n, 1, n, 1), options: DOT })));
+  const lineOf = (m, id) => m.getDecorationRange(id).startLineNumber;
+  // The cursor, as Monaco brings it back after an edit made on the model: from a marker that grows at both ends.
+  const cursor = (m, line, column) => {
+    let id = m.deltaDecorations([], [{ range: new Range(line, column, line, column), options: { stickiness: 0 } }])[0];
+    return { getModel: () => m, getPosition: () => { const r = m.getDecorationRange(id); return { lineNumber: r.startLineNumber, column: r.startColumn }; },
+      setPosition: (p) => { id = m.deltaDecorations([id], [{ range: new Range(p.lineNumber, p.column, p.lineNumber, p.column), options: { stickiness: 0 } }])[0]; } };
+  };
+  // (without editsTo, the one edit over the whole file it replaced: what these checks see then)
+  const whole = (m, text) => [{ range: m.getFullModelRange(), text }];
+  const editsTo = out.found[0] ? new Function('window', `${fn('function editsTo(')}\nreturn editsTo;`)({ monaco: { Range } }) : whole;
+  // One whole-file change as ide.js makes it (its own undo step): where the dots and the cursor are, and the text after
+  // one undo.
+  const change = async (before, after, lines, at, edits = editsTo) => {
+    const m = make(before);
+    const ids = dots(m, lines);
+    const ed = cursor(m, ...at);
+    m.pushStackElement();
+    m.pushEditOperations([], edits(m, after), () => null);
+    m.pushStackElement();
+    const r = { same: m.getValue() === after, dots: ids.map((id) => [lineOf(m, id), m.getLineContent(lineOf(m, id)).trim()]), cursor: ed.getPosition() };
+    await m.undo();
+    r.undone = m.getValue() === before;
+    return r;
+  };
+  const PROG = 'score = 0\nfor i in range(1, 4):\n    score += i\n    say score\nsay "done"\n';
+  out.reloadWhole = await change(PROG, '# my game\n' + PROG, [3, 4], [4, 5], whole); // (the old way)
+  out.reload = await change(PROG, '# my game\n' + PROG, [3, 4], [4, 5]); // another program put a line on top
+  out.replace = await change(PROG, PROG.replace(/score/g, 'points'), [2, 3, 5], [5, 3]); // Replace in Files: four lines
+  const SHOP = 'name = "Shop"\nprice = 3\nsay name\nsay price\nsay "bye"\n';
+  // a plugin's replaceAll (Tuff Agents) adding a function, the cursor at the start of the line after it
+  out.plugin = await change(SHOP, 'name = "Shop"\nprice = 3\nfunc tax(p):\n    return p * 1.2\nsay name\nsay price\nsay "bye"\n', [1, 3, 5], [3, 1]);
+  out.cut = await change(PROG, 'score = 0\nsay "done"\n', [1, 5], [5, 2]); // lines taken away in the middle
+  out.cutEnd = await change(PROG, 'score = 0\nfor i in range(1, 4):\n', [1, 2], [2, 4]); // ...and at the end
+
+  // Pairs of short texts (made of a few lines, LF and CRLF): the edits make exactly the new text, one undo takes them
+  // back, and a dot or the cursor (at the start or the end) on a line both keep stays on it: at the start, at the end,
+  // or any line when they have as many lines. (A dot on an empty last line that lines go after moves down with them,
+  // as when Enter is typed there.)
+  let seed = 7;
+  const rand = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const WORDS = ['a', 'b', 'say x', '', '    c'];
+  const textOf = (k, eol) => Array.from({ length: k }, () => WORDS[rand(WORDS.length)]).join(eol) + (rand(2) ? eol : '');
+  const bad = [];
+  let tried = 0;
+  for (let i = 0; i < 1500 && bad.length < 5; i++) {
+    const eol = rand(3) ? '\n' : '\r\n';
+    const before = textOf(rand(6), eol);
+    const after = textOf(rand(6), eol);
+    const m = make(before);
+    const old = m.getLinesContent();
+    const next = after.split(/\r?\n/);
+    let a = 0;
+    while (a < old.length && a < next.length && old[a] === next[a]) a++;
+    let b = 0;
+    while (b < old.length - a && b < next.length - a && old[old.length - 1 - b] === next[next.length - 1 - b]) b++;
+    const kept = old.map((l, k) => k + 1).filter((n) => (old.length === next.length ? old[n - 1] === next[n - 1] : n <= a || n > old.length - b)
+      && !(old[n - 1] === '' && n === old.length && b === 0 && a === old.length));
+    const to = (n) => (old.length === next.length || n <= a ? n : n + next.length - old.length);
+    const ids = dots(m, kept);
+    const marks = kept.map((n) => [n, m.deltaDecorations([], [{ range: new Range(n, 1, n, 1), options: { stickiness: 0 } }])[0],
+      m.deltaDecorations([], [{ range: new Range(n, m.getLineMaxColumn(n), n, m.getLineMaxColumn(n)), options: { stickiness: 0 } }])[0]]);
+    m.pushStackElement();
+    m.pushEditOperations([], editsTo(m, after), () => null);
+    m.pushStackElement();
+    tried++;
+    const want = after.split(/\r?\n/).join(m.getEOL());
+    const moved = kept.filter((n, k) => lineOf(m, ids[k]) !== to(n));
+    const cursorMoved = marks.filter(([n, s, e]) => { const rs = m.getDecorationRange(s), re = m.getDecorationRange(e);
+      return rs.startLineNumber !== to(n) || rs.startColumn !== 1 || re.startLineNumber !== to(n) || re.startColumn !== m.getLineMaxColumn(to(n)); }).map(([n]) => n);
+    const text = m.getValue();
+    await m.undo();
+    if (text !== want || moved.length || cursorMoved.length || m.getValue() !== before) bad.push({ before, after, text, moved, cursorMoved, undone: m.getValue() === before });
+  }
+  out.pairs = { tried, bad };
+
+  // Auto Code Sort itself (ide.js's autoSort, with autosort.js and a TuffDebug with breakpoints() and setLines): each
+  // dot goes back on its own line, the cursor stays on a line the sort left alone and goes to its own line otherwise,
+  // and one undo takes it all back, the dots too (redo sorts them again).
+  const FILE = 'C:\\proj\\main.tuf';
+  const sortCase = async (before, lines, at) => {
+    const m = make(before);
+    let ids = dots(m, lines);
+    const ed = cursor(m, ...at);
+    const texts = lines.map((n) => m.getLineContent(n).replace(/\s+/g, ''));
+    const atText = m.getLineContent(at[0]).trim();
+    let calls = 0;
+    const window = {
+      TuffSort: require(sortFile),
+      TuffDebug: { breakpoints: () => [{ path: FILE, lines: [...new Set(ids.map((id) => lineOf(m, id)))].sort((x, y) => x - y) }],
+        setLines: (p, ls) => { calls++; ids = dots(m, ls, ids); } },
+    };
+    const api = { checkSource: async () => ({ ok: true }) };
+    const autoSort = new Function('window', 'editor', 'api', 'toast', 'samePath', 'ext', 'activeTab', 'editsTo', `${fn('async function autoSort(')}\nreturn autoSort;`)(
+      window, ed, api, () => {}, (x, y) => x.toLowerCase() === y.toLowerCase(), (p) => (p.match(/\.([^.]+)$/) || [, ''])[1], () => null, editsTo);
+    await autoSort({ path: FILE, model: m }, { quiet: true });
+    const r = { calls, dots: ids.map((id, k) => [lineOf(m, id), m.getLineContent(lineOf(m, id)).replace(/\s+/g, '') === texts[k]]),
+      cursor: ed.getPosition(), cursorLine: m.getLineContent(ed.getPosition().lineNumber).trim() === atText };
+    await m.undo();
+    r.undone = m.getValue() === before;
+    r.undoDots = ids.map((id) => lineOf(m, id));
+    await m.redo();
+    r.redoDots = ids.map((id) => lineOf(m, id));
+    return r;
+  };
+  const MESSY = 'name = input("Name? ")\nif name is "Sam":\n  say "hi Sam"\nelse:\n  say "hello " + name\nsay "bye"\n';
+  out.sortIndent = await sortCase(MESSY, [3, 5, 6], [6, 5]);
+  out.sortIndentCursor = await sortCase(MESSY, [5], [5, 3]);
+  // functions go last and imports first, each part gets a header, x=1 becomes x = 1
+  out.sortMoved = await sortCase('func greet(who):\n  say "hi " + who\nx=1\nimport tgui\ngreet("Sam")\nsay x\n', [2, 3, 6], [6, 1]);
+  // the same line in a function and in the main program, and in two functions: each dot goes with its own one
+  out.sortSame = await sortCase('func a():\n    say x\nx = 1\nsay x\n', [2, 4], [4, 1]);
+  out.sortTwo = await sortCase('func a():\n    say "hi"\nfunc b():\n    say "hi"\na()\nb()\n', [2, 4], [4, 1]);
+  // Two sorts of one tab, with an edit between that unsorts it again: the tab has one watcher for them, undo goes back
+  // through both (the dots too) and redo sorts again.
+  out.sortAgain = await (async () => {
+    const before = 'func a():\n    say x\nx = 1\nsay x\n';
+    const m = make(before);
+    let watchers = 0;
+    const watch = m.onDidChangeContent.bind(m);
+    m.onDidChangeContent = (f) => { watchers++; return watch(f); };
+    let ids = dots(m, [2, 4]);
+    const lines = () => ids.map((id) => lineOf(m, id)).sort((x, y) => x - y);
+    const window = {
+      TuffSort: require(sortFile),
+      TuffDebug: { breakpoints: () => [{ path: FILE, lines: lines() }], setLines: (p, ls) => { ids = dots(m, ls, ids); } },
+    };
+    const autoSort = new Function('window', 'editor', 'api', 'toast', 'samePath', 'ext', 'activeTab', 'editsTo', `${fn('async function autoSort(')}\nreturn autoSort;`)(
+      window, cursor(m, 1, 1), { checkSource: async () => ({ ok: true }) }, () => {}, (x, y) => x.toLowerCase() === y.toLowerCase(),
+      (p) => (p.match(/\.([^.]+)$/) || [, ''])[1], () => null, editsTo);
+    const tab = { path: FILE, model: m };
+    await autoSort(tab, { quiet: true });
+    const r = { once: lines() };
+    m.pushStackElement();
+    m.pushEditOperations([], [{ range: new Range(1, 1, 1, 1), text: 'func b():\n    say 1\n' }], () => null);
+    m.pushStackElement();
+    await autoSort(tab, { quiet: true });
+    r.twice = lines().map((n) => m.getLineContent(n).trim());
+    r.watchers = watchers;
+    await m.undo();
+    r.undo1 = lines();
+    await m.undo();
+    await m.undo();
+    r.undo3 = lines();
+    r.undone = m.getValue() === before;
+    await m.redo();
+    r.redo1 = lines();
+    return r;
+  })();
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.log(JSON.stringify({ crash: String(e.stack || e) })); });
+"""
+
+
+def debug_edits(c):
+    """A file's whole new text in one go keeps breakpoints and the cursor on their lines (ide.js's editsTo and Auto Code
+    Sort), with Monaco's own text model in Node (see DEBUG_EDITS)."""
+    js = os.path.join(REPO, "tuffcode", "renderer", "js")
+    monaco_dir = os.environ.get("TUFF_MONACO") or os.path.join(REPO, "tuffcode", "node_modules", "monaco-editor")
+    try:
+        p = subprocess.run(["node", "-e", DEBUG_EDITS, os.path.join(js, "ide.js"), os.path.join(js, "autosort.js"), monaco_dir], capture_output=True, text=True,
+                           encoding="utf-8", timeout=120)
+        got = json.loads(p.stdout.strip().splitlines()[-1])
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the whole-file edit checks")
+        return
+    except (ValueError, IndexError, subprocess.TimeoutExpired) as exc:
+        got = {"crash": str(exc), "stderr": locals().get("p") and p.stderr[-500:]}
+    if not c.check("crash" not in got, "the whole-file edit checks run (ide.js's editsTo and autoSort with Monaco's own text model)", got):
+        return
+    if got["real"] is None:
+        c.check(True, "monaco-editor isn't installed here: skipped the whole-file edit checks")
+        return
+    c.check(got["found"] == [True, True], "ide.js has editsTo (a file's whole new text, over only the lines that change) and autoSort", got["found"])
+    c.check(got["reloadWhole"]["dots"] == [[3, "for i in range(1, 4):"], [4, "score += i"]],
+            "(one edit over the whole file, as before, puts the breakpoints on other lines: this check sees it)", got["reloadWhole"])
+    c.check(got["reload"] == {"same": True, "dots": [[4, "score += i"], [5, "say score"]], "cursor": {"lineNumber": 5, "column": 5}, "undone": True},
+            "a reload after another program put a line on top: the breakpoints and the cursor move down with their lines, and one undo takes it back",
+            got["reload"])
+    c.check(got["replace"] == {"same": True, "dots": [[2, "for i in range(1, 4):"], [3, "points += i"], [5, 'say "done"']], "cursor": {"lineNumber": 5, "column": 3},
+                               "undone": True},
+            "Replace in Files changing four lines: breakpoints between them and on them stay on their lines", got["replace"])
+    c.check(got["plugin"] == {"same": True, "dots": [[1, 'name = "Shop"'], [5, "say name"], [7, 'say "bye"']], "cursor": {"lineNumber": 5, "column": 1}, "undone": True},
+            "a plugin's replaceAll adding a function (Tuff Agents): the breakpoints and the cursor after it move down with their lines", got["plugin"])
+    c.check(got["cut"] == {"same": True, "dots": [[1, "score = 0"], [2, 'say "done"']], "cursor": {"lineNumber": 2, "column": 2}, "undone": True}
+            and got["cutEnd"] == {"same": True, "dots": [[1, "score = 0"], [2, "for i in range(1, 4):"]], "cursor": {"lineNumber": 2, "column": 4}, "undone": True},
+            "lines taken away, in the middle and at the end: the ones left keep their breakpoints and the cursor", (got["cut"], got["cutEnd"]))
+    c.check(got["pairs"] == {"tried": 1500, "bad": []},
+            "1500 pairs of short texts (LF and CRLF): the edits make exactly the new text, one undo takes them back, and dots and the cursor on the "
+            "lines kept stay on them", got["pairs"])
+    si, sc, sm = got["sortIndent"], got["sortIndentCursor"], got["sortMoved"]
+    c.check(si == {"calls": 1, "dots": [[3, True], [5, True], [6, True]], "cursor": {"lineNumber": 6, "column": 5}, "cursorLine": True, "undone": True,
+                   "undoDots": [3, 5, 6], "redoDots": [3, 5, 6]}
+            and sc["dots"] == [[5, True]] and sc["cursorLine"] and sc["undone"],
+            "Auto Code Sort fixing the indentation: each breakpoint stays on its line, the cursor on a line it left alone stays put (and one on a "
+            "line it changed stays on that line), and one undo takes it back", (si, sc))
+    c.check(sm == {"calls": 1, "dots": [[12, True], [5, True], [7, True]], "cursor": {"lineNumber": 7, "column": 1}, "cursorLine": True, "undone": True,
+                   "undoDots": [2, 3, 6], "redoDots": [12, 5, 7]},
+            "Auto Code Sort moving functions last and imports first (and x=1 to x = 1): each breakpoint goes back on its own line, the cursor too, "
+            "and undo puts the breakpoints back where they were (redo where the sort put them)", sm)
+    ss, s2 = got["sortSame"], got["sortTwo"]
+    c.check(ss["dots"] == [[8, True], [3, True]] and ss["cursor"]["lineNumber"] == 3 and ss["undoDots"] == [2, 4]
+            and s2["dots"] == [[8, True], [12, True]] and s2["cursor"]["lineNumber"] == 12 and s2["undoDots"] == [2, 4],
+            "...with the same line in a function and in the main program, or in two functions, each breakpoint (and the cursor) goes with its own one",
+            (ss, s2))
+    sa = got["sortAgain"]
+    c.check(sa == {"once": [3, 8], "twice": ["say x", "say x"], "watchers": 1, "undo1": [5, 10], "undo3": [2, 4], "undone": True, "redo1": [3, 8]},
+            "Auto Code Sort twice on one file, with an edit between: one undo watcher for the file, and undo takes both sorts back, the "
+            "breakpoints too", sa)
+
+
+def t_debug(c):
+    """Console only, no window: 1.5.0's debugger, with this test as TuffCode (DebugLink). In both runtimes:
+    breakpoints in two files and the Variables panel's values (kinds' objects, lists and dictionaries open up), the
+    call stack and its frames' names, Step Over, Into and Out across functions, an action and an imported file, pause
+    on error, input() while debugging, Watch it run, and loops written on one line. Then Pause and Stop, a deep call
+    stack, tterm and tmusic programs, TuffCode going away, --debug, where breakpoints stop, its speed, values as say
+    shows them, the functions a window calls (with no window), main.js's side (debug.js) and the editor's and the
+    debug pane's (debugger.js, with Design Studio's studio.js), both with Node, and a file's whole new text keeping
+    breakpoints on their lines (ide.js, with Monaco's own text model)."""
+    for slow in (False, True):
+        mode = "the tree walker" if slow else "compiled"
+        debug_breakpoints(c, slow, mode)
+        debug_steps(c, slow, mode)
+        debug_errors(c, slow, mode)
+        debug_input(c, slow, mode)
+        debug_watch(c, slow, mode)
+        debug_loops(c, slow, mode)
+    debug_breakpoints(c, False, "compiled", crlf=True)
+    debug_places(c)
+    debug_more(c)
+    debug_speed(c)
+    debug_values(c)
+    debug_windows(c)
+    debug_relay(c)
+    debug_ui(c)
+    debug_edits(c)
+
+
+# ---------------------------------------------------------------- New Project's starters (1.5.0)
+
+STARTERS_DIR = os.path.join(REPO, "tuffcode", "starters")
+# An atgui program with no window at all, for a starter's self-test: pywebview can't load, and a stand-in takes the
+# window's place (as in test/atgui/close_test.py), clicking a popup's OK or Yes as soon as it shows.
+STARTERS_NO_WINDOW = r"""
+import json, os, sys, time
+sys.modules["webview"] = None
+sys.path.insert(0, sys.argv[1])
+import tuff, tuff_view
+
+class FakeWindow:
+    def __init__(self, view):
+        self.view, self.seq = view, 0
+    def run_js(self, code):
+        for _seq, cmds in json.loads(code[len("__tv.apply("):-1]):
+            for cmd in cmds:
+                if cmd[0] == "s" and str(cmd[2].get("html", "")) in ("<span>OK</span>", "<span>Yes</span>"):
+                    self.seq += 1
+                    self.view._on_events(self.seq, [{"type": "click", "path": [cmd[1]]}])
+    def destroy(self):
+        self.view._on_closing()
+    def __getattr__(self, name):
+        return lambda *args: None
+
+def stand_in(view):
+    view._win = FakeWindow(view)
+    view._on_ready({"w": 460, "h": 640})
+    deadline = time.monotonic() + 20
+    while not view._closed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    view._on_closed()
+
+tuff_view.View._open = stand_in
+sys.argv = [os.path.join(sys.argv[1], "tuff.py"), sys.argv[2]]
+sys.exit(tuff.main())
+"""
+# A tdraw program with stand-ins for tkinter and turtle, so no window opens: it counts what the pen did.
+STARTERS_NO_TK = r"""
+import collections, json, os, sys, types
+calls = collections.Counter()
+class Fake:
+    def __init__(self, *args, **kwargs):
+        pass
+    def __getattr__(self, name):
+        def call(*args, **kwargs):
+            calls[name] += 1
+            return [] if name in ("turtles", "find_all") else 0.0 if name in ("xcor", "ycor") else None
+        return call
+tk, turtle = types.ModuleType("tkinter"), types.ModuleType("turtle")
+tk.Tk, tk.Canvas, tk.TclError = Fake, Fake, type("TclError", (Exception,), {})
+turtle.TurtleScreen, turtle.RawTurtle, turtle.Terminator = Fake, Fake, type("Terminator", (Exception,), {})
+sys.modules["tkinter"], sys.modules["turtle"] = tk, turtle
+sys.path.insert(0, sys.argv[1])
+import tuff
+sys.argv = [os.path.join(sys.argv[1], "tuff.py"), sys.argv[2]]
+code = tuff.main()
+print("PEN " + json.dumps(calls), flush=True)
+sys.exit(code)
+"""
+# The Habit Tracker's habits.tuf on its own, in a console program: streaks across months and leap years, the
+# chart's week, and saving.
+STARTERS_HABITS = """import habits.tuf
+run = habits.Habit("Run", ["2026-10-25", "2026-10-26", "2026-10-27"])
+say run:streak("2026-10-27")
+say run:streak("2026-10-28")
+say run:streak("2026-10-29")
+say habits.Habit("Leap", ["2028-02-28", "2028-02-29", "2028-03-01"]):streak("2028-03-01")
+say habits.Habit("New year", ["2025-12-31", "2026-01-01"]):streak("2026-01-01")
+say habits.day_number("2026-03-01") - habits.day_number("2026-02-28")
+say habits.day_number("2100-03-01") - habits.day_number("2100-02-28")
+say habits.day_number("2000-03-01") - habits.day_number("2000-02-28")
+say habits.last_week([run], "2026-10-27")
+say len(habits.load())
+run:toggle("2026-10-28")
+habits.save([run])
+say habits.load()[0]
+"""
+# The Habit Tracker's window, driven from inside (app:after): add, a name that's there already, tick, delete (its
+# confirm answered Yes), untick.
+STARTERS_HABITS_UI = """
+
+func selftest():
+    say len(my_habits)
+    new_name:set "Stretch"
+    add_habit()
+    new_name:set "stretch"
+    add_habit()
+    say len(my_habits)
+    tick("Stretch")
+    say summary:value()
+    say week:value()
+    say done_bar:value()
+    delete_habit("Read 10 pages")
+    say habit_list:items()
+    tick("Stretch")
+    say habit_called("Stretch"):done_on(today())
+    app:close
+
+app:after(0.3, selftest)
+"""
+# Coin Collector, driven from inside: a coin put on the hero is picked up, then the time runs out.
+STARTERS_COINS = """
+
+func selftest():
+    first = coins:items()[0]
+    first:move_to(hero:x(), hero:y())
+    game:after(0.2, report)
+
+func report():
+    say f"score {score}, coins {coins:count()}, bugs {bugs:count()}, paused {game:paused()}"
+    times_up()
+    say f"best {best}, paused {game:paused()}"
+    game:close()
+
+game:after(0.5, selftest)
+"""
+
+
+def starters_copy(sid):
+    """A fresh copy of a starter in OUT/starters/<id> (runs leave saves behind): its folder."""
+    import shutil
+    folder = os.path.join(OUT, "starters", sid)
+    shutil.rmtree(folder, ignore_errors=True)
+    shutil.copytree(os.path.join(STARTERS_DIR, sid), folder)
+    return folder
+
+
+def starters_env():
+    """A plain pipe: no Run panel, no sound, and games' saves and songs in the test's own folder."""
+    env = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW", "TUFF_NO_WRITES", "TUFF_BASE_DIR")}
+    env.update({"PYTHONIOENCODING": "utf-8", "TUFF_NO_SOUND": "1", "TUFF_SAVE_DIR": os.path.join(OUT, "starters", "saves"),
+                "TUFF_MUSIC_DIR": os.path.join(OUT, "starters", "music")})
+    return env
+
+
+def starters_run(folder, stdin="", args=None, env=None, main="main.tuf", timeout=90):
+    """Runs a program in its folder, with its answers through a pipe: (exit code, stdout, stderr, seconds)."""
+    t0 = time.perf_counter()
+    p = subprocess.run(args or tuff_cmd() + [main], input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       cwd=folder, env={**starters_env(), **(env or {})}, timeout=timeout)
+    return p.returncode, p.stdout, p.stderr, time.perf_counter() - t0
+
+
+def starters_add(folder, code_text, main="main.tuf"):
+    with open(os.path.join(folder, main), "a", encoding="utf-8") as f:
+        f.write(code_text)
+
+
+def starters_snake(c, extra):
+    """Snake through a pipe, with screen:press keys (and anything else) put in just before screen:every_frame:
+    (exit code, stdout, stderr, the final screen's rows, the folder). Food the checks don't place goes in the top left
+    corner, out of every check's way: nothing seeds random() in a pipe, and a * on the snake's row would be eaten."""
+    folder = starters_copy("snake")
+    path = os.path.join(folder, "main.tuf")
+    with open(path, encoding="utf-8") as f:
+        code_text = f.read()
+    hook = "start()\nscreen:every_frame(step)"
+    spot = "food = [random(1, width - 2), random(1, height - 2)]"
+    c.check(hook in code_text and spot in code_text, "snake: main.tuf starts the game with start() and screen:every_frame(step), "
+            "and puts the food anywhere with random()", None)
+    with open(path, "w", encoding="utf-8") as f:  # (only the first spot: the one after it, for food on the snake, stays random)
+        f.write(code_text.replace(spot, "food = [1, 1]", 1).replace(hook, "start()\n" + extra + "screen:every_frame(step)"))
+    code, out, err, _s = starters_run(folder)
+    lines = out.splitlines()
+    top = next((i for i, x in enumerate(lines) if x.startswith("┌")), None)
+    return code, out, err, lines[top:top + 16] if top is not None else [], folder
+
+
+def starters_weather(c, folder, stdin="Testville\nAtlantis\n\n", first=0):
+    """Weather against a stand-in for Open-Meteo on this computer: the copy's two addresses point at it. Its three days
+    start first days from today here: they're the place's own days (timezone=auto), so far away they can start
+    tomorrow (1) or yesterday (-1)."""
+    import datetime
+    import http.server
+    import threading
+    import urllib.parse
+    asked = []
+    days = [(datetime.date.today() + datetime.timedelta(days=first + i)).isoformat() for i in range(3)]
+
+    class Answer(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            u = urllib.parse.urlsplit(self.path)
+            q = urllib.parse.parse_qs(u.query)
+            asked.append((u.path, q))
+            if u.path == "/geo":
+                body = {"results": [{"name": "Testville", "country": "Nowhere Land", "latitude": 51.5, "longitude": -0.12}]} \
+                    if q.get("name") == ["Testville"] else {"generationtime_ms": 0.4}
+            else:
+                body = {"current": {"temperature_2m": 12.6, "apparent_temperature": 10.2, "relative_humidity_2m": 81, "weather_code": 61,
+                                    "wind_speed_10m": 14.4},
+                        "daily": {"time": days, "weather_code": [61, 3, 0],
+                                  "temperature_2m_max": [14.1, 15.9, 17.4], "temperature_2m_min": [8.2, 9.6, 7.5]}}
+            data = json.dumps(body).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Answer)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        path = os.path.join(folder, "main.tuf")
+        with open(path, encoding="utf-8") as f:
+            code_text = f.read()
+        urls = ('"https://geocoding-api.open-meteo.com/v1/search"', '"https://api.open-meteo.com/v1/forecast"')
+        c.check(all(u in code_text for u in urls), "weather: asks Open-Meteo's places and forecast addresses", None)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code_text.replace(urls[0], f'"{base}/geo"').replace(urls[1], f'"{base}/forecast"'))
+        result = starters_run(folder, stdin)
+    finally:
+        server.shutdown()
+    return result, asked
+
+
+# The file run last, before and after another folder opens: ide.js's runTarget, rerun, buildTarget and openStudio (cut
+# from its source) with no .tuf tab open.
+STALE_RUN = r"""
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[1], 'utf8').replace(/\r\n/g, '\n');
+const line = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n', at)); };
+const fn = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n  }\n', at) + 4); };
+const state = { root: 'C:\\Old', lastRunFile: 'C:\\Old\\main.tuf' };
+let did = [];
+const f = new Function('state', 'engine', 'studio', 'SEP', 'activeTab', 'ext', 'join', 'runCurrent', 'saveAll', 'startRun', 'hideMenus', 'api', 'showStudio',
+  [line('const isUnder = '), line('const lastRun = '), fn('function runTarget('), fn('async function rerun('), fn('function buildTarget('),
+    fn('async function openStudio('), 'return { runTarget, rerun, buildTarget, openStudio };'].join('\n'))(
+  state, { visible: false, file: null }, { file: null }, '\\', () => null, (p) => (p.match(/\.([^.\\]+)$/) || [, ''])[1], (a, b) => `${a}\\${b}`,
+  () => did.push('current'), async () => {}, (p) => did.push('start', p), () => {}, { fs: { exists: async () => true } }, (p) => did.push(p));
+(async () => {
+  const out = [];
+  for (const root of ['C:\\Old', 'C:\\Other']) {
+    state.root = root;
+    const r = { run: f.runTarget() };
+    did = [];
+    await f.rerun();
+    r.rerun = did;
+    r.build = f.buildTarget();
+    did = [];
+    await f.openStudio();
+    r.studio = did[0];
+    out.push(r);
+  }
+  console.log(JSON.stringify(out));
+})().catch((e) => console.log(JSON.stringify({ crash: String(e.stack || e) })));
+"""
+
+
+def t_starters(c):
+    """1.5.0, no window and no sound: New Project's starters (tuffcode/starters). Each is listed with its picture and
+    passes --check. The console ones run in a pipe with their answers; Snake (tterm) with screen:press keys; Coin
+    Collector (tgame) in Tuff Engine's preview and through headless.py; the Habit Tracker (atgui) with a stand-in for
+    its window, and the Drawing (tdraw) with a stand-in pen; Weather against a stand-in weather service, and with no
+    internet. Then the create logic and the gallery in Node (new_project_harness.js), and how the IDE and the built
+    app find the starters."""
+    import datetime
+    import shutil
+    import socket
+    import wave
+    root = os.path.join(OUT, "starters")
+    shutil.rmtree(root, ignore_errors=True)
+    os.makedirs(root)
+    with open(os.path.join(STARTERS_DIR, "starters.json"), encoding="utf-8") as f:
+        listed = json.load(f)
+    ids = [s.get("id") for s in listed]
+    c.check(ids == ["blank", "hello", "quiz", "habits", "shop", "snake", "coins", "music", "drawing", "weather"], "starters.json lists the 10 starters", ids)
+    for s in listed:
+        sid = s.get("id")
+        c.check(os.path.isfile(os.path.join(STARTERS_DIR, sid, "main.tuf")) and os.path.isfile(os.path.join(STARTERS_DIR, f"{sid}.svg"))
+                and s.get("name") and s.get("about") and isinstance(s.get("tags"), list) and re.fullmatch(r"#[0-9a-f]{6}", s.get("color", ""))
+                and all(isinstance(u, str) and u for u in s.get("uses", [])),
+                f"{sid}: main.tuf, a picture, a name, an about line, tags, what it uses (for the search) and a colour", s)
+    uses = {s.get("id"): s.get("uses", []) for s in listed}
+    c.check(all(lib in uses.get(sid, []) for sid, lib in (("snake", "tterm"), ("coins", "tgame"), ("music", "tmusic"), ("drawing", "tdraw"),
+                                                             ("weather", "tap"), ("habits", "atgui"), ("habits", "import"), ("shop", "import"))),
+            "searching for a library finds the starters that use it (starters.json's uses: tterm, tgame, tmusic, tdraw, tap, atgui, import)", uses)
+    left = [os.path.relpath(os.path.join(d, f), STARTERS_DIR) for d, _dirs, files in os.walk(STARTERS_DIR) for f in files
+            if f in ("best.json", "habits.json", "receipt.txt", "my_tune.wav", ".DS_Store") or "__pycache__" in d]
+    c.check(not left, "no starter has a file a run leaves behind (it would go into every new project)", left)
+    for d, _dirs, files in os.walk(STARTERS_DIR):
+        for f in sorted(files):
+            if f.endswith(".tuf"):  # in its own folder, so import money.tuf finds money.tuf
+                p = subprocess.run(tuff_cmd() + ["--check", f], cwd=d, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                   env=starters_env(), stdin=subprocess.DEVNULL, timeout=60)
+                c.check(p.returncode == 0 and p.stdout.strip() == "OK", f"{os.path.relpath(os.path.join(d, f), STARTERS_DIR)} passes --check",
+                        (p.stdout + p.stderr)[:400])
+
+    # ---- console starters, through a pipe
+    code, out, err, _s = starters_run(starters_copy("blank"))
+    c.check(code == 0 and out == "" and err == "", "blank: runs, and says nothing (it's all comments)", (code, out, err))
+    folder = starters_copy("hello")
+    code, out, err, _s = starters_run(folder, "Sam\n12\n")
+    c.check(code == 0 and "Nice to meet you, Sam!" in out and "In ten years you'll be 22." in out and "TUFF IS FUN!" in out
+            and out.count("Counting: ") == 3 and "This line is purple." in out and "Bye for now, Sam!" in out and not err,
+            "hello: asks a name and an age, counts, shouts and says goodbye", (out + err)[-600:])
+    code, out, err, _s = starters_run(folder, "  \nold\n")
+    c.check(code == 0 and "Nice to meet you, friend!" in out and "That isn't a number, but that's OK." in out,
+            "hello: no name is 'friend', and an age that isn't a number is fine", (out + err)[-400:])
+    folder = starters_copy("quiz")
+    code, out, err, _s = starters_run(folder, "42\n MARS \n6\nhoney\nThe Pacific Ocean\n")
+    c.check(code == 0 and out.count("Right!") == 4 and "Not quite: it's 8." in out and "You got 4 out of 5 (80%)." in out and "Well done!" in out,
+            "quiz: answers count in any case and with spaces, a wrong one shows the answer, and the score is a percent", (out + err)[-600:])
+    code, out, err, _s = starters_run(folder, "forty-two\nmars\neight\nhoney\npacific\n")
+    c.check(code == 0 and "You got 5 out of 5 (100%)." in out and "A perfect score!" in out, "quiz: every answer in a question's list counts", (out + err)[-300:])
+    folder = starters_copy("shop")
+    code, out, err, _s = starters_run(folder, "1\n3\n9\n2\n5\n4\n2\nx\n3\n0\n\n")
+    receipt = ""
+    if os.path.isfile(os.path.join(folder, "receipt.txt")):
+        with open(os.path.join(folder, "receipt.txt"), encoding="utf-8") as f:
+            receipt = f.read()
+    c.check(code == 0 and "Added 3 x Apple. Basket so far: $1.35" in out and "There's no number 9 on the shelf." in out
+            and "Sorry, there are only 4 left." in out and "There's no number x on the shelf." in out and "Type how many you'd like" in out
+            and "Thanks for shopping!" in out, "shop: buys with money.tuf's prices, and turns down what isn't on the shelf or in stock", (out + err)[-800:])
+    c.check(re.search(r"3 x Apple +\$1\.35", receipt) and re.search(r"2 x Cheese +\$7\.60", receipt) and re.search(r"Subtotal +\$8\.95", receipt)
+            and re.search(r"Tax \(20%\) +\$1\.79", receipt) and re.search(r"Total +\$10\.74", receipt),
+            "shop: the receipt (money.tuf's tax and as_money) is in receipt.txt", receipt)
+    folder = starters_copy("shop")
+    code, out, err, _s = starters_run(folder, "\n")
+    c.check(code == 0 and "Nothing in the basket" in out and not os.path.exists(os.path.join(folder, "receipt.txt")),
+            "shop: paying for nothing writes no receipt", (out + err)[-300:])
+    folder = starters_copy("music")
+    code, out, err, secs = starters_run(folder, "1\ni\nchip\n2\nw\nC4 E4 G4 C5*2\nw\nH4 C4\ni\ntrumpet\ns\nb\nzz\n9\nq\n")
+    try:
+        with wave.open(os.path.join(folder, "my_tune.wav")) as w:
+            seconds = w.getnframes() / w.getframerate()
+    except (OSError, wave.Error, EOFError):
+        seconds = None
+    c.check(code == 0 and "Playing Twinkle Twinkle on the piano..." in out and "Playing Ode to Joy on the chip..." in out
+            and "There's no trumpet, so it's still chip." in out and "Playing the band..." in out
+            and out.count("Type a number or a letter from the list.") == 2 and out.rstrip().endswith("Bye!") and not err,
+            "music: plays tunes, changes the instrument, plays the band, and asks again after a wrong choice", (out + err)[-800:])
+    c.check("Those notes didn't work:" in out and '"H4" (note 1) isn\'t a note' in out, "music: a mistake in typed notes is shown, and it carries on", out[-600:])
+    c.check(seconds is not None and abs(seconds - 2.5) < 0.1 and "Saved my_tune.wav (2.5 seconds)" in out,
+            "music: saves the last tune (C4 E4 G4 C5*2) as my_tune.wav, 2.5 seconds long", (seconds, out[-300:]))
+    c.check(secs < 30, f"music: in a pipe nothing plays, so nothing waits ({secs:.1f} s)", secs)
+
+    # ---- Weather: a stand-in weather service, then no internet (a proxy that refuses), with the real addresses
+    weekday = lambda days_on: (datetime.date.today() + datetime.timedelta(days=days_on)).strftime("%A")  # in days from today here
+    (code, out, err, _s), asked = starters_weather(c, starters_copy("weather"))
+    forecast = next((q for p, q in asked if p == "/forecast"), {})
+    c.check(code == 0 and "Testville, Nowhere Land" in out and "Now: Light rain, 13°C (feels like 10°C)" in out
+            and "Wind 14 km/h, humidity 81%" in out and re.search(r"Today +Light rain +8 to 14°C", out) and re.search(r"Tomorrow +Cloudy +10 to 16°C", out)
+            and re.search(rf"\n +{weekday(2)} +Clear sky +8 to 17°C", out) and not err,
+            f"weather: finds the place, then shows the weather now and for three days (the third is {weekday(2)})", (out + err)[-800:])
+    c.check(forecast.get("latitude") == ["51.5"] and forecast.get("longitude") == ["-0.12"] and "weather_code" in forecast.get("current", [""])[0]
+            and "temperature_2m_max" in forecast.get("daily", [""])[0], "weather: asks for the forecast where the place is", asked)
+    c.check("I couldn't find a place called Atlantis. Check the spelling?" in out and out.rstrip().endswith("Bye!"),
+            "weather: a place that isn't there says so, and Enter stops", out[-300:])
+    # Far away it can be tomorrow already (Sydney, seen from London in the evening), or still yesterday: the days are
+    # the place's own, so the third one is named from the place's today
+    for first, where in ((1, "a day ahead of this computer"), (-1, "a day behind it")):
+        (code, out, err, _s), _asked = starters_weather(c, starters_copy("weather"), "Testville\n\n", first)
+        c.check(code == 0 and re.search(r"Today +Light rain", out) and re.search(r"Tomorrow +Cloudy", out)
+                and re.search(rf"\n +{weekday(first + 2)} +Clear sky +8 to 17°C", out) and not err,
+                f"weather: for a place {where}, Today and Tomorrow are its own, and the third day is {weekday(first + 2)}", (out + err)[-500:])
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    proxy = f"http://127.0.0.1:{s.getsockname()[1]}"  # nothing answers there once it's closed
+    s.close()
+    code, out, err, _s = starters_run(starters_copy("weather"), "London\n\n", env={"HTTPS_PROXY": proxy, "HTTP_PROXY": proxy, "https_proxy": proxy,
+                                                                                  "http_proxy": proxy, "NO_PROXY": "", "no_proxy": ""})
+    c.check(code == 0 and "Couldn't get the weather:" in out and "Check that the computer is on the internet" in out and out.rstrip().endswith("Bye!")
+            and "Tuff error" not in err, "weather: with no internet, try and catch say so kindly, and it carries on", (out + err)[-500:])
+
+    # ---- the Habit Tracker: habits.tuf on its own, then the window with a stand-in for it
+    folder = starters_copy("habits")
+    with open(os.path.join(folder, "check_habits.tuf"), "w", encoding="utf-8") as f:
+        f.write(STARTERS_HABITS)
+    code, out, err, _s = starters_run(folder, main="check_habits.tuf")
+    c.check(code == 0 and out.splitlines() == ["3", "3", "0", "3", "2", "1", "1", "2", "[0, 0, 0, 0, 1, 1, 1]", "3",
+                                               'Habit(name: "Run", days: ["2026-10-25", "2026-10-26", "2026-10-27", "2026-10-28"])'],
+            "habits.tuf: streaks (a day not ticked yet doesn't break one; months, years and leap days), the week, three to start and "
+            "saving Habits in habits.json", (out + err)[-600:])
+    if RUNTIME:
+        c.check(True, "the Habit Tracker's and the Drawing's stand-in runs need tuff.py: skipped with --runtime")
+    else:
+        folder = starters_copy("habits")
+        starters_add(folder, STARTERS_HABITS_UI)
+        code, out, err, secs = starters_run(folder, args=[sys.executable, "-c", STARTERS_NO_WINDOW, REPO, "main.tuf"])
+        said = out.splitlines()
+        saved = read_json(os.path.join(folder, "habits.json")) or []
+        c.check(code == 0 and not err and len(said) == 7 and said[:2] == ["3", "4"] and re.fullmatch(r"\w+ \d+ \w+: 1 of 4 done", said[2])
+                and said[3:] == ["[0, 0, 0, 0, 0, 0, 1]", "25", '["Drink water", "Go for a walk", "Stretch"]', "false"],
+                f"habits: the window (a stand-in) adds a habit but not the same one twice, ticks it, deletes one after Yes, and unticks ({secs:.1f} s)",
+                (out + err)[-800:])
+        c.check([h.get("name") for h in saved] == ["Drink water", "Go for a walk", "Stretch"] and all(h.get("$kind") == "Habit" for h in saved)
+                and saved[2].get("days") == [], "habits: every change is saved in habits.json, as Habits", saved)
+        # ---- the Drawing, with a stand-in pen
+        code, out, err, _s = starters_run(starters_copy("drawing"), args=[sys.executable, "-c", STARTERS_NO_TK, REPO, "main.tuf"])
+        pen = json.loads(out.split("PEN ", 1)[1]) if "PEN " in out else {}
+        c.check(code == 0 and not err.strip() and pen.get("forward", 0) > 100 and pen.get("begin_fill") == 5 and pen.get("dot") == 2
+                and pen.get("write") == 1 and pen.get("onclick") == 1 and pen.get("mainloop") == 1,
+                "drawing: draws with a stand-in pen (no window): the spiral, 5 stars, the moon, the words, and waits for clicks", (pen, err[-300:]))
+
+    # ---- Snake, through a pipe with screen:press keys
+    code, out, err, screen, folder = starters_snake(c, "")
+    c.check(code == 0 and len(screen) == 16 and "GAME OVER" in "\n".join(screen) and "Score 0  Best 0" in screen[0] and screen[-1].startswith("└")
+            and out.rstrip().endswith("Thanks for playing! Your best is 0.") and not os.path.exists(os.path.join(folder, "best.json")),
+            "snake: with no keys it runs into the wall: game over, and nothing is saved", out[-900:])
+    code, out, err, screen, folder = starters_snake(c, "food = [12, 8]\n")
+    c.check(code == 0 and "Score 1  Best 1" in screen[0] and read_json(os.path.join(folder, "best.json")) == 1
+            and out.rstrip().endswith("Your best is 1."), "snake: it eats the food in its way, grows, and the best score is saved in best.json", out[-900:])
+    code, out, err, screen, folder = starters_snake(c, 'food = [12, 8]\nscreen:press("space", 90)\nscreen:press("up", 100)\n')
+    c.check(code == 0 and "@" in screen[1] and "GAME OVER" in "\n".join(screen) and "Best 1" in screen[0] and read_json(os.path.join(folder, "best.json")) == 1,
+            "snake: Space plays again after game over, and the new snake turns up into the top wall", out[-900:])
+    for key in ("q", "escape"):  # after eating once: the new best counts, though the snake never hit anything
+        code, out, err, screen, folder = starters_snake(c, f'food = [12, 8]\nscreen:press("{key}", 40)\n')
+        c.check(code == 0 and "GAME OVER" not in "\n".join(screen) and "Score 1  Best 1" in screen[0] and read_json(os.path.join(folder, "best.json")) == 1
+                and out.rstrip().endswith("Your best is 1."), f"snake: {'Q' if key == 'q' else 'Esc'} stops the game mid-game, and keeps the new best score",
+                out[-900:])
+
+    # ---- Coin Collector: Tuff Engine's preview, then headless.py with a self-test
+    folder = starters_copy("coins")
+    code, out, err, d, secs = scene(os.path.join(folder, "main.tuf"))
+    things = {t.get("var"): t for t in d.get("things", []) if t.get("var")}
+    c.check(code == 0 and d.get("error") is None and d.get("mode") == "2d" and d.get("title") == "Coin Collector" and "hero" in things,
+            f"coins: Tuff Engine's preview runs it ({secs:.1f} s), with the hero", {k: d.get(k) for k in ("error", "mode", "title", "stopped")})
+    if not RUNTIME:
+        folder = starters_copy("coins")
+        starters_add(folder, STARTERS_COINS)
+        with open(os.path.join(folder, "events.json"), "w", encoding="utf-8") as f:
+            json.dump({"3": [{"type": "keydown", "code": "Space"}], "4": [{"type": "keyup", "code": "Space"}],
+                       "10": [{"type": "keydown", "code": "ArrowRight"}], "25": [{"type": "keyup", "code": "ArrowRight"}]}, f)
+        code, out, err, secs = starters_run(folder, args=[sys.executable, os.path.join(HERE, "headless.py"), "main.tuf", "out.json", "900", "events.json"])
+        cmds = read_json(os.path.join(folder, "out.json")) or []
+        images = {cmd[1]: cmd[5].get("src") for cmd in cmds if cmd[0] == "c" and len(cmd) > 5 and cmd[3] == "image"}
+        hero = next((i for i, src in images.items() if src == "asset:pictures/hero.png"), None)
+        walked = any(cmd[0] == "s" and cmd[1] == hero and (cmd[2].get("play") or [None])[0] == [1, 2, 3, 4] for cmd in cmds)
+        texts = [cmd[2]["text"] for cmd in cmds if cmd[0] == "s" and "text" in cmd[2]]
+        m = re.search(r"^score (\d+), coins 5, bugs 1, paused false\nbest (\d+), paused true$", out, re.M)
+        c.check(code == 0 and "Tuff error" not in err and m and int(m.group(1)) >= 1 and m.group(1) == m.group(2),
+                f"coins: headless, Space starts it, a coin on the hero is picked up (a new one comes), and when the time's up the game ends ({secs:.1f} s)",
+                (out + err)[-600:])
+        c.check(set(images.values()) == {"asset:pictures/hero.png", "asset:pictures/coin.png", "asset:pictures/bug.png"} and walked and "Coins: 1" in texts,
+                "coins: the pictures come from the pictures folder, the hero walks while an arrow is held, and the score goes up", (images, texts[:6]))
+        saves = read_json(os.path.join(root, "saves", "Coin Collector.json")) or {}
+        c.check(m and saves.get("saves", {}).get("best") == int(m.group(2)), "coins: the best score is saved with game:save", saves)
+    with open(os.path.join(STARTERS_DIR, "coins", "main.tuf"), encoding="utf-8") as f:
+        coins_code = f.read()
+    c.check(re.search(r"[\"'](\./)?pictures[\"'\\/]", coins_code, re.I), "coins: Build exe takes the pictures folder along (the code names it in a path)", None)
+
+    # ---- the create logic and the gallery, in Node
+    app = os.path.join(REPO, "tuffcode")
+    try:
+        for js in ("starters.js", os.path.join("renderer", "js", "new-project.js"), os.path.join("test", "e2e", "suites", "newproject.mjs")):
+            p = subprocess.run(["node", "--check", os.path.join(app, js)], capture_output=True, text=True, encoding="utf-8", timeout=60)
+            c.check(p.returncode == 0, f"node --check {js}", p.stderr[-400:])
+        p = subprocess.run(["node", os.path.join(HERE, "new_project_harness.js"), os.path.join(root, "harness")], capture_output=True, text=True,
+                           encoding="utf-8", timeout=180)
+        results = json.loads(p.stdout)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the New Project harness")
+        results = []
+    except ValueError:
+        c.check(False, "the New Project harness ran", (p.stdout + p.stderr)[-800:])
+        results = []
+    for ok, what, got in results:
+        c.check(ok, f"New Project: {what}", got)
+
+    # ---- how the IDE and the built app find them
+    def text_of(*parts):
+        with open(os.path.join(app, *parts), encoding="utf-8") as f:
+            return f.read()
+    build = json.loads(text_of("package.json"))["build"]
+    c.check({"from": "starters", "to": "starters"} in build["extraResources"] and "starters.js" in build["files"],
+            "the built app has resources/starters (extraResources) and starters.js", build["extraResources"][-2:])
+    main = text_of("main.js")
+    c.check("require('./starters')" in main and "path.join(process.resourcesPath, 'starters')" in main
+            and all(f"'starters:{n}'" in main for n in ("list", "check", "create", "pickFolder")),
+            "main.js finds the starters (resources/starters when built) and answers the gallery's calls", None)
+    c.check(re.search(r"const SAMPLE_MAIN = `[^`]*# Want a head start\? File > New Project\.\.\. has starter projects", main),
+            "a first run's HelloTuff points to File > New Project... (its main.tuf is what opens first)", None)
+    c.check("starters: { list: invoke('starters:list')" in text_of("preload.js"), "preload.js gives the page the starters calls", None)
+    html = text_of("renderer", "index.html")
+    c.check('<script src="js/new-project.js"></script>' in html and 'id="es-new-project"' in html,
+            "index.html loads new-project.js, and the empty editor has a New Project… button", None)
+    ide = text_of("renderer", "js", "ide.js")
+    c.check("newProject: { label: 'New Project…'" in ide and "['File', ['newProject'," in ide and "{ label: 'New Project…', run: commands.newProject.run }" in ide
+            and "window.TuffNewProject?.isOpen()" in ide and "openFolder: (dir) => openFolder(dir)" in ide,
+            "ide.js: New Project… is a command (so Search Everywhere finds it), first in the File menu and the project menu, and "
+            "the IDE's shortcuts wait while it's open", None)
+    c.check("if (process.platform !== 'darwin') { Menu.setApplicationMenu(null); return; }" in main,
+            "main.js sets no menu on Windows and Linux: the keys of Electron's default one (Ctrl+W closes the window, Ctrl+R reloads it) "
+            "would work in the gallery, where the IDE's own shortcuts wait", None)
+    # After New Project or Open Folder the file run last is the old project's: with no .tuf tab open, Run (and Debug),
+    # Rerun, Design Studio and Build go to the new folder's main.tuf instead (ide.js's own functions, from its source).
+    try:
+        p = subprocess.run(["node", "-e", STALE_RUN, os.path.join(app, "renderer", "js", "ide.js")], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        got = json.loads(p.stdout.strip().splitlines()[-1])
+    except FileNotFoundError:
+        got = None
+    except (ValueError, IndexError) as exc:
+        got = {"crash": str(exc), "stderr": p.stderr[-500:]}
+    if got is not None:
+        old, other = "C:\\Old\\main.tuf", "C:\\Other\\main.tuf"
+        c.check(got == [{"run": old, "rerun": ["start", old], "build": old, "studio": old}, {"run": None, "rerun": ["current"], "build": other, "studio": other}],
+                "ide.js: after another folder opens, Run, Rerun, Design Studio and Build leave the old project's file run last alone", got)
+
+
+# ---------------------------------------------------------------- Learn's Section 1.7, the Workshop (1.5.0)
+
+# What the Workshop lessons' console examples and solutions say (through a pipe: no sound, no one to press keys).
+LEARN_150_SAYS = {
+    ("workshop-templates", "example"): "Sam has 10 points\nTwo of them: $12.75\n0.33 and 007\n[Sam   ] [   9]",
+    ("workshop-templates", "solution"): "popcorn  $1.20\napple    $0.45\njuice    $1.85\nTotal:   $3.50",
+    ("workshop-kinds", "example"): 'Rex\'s hunger: 6\nAnn\'s hunger: 2\nPet(name: "Rex", hunger: 6)',
+    ("workshop-kinds", "solution"): "Holes and Wonder: 582 pages",
+    ("workshop-actions", "example"): "Rex played\nRex's hunger: 4",
+    ("workshop-actions", "solution"): "Sam has 3 hp left",
+    ("workshop-files", "example"): "Price: $6.38\nWith tax: $7.65\nThe tax rate is 0.2",
+    ("workshop-files", "solution"): "3 tickets: $16.20",
+    ("workshop-music", "example"): "That song is 8 seconds long",
+    ("workshop-music", "solution"): "",
+}
+_SNACKS = 'snacks = {"popcorn": 1.2, "apple": 0.45, "juice": 1.85}\n'
+_BOOK = 'kind Book:\n    title = ""\n    pages = 0\n\n'
+_BOOKS = _BOOK + 'holes = Book("Holes", 272)\nwonder = Book("Wonder", 310)\n'
+_HERO = 'kind Hero:\n    name = "?"\n    hp = 10\n'
+_SCREEN = 'mention tterm\nscreen = tterm.screen(20, 10)\nx = 10\ny = 5\n\nfunc step(dt):\n'
+_SHEET = 'mention tgame\ngame = tgame.window("Walker", 600, 300)\nhero = game:image("walker.png", 300, 200, 96)\n'
+_WALK = _SHEET + 'hero:frames(4)\nhero:animation("walk", [1, 2, 3, 4], 8)\n'
+
+
+def _boxed(arrows):
+    """The terminal game with these lines for the up and down arrows, in its box (walls at y = 0 and y = 9)."""
+    return _SCREEN + arrows + '    screen:clear()\n    screen:box(0, 0, 20, 10, "gray")\n    screen:put(x, y, "@", "lime")\n\nscreen:every_frame(step)\n'
+
+
+def _walks(lines):
+    """The sprite sheet game with these lines in its loop, after dt = game:frame()."""
+    return _WALK + 'while game:open():\n    dt = game:frame()\n' + lines
+
+
+# The terminal game with up and down the wrong way round (y goes down the screen), and with its stops on the walls.
+_TTERM_SWAPPED = _boxed('    if screen:pressed("up") and y < 8:\n        y += 1\n    if screen:pressed("down") and y > 1:\n        y -= 1\n')
+_TTERM_WALLS = _boxed('    if screen:pressed("up") and y > 0:\n        y -= 1\n    if screen:pressed("down") and y < 9:\n        y += 1\n')
+_TTERM_NAMES = _boxed('    if screen:pressed("Up") and y > 1:\n        y -= 1\n    if screen:pressed("arrow down") and y < 8:\n        y += 1\n')
+# The sprite sheet game with frame 1 only before the loop (the walk never stops), and on every frame (it never starts).
+_SHEETS_BEFORE = _WALK + 'hero:frame(1)\nwhile game:open():\n    dt = game:frame()\n    if game:held("right"):\n        hero:play("walk")\n'
+_SHEETS_ALWAYS = _WALK + 'while game:open():\n    dt = game:frame()\n    if game:held("right"):\n        hero:play("walk")\n    hero:frame(1)\n'
+# ...and with each arrow's own if playing the walk, then frame 1 under an else: under the right arrow's if alone, that
+# else runs while left is held too, so going left it never walks. After an if and an elif, it runs only when neither is.
+_HELD_LEFT = '    if game:held("left"):\n        hero:move(-150 * dt, 0)\n        hero:play("walk")\n'
+_HELD_RIGHT = _HELD_LEFT.replace("left", "right").replace("-150", "150")
+_ELSE_STILL = '    else:\n        hero:frame(1)\n'
+_SHEETS_ELSE = _walks(_HELD_LEFT + _HELD_RIGHT + _ELSE_STILL)
+_SHEETS_ELIF = _walks(_HELD_LEFT + _HELD_RIGHT.replace("if", "elif", 1) + _ELSE_STILL)
+# ...and frame 1 under an if of its own that checks only that right isn't held: true while left is held too.
+_SHEETS_IF_NOT = _walks(_HELD_LEFT + _HELD_RIGHT + '    if not game:held("right"):\n        hero:frame(1)\n')
+# The mistakes a learner is likely to make in each lesson's task: programs that run (so Learn checks them, instead of
+# pointing at an error), and how the hint its check gives starts.
+LEARN_150_MISTAKES = [
+    ("workshop-templates", _SNACKS + 'for snack in snacks:\n    say "{snack:8} {snacks[snack]:money}"\n', "Put an f right before the quotes"),
+    ("workshop-templates", _SNACKS + 'for snack in snacks:\n    say snack + " " + text(snacks[snack], 2)\n', "Make each line with a template"),
+    ("workshop-templates", _SNACKS + 'for snack in snacks:\n    say f"{snack:8} {snacks[snack]}"\n', "Show the prices as money"),
+    ("workshop-templates", _SNACKS + 'for snack in snacks:\n    say f"{snack:8} {snacks[snack]:money}"\n', "Then add the prices up"),
+    ("workshop-templates", _SNACKS + 'total = 0\nfor snack in snacks:\n    total += snacks[snack]\n    say f"{snack:8} {snacks[snack]:money}"\n'
+                                     'say "Total: " + total\n', "Say the total as money too"),
+    ("workshop-templates", _SNACKS + 'total = 0\nfor snack in snacks:\n    total += snacks[snack]\n    say f"{snack:8} {snacks[snack]:money}"\n'
+                                     'say "Total: $" + total\n', "Say the total as money too"),  # Total: $3.5
+    ("workshop-templates", 'snacks = {"popcorn": 1.2, "apple": 0.45, "juice": 1.85, "nuts": 2}\nfor snack in snacks:\n'
+                           '    say f"{snack:8} {snacks[snack]:money}"\n', "Then add the prices up"),  # four lines of money, but no total
+    ("workshop-templates", _SNACKS + 'total = 0\nfor snack in snacks:\n    total += snacks[snack]\n    say f"{snack:8} {snacks[snack]:money}"\n'
+                                     'say f"Total: ${total:0.0}"\n', "Say the total as money too"),  # Total: $3.5
+    ("workshop-templates", _SNACKS + 'for snack in snacks:\n    say f"{snack:8} ${snacks[snack]:0.00}"\n', "Then add the prices up"),  # $ and {x:0.00}: money
+    ("workshop-kinds", 'holes = {"title": "Holes", "pages": 272}\nsay holes["pages"]\n', "Start your own kind"),
+    ("workshop-kinds", 'kind Book:\n    title = ""\n\nholes = Book("Holes")\nwonder = Book("Wonder")\nsay holes.title + wonder.title\n', "Give Book two fields"),
+    ("workshop-kinds", _BOOK + 'holes = Book("Holes", 272)\nsay holes.pages\n', "Make two of them"),
+    ("workshop-kinds", _BOOK + 'holes = Book("Holes", 272)\nwonder = Book("Wonder", 310)\nsay holes\nsay wonder\n', "Read a field with a dot"),
+    ("workshop-kinds", _BOOK + 'holes = Book("Holes", 272)\nwonder = Book("Wonder", 310)\nsay f"{holes.title} has {holes.pages} pages"\n'
+                               'say f"{wonder.title} has {wonder.pages} pages"\n', "Add the two books' pages together"),
+    ("workshop-kinds", _BOOKS + 'say holes.title + ": " + holes.pages + " pages"\nsay wonder.title + ": " + wonder.pages + " pages"\n',
+     "Add the two books' pages together"),  # + only joins text here
+    ("workshop-kinds", _BOOKS + 'say holes.title + " and " + wonder.title\n', "Add the two books' pages together"),
+    ("workshop-kinds", _BOOKS + 'say "They have " + holes.pages + wonder.pages + " pages"\n', "After words, + joins each number on"),  # 272310
+    ("workshop-actions", _HERO + '\nfunc hurt(damage):\n    sam.hp -= damage\n\nsam = Hero("Sam")\nhurt(3)\nhurt(4)\nsay sam.hp\n', "Move the func into the kind"),
+    ("workshop-actions", _HERO + '    func hurt(damage):\n        sam.hp -= damage\n\nsam = Hero("Sam")\nsam:hurt(3)\nsam:hurt(4)\nsay sam.hp\n',
+     "In the action, take the damage off the hero's own hp"),
+    ("workshop-actions", _HERO + '    func hurt(damage):\n        my.hp -= damage\n\nsam = Hero("Sam")\nsay sam.hp\n', "Run the action on your hero"),
+    ("workshop-actions", _HERO + '    func hurt(damage):\n        my.hp -= damage\n\nsam = Hero("Sam")\nsam:hurt(3)\nsay sam.hp\n', "Hurt your hero twice"),
+    ("workshop-files", 'say f"{3 * 4.5 * 1.2:money}"\n', "Load the file first"),
+    ("workshop-files", 'import money.tuf\nsay money.as_money(3 * 4.5)\n', "Add the tax with money.with_tax"),
+    ("workshop-files", 'import money.tuf\nsay money.with_tax(3 * 4.5)\n', "Show it as money"),
+    ("workshop-files", 'import money.tuf\nsay money.as_money(3 * 4.5 * money.rate)\n', "Add the tax with money.with_tax"),  # only the tax, $2.70
+    ("workshop-files", 'import money.tuf\nsay money.as_money(3 * 4.5 + money.rate)\n', "Add the tax with money.with_tax"),  # $13.70
+    ("workshop-files", 'import money.tuf\nsay 3 * 4.5 * (1 + money.rate)\n', "Show it as money"),  # 16.2: the tax is on, but not as money
+    ("workshop-music", 'mention tmusic\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4")\nsong:track("bass", "C3*3")\nsong:play()\n', "Play a tune first"),
+    ("workshop-music", 'mention tmusic\ntmusic.play("C4 E4 G4", "piano")\ntmusic.play("C3*3", "bass")\n', "Make a song"),
+    ("workshop-music", 'mention tmusic\ntmusic.play("C4 E4", "piano")\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4")\nsong:play()\n', "Give it two tracks"),
+    ("workshop-music", 'mention tmusic\ntmusic.play("C4 E4", "piano")\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4")\n'
+                       'song:track("bass", "C3*3")\n', "Play the song after its tracks"),
+    ("workshop-tterm", _SCREEN + '    if screen:pressed("up"):\n        y -= 1\n    screen:clear()\n    screen:put(x, y, "@")\n\nscreen:every_frame(step)\n',
+     "Now the down arrow"),
+    ("workshop-tterm", _SCREEN + '    if screen:pressed("up"):\n        x -= 1\n    if screen:pressed("down"):\n        x += 1\n    screen:clear()\n'
+                                 '    screen:put(x, y, "@")\n\nscreen:every_frame(step)\n', "Up goes towards the top"),
+    ("workshop-tterm", _SCREEN + '    if screen:pressed("up"):\n        y -= 1\n    if screen:pressed("down"):\n        y += 1\n    screen:clear()\n'
+                                 '    screen:put(x, y, "@")\n\nscreen:every_frame(step)\n', "Keep the @ inside the box"),
+    ("workshop-tterm", _TTERM_SWAPPED, "Up goes towards the top"),
+    ("workshop-tterm", _TTERM_WALLS, "The box's top wall is at y = 0, so stop the @ at 1"),
+    ("workshop-tterm", _TTERM_WALLS.replace("y > 0", "y > 1"), "The box's bottom wall is at y = 9, so stop the @ at 8"),
+    ("workshop-sheets", _SHEET + 'while game:open():\n    game:frame()\nhero:frames(4)\n', "Cut it into frames before the game starts"),
+    ("workshop-sheets", _SHEET + 'hero:frames(4)\nwhile game:open():\n    game:frame()\n', "Name the walk and its frames"),
+    ("workshop-sheets", _SHEET + 'hero:frames(4)\nhero:animation("walk", [1, 2, 3, 4], 8)\nhero:play("walk")\nwhile game:open():\n    game:frame()\n',
+     "Play the walk in the loop"),
+    ("workshop-sheets", _SHEET + 'hero:frames(4)\nhero:animation("walk", [1, 2, 3, 4], 8)\nwhile game:open():\n    dt = game:frame()\n'
+                                 '    if game:held("right"):\n        hero:play("walk")\n', "When no arrow is held"),
+    ("workshop-sheets", _SHEETS_BEFORE, "When no arrow is held"),
+    ("workshop-sheets", _SHEETS_ALWAYS, "Put hero:frame(1) under else:"),
+    ("workshop-sheets", _SHEETS_ELSE, "The else runs while left is held too"),
+    ("workshop-sheets", _walks(_HELD_RIGHT + _HELD_LEFT + _ELSE_STILL), "The else runs while right is held too"),
+    ("workshop-sheets", _SHEETS_IF_NOT, "When left is held, if not game:held(\"right\") is true too"),
+    ("workshop-sheets", _walks(_HELD_LEFT + _HELD_RIGHT + '    if not game:held("left"): hero:frame(1)\n'), "When right is held, if not game:held(\"left\")"),
+]
+# Other right ways to do the tasks, which the checks must accept: each runs, and its check says it's done.
+LEARN_150_GOOD = [
+    ("workshop-templates", _SNACKS + 'say f"popcorn  {snacks["popcorn"]:money}"\nsay f"apple    {snacks["apple"]:money}"\n'
+                           'say f"juice    {snacks["juice"]:money}"\nsay f"Total:   {snacks["popcorn"] + snacks["apple"] + snacks["juice"]:money}"\n'),
+    ("workshop-templates", _SNACKS + "total = 0\nfor snack in snacks:\n    total += snacks[snack]\n    say f'{snack:8} {snacks[snack]:money}'\n"
+                           "say f'Total:   {total:money}'\n"),
+    ("workshop-templates", _SNACKS + 'total = 0\nfor snack in snacks:\n    total += snacks[snack]\n    say f"{snack:8} {snacks[snack]:money}"\n'
+                           'say f"Total:   ${total:0.00}"\n'),  # the lesson's {x:0.00}, after a $
+    ("workshop-kinds", _BOOKS + 'total = holes.pages\ntotal = total + wonder.pages\nsay total\n'),
+    ("workshop-kinds", _BOOKS + 'total = 0\nfor book in [holes, wonder]:\n    total += book.pages\nsay "Pages: " + total\n'),
+    ("workshop-kinds", _BOOKS + 'say "They have " + (holes.pages + wonder.pages) + " pages"\n'),
+    ("workshop-actions", _HERO + '    func hurt(damage):\n        my.hp -= damage\n\nsam = Hero("Sam")\nfor i in range(1, 2):\n    sam:hurt(3)\n'
+                         'say f"{sam.name} has {sam.hp} hp left"\n'),
+    ("workshop-actions", _HERO + '    func heal(amount):\n        my.hp += amount\n    func hurt(damage):\n        my.hp -= damage\n\nsam = Hero("Sam")\n'
+                         'sam:hurt(3)\nsam:hurt(4)\nsay f"{sam.name} has {sam.hp} hp left"\n'),
+    ("workshop-files", 'import money.tuf\n\nsay f"3 tickets: {money.with_tax(3 * 4.5):money}"\n'),  # Lesson 1's :money
+    ("workshop-files", 'import money.tuf\n\nsay money.as_money(3 * 4.5 * (1 + money.rate))\n'),  # the tax from money.rate
+    ("workshop-files", 'import money.tuf\n\nprice = 3 * 4.5\ntax = price * money.rate\nsay "3 tickets: " + money.as_money(price + tax)\n'),
+    ("workshop-files", 'import money.tuf\n\nsay f"3 tickets: ${money.with_tax(3 * 4.5):0.00}"\n'),  # Lesson 1's $ and {x:0.00}
+    ("workshop-tterm", _TTERM_NAMES),
+    ("workshop-tterm", _boxed('    if screen:pressed("up") and y >= 2: y -= 1\n    if screen:pressed("down") and y <= 7: y = y + 1\n')),
+    ("workshop-tterm", _boxed('    if screen:pressed("up"):\n        y -= 1\n    elif screen:pressed("down"):\n        y += 1\n'
+                              '    if y < 1:\n        y = 1\n    if y > 8:\n        y = 8\n')),
+    ("workshop-sheets", _SHEET + 'hero:frames 4\nhero:animation("walk", [1, 2, 3, 4], 8)\nwhile game:open():\n    dt = game:frame()\n'
+                                 '    if game:held("right"):\n        hero:move(150 * dt, 0)\n        hero:play "walk"\n    else:\n        hero:frame 1\n'),
+    ("workshop-sheets", _WALK + 'while game:open():\n    dt = game:frame()\n    if game:held("left") or game:held("right"): hero:play("walk")\n'
+                                '    else: hero:frame(1)\n'),
+    ("workshop-sheets", _SHEETS_ELIF),
+    ("workshop-sheets", _walks(_HELD_LEFT + '    else:\n        if game:held("right"):\n            hero:move(150 * dt, 0)\n'
+                               '            hero:play("walk")\n        else:\n            hero:frame(1)\n')),  # an else inside an else
+    ("workshop-sheets", _walks(_HELD_LEFT + _HELD_RIGHT + '    if not game:held("left") and not game:held("right"):\n        hero:frame(1)\n')),
+    ("workshop-sheets", _walks(_HELD_LEFT + _HELD_RIGHT + '    if not game:held("left"):\n        if not game:held("right"):\n            hero:frame(1)\n')),
+    ("workshop-sheets", _walks(_HELD_LEFT + '    elif not game:held("right"):\n        hero:frame(1)\n'
+                               '    else:\n        hero:move(150 * dt, 0)\n        hero:play("walk")\n')),  # (after the if for left)
+]
+# Slips in these lessons that stop the run, so Learn only shows what the run says: (the program, with money.tuf next to
+# it, and what both runtimes and --check say).
+LEARN_150_SLIPS = [
+    (_HERO + '    func hurt(damage):\n        self.hp -= damage\n\nsam = Hero("Sam")\nsam:hurt(3)\n',
+     "I don't know what 'self' is. Tuff has no classes: make a kind (kind Pet:), and in its actions the object itself is my, like my.hunger."),
+    ('import money.tuf\n\nsay as_money(with_tax(3 * 4.5))\n', "I don't know what 'as_money' is. It's in money.tuf, so write money.as_money"),
+    ('import money.tuf\n\nsay money.as_money(3 * 4.5 * (1 + rate))\n', "I don't know what 'rate' is. It's in money.tuf, so write money.rate"),
+]
+
+
+def learn_150_write(folder, files):
+    """Writes a lesson's own files (text, or {"base64": ...} for a picture) into folder."""
+    os.makedirs(folder, exist_ok=True)
+    for name, data in (files or {}).items():
+        if isinstance(data, dict):
+            with open(os.path.join(folder, name), "wb") as f:
+                f.write(base64.b64decode(data["base64"]))
+        else:
+            with open(os.path.join(folder, name), "w", encoding="utf-8") as f:
+                f.write(data)
+
+
+def learn_150_game(folder, name, code, frames, events=None, slow=False):
+    """A tgame lesson's program, run by headless.py in folder (no window): (exit code, say lines, stderr, the
+    commands it sent the page)."""
+    path = os.path.join(folder, name + ".tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(code)
+    out = os.path.join(folder, name + ".json")
+    args = [sys.executable, os.path.join(HERE, "headless.py"), path, out, str(frames)]
+    if events:
+        with open(os.path.join(folder, name + ".events.json"), "w", encoding="utf-8") as f:
+            json.dump(events, f)
+        args.append(os.path.join(folder, name + ".events.json"))
+    env = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW", "TUFF_TGAME_AUTOPILOT")}
+    env.update(PYTHONIOENCODING="utf-8", TUFF_NO_SOUND="1", **({"TUFF_SLOW": "1"} if slow else {}))
+    p = subprocess.run(args, cwd=folder, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, env=env,
+                       stdin=subprocess.DEVNULL)
+    return p.returncode, [x for x in p.stdout.splitlines() if x.strip()], p.stderr, read_json(out) or []
+
+
+def learn_150_plays(cmds):
+    """[(frame, what :play sent, the frame shown)] for the first picture a game made."""
+    pic = next((cmd[1] for cmd in cmds if cmd[0] == "c" and cmd[3] == "image"), None)
+    return [(f, s.get("play", "-"), s.get("cell")) for f, s in frame_sets(cmds, pic)]
+
+
+def learn_150_png(data):
+    """An 8-bit PNG read the way the game window has to read it, every chunk's CRC checked and every row unfiltered:
+    (width, height, rows of pixels, how see-through a pixel is from 0 to 255), or None if it doesn't read. (tgame
+    itself only reads the header, so a run doesn't notice a broken picture: the window just shows nothing.)"""
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos, idat, head, trns = 8, b"", None, b""
+    while pos + 12 <= len(data):
+        n = struct.unpack(">I", data[pos:pos + 4])[0]
+        kind, body = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + n]
+        if data[pos + 8 + n:pos + 12 + n] != struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF):
+            return None
+        if kind == b"IHDR":
+            head = struct.unpack(">IIBBBBB", body)
+        elif kind == b"IDAT":
+            idat += body
+        elif kind == b"tRNS":
+            trns = body
+        pos += 12 + n
+    if not head or head[2] != 8 or head[3] not in (0, 2, 3, 4, 6) or head[6] != 0:
+        return None
+    w, h, ctype = head[0], head[1], head[3]
+    bpp = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[ctype]
+    try:
+        raw = zlib.decompress(idat)
+    except zlib.error:
+        return None
+    if len(raw) != h * (w * bpp + 1):
+        return None
+    rows, prev = [], bytearray(w * bpp)
+    for y in range(h):
+        start = y * (w * bpp + 1)
+        how, line = raw[start], bytearray(raw[start + 1:start + 1 + w * bpp])
+        for x in range(len(line)):
+            a, b = line[x - bpp] if x >= bpp else 0, prev[x]
+            c = prev[x - bpp] if x >= bpp else 0
+            if how > 4:
+                return None
+            if how == 4:
+                p = a + b - c
+                near = a if abs(p - a) <= abs(p - b) and abs(p - a) <= abs(p - c) else b if abs(p - b) <= abs(p - c) else c
+            else:
+                near = (0, a, b, (a + b) // 2)[how]
+            line[x] = (line[x] + near) & 255
+        rows.append([tuple(line[i:i + bpp]) for i in range(0, len(line), bpp)])
+        prev = line
+
+    def alpha(px):
+        if ctype == 3:
+            return trns[px[0]] if px[0] < len(trns) else 255
+        return px[-1] if ctype in (4, 6) else 255
+    return w, h, rows, alpha
+
+
+def t_learn_150(c):
+    """1.5.0, headless: Learn's Section 1.7, the Workshop (text templates, kinds, actions, your own files, tmusic, tterm
+    and sprite sheets). learn.js, in Node (learn_test.mjs), lists it after Toolbox. Every lesson's example, starter and
+    solution passes --check and runs the same in both runtimes, saying what it should (the game with headless.py, so no
+    window, and music through a pipe, so no sound); each check accepts its solution and the other right ways above, run
+    for real, and gives its hint for the starter, for empty code and for the mistakes above (played, the terminal game's
+    and the sprite sheet's really go wrong); the slips that stop a run get the same help from both runtimes and --check;
+    Start lesson writes a lesson's own files (money.tuf and the sprite sheet walker.png) next to its file, where the
+    solutions run; and a run that was stopped isn't judged, though a real error still is."""
+    import shutil
+    import tuff_tgame
+    folder = os.path.join(HERE, "out", "learn_150")  # never in the temp folder: there --check can't see money.tuf
+    shutil.rmtree(folder, ignore_errors=True)
+    os.makedirs(folder)
+    learn = os.path.join(REPO, "tuffcode", "renderer", "js", "learn.js")
+    quiet = {"TUFF_NO_SOUND": "1", "TUFF_MUSIC_DIR": os.path.join(folder, "music")}
+
+    def node(plan):
+        path = os.path.join(folder, "plan.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(plan, f)
+        p = subprocess.run(["node", os.path.join(HERE, "learn_test.mjs"), learn, path], capture_output=True, text=True, encoding="utf-8",
+                           timeout=120)
+        try:
+            return json.loads(p.stdout)
+        except ValueError:
+            return {"error": (p.stdout + p.stderr)[-800:]}
+
+    try:
+        got = node({})
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped Learn's Workshop lessons")
+        return
+    titles = [s["title"] for s in got.get("sections", [])]
+    c.check(titles[2:4] == ["Section 1.6 · Toolbox", "Section 1.7 · Workshop"], "learn.js lists Section 1.7 · Workshop right after Toolbox",
+            got.get("error") or titles)
+    work = next((s for s in got.get("sections", []) if s["id"] == "workshop"), None)
+    if work is None:
+        return
+    lessons = work["lessons"]
+    ids = [l["id"] for l in lessons]
+    c.check(work["optional"] and ids == ["workshop-templates", "workshop-kinds", "workshop-actions", "workshop-files", "workshop-music",
+                                         "workshop-tterm", "workshop-sheets"],
+            "...an optional section of 7 lessons: templates, kinds, actions, your own files, music, a terminal game, sprite sheets", ids)
+    c.check([l["file"] for l in lessons] == [f"workshop-{i:02}-{l['id'][len('workshop-'):]}.tuf" for i, l in enumerate(lessons, 1)],
+            "...whose files are lessons/workshop-01-templates.tuf and so on", [l["file"] for l in lessons])
+    heads = [(l["starter"].splitlines() or [""])[0] for l in lessons]
+    c.check(heads == [f"# Section 1.7, Lesson {i}: {l['title']}" for i, l in enumerate(lessons, 1)],
+            "each starter begins '# Section 1.7, Lesson N: <its title>'", heads)
+    c.check(all(l["task"] and l["body"].count("<p>") >= 2 and l["example"] and l["solution"] for l in lessons),
+            "each has a body, an example, a task, a starter and a solution")
+    words = " ".join(" ".join(str(l[k]) for k in ("title", "body", "task", "example", "starter", "solution")) for l in lessons)
+    c.check(not re.search(r"python|pyinstaller|\bpip\b", words, re.I), "...and none of them mentions Python, pip or PyInstaller")
+    body = {l["id"]: l["body"] for l in lessons}
+    c.check(all("Start lesson puts" in body[i] for i in ("workshop-files", "workshop-sheets")) and "Learn has put" not in words,
+            "the two lessons with files of their own say Start lesson puts them in the lessons folder (they aren't there before)")
+    c.check("Section 4" in body["workshop-sheets"] and "install from Plugins" in body["workshop-sheets"] and "<code>|</code> is a bar line" in body["workshop-music"],
+            "the sprite sheet lesson says what its game is (Section 4 has more) and that Sprite Studio is a plugin; the music one says what | is")
+    own = {l["id"]: l["files"] or {} for l in lessons}
+    c.check({i: sorted(f) for i, f in own.items() if f} == {"workshop-files": ["money.tuf"], "workshop-sheets": ["walker.png"]},
+            "two lessons have files of their own: money.tuf for your own files, walker.png for sprite sheets", {i: sorted(f) for i, f in own.items()})
+    learn_150_write(folder, own["workshop-sheets"])
+    pic = learn_150_png(base64.b64decode(own["workshop-sheets"]["walker.png"]["base64"]))
+    c.check(pic is not None and pic[:2] == (384, 96) and tuff_tgame.image_size(os.path.join(folder, "walker.png")) == (384, 96),
+            "walker.png reads whole, as the game window reads it (every CRC and row): 384 x 96, 4 frames of 96 x 96", pic and pic[:2])
+    if pic:
+        rows, alpha = pic[2], pic[3]
+        frames = [[tuple(row[i * 96:(i + 1) * 96]) for row in rows] for i in range(4)]
+        shown = [sum(alpha(px) > 0 for row in f for px in row) for f in frames]
+        c.check(all(alpha(f[0][0]) == 0 and alpha(f[95][95]) == 0 for f in frames) and all(2000 < n < 6000 for n in shown)
+                and len(set(map(tuple, frames))) == 4, "...each frame see-through around a walker of its own (4 different frames)", shown)
+
+    # Each lesson's code, next to its own files: --check, and a run in both runtimes.
+    outputs = {}  # (lesson, part) -> what it said, for its check
+    for l in lessons:
+        where = os.path.join(folder, l["id"])
+        learn_150_write(where, own[l["id"]])
+        game = "mention tgame" in l["example"]
+        for part in ("example", "starter", "solution"):
+            path = os.path.join(where, part + ".tuf")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(l[part])
+            p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=where,
+                               stdin=subprocess.DEVNULL)
+            c.check(p.returncode == 0 and p.stdout.strip() == "OK", f"{l['id']} {part} passes --check", (p.stdout + p.stderr)[:300])
+            if game:
+                run = learn_150_game(where, "run_" + part, l[part], 10)
+                outputs[(l["id"], part)] = "\n".join(run[1])
+                c.check(run[0] == 0 and not run[2].strip(), "...and runs headless, with no window", run[2][-300:])
+                continue
+            slow, fast = [interp_run(os.path.join(where, mode + "_" + part), l[part], mode == "slow", env=quiet, files=own[l["id"]])
+                          for mode in ("slow", "fast")]
+            outputs[(l["id"], part)] = fast[1]
+            want = LEARN_150_SAYS.get((l["id"], part))
+            c.check(fast[0] == 0 and not fast[2].strip() and slow == fast and (want is None or fast[1].strip() == want),
+                    f"...and runs the same in both runtimes{', saying ' + repr(want[:40]) if want else ''}", (slow, fast))
+
+    # The terminal game: the up and down arrows move the @, and the box's walls stop it (screen:press gives a frame a key).
+    tterm = next(l for l in lessons if l["id"] == "workshop-tterm")
+    c.check(outputs.get(("workshop-tterm", "example"), "").rstrip().endswith("You stopped at 3."), "the tterm example ends 'You stopped at 3.'",
+            outputs.get(("workshop-tterm", "example"), "")[-200:])
+    # The same for a game that writes the keys as "Up" and "arrow down" (its check accepts it, below), and for two
+    # mistakes its check finds: up and down swapped, and stops that let the @ onto the walls.
+    games = [("the tterm solution", tterm["solution"], 1, 8, "against the box"), ('"Up" and "arrow down"', _TTERM_NAMES, 1, 8, "too"),
+             ("up and down swapped", _TTERM_SWAPPED, 8, 1, "the wrong way"), ("stops at y > 0 and y < 9", _TTERM_WALLS, 0, 9, "onto the walls")]
+    for i, (name, game_code, up_row, down_row, how) in enumerate(games):
+        for key, want in (("up", up_row), ("down", down_row)):
+            keys = "".join(f'screen:press("{key}", {n})\n' for n in range(2, 30, 2))
+            code = game_code.replace("screen:every_frame(step)", keys + "screen:every_frame(step)")
+            runs = [interp_run(os.path.join(folder, f"tterm{i}_{key}_{mode}"), code, mode == "slow") for mode in ("slow", "fast")]
+            rows = [r for r, line in enumerate(runs[1][1].splitlines()) if "@" in line]
+            c.check(runs[0] == runs[1] and runs[1][0] == 0 and rows == [want],
+                    f"{name}: pressing {key} 14 times takes the @ to row {want}, {how}", (rows, runs[1][1][-400:]))
+
+    # The sprite sheet game, headless: the example walks by itself; the solution walks while an arrow is held.
+    sheets = next(l for l in lessons if l["id"] == "workshop-sheets")
+    where = os.path.join(folder, "workshop-sheets")
+    code, out, err, d, secs = scene(os.path.join(where, "example.tuf"))
+    hero = next((t for t in d.get("things", []) if t.get("var") == "hero"), {})
+    c.check(d.get("error") is None and hero.get("frames") == {"cells": [4, 1], "frame": 1, "playing": "walk", "loop": True,
+                                                                 "animations": {"walk": {"frames": [1, 2, 3, 4], "fps": 8}}},
+            "Tuff Engine's preview of the sprite sheet example: 4 frames, walk playing", (d.get("error"), hero.get("frames")))
+    walk = [[1, 2, 3, 4], 8, True]
+    runs = [learn_150_game(where, "example_" + mode, sheets["example"], 30, slow=mode == "slow") for mode in ("slow", "fast")]
+    c.check(runs[1][0] == 0 and not runs[1][2].strip() and learn_150_plays(runs[1][3]) == [(0, walk, 1)]
+            and learn_150_plays(runs[0][3]) == learn_150_plays(runs[1][3]),
+            "the example runs headless in both runtimes, walking from the start", (learn_150_plays(runs[1][3]), runs[1][2][-300:]))
+    keys = {"10": [{"type": "keydown", "code": "ArrowRight"}], "40": [{"type": "keyup", "code": "ArrowRight"}],
+            "50": [{"type": "keydown", "code": "ArrowLeft"}], "60": [{"type": "keyup", "code": "ArrowLeft"}]}
+    runs = [learn_150_game(where, "solution_" + mode, sheets["solution"], 80, keys, slow=mode == "slow") for mode in ("slow", "fast")]
+    plays = [learn_150_plays(r[3]) for r in runs]
+    c.check(runs[1][0] == 0 and not runs[1][2].strip() and plays[0] == plays[1]
+            and plays[1] == [(0, None, 1), (10, walk, None), (40, None, 1), (50, walk, None), (60, None, 1)],
+            "the solution, headless in both runtimes: frame 1 standing, the walk while right or left is held, frame 1 again after",
+            (plays, runs[1][2][-300:]))
+    # Two mistakes its check finds, with right held from frame 10 to 40.
+    learn_150_write(os.path.join(folder, "sheets_mistakes"), own["workshop-sheets"])
+    held = {"10": [{"type": "keydown", "code": "ArrowRight"}], "40": [{"type": "keyup", "code": "ArrowRight"}]}
+    run = learn_150_game(os.path.join(folder, "sheets_mistakes"), "before", _SHEETS_BEFORE, 60, held)
+    c.check(run[0] == 0 and learn_150_plays(run[3]) == [(0, None, 1), (10, walk, None)],
+            "hero:frame(1) only before the loop: the walk starts, and never stops after right is let go", learn_150_plays(run[3]))
+    run = learn_150_game(os.path.join(folder, "sheets_mistakes"), "always", _SHEETS_ALWAYS, 60, held)
+    plays = learn_150_plays(run[3])
+    c.check(run[0] == 0 and len(plays) > 1 and plays[1][0] == 10 and all(p[1:] == (None, 1) for p in plays),
+            "hero:frame(1) on every frame: while right is held it's frame 1 every time, so it never walks", plays[:4])
+    # With the solution's keys: an else under the right arrow's if alone walks going right, but going left it's frame 1
+    # every time. As an elif, it walks both ways, as the solution does.
+    run = learn_150_game(os.path.join(folder, "sheets_mistakes"), "else", _SHEETS_ELSE, 80, keys)
+    plays = learn_150_plays(run[3])
+    c.check(run[0] == 0 and plays == [(0, None, 1), (10, walk, None), (40, None, 1)] + [(f, None, 1) for f in range(50, 60)],
+            "an else under the right arrow's if alone: it walks going right, but going left it's frame 1 every time", plays)
+    run = learn_150_game(os.path.join(folder, "sheets_mistakes"), "elif", _SHEETS_ELIF, 80, keys)
+    c.check(run[0] == 0 and learn_150_plays(run[3]) == [(0, None, 1), (10, walk, None), (40, None, 1), (50, walk, None), (60, None, 1)],
+            "...and with elif for the right arrow, it walks both ways", learn_150_plays(run[3]))
+    run = learn_150_game(os.path.join(folder, "sheets_mistakes"), "if_not", _SHEETS_IF_NOT, 80, keys)
+    c.check(run[0] == 0 and learn_150_plays(run[3]) == [(0, None, 1), (10, walk, None), (40, None, 1)] + [(f, None, 1) for f in range(50, 60)],
+            "frame 1 under if not game:held(\"right\") of its own: going left it's frame 1 every time too", learn_150_plays(run[3]))
+
+    # Learn's checks (in Node), with what the programs really said: the mistakes above, and the other right ways.
+    def ran(where, lesson, code):
+        if "mention tgame" in code:
+            learn_150_write(where, own[lesson])
+            run = learn_150_game(where, "program", code, 5)
+            return run[0], "\n".join(run[1]), run[2]
+        return interp_run(where, code, False, env=quiet, files=own[lesson])
+
+    mistakes = [ran(os.path.join(folder, "mistake", str(i)), lesson, code) for i, (lesson, code, _h) in enumerate(LEARN_150_MISTAKES)]
+    good = [ran(os.path.join(folder, "good", str(i)), lesson, code) for i, (lesson, code) in enumerate(LEARN_150_GOOD)]
+    jobs = [{"id": l["id"], "src": l[part], "out": outputs.get((l["id"], part), "")} for l in lessons for part in ("solution", "starter")]
+    jobs += [{"id": l["id"], "src": "", "out": ""} for l in lessons]
+    jobs += [{"id": lesson, "src": code, "out": run[1]} for (lesson, code, _h), run in zip(LEARN_150_MISTAKES, mistakes)]
+    jobs += [{"id": lesson, "src": code, "out": run[1]} for (lesson, code), run in zip(LEARN_150_GOOD, good)]
+    verdicts = node({"checks": jobs}).get("verdicts") or [None] * len(jobs)
+    n, m = len(lessons), len(LEARN_150_MISTAKES)
+    for i, l in enumerate(lessons):
+        solution, starter, empty = verdicts[2 * i], verdicts[2 * i + 1], verdicts[2 * n + i]
+        c.check(solution is True and isinstance(starter, str) and not starter.startswith("THREW") and isinstance(empty, str)
+                and not empty.startswith("THREW"), f"{l['id']}: its check accepts the solution, and gives the starter a hint: {starter}",
+                (solution, starter, empty))
+
+    def shown(code):
+        """The program on one line, without the lines they all have (like the terminal game's screen:clear())."""
+        same = ("mention", "kind", "snacks =", "screen", "x = ", "y = ", "func step")
+        return " / ".join(x.strip() for x in code.splitlines() if x.strip() and not x.strip().startswith(same))[-90:]
+
+    for (lesson, code, hint), run, verdict in zip(LEARN_150_MISTAKES, mistakes, verdicts[3 * n:3 * n + m]):
+        c.check(run[0] == 0 and isinstance(verdict, str) and verdict.startswith(hint),
+                f"{lesson}: '{shown(code)}' runs, and the check says: {hint}", (run[0], run[2][-200:], verdict))
+    for (lesson, code), run, verdict in zip(LEARN_150_GOOD, good, verdicts[3 * n + m:]):
+        c.check(run[0] == 0 and not run[2].strip() and verdict is True, f"{lesson}: '{shown(code)}' runs, and the check accepts it",
+                (run[0], run[2][-200:], verdict))
+
+    # Slips that stop the run, where Learn shows the run's message: both runtimes, and --check, say what to write.
+    for i, (code, says) in enumerate(LEARN_150_SLIPS):
+        where = os.path.join(folder, "slip", str(i))
+        runs = [interp_run(where, code, mode == "slow", env=quiet, files=own["workshop-files"]) for mode in ("slow", "fast")]
+        p = subprocess.run(tuff_cmd() + ["--check", os.path.join(where, "program.tuf")], capture_output=True, text=True, encoding="utf-8",
+                           timeout=60, cwd=where, stdin=subprocess.DEVNULL)
+        firsts = [first_error(err) or ("", 1, None, "") for err in (runs[0][2], runs[1][2], p.stderr)]
+        c.check(runs[0] == runs[1] and runs[1][0] == 1 and [f[3] for f in firsts] == [says] * 3 and len({f[1] for f in firsts}) == 1,
+                f"'{code.splitlines()[(firsts[1][1] or 1) - 1].strip()}' stops the run, and both runtimes and --check say: {says[:60]}...",
+                ([f[1:] for f in firsts], runs[1][2][-300:]))
+
+    # Start lesson in a project (its folder has a space in its name): the lesson's file, and its own files next to it.
+    project = os.path.join(folder, "My Project")
+    os.makedirs(project)
+    lessons_dir = os.path.join(project, "lessons")
+    got = node({"starts": [{"root": project, "id": "workshop-files"}, {"root": project, "id": "workshop-sheets"},
+                           {"root": project, "id": "workshop-templates"}]}).get("starts") or [{}] * 3
+    files, sheet, plain = got
+    c.check(files.get("calls") == [["createDir", "lessons"], ["writeFile", "lessons/workshop-04-files.tuf"], ["writeFile", "lessons/money.tuf"],
+                                   ["refreshTree"], ["openFile", "lessons/workshop-04-files.tuf"]],
+            "Start lesson on 'Your own files' makes lessons/, the lesson's file and money.tuf next to it, then opens the lesson", files)
+    with open(os.path.join(lessons_dir, "money.tuf"), encoding="utf-8") as f:
+        c.check(f.read() == own["workshop-files"]["money.tuf"], "...with the money.tuf the lesson has")
+    with open(os.path.join(lessons_dir, "walker.png"), "rb") as f:
+        same = f.read() == base64.b64decode(own["workshop-sheets"]["walker.png"]["base64"])
+    c.check(sheet.get("calls") == [["writeFile", "lessons/workshop-07-sheets.tuf"], ["plugins.writeFile", "lessons/walker.png", "base64"],
+                                   ["refreshTree"], ["openFile", "lessons/workshop-07-sheets.tuf"]] and same,
+            "Start lesson on 'Animated pictures' writes walker.png (as base64, inside the project) next to its file", (sheet, same))
+    c.check(plain.get("calls") == [["writeFile", "lessons/workshop-01-templates.tuf"], ["refreshTree"], ["openFile", "lessons/workshop-01-templates.tuf"]],
+            "...and a lesson without files of its own writes only its file", plain)
+    # The solutions, in the lesson files there: they find money.tuf and walker.png.
+    files_lesson = next(l for l in lessons if l["id"] == "workshop-files")
+    runs = [interp_run(lessons_dir, files_lesson["solution"], mode == "slow", env=quiet, main="workshop-04-files.tuf") for mode in ("slow", "fast")]
+    c.check(runs[0] == runs[1] and runs[1][0] == 0 and runs[1][1].strip() == "3 tickets: $16.20",
+            "the 'Your own files' solution, in lessons/workshop-04-files.tuf, imports the money.tuf Learn wrote", runs[1])
+    run = learn_150_game(lessons_dir, "workshop-07-sheets", sheets["solution"], 20, {"5": [{"type": "keydown", "code": "ArrowRight"}]})
+    c.check(run[0] == 0 and learn_150_plays(run[3]) == [(0, None, 1), (5, walk, None)],
+            "the 'Animated pictures' solution, in lessons/, walks with the walker.png Learn wrote", (learn_150_plays(run[3]), run[2][-300:]))
+    # Starting again keeps what the learner changed, and brings back a file they deleted.
+    with open(os.path.join(lessons_dir, "money.tuf"), "a", encoding="utf-8") as f:
+        f.write("\nfunc half(price):\n    return price / 2\n")
+    again, back = node({"starts": [{"root": project, "id": "workshop-files"},
+                                   {"root": project, "id": "workshop-sheets", "remove": ["walker.png"]}]}).get("starts") or [{}] * 2
+    with open(os.path.join(lessons_dir, "money.tuf"), encoding="utf-8") as f:
+        changed = f.read()
+    c.check(again.get("calls") == [["openFile", "lessons/workshop-04-files.tuf"]] and changed.endswith("return price / 2\n"),
+            "starting a lesson again changes nothing: the money.tuf the learner added to stays as it is", again)
+    c.check(back.get("calls", [])[:1] == [["plugins.writeFile", "lessons/walker.png", "base64"]] and os.path.isfile(os.path.join(lessons_dir, "walker.png")),
+            "...and a lesson file it needs that was deleted comes back", back)
+    # A run of a lesson's file that was stopped (Stop ends it with -1, the debugger's own stop with 130) isn't judged:
+    # the status line keeps what it said, or stays empty. A real error still is one.
+    templates = next(l for l in lessons if l["id"] == "workshop-templates")
+    hint = verdicts[1]  # the starter's, from above
+    error = "Your program hit an error. Click the red message in the Run window to jump to it."
+    runs =[(-1, "", ""), (0, templates["starter"], outputs[("workshop-templates", "starter")]), (-1, "", ""), (130, "", ""), (1, "", ""),
+            (0, templates["solution"], outputs[("workshop-templates", "solution")]), (-1, "", "")]
+    said = (node({"runs": [{"root": project, "id": "workshop-templates", "runs": [{"code": n, "src": s, "out": o} for n, s, o in runs]}]})
+            .get("runs") or [None])[0]
+    c.check(said == [None, hint, hint, hint, error, "Nice! Lesson complete.", "Nice! Lesson complete."],
+            "a lesson's run that was stopped (exit code -1 or 130) leaves what Learn says as it was; a real error (1) still says so", said)
+    # The e2e test knows the new section too.
+    with open(os.path.join(HERE, "..", "e2e", "suites", "learn-sections.mjs"), encoding="utf-8") as f:
+        suite = f.read()
+    c.check("'Section 1.7 · Workshop'" in suite and "'workshop'" in suite, "learn-sections.mjs (the e2e test) knows Section 1.7 · Workshop")
+
+
+# ---------------------------------------------------------------- Build exe, with its packing tool stood in for (1.5.0)
+
+def t_build_pack(c):
+    """No window, no packing tool: build_exe_pack_test.mjs runs tuffcode/build.js with PyInstaller stood in for, lays the
+    app out as its .exe unpacks it and runs it with the launcher build.js wrote. 1.5.0: a built app run as the real one
+    runs (frozen, unpacked afresh each time, started from another folder) keeps what it saves in "<its name> files"
+    beside its .exe, or in TuffApps when it can't write there, and reads it back; and a project folder with ; in its
+    path packs."""
+    sep = ";" if os.name == "nt" else ":"
+    try:
+        p = subprocess.run(["node", os.path.join(HERE, "build_exe_pack_test.mjs")], capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=300, env={k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_BASE_DIR")})
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped Build exe")
+        return
+
+    def section(title):
+        """What build_exe_pack_test.mjs said under == Build exe: title."""
+        at = p.stdout.find(f"== Build exe: {title}")
+        rest = p.stdout[at:] if at >= 0 else ""
+        ends = [i for i in (rest.find("\n== ", 1), rest.find("build_exe_pack:")) if i > 0]
+        return rest[:min(ends)] if ends else rest
+
+    saves = section("a built app keeps what it saves")
+    c.check(saves.count("  ok  ") >= 9 and "FAIL" not in saves,
+            "a built app (run as the real one runs) keeps what it saves in a folder of its own beside its .exe (other files "
+            "beside it aren't taken for its own), or in TuffApps when it can't write there, reads it back the next time it "
+            "starts, starts from the files packed with it, and imports its own .tuf files from the app; not built, a program's "
+            "files stay next to it", (saves or p.stdout)[-1500:] + p.stderr[-300:])
+    semi = section(f"a project folder with {sep} in its path")
+    c.check(semi.count("  ok  ") >= 6 and "FAIL" not in semi,
+            f"a project folder with {sep} in its path builds: every --add-data has one {sep} (it packs copies of the files), and the "
+            "app's name drops it", (semi or p.stdout)[-1500:] + p.stderr[-300:])
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
@@ -4793,6 +10720,226 @@ TESTS.update({"hud_health_3d": t_hud_health_3d, "hud_health_2d": t_hud_health_2d
 TESTS.update({"net": t_net, "net_2d": t_net_2d, "net_rooms": t_net_rooms})
 TESTS.update({"car_enter": t_car_enter, "weight": t_weight, "sign_text": t_sign_text, "people_style": t_people_style})
 TESTS.update({"recursion": t_recursion, "recursion_window": t_recursion_window, "pictures_up": t_pictures_up})  # 1.4.1
+TESTS.update({"interp": t_interp})  # 1.5.0
+TESTS.update({"fstrings": t_fstrings})  # 1.5.0
+TESTS.update({"frames": t_frames, "frames_window": t_frames_window})  # 1.5.0: sprite sheets
+TESTS.update({"numbers": t_numbers})  # 1.5.0: too-big numbers, quicker library calls
+TESTS.update({"modules": t_modules})  # 1.5.0: your own files as libraries (import money.tuf)
+TESTS.update({"kinds": t_kinds})  # 1.5.0: your own objects
+TESTS.update({"tterm": t_tterm})  # 1.5.0: terminal games
+TESTS.update({"tmusic": t_tmusic})  # 1.5.0: music from notes
+TESTS.update({"debug": t_debug})  # 1.5.0: the debugger
+TESTS.update({"starters": t_starters})  # 1.5.0: New Project's starters
+TESTS.update({"learn_150": t_learn_150})  # 1.5.0: Learn's Section 1.7, the Workshop
+TESTS.update({"build_pack": t_build_pack})  # 1.5.0: Build exe with its packing tool stood in for (a built app's own files)
+
+# The tab bar (1.5.0): ide.js's own tab functions, cut from its source (each from its first line to the } under it) and
+# run in Node with stand-ins for the rest of the page.
+TABS_JS = r"""
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[1], 'utf8').replace(/\r\n/g, '\n');
+const fn = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n  }\n', at) + 4); };
+const heads = ['function tabMenu(', 'function closeTabs(', 'function moveTab(', 'function tabDropIndex(', 'function endTabDrag('];
+const out = { found: heads.map((h) => !!fn(h)) };
+if (out.found.includes(false)) { console.log(JSON.stringify(out)); process.exit(0); }
+const state = { tabs: [], active: null, root: 'C:\\p' };
+const log = [];
+let renders = 0, persists = 0;
+const env = {
+  state, REVEAL: 'Reveal in File Explorer', basename: (p) => p.split('\\').pop(), rel: (p) => p.slice(state.root.length + 1),
+  ext: (p) => (p.match(/\.([^.\\]+)$/) || [, ''])[1].toLowerCase(),
+  renderTabs: () => renders++, persistSession: () => persists++, saveAll: async () => {},
+  activate: (t) => { state.active = t.path; log.push('activate ' + t.path); },
+  closeTab: (t) => { const i = state.tabs.indexOf(t); if (i >= 0) state.tabs.splice(i, 1); log.push('close ' + t.path);
+    if (state.active === t.path) state.active = (state.tabs[i] || state.tabs[i - 1] || {}).path || null; },
+  startRun: (p) => log.push('run ' + p), api: { fs: { reveal: (p) => log.push('reveal ' + p) } },
+  navigator: { clipboard: { writeText: (s) => log.push('copy ' + s) } },
+  showInProject: (p) => log.push('show ' + p), renameEntry: (p) => log.push('rename ' + p),
+  $: () => ({ classList: { add() {}, remove() {} } }),
+};
+const f = new Function(...Object.keys(env), `let tabDrag = null;\n${heads.map(fn).join('\n')}
+return { tabMenu, closeTabs, moveTab, tabDropIndex, endTabDrag, setDrag: (d) => { tabDrag = d; }, getDrag: () => tabDrag };`)(...Object.values(env));
+const T = (name) => ({ path: 'C:\\p\\' + name });
+const four = ['a.tuf', 'b.tuf', 'c.txt', 'd.tuf'];
+const reset = (names, active) => { state.tabs.splice(0, state.tabs.length, ...names.map(T)); state.active = 'C:\\p\\' + active; log.length = 0; renders = persists = 0; };
+const order = () => state.tabs.map((t) => t.path.split('\\').pop());
+const shown = (i) => f.tabMenu(state.tabs[i]).map((it) => (it === 'sep' ? '-' : it.disabled ? `(${it.label})` : it.label));
+const pick = (i, label) => f.tabMenu(state.tabs[i]).find((it) => it.label === label).run();
+(async () => {
+  // tabs 0-100, 100-150 and 150-300 wide: a dragged tab passes another when the pointer crosses its middle
+  const rects = [{ left: 0, width: 100 }, { left: 100, width: 50 }, { left: 150, width: 150 }];
+  out.drop = [[0, 120], [0, 130], [0, 260], [2, 130], [2, 110], [2, 40], [1, 60], [1, 40], [1, 240]].map(([i, x]) => f.tabDropIndex(rects, i, x));
+  reset(['a.tuf', 'b.tuf', 'c.txt'], 'a.tuf');
+  out.move = [f.moveTab(state.tabs[0], 2), order(), f.moveTab(state.tabs[2], 9), order(), f.moveTab(state.tabs[1], -5), order(), renders, persists];
+  reset(['a.tuf', 'b.tuf', 'c.txt'], 'c.txt');
+  out.menuFirst = shown(0);
+  out.menuLast = shown(2);
+  reset(['only.tuf'], 'only.tuf');
+  out.menuOnly = shown(0);
+  reset(four, 'd.tuf'); pick(1, 'Close Tabs to the Right'); out.right = [order(), state.active, [...log]];
+  reset(four, 'a.tuf'); pick(2, 'Close Tabs to the Left'); out.left = [order(), state.active, [...log]];
+  reset(four, 'b.tuf'); pick(0, 'Close Other Tabs'); out.others = [order(), state.active, [...log]];
+  reset(four, 'c.txt'); pick(0, 'Close Tabs to the Right'); out.keepShown = [order(), state.active];
+  reset(four, 'a.tuf'); pick(3, 'Close All Tabs'); out.all = [order(), state.active];
+  reset(four, 'a.tuf'); pick(3, 'Move Tab Left'); out.left1 = [order(), persists];
+  reset(four, 'a.tuf'); pick(0, 'Move Tab Right'); out.right1 = order();
+  reset(four, 'a.tuf'); await pick(1, "Run 'b.tuf'"); pick(2, 'Copy Path'); pick(2, 'Copy Relative Path'); pick(3, 'Reveal in File Explorer');
+  pick(3, 'Show in Project'); pick(1, 'Rename File…'); out.acts = [...log];
+  // dragged a to the end, then Escape: back where it was; a drag that never moved changes nothing
+  reset(['a.tuf', 'b.tuf', 'c.txt'], 'a.tuf');
+  f.setDrag({ t: state.tabs[0], from: 0, moving: true }); f.moveTab(state.tabs[0], 2); out.dragged = order(); f.endTabDrag(true);
+  out.putBack = [order(), f.getDrag()];
+  reset(['a.tuf', 'b.tuf'], 'a.tuf'); f.setDrag({ t: state.tabs[0], from: 0, moving: false }); f.endTabDrag(); out.still = [order(), f.getDrag(), renders, persists];
+  console.log(JSON.stringify(out));
+})();
+"""
+
+
+def t_tabs(c):
+    """The tab bar (1.5.0), with no window: where a dragged tab lands, moving tabs (Move Tab Left/Right too; the order
+    is saved for next time), the right-click menu's items (greyed out where they can't be done, Run only on a .tuf)
+    and what each does, and Escape putting a dragged tab back. The keys and the Go menu are wired up."""
+    ide = os.path.join(REPO, "tuffcode", "renderer", "js", "ide.js")
+    try:
+        p = subprocess.run(["node", "-e", TABS_JS, ide], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the tab bar")
+        return
+    try:
+        got = json.loads(p.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        c.check(False, "the tab bar's checks ran", (p.stdout[-400:], p.stderr[-800:]))
+        return
+    if False in got["found"]:
+        c.check(False, "ide.js has tabMenu, closeTabs, moveTab, tabDropIndex and endTabDrag", got["found"])
+        return
+    c.check(got["drop"] == [0, 1, 2, 2, 1, 0, 1, 0, 2],
+            "a dragged tab takes another's place once the pointer passes that tab's middle, either way, past several at once", got["drop"])
+    c.check(got["move"] == [True, ["b.tuf", "c.txt", "a.tuf"], False, ["b.tuf", "c.txt", "a.tuf"], True, ["c.txt", "b.tuf", "a.tuf"], 2, 2],
+            "moving a tab changes the order (past the ends it stops at the end) and saves it for next time; no move, no save", got["move"])
+    tail = ["-", "Copy Path", "Copy Relative Path", "Reveal in File Explorer", "Show in Project", "-", "Rename File…"]
+    c.check(got["menuFirst"] == ["Run 'a.tuf'", "-", "Close", "Close Other Tabs", "(Close Tabs to the Left)", "Close Tabs to the Right",
+                                 "Close All Tabs", "-", "(Move Tab Left)", "Move Tab Right", *tail],
+            "the first tab's menu: Run for a .tuf, the closes, Move (Left greyed out), the paths and Rename", got["menuFirst"])
+    c.check(got["menuLast"] == ["Close", "Close Other Tabs", "Close Tabs to the Left", "(Close Tabs to the Right)", "Close All Tabs", "-",
+                                "Move Tab Left", "(Move Tab Right)", *tail],
+            "the last tab's menu (a .txt: no Run): to the Right and Move Right greyed out", got["menuLast"])
+    c.check("(Close Other Tabs)" in got["menuOnly"] and "(Move Tab Left)" in got["menuOnly"] and "(Move Tab Right)" in got["menuOnly"],
+            "with one tab, Close Other Tabs and both Moves are greyed out", got["menuOnly"])
+    c.check(got["right"] == [["a.tuf", "b.tuf"], "C:\\p\\b.tuf", ["activate C:\\p\\b.tuf", "close C:\\p\\c.txt", "close C:\\p\\d.tuf"]]
+            and got["left"] == [["c.txt", "d.tuf"], "C:\\p\\c.txt", ["activate C:\\p\\c.txt", "close C:\\p\\a.tuf", "close C:\\p\\b.tuf"]]
+            and got["others"][:2] == [["a.tuf"], "C:\\p\\a.tuf"],
+            "Close Tabs to the Right / Left / Other Tabs close those, and when the file on screen goes the right-clicked tab "
+            "comes up (not each next tab in turn)", [got["right"], got["left"], got["others"]])
+    c.check(got["keepShown"] == [["a.tuf"], "C:\\p\\a.tuf"] and got["all"] == [[], None],
+            "...and Close All Tabs closes every one", [got["keepShown"], got["all"]])
+    c.check(got["left1"] == [["a.tuf", "b.tuf", "d.tuf", "c.txt"], 1] and got["right1"] == ["b.tuf", "a.tuf", "c.txt", "d.tuf"],
+            "Move Tab Left and Right move the right-clicked tab one place", [got["left1"], got["right1"]])
+    c.check(got["acts"] == ["run C:\\p\\b.tuf", "copy C:\\p\\c.txt", "copy c.txt", "reveal C:\\p\\d.tuf", "show C:\\p\\d.tuf", "rename C:\\p\\b.tuf"],
+            "Run, Copy Path, Copy Relative Path, Reveal, Show in Project and Rename do that to the tab's file", got["acts"])
+    c.check(got["dragged"] == ["b.tuf", "c.txt", "a.tuf"] and got["putBack"] == [["a.tuf", "b.tuf", "c.txt"], None]
+            and got["still"] == [["a.tuf", "b.tuf"], None, 0, 0],
+            "Escape while dragging puts the tab back where it was; a click that never dragged moves nothing", [got["putBack"], got["still"]])
+    with open(ide, encoding="utf-8") as f:
+        src = f.read()
+    c.check("'Ctrl+Shift+PageUp': 'moveTabLeft'" in src and "'Ctrl+Shift+PageDown': 'moveTabRight'" in src
+            and "'prevTab', 'moveTabLeft', 'moveTabRight']]" in src and "tab.onpointerdown" in src and "showMenu(e.clientX, e.clientY, tabMenu(t))" in src,
+            "Ctrl+Shift+PgUp/PgDn move the tab on screen, the Go menu has both, and each tab drags and has the menu")
+
+
+# The editor after pen: and song: (1.5.0), in Node.
+PEN_LANG = r"""
+const fs = require('fs'), vm = require('vm');
+const window = {}, ctx = { window };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+let completion = null, hover = null;
+const monaco = { Range: class { constructor(...a) { this.a = a; } }, editor: { defineTheme() {} }, languages: {
+  register() {}, setMonarchTokensProvider() {}, setLanguageConfiguration() {},
+  registerHoverProvider(_id, p) { hover = hover || p; }, registerDefinitionProvider() {}, registerReferenceProvider() {},
+  registerRenameProvider() {}, registerDocumentSymbolProvider() {}, registerSignatureHelpProvider() {}, registerColorProvider() {},
+  registerCompletionItemProvider(_id, p) { completion = p; },
+  CompletionItemKind: new Proxy({}, { get: (_t, k) => k }), CompletionItemInsertTextRule: {}, IndentAction: {}, SymbolKind: {} } };
+window.defineTuffTheme = () => {};
+window.registerTuff(monaco, '#3574f0');
+const model = (src, col) => { const lines = src.split('\n'); return { getLinesContent: () => lines, getLineContent: (n) => lines[n - 1],
+  getValue: () => src, getWordUntilPosition: () => ({ startColumn: col || 1, endColumn: col || 1 }),
+  getWordAtPosition: ({ lineNumber, column }) => { for (const m of lines[lineNumber - 1].matchAll(/\w+/g))
+    if (m.index < column && column <= m.index + m[0].length) return { word: m[0], startColumn: m.index + 1, endColumn: m.index + 1 + m[0].length };
+    return null; } }; };
+const end = (src) => { const lines = src.split('\n'); return { lineNumber: lines.length, column: lines[lines.length - 1].length + 1 }; };
+const items = (src) => completion.provideCompletionItems(model(src, end(src).column), end(src)).suggestions;
+const labels = (src) => items(src).map((s) => s.label);
+const color = items('mention tdraw\npen = tdraw.pen()\npen:').find((s) => s.label === 'color');
+console.log(JSON.stringify({
+  pen: labels('mention tdraw\npen = tdraw.pen()\npen:'),
+  inFunc: labels('import tdraw\nturtle = tdraw.pen()\nfunc draw():\n    turtle:'),
+  later: labels('mention tdraw\npen = tdraw.pen()\nfor i in range(1, 3):\n    pen:'),
+  song: labels('mention tmusic\nsong = tmusic.song(120)\nsong:'),
+  list: labels('x = [1]\nx:'), plain: labels('mention tdraw\nthing = 5\nthing:'),
+  color: color && [color.detail, color.documentation.includes('tdraw')],
+  shapeDoc: window.TUFF_METHOD_DOCS.shape,
+}));
+"""
+
+
+def t_pen(c):
+    """tdraw's pen (1.5.0): pen:shape changes how the pen looks (with a stand-in window, so none opens), the checker
+    knows its words, and the editor offers only a pen's methods after pen: (it used to offer every library's, app:icon
+    and a list's :add too), and only a song's after song:."""
+    import tuff_tdraw
+    folder = os.path.join(OUT, "pen")
+    os.makedirs(folder, exist_ok=True)
+    run_env = {**{k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW")}, "PYTHONIOENCODING": "utf-8", "TUFF_NO_SOUND": "1"}
+
+    def run(name, code, *args):
+        with open(os.path.join(folder, name), "w", encoding="utf-8") as f:
+            f.write(code)
+        p = subprocess.run([sys.executable, *args, name] if args else [sys.executable, "-c", STARTERS_NO_TK, REPO, name], cwd=folder,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, env=run_env, stdin=subprocess.DEVNULL)
+        return p.returncode, p.stdout, p.stderr
+
+    code, out, err = run("shapes.tuf", 'mention tdraw\npen = tdraw.pen()\npen:shape("arrow")\npen:shape("Big  Arrow", 2)\npen:hide()\n'
+                                       'pen:shape("turtle")\npen:shape("circle", 0.5)\nsay "done"\n')
+    calls = json.loads(out.split("PEN ", 1)[1]) if "PEN " in out else {}
+    c.check(code == 0 and "done" in out and calls.get("shape") == 5 and calls.get("shapesize") == 2 and calls.get("hideturtle") == 1,
+            'pen:shape("arrow"), "big arrow" (any case and spacing) with a size, "turtle" and "circle" change the pen\'s look, and '
+            "it can still be hidden", (code, calls, err[-300:]))
+    want = 'pen:shape takes "turtle", "arrow", "big arrow", "circle", "square" or "triangle" (pen:hide() hides it).'
+    code, out, err = run("unknown.tuf", 'mention tdraw\npen = tdraw.pen()\nlook = "hex" + "agon"\npen:shape(look)\n')
+    c.check(code != 0 and want in err and "line 4" in err, "an unknown shape is a Tuff error that lists the shapes", (code, err[-300:]))
+    code, out, err = run("small.tuf", 'mention tdraw\npen = tdraw.pen()\npen:shape("arrow", 0)\n')
+    c.check(code != 0 and "pen:shape's size has to be more than 0." in err, "a size of 0 or less is a Tuff error", (code, err[-300:]))
+    code, out, err = run("check_bad.tuf", 'mention tdraw\npen = tdraw.pen()\npen:shape("hexagon")\n', TUFF, "--check")
+    c.check(code != 0 and want in out + err and "line 3" in out + err, "--check catches a shape word that isn't one", (code, (out + err)[-300:]))
+    code, out, err = run("check_good.tuf", 'mention tdraw\npen = tdraw.pen()\nlook = "triangle"\npen:shape(look, 3)\npen:shape("Square")\n'
+                                           'pen:hide()\npen:show()\n', TUFF, "--check")
+    c.check(code == 0, "--check is happy with real shapes, a size, and a shape in a variable", (code, (out + err)[-300:]))
+    lang = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")
+    try:
+        p = subprocess.run(["node", "-e", PEN_LANG, lang], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the editor")
+        return
+    try:
+        got = json.loads(p.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        c.check(False, "the editor's checks ran", (p.stdout[-400:], p.stderr[-800:]))
+        return
+    pen = list(tuff_tdraw.PEN_METHODS)
+    c.check(got["pen"] == pen and got["inFunc"] == pen and got["later"] == pen and "shape" in pen,
+            "pen: offers a pen's methods and nothing else (shape too), whatever the pen is called and wherever it's used", got["pen"])
+    c.check("icon" not in got["pen"] and "add" not in got["pen"], "...so not app:icon or a list's :add", got["pen"][:8])
+    c.check(got["song"] == ["track", "play", "loop", "stop", "save", "length"], "song: offers a song's methods and nothing else", got["song"])
+    c.check("add" in got["list"] and "add" in got["plain"] and len(got["plain"]) > len(pen),
+            "a list, or a name a library didn't make, still gets the usual methods", (got["list"][:6], len(got["plain"])))
+    c.check(got["color"] == ["pen:color", True], "a suggestion's detail names it on the pen (pen:color), and its doc has tdraw's use", got["color"])
+    c.check(bool(got["shapeDoc"]) and got["shapeDoc"][0] == 'pen:shape("arrow")' and "big arrow" in got["shapeDoc"][1],
+            "pen:shape has a hover doc", got["shapeDoc"])
+    with open(os.path.join(REPO, "tuffcode", "mcp", "tuff-guide.md"), encoding="utf-8") as f:
+        c.check('pen:shape("arrow")' in f.read(), "the guide for AI helpers teaches pen:shape")
+
+
+TESTS.update({"tabs": t_tabs, "pen": t_pen})  # 1.5.0: dragging tabs and their menu; pen:shape and pen: suggestions
 
 
 def main():

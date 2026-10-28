@@ -129,7 +129,13 @@ HINTS = {
     "sprite": {"goto": "move_to", "go_to": "move_to", "position": "move_to", "rotate": "turn", "rotation": "angle",
                "collide": "touches", "collides": "touches", "colliding": "touches", "hits": "touches", "touching": "touches",
                "fill": "color", "colour": "color", "text": "set", "on_click": "clicked", "delete": "remove",
-               "destroy": "remove", "kill": "remove", "wrap": "on_edge", "keep_on_screen": "on_edge"},
+               "destroy": "remove", "kill": "remove", "wrap": "on_edge", "keep_on_screen": "on_edge",
+               # sprite-sheet animation (1.5.0)
+               "animate": "play", "play_animation": "play", "add_animation": "animation", "anim": "animation",
+               "set_frame": "frame", "goto_frame": "frame", "show_frame": "frame", "sheet": "frames",
+               "sprite_sheet": "frames", "spritesheet": "frames", "on_end": "on_done",
+               "on_finish": "on_done", "on_finished": "on_done", "on_complete": "on_done", "on_animation_end": "on_done",
+               "stop_animation": "stop"},
     "object": {"goto": "move_to", "go_to": "move_to", "position": "move_to", "rotate": "turn", "rotation": "angle",
                "collide": "touches", "collides": "touches", "touching": "touches", "hits": "touches",
                "colour": "color", "on_click": "clicked", "delete": "remove", "destroy": "remove", "kill": "remove",
@@ -391,6 +397,11 @@ def thing_of(v):
     return getattr(v, "tg", None)
 
 
+def song_of(v):
+    """The tmusic song behind a Tuff value (tmusic.song: game:music(song) and game:sound(song) play it), or None."""
+    return getattr(v, "song", None)
+
+
 # ---------------------------------------------------------------- the library
 
 class Lib:
@@ -481,6 +492,7 @@ class Game:
         self.sound_count = 0
         self.phys = None  # the game's physics (Physics), once something uses it
         self.fx = None  # its effects (Effects): slow motion, a shake, pop text, weather, the time of day
+        self.flipping = False  # a picture has played frames (sprite:play): the page's canvases hear about pausing
         self.net = None  # its multiplayer (Net), once it hosts, joins or shares something
         self.base = getattr(getattr(self.rt, "interp", None), "base_dir", None) or os.getcwd()
         if SCENE is not None:
@@ -597,6 +609,8 @@ class Game:
         if self.fx is not None:
             self.fx.before_frame()
         self.before_frame()
+        if self.flipping:
+            self.flip_pause()
         try:
             self.view.frame()
         except self.tv.ViewClosed:
@@ -657,6 +671,16 @@ class Game:
 
     def before_frame(self):
         """Changes kept back until the frame is sent (a 3D world's land, which many edits can change at once)."""
+
+    def flip_pause(self):
+        """Pictures that play frames (sprite:play) step through them by themselves in the page (flip.js), and hold
+        still while the game is paused: the game's canvas and the HUD's say so (data-paused, as a world's scene does
+        for anim.js)."""
+        paused = bool(self.is_paused)
+        for layer in ([] if self.three_d else [self]) + ([self.hud_layer] if self.hud_layer is not None else []):
+            if getattr(layer, "flip_paused", False) != paused:
+                layer.flip_paused = paused
+                self.view.set(layer.node, attrs={"data-paused": paused})
 
     def every_frame(self, fn):
         self.ticks.append(self.lib.check_fn(fn, ":every_frame"))
@@ -839,6 +863,13 @@ class Game:
 
     # ---- sound
     def sound(self, name):
+        song = song_of(name)
+        if song is not None:  # tmusic's song (1.5.0): it plays once, and the game goes on
+            url = self.song_url(song)
+            if url is not None:
+                self.sound_count += 1
+                self.view.call(0, "sound", f"s{self.sound_count}", url, 1, False)
+            return None
         n = self.rt.text(name).strip()
         low = n.lower()
         if low in SOUNDS:
@@ -858,9 +889,23 @@ class Game:
         self.view.call(0, "tones", [[pitch, 0, seconds, "square", 1]], 0.25)
 
     def music(self, file):
-        url, _ = self.file_url(file, "music", SOUND_FILES)
+        song = song_of(file)  # a sound file, or tmusic's song (1.5.0)
+        url = self.song_url(song) if song is not None else self.file_url(file, "music", SOUND_FILES)[0]
+        if url is None:
+            return
         self.view.call(0, "sound_stop", "music")
         self.view.call(0, "sound", "music", url, 0.6, True)
+
+    def song_url(self, song):
+        """The page's address for a tmusic song's .wav, which tmusic makes once and keeps in a folder of its own: the
+        window shares that folder with its page. None in Tuff Engine's preview, which plays no sound (so it doesn't
+        spend the time making it)."""
+        song.ready()
+        if SCENE is not None:
+            return None
+        folder, name = os.path.split(song.wav())
+        self.tv.share("music", folder)
+        return self.view.shared_url("music", name)
 
     def stop_music(self):
         self.view.call(0, "sound_stop", "music")
@@ -1644,7 +1689,8 @@ class Layer:
         nw, nh = image_size(full) or (64, 64)
         w = nw if width is None else g.num(width, ":image")
         h = nh * (w / nw) if nw else w
-        return self.make("image", x, y, {"src": url, "w": w, "h": h, "file": g.rt.text(file)}).native
+        return self.make("image", x, y, {"src": url, "w": w, "h": h, "file": g.rt.text(file), "pic": (nw, nh),
+                                         "sized": width is not None}).native
 
     def clear_layer(self):
         """hud:clear(): removes what the program drew on it. tgame's own (the "E: Talk" hint, the crosshair, the pause
@@ -1770,6 +1816,9 @@ class Sprite(Physical):
         ("clicked", "clicked"), ("shake", "shake"),
         ("physics", "physics"), ("weight", "weight"), ("mass", "mass"), ("bounce", "bounce"), ("friction", "friction"), ("push", "kick"),
         ("velocity", "velocity"), ("on_hit", "on_hit"), ("sleep", "sleep"), ("wake", "wake"),
+        # 1.5.0: sprite-sheet animation (a picture cut into frames)
+        ("frames", "frames"), ("frame", "frame"), ("animation", "animation"), ("play", "play"), ("stop", "stop_frames"),
+        ("on_done", "on_done"),
     ]
     D = 2
     EXAMPLE = "ball"
@@ -1794,6 +1843,10 @@ class Sprite(Physical):
         self.size_ = props.get("size", 24)
         self.ax = props.get("ax", 0.5)  # where x is across a text: 0 its left edge, 0.5 its middle, 1 its right edge
         self.file = props.pop("file", None)
+        self.pic = props.pop("pic", None)  # a picture's own size (width, height), for cutting it into frames
+        self.sized = props.pop("sized", False)  # its width was given (game:image's, or :size): frames keep it
+        self.sheet = None  # a picture cut into frames (Flipbook), once :frames cut it
+        self.done_fns = []  # :on_done's functions, for an animation that plays once
         self.vx = self.vy = self.spin_speed = 0.0
         self.edge = "none"
         self.anims = []
@@ -1840,7 +1893,7 @@ class Sprite(Physical):
         self.push()
 
     def busy(self):
-        if self.vx or self.vy or self.spin_speed or self.anims:
+        if self.vx or self.vy or self.spin_speed or self.anims or (self.sheet is not None and self.sheet.once()):
             self.game.movers.add(self)
         else:
             self.game.movers.discard(self)
@@ -2101,6 +2154,7 @@ class Sprite(Physical):
         a = self.num(a, ":size")
         if self.shape in ("rect", "image"):
             self.w, self.h = a, (self.num(b, ":size") if b is not MISSING else a)
+            self.sized = True
             self.send(w=self.w, h=self.h)
         elif self.shape == "circle":
             self.r = max(0, a)  # shrunk below 0 it's gone: nothing to see, click or touch
@@ -2180,6 +2234,7 @@ class Sprite(Physical):
             self.send(text=self.words)
         elif self.shape == "image":
             url, full = self.game.file_url(a, "picture", IMAGE_FILES)
+            self.pic = image_size(full) or self.pic  # a sprite sheet's frames are cut from the picture it shows now
             self.send(src=url)
         else:
             raise self.rt.error("Only text and pictures can :set something new. To keep a value on a sprite, "
@@ -2203,6 +2258,152 @@ class Sprite(Physical):
         self.anims.append(["shake", 0.0, 0.35])
         self.busy()
         return self.native
+
+    # ---- sprite-sheet animation: a picture cut into a grid of frames (Flipbook)
+    def picture_only(self, what):
+        if self.shape != "image":
+            also = " To stop a sprite moving, use sprite:speed(0, 0)." if what == ":stop" else ""
+            raise self.rt.error(f"Only pictures have frames ({what}). Make one with game:image(\"hero_sheet.png\", 100, 300), "
+                                f"then cut it into frames with hero:frames(4).{also}")
+
+    def flipbook(self, what):
+        """Its frames, for :frame, :animation and :play: the picture has to be cut into frames first."""
+        self.picture_only(what)
+        if self.sheet is None:
+            raise self.rt.error(f"{what} needs the picture cut into frames first: hero:frames(4) for 4 frames side by side, "
+                                "or hero:frames(4, 2) for 4 across and 2 down.")
+        return self.sheet
+
+    def whole(self, v, what, message):
+        n = self.num(v, what)
+        if n != int(n) or n < 1:
+            raise self.rt.error(message)
+        return int(n)
+
+    def frame_number(self, v, what):
+        """A frame of its picture: a whole number from 1 to how many frames it has."""
+        f = self.sheet
+        count = f.cols * f.rows
+        n = self.num(v, what)
+        if n != int(n) or n < 1:
+            raise self.rt.error(f"{what}: frames are numbered from 1 (the top left one), so there's no frame {tidy(n)}.")
+        if n > count:
+            raise self.rt.error(f"{what}: this picture has {count} frame{'s' if count != 1 else ''} (1 to {count}), "
+                                f"so there's no frame {tidy(n)}.")
+        return int(n)
+
+    def frames(self, across, down=1):
+        """sprite:frames(4) or (4, 2): cuts its picture (a sprite sheet) into frames, so many across and so many
+        down, numbered from 1 left to right, then the next row. It shows frame 1, as big as the width the picture was
+        given (or one frame's own size), and anything playing stops. Animations it made before stay."""
+        self.picture_only(":frames")
+        how = (":frames needs how many frames across, then how many down (1 if you leave it out), as whole numbers "
+               "from 1, like hero:frames(4) or hero:frames(4, 2).")
+        cols, rows = self.whole(across, ":frames", how), self.whole(down, ":frames", how)
+        if cols * rows > MAX_FRAMES:
+            raise self.rt.error(f":frames can cut a picture into {MAX_FRAMES} frames at most, not {cols * rows}.")
+        nw, nh = self.pic or (self.w, self.h)
+        fw, fh = nw / cols, nh / rows
+        self.w = self.w if self.sized else fw
+        self.h = self.w * fh / fw if fw else self.w
+        named = self.sheet.named if self.sheet is not None else {}
+        self.sheet = Flipbook(cols, rows, named)
+        self.send(cells=[cols, rows], cell=1, play=None, w=self.w, h=self.h)
+        if self.phys_kind is not None:
+            self.phys_changed()  # one frame is its size now: its body's too
+        self.busy()
+        return self.native
+
+    def frame(self, number=MISSING):
+        """sprite:frame(3) shows frame 3 (and stops what's playing). sprite:frame() gives the frame it shows now."""
+        if number is MISSING:
+            self.picture_only(":frame")
+            return 1 if self.sheet is None else self.sheet.showing(self.game.clock)
+        f = self.flipbook(":frame")
+        n = self.frame_number(number, ":frame")
+        if f.playing is not None or f.cell != n:  # standing still with hero:frame(1) every frame sends nothing new
+            f.playing, f.cell = None, n
+            self.send(play=None, cell=n)
+            self.busy()
+        return self.native
+
+    def animation(self, name, frames, speed=10):
+        """sprite:animation("walk", [1, 2, 3, 4], 10): names some of its frames, in the order they show, and how many
+        a second (10 if you leave it out). Making one that's playing starts it again with its new frames."""
+        f = self.flipbook(":animation")
+        key = self.rt.plain(name)
+        if not isinstance(key, str) or not key.strip():
+            raise self.rt.error(":animation needs a name as text first, then the frames and how many a second, like "
+                                "hero:animation(\"walk\", [1, 2, 3, 4], 10).")
+        items = self.rt.plain(frames)
+        if not isinstance(items, list):
+            raise self.rt.error(f":animation needs its frames as a list, like hero:animation(\"{key}\", [1, 2, 3, 4], 10).")
+        if not items:
+            raise self.rt.error(f":animation needs at least one frame, like hero:animation(\"{key}\", [1, 2, 3, 4], 10).")
+        nums = [self.frame_number(v, ":animation") for v in items]
+        fps = self.num(speed, ":animation")
+        if fps <= 0:
+            raise self.rt.error(f":animation's speed is how many frames a second, above 0, like hero:animation(\"{key}\", "
+                                "[1, 2, 3, 4], 10).")
+        f.named[key] = (nums, fps)
+        if f.playing == key:
+            self.start_animation(key, f.loop)
+        return self.native
+
+    def play(self, name, loop=True):
+        """sprite:play("walk") plays an animation again and again; sprite:play("jump", false) plays it once and stays
+        on its last frame (then :on_done's functions run). Playing the one that's playing already carries on, so it can
+        go in every frame of a loop."""
+        f = self.flipbook(":play")
+        key = self.rt.plain(name)
+        if not isinstance(key, str):
+            raise self.rt.error(f":play needs the name of an animation as text, like hero:play(\"walk\"), not {self.rt.what(key)}.")
+        if key not in f.named:
+            raise self.rt.error(no_animation(key, list(f.named)))
+        again = self.rt.plain(loop)
+        if not isinstance(again, bool):
+            raise self.rt.error(f":play's second input is true (again and again, the same as leaving it out) or false "
+                                f"(once), like hero:play(\"{key}\", false).")
+        if f.playing != key or f.loop != again:
+            self.start_animation(key, again)
+        return self.native
+
+    def start_animation(self, key, loop):
+        f = self.sheet
+        frames, fps = f.named[key]
+        count = f.cols * f.rows
+        over = next((n for n in frames if n > count), None)
+        if over is not None:  # :frames cut the picture into fewer frames after the animation was made
+            raise self.rt.error(f"The animation \"{key}\" shows frame {over}, but this picture has {count} frames now (1 to {count}).")
+        f.playing, f.loop, f.at = key, loop, self.game.clock
+        self.send(play=[frames, tidy(fps), loop])
+        self.game.flipping = True  # the page needs to know when the game pauses (Game.flip_pause)
+        self.busy()
+
+    def stop_frames(self):
+        """sprite:stop() stops the animation playing, on the frame it shows."""
+        self.picture_only(":stop")
+        f = self.sheet
+        if f is not None and f.playing is not None:
+            f.cell, f.playing = f.showing(self.game.clock), None
+            self.send(play=None, cell=f.cell)
+            self.busy()
+        return self.native
+
+    def on_done(self, fn):
+        """sprite:on_done(landed): runs landed(sprite, name) when an animation that plays once (:play(name, false))
+        has shown its last frame."""
+        self.picture_only(":on_done")
+        self.done_fns.append(self.game.lib.check_fn(fn, ":on_done"))
+        return self.native
+
+    def animation_done(self):
+        f = self.sheet
+        name = f.playing
+        f.playing, f.cell = None, f.named[name][0][-1]
+        self.send(play=None, cell=f.cell)  # it stays on its last frame (the page shows it already)
+        for fn in list(self.done_fns):
+            self.game.fire(fn, self.native, name)
 
     # ---- every frame, while it moves by itself
     def tick(self, dt):
@@ -2236,7 +2437,56 @@ class Sprite(Physical):
             self.push()
             if self.dynamic():  # a glide carries it: no speed builds up meanwhile
                 self.game.phys.send("velocity", int(self.node), 0, 0)
+        f = self.sheet
+        if f is not None and f.once() and f.ended(self.game.clock):
+            self.animation_done()  # last: its functions may move it, play another or remove it
         self.busy()
+
+
+MAX_FRAMES = 10000  # the most frames sprite:frames cuts a picture into
+
+
+def no_animation(name, names):
+    """sprite:play's message for an animation it hasn't made (with "did you mean")."""
+    if not names:
+        return (f"There's no animation called \"{name}\". Make it first, like "
+                f"hero:animation(\"{name}\", [1, 2, 3, 4], 10), then hero:play(\"{name}\").")
+    shown = ", ".join(f'"{n}"' for n in names)
+    return f"There's no animation called \"{name}\". This picture has {shown}.{did_you_mean(name, names)}"
+
+
+class Flipbook:
+    """A picture cut into a grid of frames (sprite:frames), the animations it has (sprite:animation: a name, its
+    frames and how many a second) and the one playing (sprite:play). The page steps through the frames by itself
+    (tuff_view_web/flip.js) by the game's clock, so they slow down in slow motion and hold still while the game is
+    paused. Python goes by the same clock (game:time) to know the frame it shows (sprite:frame()) and when one that
+    plays once has shown its last frame (sprite:on_done)."""
+
+    def __init__(self, cols, rows, named=None):
+        self.cols, self.rows = cols, rows
+        self.named = named if named is not None else {}  # name -> (its frames, how many a second)
+        self.playing = None  # the animation playing, or None
+        self.loop = True     # it plays again and again (False: once)
+        self.at = 0.0        # the game's time when it started
+        self.cell = 1        # the frame it shows while nothing plays
+
+    def once(self):
+        """Playing an animation that plays once: Python watches for its end (a loop needs nothing each frame)."""
+        return self.playing is not None and not self.loop
+
+    def steps(self, clock):
+        frames, fps = self.named[self.playing]
+        return int((clock - self.at) * fps + 1e-6), frames
+
+    def showing(self, clock):
+        if self.playing is None:
+            return self.cell
+        i, frames = self.steps(clock)
+        return frames[i % len(frames)] if self.loop else frames[min(i, len(frames) - 1)]
+
+    def ended(self, clock):
+        i, frames = self.steps(clock)
+        return i >= len(frames)
 
 
 class Group:
@@ -6912,6 +7162,11 @@ class Scene:
                 item = {"kind": {"rect": "box"}.get(t.shape, t.shape), "layer": "hud" if t.layer is g.hud_layer else "game",
                         "ids": [int(t.node)], "x": tidy(t.x), "y": tidy(t.y), "z": 0, "dims": None, "k": None,
                         "heading": tidy(t.rot), "drag": "xy"}
+                f = t.sheet
+                if f is not None:  # a picture cut into frames (sprite:frames), its animations and the one playing
+                    item["frames"] = {"cells": [f.cols, f.rows], "frame": f.showing(g.clock), "playing": f.playing,
+                                      "loop": f.loop, "animations": {n: {"frames": fr, "fps": tidy(fps)}
+                                                                     for n, (fr, fps) in f.named.items()}}
             else:
                 # y is the height above the land, as the program wrote it; "ground" is the land's height there.
                 item = {"kind": t.kind, "layer": "world", "ids": ids_of(t), "x": tidy(t.x), "y": tidy(t.y - t.ground()),
@@ -7530,6 +7785,9 @@ class Autopilot:
         out["labels"] = [t.label_text for t in g.things if isinstance(t, Thing) and t.alive and t.label_text]
         out["fallen"] = len([t for t in g.things if isinstance(t, Thing) and t.alive and t.fallen])
         out["sprites"] = [[s.shape, round(s.x, 2), round(s.y, 2)] for s in g.things if isinstance(s, Sprite) and s.alive][:400]
+        # pictures cut into frames: [its node, the frame it shows, the animation playing (or None)]
+        out["frames"] = [[int(s.node), s.sheet.showing(g.clock), s.sheet.playing] for s in g.things
+                         if isinstance(s, Sprite) and s.alive and s.sheet is not None][:400]
         out["objects"] = [[t.kind, round(t.x, 2), round(t.y, 2), round(t.z, 2), t.fallen, t.data]
                           for t in g.things if isinstance(t, Thing) and t.alive][:400]
         out["physics"] = g.phys.state() if g.phys is not None else None
@@ -7652,6 +7910,10 @@ for _k in ("object", "ragdoll", "player"):
     GIVES[_k].update({m: _k for m in _LOOKS})
     VALUES.update({(_k, "shirt"): {0: "color"}, (_k, "pants"): {0: "color"}, (_k, "shoes"): {0: "color"},
                    (_k, "skin"): {0: "skin"}, (_k, "hair"): {0: "hair", 1: "hair"}, (_k, "sleeves"): {0: "sleeves"}})
+# 1.5.0: sprite-sheet animation. sprite:frame is left out (frame() gives a number, frame(3) the sprite); on_done's
+# function gets the sprite and the animation's name.
+GIVES["sprite"].update({m: "sprite" for m in ("frames", "animation", "play", "stop", "on_done")})
+HANDLERS["sprite"]["on_done"] = (0, 2, "2 inputs (the sprite and the animation's name)")
 
 
 def check_value(kind, method, index, value, base_dir=None):

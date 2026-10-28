@@ -1,0 +1,51 @@
+# Drawing: a pen that draws as it moves, like a turtle with a pencil. This one
+# draws a night sky: a rainbow spiral, a moon and some stars. Then click
+# anywhere in the window to add more stars.
+# The middle of the window is 0, 0: x goes right and y goes up, to 320 each way.
+mention tdraw
+
+tdraw.title("My drawing")
+tdraw.background("#0b1026")
+pen = tdraw.pen()                   # opens the drawing window
+pen:speed "fast"                    # "slow", "normal", "fast" or "instant"
+
+# A rainbow spiral: forward a little further each time, turning as it goes
+pen:color "rainbow"
+pen:width(2)
+for i in range(1, 80):
+    pen:forward(i * 2)
+    pen:right(61)
+
+# A star of any size and colour, at x, y
+func star(x, y, size, colour):
+    pen:jump(x, y)                  # jump moves without drawing
+    pen:color(colour, colour)       # the line colour, then the fill colour
+    pen:star(size, colour)
+
+# A moon: a big pale circle, with a dark one over it to make a crescent
+pen:jump(200, 170)
+pen:dot(110, "#f5e6a8")
+pen:jump(225, 185)
+pen:dot(95, "#0b1026")
+
+star(-240, 240, 30, "gold")
+star(-120, 270, 14, "white")
+star(60, 250, 18, "sky")
+star(250, -230, 26, "pink")
+star(-250, -210, 20, "lime")
+
+pen:jump(-120, -300)
+pen:color "white"
+pen:write("Click to add stars!", 16)
+pen:hide()
+
+# Runs on every click, with where it was
+func clicked(x, y):
+    star(x, y, random(10, 30), "gold")
+
+tdraw.on_click(clicked)
+
+# Ideas to try:
+# - A house: pen:square(120) for the walls, pen:triangle(120) for the roof.
+# - Change the 61 in the spiral to 89 or 121 and see what it draws.
+# - Stars in random colours: make a list of colours and pick one with random().

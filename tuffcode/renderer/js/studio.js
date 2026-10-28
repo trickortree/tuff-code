@@ -200,7 +200,7 @@
       const { code: line, comment } = stripComment(full);
       let m;
       if ((m = line.match(/^func\s+([A-Za-z_]\w*)/))) { res.funcs.push({ name: m[1], line: ln }); return; }
-      if ((m = line.match(/^(import|mention)\s+(m?tgui)\b/))) { res.lib = m[2]; res.importLine = ln; return; }
+      if ((m = line.match(/^(import|mention)\s+(m?tgui)\b(?!\.tuf)/))) { res.lib = m[2]; res.importLine = ln; return; }
       if ((m = line.match(/^([A-Za-z_]\w*)\s*=\s*(m?tgui)\.window\b\s*(.*)$/))) {
         const args = parseArgs(m[3]);
         res.win = { kind: 'window', var: m[1], lib: m[2], line: ln, comment, values: valuesFor(WINDOW, args), props: {}, children: [] };
@@ -592,7 +592,7 @@
       const code = model.getValue();
       let at = 0;
       code.split(/\r?\n/).forEach((l, i) => { if (/^(import|mention)\s+\w+/.test(l)) at = i + 1; });
-      const hasImport = new RegExp(`^(import|mention)\\s+${lib}\\b`, 'm').test(code);
+      const hasImport = new RegExp(`^(import|mention)\\s+${lib}\\b(?!\\.tuf)`, 'm').test(code);
       ed.insertAfter(at, `${hasImport ? '' : `mention ${lib}${ed.eol}`}${ed.eol}app = ${lib}.window("My App")${ed.eol}app:heading "Hello!"`);
       ed.commit();
     },
@@ -1145,7 +1145,7 @@
     updateUndo();
     if (!p.win) {
       // A tgame file is a game: Tuff Engine is where it's built visually.
-      const game = /^[ \t]*(?:import|mention)[ \t]+tgame\b/m.test(S.model.getValue());
+      const game = /^[ \t]*(?:import|mention)[ \t]+tgame\b(?!\.tuf)/m.test(S.model.getValue());
       stage.innerHTML = `<div class="sd-none">${ICONS.window}<b>${game ? 'This is a game' : "This file doesn't have an app window yet"}</b><span>${game ? 'Games are built in Tuff Engine. Or start an app from a template, or add an empty window and drag widgets onto it.' : 'Start from a template, or add an empty window and drag widgets onto it.'}</span>
         <div>${game ? '<button class="btn primary" data-a="engine">Open in Tuff Engine</button>' : ''}<button class="btn${game ? '' : ' primary'}" data-a="tpl">Pick a template</button><button class="btn" data-lib="mtgui">Empty modern window</button><button class="btn" data-lib="tgui">Empty classic window</button></div></div>`;
       $('[data-a="engine"]', stage)?.addEventListener('click', () => ide.openEngine(S.file));
@@ -1747,6 +1747,15 @@
     return [parsed.win, ...parsed.nodes].find((n) => n && Object.values(n.props).some((p) => p.line === line)) || null;
   }
 
+  // The widget whose gear goes on this line, where a click in the glyph margin opens its customizer: on the widget's
+  // own line, unless the debugger has a red dot there (1.5.0, debugger.js: a click takes the breakpoint away). A click
+  // on the widget's other lines (title:color "red") puts a breakpoint there.
+  function gearAt(model, line) {
+    if (!model || model.getLanguageId() !== 'tuff' || !line || window.TuffDebug?.hasBreakpoint(model, line)) return null;
+    const node = nodeAtLine(parsedFor(model), line);
+    return node && node.line === line ? node : null;
+  }
+
   function closeCustomizer() {
     $('#customizer')?.classList.add('hidden');
     C.sub?.dispose();
@@ -1815,20 +1824,15 @@
       const line = e.target.position?.lineNumber || 0;
       if (line === hoverLine) return;
       hoverLine = line;
-      let decos = [];
-      if (model && model.getLanguageId() === 'tuff' && line) {
-        const node = nodeAtLine(parsedFor(model), line);
-        if (node && node.line === line) {
-          decos = [{ range: new monaco.Range(line, 1, line, 1), options: { glyphMarginClassName: 'tuff-gear', glyphMarginHoverMessage: { value: `Customize this ${kindInfo(node).label.toLowerCase()}` } } }];
-        }
-      }
+      const node = gearAt(model, line);
+      const decos = node ? [{ range: new monaco.Range(line, 1, line, 1), options: { glyphMarginClassName: 'tuff-gear', glyphMarginHoverMessage: { value: `Customize this ${kindInfo(node).label.toLowerCase()}` } } }] : [];
       C.decos = editor.deltaDecorations(C.decos, decos);
     });
     editor.onMouseLeave(() => { hoverLine = 0; C.decos = editor.deltaDecorations(C.decos, []); });
     editor.onMouseDown((e) => {
       if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && e.target.position) {
         const model = editor.getModel();
-        if (model && nodeAtLine(parsedFor(model), e.target.position.lineNumber)) openCustomizer(model, e.target.position.lineNumber);
+        if (gearAt(model, e.target.position.lineNumber)) openCustomizer(model, e.target.position.lineNumber);
       }
     });
     editor.onDidChangeModel(closeCustomizer);
@@ -1852,6 +1856,8 @@
     undo: () => undoRedo('undo'),
     redo: () => undoRedo('redo'),
     closeCustomizer,
+    // A click in the glyph margin on this line opens a widget's customizer (the debugger leaves it alone, debugger.js).
+    ownsGlyph: (model, line) => !!gearAt(model, line),
     parse,
     templates: () => TEMPLATES.map((t) => ({ ...t })),
     // Shared with Tuff Engine (tuff-engine.js), which reads and writes tgame code the same way.

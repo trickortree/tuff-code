@@ -69,6 +69,10 @@
   const rel = (p) => (state.root && p.startsWith(state.root) ? p.slice(state.root.length).replace(/^[\\/]/, '') : p);
   const ext = (p) => (basename(p).match(/\.([^.]+)$/) || [, ''])[1].toLowerCase();
   const isUnder = (p, dir) => p === dir || p.startsWith(dir + SEP);
+  let tabDrag = null; // a file tab being dragged along the bar (see endTabDrag)
+  // The file run last, while it's in the open folder (after Open Folder or New Project it's the old project's, so Run,
+  // Rerun, Design Studio and Build leave it alone).
+  const lastRun = () => (state.lastRunFile && state.root && isUnder(state.lastRunFile, state.root) ? state.lastRunFile : null);
   const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
   const LANGS = { tuf: 'tuff', py: 'python', js: 'javascript', ts: 'typescript', json: 'json', md: 'markdown', html: 'html', css: 'css', xml: 'xml', yml: 'yaml', yaml: 'yaml', txt: 'plaintext', env: 'ini', ini: 'ini', cfg: 'ini', toml: 'ini', sh: 'shell', bat: 'bat', cmd: 'bat', ps1: 'powershell' };
@@ -205,6 +209,7 @@
       const b = document.createElement('button');
       b.className = 'mi' + (it.danger ? ' danger' : '');
       b.innerHTML = `<span>${esc(it.label)}</span>${it.sc ? `<span class="sc">${esc(it.sc)}</span>` : ''}`;
+      b.disabled = !!it.disabled; // (greyed out: Close Tabs to the Left on the first tab)
       b.onclick = () => { hideMenus(); it.run(); };
       m.appendChild(b);
     }
@@ -382,6 +387,33 @@
     tree.fresh = null;
   }
 
+  // ---------- a file's whole new text ----------
+  // One edit over a file's whole text puts every breakpoint (a decoration, debugger.js) and the cursor on whatever line
+  // then holds their old place in the text. These edits leave alone the lines that stay the same, so what's on them
+  // stays there: with as many lines as before (a replace, a file tidied, lines another program changed) they change
+  // only the lines that differ; otherwise the lines the old and new text share at the start and at the end are left
+  // alone and only the middle is replaced, as Design Studio's commit does (studio.js). [] when the text is the same.
+  function editsTo(model, text) {
+    const old = model.getLinesContent();
+    const next = text.split(/\r?\n/);
+    const { Range } = window.monaco;
+    const end = (n) => model.getLineMaxColumn(n);
+    if (old.length === next.length) return old.flatMap((line, i) => (line === next[i] ? [] : [{ range: new Range(i + 1, 1, i + 1, end(i + 1)), text: next[i] }]));
+    const eol = model.getEOL();
+    let a = 0;
+    while (a < old.length && a < next.length && old[a] === next[a]) a++;
+    let b = 0;
+    while (b < old.length - a && b < next.length - a && old[old.length - 1 - b] === next[next.length - 1 - b]) b++;
+    const mid = next.slice(a, next.length - b).join(eol);
+    const from = a + 1; // (the old lines it replaces: from to to)
+    const to = old.length - b;
+    // Lines only added go in before the shared end, which moves down with what's on it, or after the last line. Lines
+    // only taken away go with the line break after them, or before them at the end.
+    if (to < from) return [b ? { range: new Range(from, 1, from, 1), text: mid + eol, forceMoveMarkers: true } : { range: new Range(to, end(to), to, end(to)), text: eol + mid }];
+    if (a + b === next.length) return [{ range: b ? new Range(from, 1, to + 1, 1) : new Range(a, end(a), to, end(to)), text: '' }];
+    return [{ range: new Range(from, 1, to, end(to)), text: mid }];
+  }
+
   // ---------- files changed outside TuffCode ----------
   // main.js watches the open folder, so files an agent (or Explorer/Finder, or anything else) makes,
   // changes or deletes show up straight away, and open tabs follow along unless you've edited them.
@@ -394,7 +426,7 @@
       if (!state.tabs.includes(t) || t.model.isDisposed() || isDirty(t)) continue;
       if (disk === null || norm(disk) === norm(t.model.getValue())) continue;
       t.model.pushStackElement(); // the reload is its own undo step
-      t.model.pushEditOperations([], [{ range: t.model.getFullModelRange(), text: disk }], () => null);
+      t.model.pushEditOperations([], editsTo(t.model, disk), () => null);
       t.model.pushStackElement();
       t.saved = t.model.getAlternativeVersionId();
     }
@@ -542,6 +574,7 @@
     }
     if (state.active && isUnder(state.active, p)) state.active = np + state.active.slice(p.length);
     if (state.lastRunFile && isUnder(state.lastRunFile, p)) state.lastRunFile = np + state.lastRunFile.slice(p.length);
+    window.dispatchEvent(new CustomEvent('tuff:renamed', { detail: { from: p, to: np } })); // (1.5.0: breakpoints go with it, debugger.js)
     tree.expanded = new Set([...tree.expanded].map((d) => (isUnder(d, p) ? np + d.slice(p.length) : d)));
     for (const k of [...tree.children.keys()]) if (isUnder(k, p)) tree.children.delete(k);
     await refreshTree();
@@ -571,7 +604,12 @@
   async function openFolder(dir, { restore } = {}) {
     await saveAll();
     for (const t of [...state.tabs]) closeTab(t, { save: false, quiet: true });
+    // (the old project's Design Studio and Tuff Engine tabs go too: they'd show its files)
+    if (studio.open) closeStudio();
+    if (engine.open) closeEngine();
+    studio.file = engine.file = null;
     state.root = dir;
+    window.dispatchEvent(new CustomEvent('tuff:folder-opened', { detail: { dir } })); // (1.5.0: a program being debugged stops, debugger.js)
     tree.children.clear();
     tree.expanded = new Set([dir]);
     tree.selected = null;
@@ -605,7 +643,7 @@
   const syncDirty = (t) => t.el?.classList.toggle('dirty', isDirty(t));
 
   async function openFile(p, { focus = true, quiet = false, background = false } = {}) {
-    let t = state.tabs.find((x) => x.path === p);
+    let t = state.tabs.find((x) => x.path === p) || state.tabs.find((x) => samePath(x.path, p));
     if (!t) {
       let content;
       try {
@@ -680,7 +718,7 @@
   async function openStudio(file) {
     hideMenus();
     const t = activeTab();
-    let target = file || studio.file || (t && ext(t.path) === 'tuf' ? t.path : null) || state.lastRunFile;
+    let target = file || studio.file || (t && ext(t.path) === 'tuf' ? t.path : null) || lastRun();
     if (!target || !(await api.fs.exists(target))) target = join(state.root, 'main.tuf');
     showStudio(target);
   }
@@ -737,7 +775,7 @@
     if (!target && state.root) {
       const tufs = (await api.fs.listAll(state.root)).filter((f) => f.name.endsWith('.tuf') && !/^(dist|build)[\\/]/.test(f.rel)).sort((a, b) => a.rel.localeCompare(b.rel));
       for (const f of tufs.slice(0, 80)) {
-        try { if (/^[ \t]*(?:import|mention)[ \t]+tgame\b/m.test(await api.fs.readFile(f.path))) { target = f.path; break; } } catch { /* unreadable */ }
+        try { if (/^[ \t]*(?:import|mention)[ \t]+tgame\b(?!\.tuf)/m.test(await api.fs.readFile(f.path))) { target = f.path; break; } } catch { /* unreadable */ }
       }
       target = target || tufs[0]?.path || null;
       if (!target) {
@@ -799,6 +837,7 @@
     try {
       await api.fs.writeFile(t.path, t.model.getValue());
       t.saved = version;
+      if (ext(t.path) === 'tuf') recheckImporters(t);
     } catch (err) {
       toast(`Could not save ${basename(t.path)}: ${cleanErr(err)}`, 'error');
     }
@@ -847,9 +886,13 @@
       el.appendChild(tab);
     } else engine.el = null;
     for (const t of state.tabs) {
-      const tab = t.el = tabEl(t.el, 'tab' + (t.path === state.active && !studio.visible && !engine.visible ? ' active' : '') + (isDirty(t) ? ' dirty' : ''));
+      const tab = t.el = tabEl(t.el, 'tab' + (t.path === state.active && !studio.visible && !engine.visible ? ' active' : '') + (isDirty(t) ? ' dirty' : '')
+        + (tabDrag?.moving && tabDrag.t === t ? ' dragging' : ''));
       tab.title = t.path;
       tab.innerHTML = `${fileIcon(basename(t.path))}<span>${esc(basename(t.path))}</span><button class="x" title="Close (Ctrl+F4)">${TuffIcon('close-line')}</button>`;
+      tab.onpointerdown = (e) => {
+        if (e.button === 0 && !e.target.closest('.x')) tabDrag = { t, x: e.clientX, from: state.tabs.indexOf(t), moving: false };
+      };
       tab.onmousedown = (e) => {
         if (e.button === 1) { e.preventDefault(); closeTab(t); }
         else if (e.button === 0 && !e.target.closest('.x')) activate(t);
@@ -857,18 +900,109 @@
       tab.querySelector('.x').onclick = (e) => { e.stopPropagation(); closeTab(t); };
       tab.oncontextmenu = (e) => {
         e.preventDefault();
-        showMenu(e.clientX, e.clientY, [
-          { label: 'Close', sc: 'Ctrl+F4', run: () => closeTab(t) },
-          { label: 'Close Other Tabs', run: () => state.tabs.filter((x) => x !== t).forEach((x) => closeTab(x)) },
-          { label: 'Close All Tabs', run: () => [...state.tabs].forEach((x) => closeTab(x)) },
-          'sep',
-          { label: 'Copy Path', run: () => navigator.clipboard.writeText(t.path) },
-          { label: REVEAL, run: () => api.fs.reveal(t.path) },
-        ]);
+        showMenu(e.clientX, e.clientY, tabMenu(t));
       };
       el.appendChild(tab);
     }
     el.querySelector('.tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  // A file tab's right-click menu (1.5.0: Run, Close to the Left or Right, Move, Copy Relative Path, Show in Project
+  // and Rename were added). What can't be done there (Close Tabs to the Left on the first tab) is greyed out.
+  function tabMenu(t) {
+    const i = state.tabs.indexOf(t);
+    const left = state.tabs.slice(0, i), right = state.tabs.slice(i + 1);
+    const items = [];
+    if (ext(t.path) === 'tuf') items.push({ label: `Run '${basename(t.path)}'`, run: async () => { await saveAll(); startRun(t.path); } }, 'sep');
+    items.push(
+      { label: 'Close', sc: 'Ctrl+F4', run: () => closeTab(t) },
+      { label: 'Close Other Tabs', disabled: !left.length && !right.length, run: () => closeTabs([...left, ...right], t) },
+      { label: 'Close Tabs to the Left', disabled: !left.length, run: () => closeTabs(left, t) },
+      { label: 'Close Tabs to the Right', disabled: !right.length, run: () => closeTabs(right, t) },
+      { label: 'Close All Tabs', run: () => closeTabs([...state.tabs]) },
+      'sep',
+      { label: 'Move Tab Left', sc: 'Ctrl+Shift+PgUp', disabled: !left.length, run: () => moveTab(t, i - 1) },
+      { label: 'Move Tab Right', sc: 'Ctrl+Shift+PgDn', disabled: !right.length, run: () => moveTab(t, i + 1) },
+      'sep',
+      { label: 'Copy Path', run: () => navigator.clipboard.writeText(t.path) },
+      { label: 'Copy Relative Path', run: () => navigator.clipboard.writeText(rel(t.path)) },
+      { label: REVEAL, run: () => api.fs.reveal(t.path) },
+      { label: 'Show in Project', run: () => showInProject(t.path) },
+      'sep',
+      { label: 'Rename File…', run: () => renameEntry(t.path) },
+    );
+    return items;
+  }
+
+  // Closes these tabs. When the one on screen goes, keep (the tab that was right-clicked) comes up, not each next
+  // tab in turn.
+  function closeTabs(list, keep) {
+    if (keep && list.some((x) => x.path === state.active)) activate(keep);
+    for (const x of list) closeTab(x);
+  }
+
+  // Moves a file tab to place i (dragging it, Move Tab Left/Right). TuffCode opens the tabs in this order next time.
+  // (Design Studio's and Tuff Engine's tabs stay in front.)
+  function moveTab(t, i) {
+    const from = state.tabs.indexOf(t);
+    const to = Math.max(0, Math.min(state.tabs.length - 1, i));
+    if (from < 0 || from === to) return false;
+    state.tabs.splice(from, 1);
+    state.tabs.splice(to, 0, t);
+    renderTabs();
+    persistSession();
+    return true;
+  }
+
+  // Where a dragged tab goes: past each tab whose middle the pointer has crossed. rects are the file tabs' boxes in
+  // order, i the dragged tab's place, x the pointer.
+  function tabDropIndex(rects, i, x) {
+    let to = i;
+    while (to > 0 && x < rects[to - 1].left + rects[to - 1].width / 2) to--;
+    if (to === i) while (to < rects.length - 1 && x > rects[to + 1].left + rects[to + 1].width / 2) to++;
+    return to;
+  }
+
+  // Dragging a tab along the bar (1.5.0): once it has moved 5px it follows the pointer, trading places with each tab
+  // it passes, and the bar scrolls at its ends. Escape puts it back where it was. (tabDrag is up with the helpers.)
+  window.addEventListener('pointermove', (e) => {
+    const d = tabDrag;
+    if (!d) return;
+    if (!(e.buttons & 1)) return endTabDrag(); // (let go outside the window)
+    if (!d.moving) {
+      if (Math.abs(e.clientX - d.x) < 5) return;
+      d.moving = true;
+      $('#tabs').classList.add('dragging');
+      d.t.el?.classList.add('dragging');
+    }
+    const bar = $('#tabs');
+    const r = bar.getBoundingClientRect();
+    if (e.clientX < r.left + 24) bar.scrollLeft -= 12;
+    else if (e.clientX > r.right - 24) bar.scrollLeft += 12;
+    const at = state.tabs.indexOf(d.t);
+    if (at >= 0 && state.tabs.every((x) => x.el)) moveTab(d.t, tabDropIndex(state.tabs.map((x) => x.el.getBoundingClientRect()), at, e.clientX));
+  });
+  window.addEventListener('pointerup', () => endTabDrag());
+  window.addEventListener('blur', () => endTabDrag());
+  function endTabDrag(putBack = false) {
+    const d = tabDrag;
+    tabDrag = null;
+    if (!d?.moving) return;
+    $('#tabs').classList.remove('dragging');
+    if (!putBack || !moveTab(d.t, d.from)) renderTabs();
+  }
+
+  // A tab's Show in Project: the Project view, with the folders down to the file open and the file picked.
+  async function showInProject(p) {
+    showSideView('project', true);
+    const dirs = [];
+    for (let d = dirname(p); state.root && d.length > state.root.length && isUnder(d, state.root); d = dirname(d)) dirs.unshift(d);
+    for (const d of dirs) {
+      if (!tree.children.has(d)) await loadChildren(d);
+      tree.expanded.add(d);
+    }
+    renderTree();
+    selectInTree(p);
   }
 
   function cycleTab(dir) {
@@ -886,7 +1020,7 @@
   // window title name it (TuffIDE.activeFile() says the same). Otherwise it's the code tab's file.
   function runTarget() {
     const t = activeTab();
-    return (engine.visible && engine.file) || (t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile);
+    return (engine.visible && engine.file) || (t && ext(t.path) === 'tuf' ? t.path : lastRun());
   }
   function shownTab() {
     return (engine.visible && engine.file && state.tabs.find((x) => x.path === engine.file)) || activeTab();
@@ -918,10 +1052,18 @@
     live.timers.set(t.path, setTimeout(() => runCheck(t), 650));
   }
 
+  // A .tuf file was saved (1.5.0): the open files that import it (import money) are checked again, because a check
+  // reads the files a file imports from the disk.
+  function recheckImporters(saved) {
+    const name = basename(saved.path).replace(/\.tuf$/i, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const uses = new RegExp(`^[ \\t]*(import|mention)[ \\t]+${name}\\.tuf\\b`, 'm');
+    for (const t of state.tabs) if (t !== saved && ext(t.path) === 'tuf' && uses.test(t.model.getValue())) scheduleCheck(t);
+  }
+
   async function runCheck(t) {
     if (!state.tabs.includes(t) || t.model.isDisposed()) return;
     const version = t.model.getVersionId();
-    const r = await api.checkSource(t.model.getValue());
+    const r = await api.checkSource(t.model.getValue(), t.path); // its imports are found next to the real file
     if (!state.tabs.includes(t) || t.model.isDisposed() || t.model.getVersionId() !== version) return;
     const monaco = window.monaco;
     if (r.ok || r.unknown || !r.line) {
@@ -1062,10 +1204,9 @@
     for (const g of find.results) {
       const t = state.tabs.find((x) => x.path === g.path);
       if (t) {
-        const text = t.model.getValue();
-        const next = text.replace(re, find.re ? rep : () => rep);
-        if (next !== text) {
-          t.model.pushEditOperations([], [{ range: t.model.getFullModelRange(), text: next }], () => null);
+        const edits = editsTo(t.model, t.model.getValue().replace(re, find.re ? rep : () => rep));
+        if (edits.length) {
+          t.model.pushEditOperations([], edits, () => null);
           await saveTab(t);
         }
       } else {
@@ -1199,6 +1340,9 @@
     span.replaceChildren(...parts);
   }
 
+  // A tterm game's keys go to the program over stdin (tterm.js), like the answers typed for input.
+  const sendKey = (line) => { if (state.running) api.run.input(line); };
+
   function handleOsc(kind, args, c) {
     if (kind === 'say') {
       // say;<id>;<b64>[;<style>]: "notice" is the yellow line a tgame program starts with. The second player
@@ -1208,6 +1352,7 @@
       const span = appendOut(text, args[2] === 'notice' ? 'tline notice' : 'tline', c);
       const look = richStyle(args[2]);
       if (look) richLine(span, text, look);
+      if (look && look.screen) window.TuffTerm?.screen(span, look, c.who === 1 ? sendKey : null); // a tterm game (1.5.0)
       c.lines.set(args[0], span);
       // tgame's notice gets a button that opens the game in Tuff Engine.
       if (args[2] === 'notice' && /^Tuff Engine/.test(span.textContent)) {
@@ -1225,6 +1370,7 @@
       const look = richStyle(args[2]);
       if (look) richLine(span, decode64(args[1] || ''), look);
       else span.textContent = decode64(args[1] || '');
+      if (look && look.screen) window.TuffTerm?.screen(span, look, c.who === 1 ? sendKey : null);
       if (look && look.anim) return; // an animation's frame: no flash
       const now = performance.now();
       const rapid = now - (span.lastRewrite || 0) < 400;
@@ -1242,9 +1388,35 @@
       if (look) richLine(span, text, look);
       if (c.who === 1 && runInput) runInput.focus();
     } else if (kind === 'error') {
-      markError(state.lastRunFile, +args[0], +args[1], decode64(args[2] || ''));
+      // error;<line>;<col>;<message>[;<file>] (base64): the file is there when it's another of the program's own, one
+      // it imports (1.5.0); the line is that file's.
+      markError(args[3] ? decode64(args[3]) : state.lastRunFile, +args[0], +args[1], decode64(args[2] || ''));
     } else if (kind === 'clear') {
       clearOutput(args[0] === 'all' ? Infinity : +args[0], c);
+    } else if (kind === 'music') {
+      // music;play;<id>;<b64 file>;<1 to loop> and music;stop;<id or all> (1.5.0): a tmusic song, as the .wav it made.
+      // The second player leaves it out: the first copy plays it.
+      if (c.who === 2) return;
+      if (args[0] === 'play') playMusic(args[1], decode64(args[2] || ''), args[3] === '1');
+      else if (args[0] === 'stop') stopMusic(args[1] === 'all' ? null : args[1]);
+    }
+  }
+
+  // tmusic's songs (1.5.0) play here while the program runs. A new run or a program stopped early (Stop, or an error)
+  // stops them all; at a program's usual end the loops stop, and a tune played once plays to its end.
+  const music = new Map(); // id -> its Audio
+  const fileUrl = (p) => (/^[A-Za-z]:/.test(p) ? 'file:///' : 'file://') + encodeURI(p.replace(/\\/g, '/')).replace(/[?#]/g, encodeURIComponent);
+  function playMusic(id, file, loop) {
+    stopMusic(id);
+    const el = new Audio(fileUrl(file));
+    el.loop = loop;
+    el.onended = () => { if (music.get(id) === el) music.delete(id); };
+    music.set(id, el);
+    el.play().catch(() => { if (music.get(id) === el) music.delete(id); });
+  }
+  function stopMusic(id = null, loopsOnly = false) {
+    for (const [key, el] of [...music]) {
+      if ((id == null || key === id) && (!loopsOnly || el.loop)) { el.pause(); music.delete(key); }
     }
   }
 
@@ -1298,12 +1470,18 @@
 
   function handleStderr(text, c = copies[1]) {
     const span = appendOut(text, 'err', c);
-    const m = text.match(/Tuff error on line (\d+)/);
+    // "Tuff error in libs/money.tuf on line 4: ..." (1.5.0) is in one of the files the program imports, named from
+    // the program's folder.
+    const m = text.match(/Tuff error (?:in (.+?) )?on line (\d+)/);
     if (m && state.lastRunFile) {
-      const file = state.lastRunFile;
+      const file = m[1] ? join(dirname(state.lastRunFile), m[1].replace(/[\\/]/g, SEP)) : state.lastRunFile;
       span.classList.add('clickable');
       span.title = 'Jump to this line';
-      span.onclick = () => goToLine(file, +m[1]);
+      span.onclick = async () => {
+        await goToLine(file, +m[2]);
+        const p = pendingMark; // its error mark, now that it's open
+        if (m[1] && p && samePath(p.file, file)) markError(file, +m[2], p.col, p.message);
+      };
       // Tuff Agents sets this when it's on: ask the chosen agent what the error means.
       if (window.tuffExplainError) {
         const b = document.createElement('button');
@@ -1323,8 +1501,14 @@
     editor.focus();
   }
 
+  // The last run error in a file that wasn't open (one the program imports, 1.5.0): marked when its line is clicked.
+  let pendingMark = null;
+  const samePath = (a, b) => (api.platform === 'win32' ? a.replace(/\//g, '\\').toLowerCase() === b.replace(/\//g, '\\').toLowerCase() : a === b);
+
   function markError(file, line, col, message) {
-    const t = state.tabs.find((x) => x.path === file);
+    if (!file) return;
+    const t = state.tabs.find((x) => x.path === file) || state.tabs.find((x) => samePath(x.path, file));
+    if (!t && line) pendingMark = { file, col, message };
     if (!t || !line) return;
     const monaco = window.monaco;
     const word = t.model.getWordAtPosition({ lineNumber: line, column: col });
@@ -1367,10 +1551,12 @@
       .join('');
   }
 
-  // A new run starts over with one copy: main.js ends the second player too.
-  function startRun(file) {
+  // A new run starts over with one copy: main.js ends the second player too. opts.debug (1.5.0): the debugger's
+  // (debugger.js). Gives the run's id; tuff:run-started says a run started, and whether it's debugged.
+  function startRun(file, opts = null) {
     state.lastRunFile = file;
     state.runId += 1;
+    stopMusic();
     if (state.running2) {
       state.run2Id += 1; // what it says on its way out isn't shown
       setRunning2(false);
@@ -1383,11 +1569,14 @@
     $('#run-output').classList.remove('two');
     setBottomTab('run');
     createRunInput();
-    clearMarkers(file);
+    for (const t of state.tabs) clearMarkers(t.path); // the last run's error may be in a file it imports (1.5.0)
+    pendingMark = null;
     $('#run-tab-name').innerHTML = `${fileIcon(basename(file))}<span>${esc(basename(file))}</span>`;
     setRunning(true);
     updateChrome();
-    api.run.start(file, state.runId);
+    api.run.start(file, state.runId, opts);
+    window.dispatchEvent(new CustomEvent('tuff:run-started', { detail: { file, id: state.runId, debug: !!opts?.debug } }));
+    return state.runId;
   }
 
   async function runCurrent() {
@@ -1436,7 +1625,7 @@
       if (!quiet) toast('Your code is already nice and tidy.', 'ok');
       return;
     }
-    const [was, now] = await Promise.all([api.checkSource(before), api.checkSource(result.code)]);
+    const [was, now] = await Promise.all([api.checkSource(before, t.path), api.checkSource(result.code, t.path)]);
     if (was.ok && !now.ok) {
       toast('Auto code sort stopped: tidying this file would break it, so nothing was changed.', 'error', 6000);
       return;
@@ -1444,10 +1633,30 @@
     if (model.getValue() !== before) return;
     const onScreen = editor.getModel() === model;
     const pos = onScreen ? editor.getPosition() : null;
+    // The sort moves lines about (autosort.js says where each one went): each breakpoint goes with its line, and so does
+    // the cursor when its line moved. One on a line the sort took away (an old note) goes on the next line it kept.
+    const to = new Map(result.from.map((o, k) => [o + 1, k + 1]));
+    const last = model.getLineCount();
+    const where = (n) => { for (let k = n; k <= last; k++) if (to.has(k)) return to.get(k); return result.from.length || 1; };
+    const dots = window.TuffDebug?.breakpoints().find((b) => samePath(b.path, t.path))?.lines || [];
+    const unsorted = model.getAlternativeVersionId();
     model.pushStackElement();
-    model.pushEditOperations([], [{ range: model.getFullModelRange(), text: result.code }], () => null);
+    model.pushEditOperations([], editsTo(model, result.code), () => null);
     model.pushStackElement();
-    if (onScreen && pos) editor.setPosition({ lineNumber: Math.min(pos.lineNumber, model.getLineCount()), column: 1 });
+    if (dots.length) {
+      const moved = dots.map(where);
+      window.TuffDebug.setLines(t.path, moved);
+      // Undo (Ctrl+Z, or the toast's) brings the old text back but would leave the dots where they are: they go back
+      // with it, and Redo takes them to the sorted lines again. (One watcher for the tab, however many sorts it has had.)
+      const back = (t.sortDots ||= { undo: new Map(), redo: new Map() });
+      back.undo.set(unsorted, dots);
+      back.redo.set(model.getAlternativeVersionId(), moved);
+      t.sortWatch ||= model.onDidChangeContent((e) => {
+        const lines = (e.isUndoing ? back.undo : e.isRedoing ? back.redo : null)?.get(model.getAlternativeVersionId());
+        if (lines) window.TuffDebug.setLines(t.path, lines);
+      });
+    }
+    if (onScreen && pos && editor.getPosition().lineNumber !== where(pos.lineNumber)) editor.setPosition({ lineNumber: where(pos.lineNumber), column: 1 });
     const what = result.summary.length ? result.summary.join(', ') : 'tidied up';
     const text = `Auto code sort: ${what.charAt(0).toUpperCase() + what.slice(1)}.`;
     if (!was.ok && now.ok) toast(`${text} That also fixed the mistake in your code.`, 'ok', 6000);
@@ -1456,7 +1665,7 @@
   }
 
   async function rerun() {
-    if (!state.lastRunFile) return runCurrent();
+    if (!lastRun()) return runCurrent();
     await saveAll();
     startRun(state.lastRunFile);
   }
@@ -1469,7 +1678,9 @@
   });
   api.run.onExit(({ id, code }) => {
     if (id !== state.runId) return;
+    stopMusic(null, code === 0);
     const output = runOutputText();
+    window.TuffTerm?.ended($('#run-output'));
     runInput?.remove();
     runInput = null;
     appendOut('\n', 'done');
@@ -1489,20 +1700,21 @@
     appendOut(`The second player finished with exit code ${code}\n`, 'done' + (code ? ' bad' : ''), copies[2]);
     setRunning2(false);
   });
-  $('#run-output').addEventListener('mouseup', () => {
+  $('#run-output').addEventListener('mouseup', (e) => {
+    if (e.target.closest?.('.tscreen.live')) return; // a tterm game keeps the keys it was clicked for
     if (runInput && !getSelection().toString()) runInput.focus();
   });
 
   // ---------- build ----------
   const BUILD_STEPS = [
-    ['python', 'Find Python'],
+    ['python', 'Get ready to build'],
     ['check', 'Check your code for mistakes'],
     ['tools', 'Get the build tools ready'],
     ['pack', 'Pack your program'],
     ['build', api.platform === 'win32' ? 'Build your .exe' : 'Build your app'],
   ];
   const bd = { file: null, icon: null, windowed: true, building: false, steps: {}, last: null };
-  const exeName = (n) => n.replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'MyTuffApp';
+  const exeName = (n) => n.replace(/[<>:"/\\|?*;]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'MyTuffApp';
   const buildPrefs = () => (state.settings.builds || {})[state.root] || {};
 
   function setBottomTab(tab) {
@@ -1517,7 +1729,7 @@
   function buildTarget() {
     const t = activeTab();
     if (t && ext(t.path) === 'tuf') return t.path;
-    return state.lastRunFile || join(state.root, 'main.tuf');
+    return lastRun() || join(state.root, 'main.tuf');
   }
 
   async function refreshIconPreview() {
@@ -1544,7 +1756,7 @@
     const t = state.tabs.find((x) => x.path === bd.file);
     const src = t ? t.model.getValue() : await api.fs.readFile(bd.file);
     bd.icon = prefs.icon && (await api.fs.exists(prefs.icon)) ? prefs.icon : null;
-    bd.windowed = prefs.windowed ?? /^\s*(import|mention)\s+m?tgui\b/m.test(src);
+    bd.windowed = prefs.windowed ?? /^\s*(import|mention)\s+m?tgui\b(?!\.tuf)/m.test(src);
     const titled = src.match(/m?tgui\.window\(\s*["']([^"']+)["']/);
     $('#bd-name').value = prefs.name || titled?.[1] || basename(state.root);
     $('#bd-file').innerHTML = `${fileIcon(basename(bd.file))}<span>${esc(rel(bd.file))}</span>`;
@@ -1630,7 +1842,7 @@
       if (stick) log.scrollTop = log.scrollHeight;
     } else if (ev.type === 'tuff-error') {
       const m = ev.text.match(/Tuff error on line (\d+): ([^\n]*)/);
-      if (m && bd.last) markError(bd.last.file, +m[1], 1, m[2]);
+      if (m && bd.last) markError(ev.file || bd.last.file, +m[1], 1, m[2]); // ev.file: one of the files it imports (1.5.0)
     } else if (ev.type === 'done') {
       finishBuild(ev);
     }
@@ -1731,6 +1943,7 @@
   };
 
   const commands = {
+    newProject: { label: 'New Project…', run: () => window.TuffNewProject?.open() },
     newFile: { label: 'New File…', sc: 'Ctrl+Alt+N', run: () => newEntry(false) },
     newFolder: { label: 'New Folder', run: () => newEntry(true) },
     openFolder: { label: 'Open Folder…', sc: 'Ctrl+O', run: pickFolder },
@@ -1764,6 +1977,8 @@
     liveCheck: { label: 'Check for Mistakes as You Type (on/off)', run: () => { setLiveCheck(state.settings.liveCheck === false); toast(state.settings.liveCheck === false ? 'Live checking is off.' : 'Live checking is on.'); } },
     nextTab: { label: 'Next Tab', sc: 'Ctrl+Tab', run: () => cycleTab(1) },
     prevTab: { label: 'Previous Tab', sc: 'Ctrl+Shift+Tab', run: () => cycleTab(-1) },
+    moveTabLeft: { label: 'Move Tab Left', sc: 'Ctrl+Shift+PgUp', run: () => { const t = activeTab(); if (t) moveTab(t, state.tabs.indexOf(t) - 1); } },
+    moveTabRight: { label: 'Move Tab Right', sc: 'Ctrl+Shift+PgDn', run: () => { const t = activeTab(); if (t) moveTab(t, state.tabs.indexOf(t) + 1); } },
     zoomIn: { label: 'Increase Font Size', sc: 'Ctrl+=', run: zoom(1) },
     zoomOut: { label: 'Decrease Font Size', sc: 'Ctrl+-', run: zoom(-1) },
     zoomReset: { label: 'Reset Font Size', sc: 'Ctrl+0', run: zoom(0) },
@@ -1784,18 +1999,21 @@
     'Ctrl+Alt+S': 'settings', 'Ctrl+Alt+L': 'autoSort', 'Ctrl+S': 'saveAll', 'Ctrl+O': 'openFolder', 'Ctrl+Alt+N': 'newFile', 'Ctrl+F4': 'closeTab', 'Ctrl+W': 'closeTab',
     'Ctrl+Shift+N': 'goToFile', 'Ctrl+E': 'goToFile', 'Alt+1': 'toggleProject', 'Alt+2': 'learn', 'Alt+3': 'plugins', 'Alt+4': 'toggleRun', 'Ctrl+Shift+D': 'studio', 'Ctrl+Shift+G': 'engine',
     'Shift+F10': 'run', 'Ctrl+Shift+F10': 'run', 'Ctrl+F5': 'rerun', 'Ctrl+F2': 'stop', 'Ctrl+F9': 'build',
-    'Ctrl+Tab': 'nextTab', 'Ctrl+Shift+Tab': 'prevTab', 'Ctrl+Shift+I': 'devtools', 'F12': 'goToDefinition',
+    'Ctrl+Tab': 'nextTab', 'Ctrl+Shift+Tab': 'prevTab', 'Ctrl+Shift+PageUp': 'moveTabLeft', 'Ctrl+Shift+PageDown': 'moveTabRight',
+    'Ctrl+Shift+I': 'devtools', 'F12': 'goToDefinition',
     'Ctrl+Shift+F': 'findInFiles', 'Ctrl+Shift+T': 'reopenTab', 'Ctrl+Alt+Z': 'zen',
     'Ctrl+=': 'zoomIn', 'Ctrl++': 'zoomIn', 'Ctrl+Shift++': 'zoomIn', 'Ctrl+-': 'zoomOut', 'Ctrl+0': 'zoomReset',
     'Ctrl+D': 'dupLine', 'Ctrl+Y': 'deleteLine', 'Ctrl+Shift+Z': 'redo', 'Ctrl+R': 'replace',
   };
 
   const menus = [
-    ['File', ['newFile', 'newFolder', 'openFolder', 'sep', 'saveAll', 'closeTab', 'sep', 'settings', 'sep', 'exit']],
+    ['File', ['newProject', 'newFile', 'newFolder', 'openFolder', 'sep', 'saveAll', 'closeTab', 'sep', 'settings', 'sep', 'exit']],
     ['Edit', ['undo', 'redo', 'sep', 'find', 'replace', 'findInFiles', 'sep', 'renameSymbol', 'autoSort', 'comment', 'dupLine', 'deleteLine', 'selectAll']],
     ['View', ['toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'engine', 'sep', 'zen', 'zoomIn', 'zoomOut', 'zoomReset', 'sep', 'settings', 'devtools']],
-    ['Go', ['searchEverywhere', 'goToFile', 'goToSymbol', 'sep', 'goToDefinition', 'findUses', 'sep', 'reopenTab', 'nextTab', 'prevTab']],
-    ['Run', ['run', 'rerun', 'stop', 'sep', 'build', 'sep', 'liveCheck']],
+    ['Go', ['searchEverywhere', 'goToFile', 'goToSymbol', 'sep', 'goToDefinition', 'findUses', 'sep', 'reopenTab', 'nextTab', 'prevTab', 'moveTabLeft', 'moveTabRight']],
+    // (debug to toggleBreakpoint are the debugger's, debugger.js: a menu leaves out the commands that aren't there)
+    ['Run', ['run', 'debug', 'watchRun', 'rerun', 'stop', 'sep', 'debugContinue', 'stepOver', 'stepInto', 'stepOut', 'debugPause', 'toggleBreakpoint',
+      'sep', 'build', 'sep', 'liveCheck']],
     ['Help', ['learn', 'replayIntro', 'whatsNew', 'sep', 'checkUpdates', 'about']],
   ];
 
@@ -1815,6 +2033,7 @@
         for (const id of ids) {
           if (id === 'sep') { dd.appendChild(document.createElement('hr')); continue; }
           const c = commands[id];
+          if (!c) continue;
           const mi = document.createElement('button');
           mi.className = 'mi';
           mi.innerHTML = `<span>${esc(c.label)}</span>${c.sc ? `<span class="sc">${esc(c.sc)}</span>` : ''}`;
@@ -2097,7 +2316,8 @@
   $('#search-everywhere').addEventListener('mousedown', (e) => { if (e.target.id === 'search-everywhere') closeSearch(); });
 
   // ---------- keyboard ----------
-  const overlayOpen = () => !$('#modal').classList.contains('hidden') || !$('#settings').classList.contains('hidden') || !$('#build-dialog').classList.contains('hidden') || !$('#search-everywhere').classList.contains('hidden') || !$('#intro').classList.contains('hidden');
+  const overlayOpen = () => !$('#modal').classList.contains('hidden') || !$('#settings').classList.contains('hidden') || !$('#build-dialog').classList.contains('hidden') || !$('#search-everywhere').classList.contains('hidden') || !$('#intro').classList.contains('hidden')
+    || !!window.TuffNewProject?.isOpen() || !!document.getElementById('whatsnew');
   let shiftClean = false;
   let lastShift = 0;
 
@@ -2109,7 +2329,8 @@
   // and moved you into the editor, so a Ctrl+Z after them undid code too. In a box they stay the box's own.
   // Ctrl+Alt ones (Settings, New File, Zen) stay out too: on Windows Ctrl+Alt is AltGr, which types ł, ż, ś.
   const APP_WIDE = new Set(['saveAll', 'openFolder', 'closeTab', 'goToFile', 'findInFiles', 'reopenTab', 'nextTab', 'prevTab',
-    'toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'engine', 'run', 'rerun', 'stop', 'build', 'devtools', 'zoomIn', 'zoomOut', 'zoomReset']);
+    'toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'engine', 'run', 'rerun', 'stop', 'build', 'devtools', 'zoomIn', 'zoomOut', 'zoomReset',
+    'debug', 'debugContinue', 'stepOver', 'stepInto', 'stepOut']);
   function worksInTextBox(id, combo, e) {
     // On a Mac, Ctrl+letter in a text box is the box's editing (Ctrl+A, Ctrl+E, Ctrl+K, Ctrl+Y...); shortcuts are Cmd.
     if (api.platform === 'darwin' && e.ctrlKey && !e.metaKey && /^Key/.test(e.code)) return false;
@@ -2123,6 +2344,7 @@
     if (e.key === 'Shift') { if (!e.repeat) shiftClean = true; return; }
     shiftClean = false;
     if (e.key === 'Escape') hideMenus();
+    if (e.key === 'Escape' && tabDrag?.moving) { e.preventDefault(); e.stopPropagation(); endTabDrag(true); return; }
     if (overlayOpen()) return;
     if (studio.visible && window.TuffStudio?.onKey(e)) {
       e.preventDefault();
@@ -2202,6 +2424,7 @@
     const r = e.currentTarget.getBoundingClientRect();
     const recent = (state.settings.recent || []).filter((p) => p !== state.root);
     showMenu(r.left, r.bottom + 4, [
+      { label: 'New Project…', run: commands.newProject.run },
       { label: 'Open Folder…', sc: 'Ctrl+O', run: pickFolder },
       { label: 'New File…', sc: 'Ctrl+Alt+N', run: () => newEntry(false) },
       ...(recent.length ? ['sep', ...recent.map((p) => ({ label: basename(p), sc: p.length > 38 ? '…' + p.slice(-36) : p, run: () => openFolder(p) }))] : []),
@@ -2214,6 +2437,8 @@
       state.running
         ? { label: 'Stop', sc: 'Ctrl+F2', run: () => api.run.stop() }
         : { label: cur ? `Run '${basename(cur)}'` : 'Run Current File', sc: 'Shift+F10', run: runCurrent },
+      ...(commands.debug ? [{ label: cur ? `Debug '${basename(cur)}'` : commands.debug.label, sc: commands.debug.sc, run: commands.debug.run },
+        { label: commands.watchRun.label, run: commands.watchRun.run }] : []),
       { label: 'Rerun', sc: 'Ctrl+F5', run: rerun },
       ...(!$('#btn-run2').classList.contains('hidden')
         ? [{ label: state.running2 ? 'Stop the Second Player' : 'Run a Second Player', run: runSecond }] : []),
@@ -2244,22 +2469,36 @@
 
   window.TuffIDE = {
     root: () => state.root,
+    openFolder: (dir) => openFolder(dir), // New Project opens the folder it made (new-project.js)
     join,
     settings: () => state.settings,
     saveSettings,
     toast,
     refreshTree,
-    // With a line, the cursor goes there (a link like "main.tuf:12" in an agent's reply).
-    openFile: async (p, line) => {
-      const tab = await openFile(p);
-      if (tab && line > 0) { editor.revealLineInCenter(line); editor.setPosition({ lineNumber: line, column: 1 }); editor.focus(); }
+    // With a line, the cursor goes there (a link like "main.tuf:12" in an agent's reply). focus: false leaves the
+    // keyboard where it is (the debugger's Watch it run, while an answer is typed in the Run window).
+    openFile: async (p, line, { focus = true } = {}) => {
+      const tab = await openFile(p, { focus });
+      if (tab && line > 0) { editor.revealLineInCenter(line); editor.setPosition({ lineNumber: line, column: 1 }); if (focus) editor.focus(); }
       return tab;
     },
-    runFile: async (p) => { await saveAll(); startRun(p); },
+    // opts: startRun's (the debugger's). Gives the run's id.
+    runFile: async (p, opts) => { await saveAll(); return startRun(p, opts); },
+    runTarget: () => runTarget(),
+    // A model's file: its tab's path (a renamed tab keeps its model, whose uri has the path it was opened with).
+    pathOf: (m) => state.tabs.find((t) => t.model === m)?.path ?? null,
     openBuild: (p) => openBuildDialog(p),
     editor: () => editor,
     getModel: async (p) => (await openFile(p, { background: true, quiet: true }))?.model,
     listFiles: () => api.fs.listAll(state.root),
+    // A file's text without opening it: an open tab's (unsaved changes too), else the file's, or null when it isn't
+    // there. The editor reads the files a .tuf file imports with it (1.5.0, tuff-lang.js), and readDir finds them.
+    readText: async (p) => {
+      const t = state.tabs.find((x) => x.path === p) || state.tabs.find((x) => samePath(x.path, p));
+      if (t) return t.model.getValue();
+      try { return (await api.fs.exists(p)) ? await api.fs.readFile(p) : null; } catch { return null; }
+    },
+    readDir: async (dir) => { try { return await api.fs.readDir(dir); } catch { return []; } },
     rel,
     basename,
     goToLine,
@@ -2290,14 +2529,15 @@
       editor.pushUndoStop();
       return true;
     },
-    // Replaces the whole open file, as one step Ctrl+Z undoes.
+    // Replaces the whole open file, as one step Ctrl+Z undoes (only the lines that change: see editsTo).
     replaceAllText: async (text) => {
       const t = engineTab() || activeTab();
       if (!editor || !t) { toast('Open a file first.'); return false; }
       if (studio.visible || engine.visible) activate(t);
       editor.focus();
+      const edits = editsTo(t.model, String(text ?? ''));
       editor.pushUndoStop();
-      editor.executeEdits('plugin', [{ range: t.model.getFullModelRange(), text, forceMoveMarkers: true }]);
+      if (edits.length) editor.executeEdits('plugin', edits);
       editor.pushUndoStop();
       return true;
     },
@@ -2318,6 +2558,9 @@
     engineVisible: () => engine.visible,
     scene: (file, source, tag) => api.engine.scene(file, source, tag),
     stopRun: () => api.run.stop(),
+    // A dialog is open (New Project, Search Everywhere, What's New...): the IDE's shortcuts wait, and the debugger
+    // leaves the keyboard in it when the program pauses.
+    overlayOpen: () => overlayOpen(),
     isRunning: () => !!state.running,
     runCommand: (id) => commands[id]?.run(),
     hasCommand: (id) => !!commands[id],
@@ -2351,6 +2594,7 @@
 
     window.TuffStudio.init(window.TuffIDE);
     window.TuffEngine?.init(window.TuffIDE);
+    window.TuffDebug?.init(window.TuffIDE); // 1.5.0: the debugger (debugger.js)
     window.TuffWhatsNew?.init({ openWeb: (url) => api.openWeb(url), focusEditor: () => editor?.focus() });
     if (firstRun) {
       const introDone = playIntro();

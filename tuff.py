@@ -1,6 +1,7 @@
 """Tuff - the language behind TuffCode. Run a program with: python tuff.py file.tuf"""
 import base64
 import colorsys
+import decimal
 import difflib
 import inspect
 import json
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 
 IDE = os.environ.get("TUFF_IDE") == "1"
 # Echo typed answers back, so a run fed from a file reads like a real session (the MCP tuff_run tool).
@@ -29,6 +31,9 @@ class TuffError(Exception):
         self.msg = msg
         self.line = line
         self.col = col
+        # 1.5.0: the file the line is in. None until it leaves a function or an imported file (see file_of), then ""
+        # for the program itself, or the full path of one of its own files it imported (import money).
+        self.file = None
 
 
 # ---------------------------------------------------------------- tokenizer
@@ -43,6 +48,10 @@ class Tok:
     def show(self):
         if self.kind == "STR":
             return f'"{self.value}"'
+        if self.kind == "FSTR":
+            return 'f"..."'
+        if self.kind == "EOF" and self.value:  # the end of the code in a text template's { }: its } or its format's ':'
+            return self.value
         if self.kind in ("NEWLINE", "EOF"):
             return "the end of the line"
         if self.kind in ("INDENT", "DEDENT"):
@@ -62,12 +71,14 @@ def source_lines(src):
     return lines
 
 
-def tokenize(src):
+def tokenize(src, first=1):
+    """The program's tokens. first: the number of src's first line (the code in a template's { } is read on its own
+    line, see template_code)."""
     toks = []
     indents = [0]
     brackets = []  # the open ( [ { a line is inside (a line only continues inside brackets)
     lines = source_lines(src)
-    for ln, raw in enumerate(lines, 1):
+    for ln, raw in enumerate(lines, first):
         stripped = raw.lstrip(" \t")
         if not brackets:
             if not stripped or stripped.startswith("#"):
@@ -108,6 +119,10 @@ def tokenize(src):
                 while j < n and (raw[j].isalnum() or raw[j] == "_"):
                     j += 1
                 word = raw[i:j]
+                if word == "f" and j < n and raw[j] in "\"'":  # a text template: f"{name} has {score} points" (1.5.0)
+                    tok, i = template(raw, j, n, ln)
+                    toks.append(tok)
+                    continue
                 toks.append(Tok("KW" if word in KEYWORDS else "NAME", word, ln, col))
                 i = j
             elif c in "\"'":
@@ -137,7 +152,7 @@ def tokenize(src):
                 i += 2
             elif c in "+-*/%^<>=()[]{},.":
                 if c == "[":  # an index's [ ] (after a value: s[1:3]) or a list's ([a, b])
-                    after_value = toks and (toks[-1].kind in ("NAME", "STR") or (toks[-1].kind == "OP" and toks[-1].value in ")]}"))
+                    after_value = toks and (toks[-1].kind in ("NAME", "STR", "FSTR") or (toks[-1].kind == "OP" and toks[-1].value in ")]}"))
                     if after_value and len(toks) >= 2 and toks[-1].kind == "NAME" and toks[-2].kind == "METHOD" and raw[i - 1] in " \t":
                         after_value = False  # pairs:add [word:upper, 1]: after a method's name and a space, [ starts its input
                     brackets.append("[i" if after_value else "[l")
@@ -154,12 +169,169 @@ def tokenize(src):
                 raise TuffError(f"I don't understand the character '{c}'.", ln, col)
         if not brackets:
             toks.append(Tok("NEWLINE", None, ln, n + 1))
-    end = len(lines) + 1
+    end = len(lines) + first
     while len(indents) > 1:
         indents.pop()
         toks.append(Tok("DEDENT", None, end, 1))
     toks.append(Tok("EOF", None, end, 1))
     return toks
+
+
+# ---- text templates (1.5.0): f"{name} has {score + 1} points", f"Total: {price * qty:money}"
+
+# The formats, by example: 0.00 (2 decimals), 000 (at least 3 digits; 000.0 both), money ($1,234.50) and a width:
+# 12 pads to 12 letters (text on the left, numbers on the right), and >12 or <12 says which side the value goes.
+TEMPLATE_FORMAT = re.compile(r"(0+)(?:\.(0+))?|money|([<>]?)([1-9][0-9]*)")
+FORMAT_HELP = "Formats look like 0.00 (2 decimals), 000 (3 digits or more), money ($12.50) or a width like 10."
+
+
+def is_template(raw, i):
+    """Is the quote at raw[i] the start of a text template, with an f of its own just before it?"""
+    return i > 0 and raw[i - 1] == "f" and (i < 2 or not (raw[i - 2].isalnum() or raw[i - 2] == "_"))
+
+
+def skip_text(raw, i, n):
+    """Just past the "text" whose quote is at raw[i], read as tokenize reads it, or None if the line ends first."""
+    quote, j = raw[i], i + 1
+    while j < n and raw[j] != quote:
+        j += 2 if raw[j] == "\\" else 1
+    return j + 1 if j < n else None
+
+
+def skip_template(raw, i, n, ln):
+    """Just past the text template whose quote is at raw[i] (one inside another's { }), or None."""
+    quote, j = raw[i], i + 1
+    while j < n and raw[j] != quote:
+        if raw[j] == "\\" and j + 1 < n and raw[j + 1] in ESCAPES:
+            j += 2
+        elif raw.startswith("{{", j) or raw.startswith("}}", j):
+            j += 2
+        elif raw[j] == "{":
+            end = code_end(raw, j + 1, n, ln)[0]
+            if end is None:
+                return None
+            j = end + 1
+        else:
+            j += 1
+    return j + 1 if j < n else None
+
+
+def code_end(raw, i, n, ln):
+    """Where the code in a template's { } that starts at raw[i] ends: the index of its own } (past any brackets and
+    text in it), or None if the line ends first. Also gives the ':'s outside its brackets and text: the last one
+    can start a format."""
+    opened, colons = [], []
+    while i < n:
+        c = raw[i]
+        if c in "\"'":
+            i = skip_template(raw, i, n, ln) if is_template(raw, i) else skip_text(raw, i, n)
+            if i is None:
+                return None, colons
+            continue
+        if c == "#":
+            raise TuffError("A # comment can't go inside the { } of a text template.", ln, i + 1)
+        if c in "([{":
+            opened.append(i)
+        elif c in ")]}":
+            if not opened:
+                if c == "}":
+                    return i, colons
+            elif raw[opened[-1]] + c in ("()", "[]", "{}"):
+                opened.pop()
+            elif c == "}":  # f"{len(name}": the ( is still open where the { } ends
+                at = opened[-1]
+                closer = ")]"["([".index(raw[at])]
+                raise TuffError(f"This {raw[at]} needs a {closer} before the }} that ends the {{ }}.", ln, at + 1)
+        elif c == ":" and not opened:
+            colons.append(i)
+        i += 1
+    return None, colons
+
+
+def template(raw, q, n, ln):
+    """Reads the text template whose quote is at raw[q], with its f just before it. Gives back its token and where
+    it ends. The token's value is its parts in order: text, and for each { } a (tokens, format, format's column)."""
+    quote, j = raw[q], q + 1
+    parts, text = [], []
+    while True:
+        if j >= n:
+            raise TuffError(f"This text is missing its closing {quote}", ln, q)
+        c = raw[j]
+        if c == quote:
+            break
+        if c == "\\" and j + 1 < n and raw[j + 1] in ESCAPES:  # "\n" and the rest, as in any text
+            text.append(ESCAPES[raw[j + 1]])
+            j += 2
+        elif raw.startswith("{{", j) or raw.startswith("}}", j):  # {{ and }} show one brace
+            text.append(c)
+            j += 2
+        elif c == "}":
+            raise TuffError("A } on its own can't go in a text template. To show one, write }}.", ln, j + 1)
+        elif c == "{":
+            end, colons = code_end(raw, j + 1, n, ln)
+            if end is None:
+                raise TuffError("This { has no } to close it. To show a { itself, write {{.", ln, j + 1)
+            if text:
+                parts.append("".join(text))
+                text = []
+            parts.append(template_code(raw, j, end, colons, ln))
+            j = end + 1
+        else:
+            text.append(c)  # (a backslash before anything else stays, as in any text: f"C:\{folder}" is C:\ and folder)
+            j += 1
+    if text or not parts:
+        parts.append("".join(text))
+    return Tok("FSTR", parts, ln, q), j + 1
+
+
+def python_format(spec, code):
+    """How Tuff writes a Python format (.2f, 05d, ,.2f), for the message about it, or ""."""
+    m = re.fullmatch(r"[<>^]?(0?)([0-9]*)(,?)(?:\.([0-9]+))?[dfs%]?", spec)
+    if not m:
+        return ""
+    zero, width, commas, places = m.groups()
+    if commas and places == "2":
+        better = "money"
+    elif places is not None:
+        better = "0." + "0" * min(int(places), 100) if int(places) else "0"
+    elif zero and width:
+        better = "0" * min(int(width), 100)
+    else:
+        return ""
+    return f" Here, write {{{code or 'x'}:{better}}}."
+
+
+def template_code(raw, brace, end, colons, ln):
+    """One { } of a template (raw[brace] is its {, raw[end] its }): the tokens of its code, ended by an EOF token,
+    and its format and the format's column (or None, None). The format starts at the last ':' outside brackets and
+    text, when what follows that ':' is a format (f"{price * qty:money}"). Otherwise it's a method's ':'
+    (f"{name:upper()}"), so f"{d:get("k")}" and f"{ {"a": 1}["a"] }" are code all through."""
+    stop, fmt, fmt_col = end, None, None
+    if colons:
+        at = colons[-1]
+        tail = raw[at + 1:end]
+        spec = tail.strip()
+        method = raw[at - 1] not in " \t" and (tail[:1].isalpha() or tail[:1] == "_")  # glued to a word: name:upper
+        m = TEMPLATE_FORMAT.fullmatch(spec)
+        if m:
+            stop, fmt, fmt_col = at, spec, at + 2 + len(tail) - len(tail.lstrip())
+            zeros, decimals, _side, width = m.groups()
+            if width and int(width) > 1000:
+                raise TuffError(f"{width} is too wide: a width can be up to 1000.", ln, fmt_col)
+            if len(zeros or "") > 100 or len(decimals or "") > 100:
+                raise TuffError("That format has too many 0s: it can show up to 100 digits on each side of the point.", ln, fmt_col)
+        elif not spec:
+            raise TuffError("Put a format after the ':', like {price:0.00}, or take the ':' away.", ln, at + 1)
+        elif not method:
+            raise TuffError(f"'{spec}' isn't a format. {FORMAT_HELP}{python_format(spec, raw[brace + 1:at].strip())}",
+                            ln, at + 2 + len(tail) - len(tail.lstrip()))
+    if not raw[brace + 1:stop].strip():
+        raise TuffError("These { } have nothing in them. Put a value in them, like {name}, or write {{ to show a {.", ln, brace + 1)
+    # The code is read by tokenize itself, as a line of its own with spaces before it, so its tokens keep their
+    # columns in the real line (and a template in it is read the same way).
+    toks = [t for t in tokenize(" " * (brace + 1) + raw[brace + 1:stop], ln) if t.kind not in ("INDENT", "DEDENT", "NEWLINE", "EOF")]
+    toks.append(Tok("EOF", ":" if fmt else "}", ln, stop + 1))
+    return toks, fmt, fmt_col
 
 
 # ---------------------------------------------------------------- parser
@@ -172,7 +344,7 @@ class N:
         self.__dict__.update(fields)
 
 
-EXPR_STARTS = {"NUM", "STR", "NAME"}
+EXPR_STARTS = {"NUM", "STR", "FSTR", "NAME"}
 EXPR_START_KWS = {"say", "input", "not", "true", "false", "nil"}
 ASSIGN_OPS = {"=", "+=", "-=", "*=", "/="}
 COMPARE_OPS = {"==", "!=", "<", ">", "<=", ">="}
@@ -198,6 +370,12 @@ class Parser:
             elif inputs is not False and t.kind == "OP" and t.value == ")":
                 inputs = False
         self.values = self.given | self.funcs | BUILTIN_NAMES | OWN_NAME_BUILTINS | {"err", "pi", "all"}
+        # What this file imports or mentions: its libraries and its own files (money.rate = 2 says so, see simple_statement).
+        self.imported = {nxt.value for t, nxt in zip(toks, toks[1:]) if t.kind == "KW" and t.value in ("import", "mention") and nxt.kind == "NAME"}
+        self.depth = 0  # how many blocks in the statement being read is (a kind is made at the top: depth 0)
+        self.kinds = {}  # the kinds read so far: name -> line (1.5.0)
+        self.kind_name = None  # the kind whose block is being read
+        self.in_action = None  # the kind whose action is being read: its my is that kind's object
 
     def block_word(self, ahead, catch=False):
         """Is the try or catch here (ahead tokens before the ':') the start of a block? try: and catch: with a
@@ -250,6 +428,13 @@ class Parser:
         return body
 
     def block(self, opener_optional=False):
+        self.depth += 1
+        try:
+            return self.block_lines(opener_optional)
+        finally:
+            self.depth -= 1
+
+    def block_lines(self, opener_optional):
         tok = self.peek()
         # A ':' glued to the next word (then:say "hi", else:say, func f():say) is read as a method's ':', but no
         # method call can start here, so it's this block's ':'.
@@ -307,9 +492,24 @@ class Parser:
                 raise TuffError(f"'{tok.value}' needs an 'if' right above it.", tok.line, tok.col)
             if tok.value in ("import", "mention"):
                 self.next()
-                name = self.expect("NAME", msg=f"Expected a library name, like: {tok.value} anims").value
+                name = self.expect("NAME", msg=f"Expected a library's name, like: {tok.value} anims, or one of your files, "
+                                               f"like: {tok.value} money.tuf").value
+                own = bool(self.at("OP", "."))  # import money.tuf (1.5.0): one of the program's own files, even one called tmusic.tuf
+                if own:
+                    self.next()
+                    ext = self.expect("NAME", msg=f"Your own files are imported with .tuf on the end, like: {tok.value} {name}.tuf")
+                    if ext.value != "tuf":
+                        raise TuffError(f"Your own files are imported with .tuf on the end, like: {tok.value} {name}.tuf", ext.line, ext.col)
                 self.end_line()
-                return N("import", tok, name=name)
+                return N("import", tok, name=name, word=tok.value, own=own)
+        # kind Pet: (1.5.0). A soft word too: kind followed by a name can't be anything else, so a program's own
+        # variable called kind (kind = "dog", kind:upper()) keeps working.
+        if tok.kind == "NAME" and tok.value == "kind" and self.toks[self.i + 1].kind == "NAME":
+            return self.kind_def()
+        if tok.kind == "NAME" and tok.value == "class" and self.toks[self.i + 1].kind == "NAME":
+            name = self.toks[self.i + 1].value
+            raise TuffError(f"Tuff has no classes. To make your own kind of object, write: kind {name}: then its fields "
+                            "and actions, indented under it.", tok.line, tok.col)
         # try: ... catch: (or catch problem:) ... (1.4.0). Soft words: they only count at the start of a line with a
         # ':' after them, and a program that gives try or catch a value (catch = [], then catch:add(fish)) keeps them.
         if tok.kind == "NAME" and tok.value == "try" and self.block_word(1):
@@ -348,7 +548,77 @@ class Parser:
                 if not self.at("OP", ")"):
                     self.expect("OP", ",", msg="Separate function inputs with commas.")
             self.next()
-        return N("func", tok, name=name, params=params, body=self.block())
+        kind = self.kind_name if self.depth == 1 else None
+        if kind is None:
+            return N("func", tok, name=name, params=params, body=self.block())
+        # One of a kind's actions (1.5.0): in it, my is the object. Its name is Pet:feed, so it's never mixed up with
+        # a function of the program's own called feed.
+        if "my" in params:
+            raise TuffError("An action's inputs can't be called my: inside an action, my is the object itself.", tok.line, tok.col)
+        outer, self.in_action = self.in_action, kind
+        try:
+            body = self.block()
+        finally:
+            self.in_action = outer
+        for x in nodes(body):
+            if (x.kind == "assign" and x.target.kind == "var" and x.target.name == "my") or \
+                    (x.kind in ("for", "try") and x.name == "my") or (x.kind == "func" and "my" in x.params):
+                raise TuffError(f"Inside an action, my is this {kind} itself, so it can't be given a value. Use another name.",
+                                x.line, x.col)
+        return N("func", tok, name=f"{kind}:{name}", params=params, body=body, action=name)
+
+    def kind_def(self):
+        """kind Pet: (1.5.0), then its fields (name = "?", each with the value a new Pet starts with) and its
+        actions (func feed():), indented under it. Only at the top of the program, like the functions should be."""
+        tok = self.next()
+        name_tok = self.next()
+        name = name_tok.value
+        if self.depth:
+            raise TuffError("Make a kind at the top of the program, not inside a function or a block.", tok.line, tok.col)
+        if name in BUILTIN_NAMES or name in OWN_NAME_BUILTINS or name in ("err", "pi", "all", "my", "kind") or name in LIBRARIES:
+            what = "library" if name in LIBRARIES or name == "file" else "word" if name in ("my", "kind") else \
+                "value" if name in ("err", "pi", "all") else "function"
+            like = f", like {name.capitalize()}" if name.capitalize() != name else ""
+            raise TuffError(f"{name} is Tuff's own {what}, so a kind can't be called that. Give it a name of its own{like}.",
+                            name_tok.line, name_tok.col)
+        if name in self.kinds:
+            raise TuffError(f"There are two kinds called {name}. This one would replace the one on line {self.kinds[name]}. "
+                            "Give them different names.", name_tok.line, name_tok.col)
+        if self.at("OP", "("):
+            nxt = self.peek()
+            raise TuffError(f"A kind can't be made from another kind: Tuff has no inheritance. Write kind {name}: and give it "
+                            "fields of its own.", nxt.line, nxt.col)
+        if not (self.at("COLON") or self.at("METHOD")):
+            nxt = self.peek()
+            raise TuffError(f"Expected ':' after the kind's name, like: kind {name}:", nxt.line, nxt.col)
+        self.kinds[name] = tok.line
+        self.kind_name = name
+        try:
+            body = self.block()
+        finally:
+            self.kind_name = None
+        fields, actions, made = [], [], {}  # made: each field's and action's name -> what it is
+        for s in body:
+            if s.kind == "assign" and s.target.kind == "var" and s.op == "=":
+                field = s.target.name
+                if field == "my":
+                    raise TuffError("A field can't be called my: inside an action, my is the object itself.", s.line, s.col)
+                if field in made:
+                    raise TuffError(f"{name} already has {made[field]} called {field}. Give each field a name of its own.", s.line, s.col)
+                made[field] = "a field"
+                fields.append(s)
+            elif s.kind == "func":
+                if s.action in made:
+                    raise TuffError(f"{name} already has {made[s.action]} called {s.action}. Give each action a name of its own.",
+                                    s.line, s.col)
+                made[s.action] = "an action"
+                actions.append(s)
+            elif s.kind == "assign" and s.target.kind == "var":
+                raise TuffError(f"A field gets the value a new {name} starts with, using =, like {s.target.name} = 0.", s.line, s.col)
+            else:
+                raise TuffError(f"A kind holds fields (like name = \"?\") and actions (like func feed():), and nothing else. "
+                                "Put other code outside the kind.", s.line, s.col)
+        return N("kind", tok, name=name, fields=fields, actions=actions)
 
     def if_stmt(self):
         tok = self.next()
@@ -388,8 +658,16 @@ class Parser:
         target = self.expr()
         if self.at("OP") and self.peek().value in ASSIGN_OPS:
             op = self.next().value
-            if target.kind not in ("var", "index") and not (target.kind == "slice" and target.alt is not None):
-                raise TuffError("You can only store a value in a variable or a list item.", tok.line, tok.col)
+            owner = target.obj.name if target.kind == "attr" and target.obj.kind == "var" else None
+            if owner in LIBRARIES or owner == "file":
+                raise TuffError(f"{owner}.{target.name} is part of Tuff's {owner} library, so it can't be given a value.", tok.line, tok.col)
+            if owner in self.imported:  # money.rate = 2 (1.5.0): another file's names are its own
+                name = target.name
+                raise TuffError(f"{owner}.{name} belongs to {owner}.tuf, so it can't be changed from this file. Give {owner}.tuf a "
+                                f"function that changes it, like func set_{name}(new_{name}):, then call {owner}.set_{name}(...).",
+                                tok.line, tok.col)
+            if target.kind not in ("var", "index", "attr") and not (target.kind == "slice" and target.alt is not None):
+                raise TuffError("You can only store a value in a variable, a list item or an object's field.", tok.line, tok.col)
             return N("assign", tok, target=target, op=op, value=self.expr())
         return N("expr", tok, expr=target)
 
@@ -570,7 +848,7 @@ class Parser:
             j += 1
         for j in found:
             before = self.toks[j - 1]
-            if j == self.i or before.kind == "NUM" or (in_dict and before.kind == "STR"):
+            if j == self.i or before.kind == "NUM" or (in_dict and before.kind in ("STR", "FSTR")):
                 return j
         for j in found:
             if self.toks[j + 1].kind == "NAME" and self.toks[j + 1].value in self.values:
@@ -645,11 +923,38 @@ class Parser:
         while len(self.converted) > mark:
             self.converted.pop().kind = "METHOD"
 
+    def template(self, tok):
+        """f"{name} has {score + 1} points" (1.5.0): its text, and the code in each { } read like any other code.
+        That code has tokens of its own (see template_code), with their own columns, so a mistake in it points
+        inside the text."""
+        parts = []
+        for piece in tok.value:
+            if isinstance(piece, str):
+                parts.append(piece)
+                continue
+            toks, fmt, fmt_col = piece
+            outer = self.toks, self.i
+            self.toks, self.i = toks, 0
+            try:
+                value = self.expr()
+                if not self.at("EOF"):
+                    extra = self.peek()
+                    raise TuffError(f"I didn't expect {extra.show()} here. The {{ }} in a text template hold one value each, "
+                                    "like {score + 1}.", extra.line, extra.col)
+            finally:
+                self.toks, self.i = outer
+            parts.append(N("fpart", Tok("FORMAT", fmt, tok.line, fmt_col) if fmt else toks[0], value=value, fmt=fmt))
+        return N("fstr", tok, parts=parts)
+
     def primary(self):
         tok = self.next()
         if tok.kind in ("NUM", "STR"):
             return N("const", tok, value=tok.value)
+        if tok.kind == "FSTR":
+            return self.template(tok)
         if tok.kind == "NAME":
+            if tok.value == "my" and self.in_action:  # an action's my: that kind's object (the checker knows its fields)
+                return N("var", tok, name="my", of_kind=self.in_action)
             return N("var", tok, name=tok.value)
         if tok.kind == "KW" and tok.value in ("true", "false", "nil"):
             return N("const", tok, value={"true": True, "false": False, "nil": None}[tok.value])
@@ -678,14 +983,128 @@ class Parser:
 # ---------------------------------------------------------------- runtime
 
 class Func:
-    def __init__(self, name, params, body, env, line=None):
+    def __init__(self, name, params, body, env, line=None, code=None):
         self.name, self.params, self.body, self.env, self.line = name, params, body, env, line
+        self.code = code  # 1.5.0: its body compiled (Interpreter.compile_block), or None under the old tree walker
+
+
+class Kind:
+    """A kind of object the program makes (1.5.0): kind Pet:, with its fields in order, the code of each one's
+    starting value (worked out again for every new object, so two Pets never share a list), and its actions (Funcs
+    that run with my as the object). env: where the starting values are worked out and the actions run."""
+
+    def __init__(self, name, fields, defaults, actions, env, line=None):
+        self.name, self.fields, self.defaults, self.actions, self.env, self.line = name, fields, defaults, actions, env, line
+
+
+class Instance:
+    """An object made from a kind: rex = Pet("Rex"). fields holds its fields' values, in the kind's order. Two
+    objects are the same (is, ==) only when they are one object, like the same pet."""
+    __slots__ = ("kind", "fields")
+
+    def __init__(self, kind, fields):
+        self.kind, self.fields = kind, fields
+
+
+# file.save keeps an object as a dictionary with this key first: {"$kind": "Pet", "name": "Rex", "hunger": 3}. No field
+# can have this name, so it never takes one's place, and file.load knows which kind to make again.
+SAVED_KIND = "$kind"
+
+
+def an(word):
+    """'a Pet', 'an Owl'."""
+    return f"{'an' if word[:1].lower() in 'aeiou' else 'a'} {word}"
+
+
+def and_list(names):
+    """'name', 'name and hunger', 'name, hunger and age'."""
+    names = list(names)
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def kind_inputs_help(kind, fields, count):
+    """Pet("a", "b", "c") with more inputs than Pet has fields (the run and the checker say the same)."""
+    if not fields:
+        return f"{kind} has no fields, so {kind}() takes no inputs, but got {count}."
+    return (f"{kind} has {len(fields)} field{'s' if len(fields) != 1 else ''} ({and_list(fields)}), so {kind}() takes "
+            f"up to {len(fields)} input{'s' if len(fields) != 1 else ''}, one for each field in order, but got {count}.")
+
+
+def field_help(kind, fields, actions, name, owner):
+    """rex.hungr: the field isn't one of the kind's (owner: how the code names the object, or None)."""
+    owner = owner or "thing"
+    if name in actions:
+        return f"{name} is an action of {kind}, so it's called with ':', like {owner}:{name}()"
+    hint = difflib.get_close_matches(name, list(fields), n=1, cutoff=0.6)
+    if hint:
+        return f"{kind} doesn't have a field '{name}'. Did you mean '{hint[0]}'?"
+    if fields:
+        return f"{kind} doesn't have a field '{name}'. Its fields are: {', '.join(fields)}."
+    return f"{kind} doesn't have a field '{name}': it has no fields."
+
+
+def action_help(kind, fields, actions, name, owner):
+    """rex:fead(): the action isn't one of the kind's."""
+    owner = owner or "thing"
+    if name in fields:
+        return f"{name} is a field of {kind}, not an action, so it's read with a dot, like {owner}.{name}"
+    hint = difflib.get_close_matches(name, list(actions), n=1, cutoff=0.6)
+    if hint:
+        return f"{kind} doesn't have an action '{name}'. Did you mean '{hint[0]}'?"
+    if actions:
+        return f"{kind} doesn't have an action '{name}'. Its actions are: {', '.join(actions)}."
+    return f"{kind} doesn't have an action '{name}'. Give it one inside kind {kind}:, like func {name}():"
+
+
+def action_inputs_help(owner, name, want, got, bare):
+    """rex:feed(1) when feed takes no inputs (bare: rex:feed - 1, where rule 1 made "- 1" its input)."""
+    if bare and not want:
+        return f"{owner}:{name} doesn't take an input, so what comes after it was read as one. Write {owner}:{name}() instead."
+    return f"{owner}:{name}() needs {want} input{'s' if want != 1 else ''}, but got {got}."
+
+
+def kind_not_object(kind, use):
+    """Pet.name or Pet:feed(): the kind itself, not an object made from it. use is what was tried, like .name."""
+    one = kind.lower() if kind.lower() != kind else "thing"
+    return f"{kind} is a kind, not an object made from it. Make one first, like {one} = {kind}(...), then use {one}{use}."
+
+
+def own_field_help(name, kind, fields):
+    """A name that's never given a value: inside an action of kind, one of its fields written on its own (hunger,
+    not my.hunger), and my outside every action. None for any other name."""
+    if kind and name in fields:
+        return f"I don't know what '{name}' is. To use this {kind}'s field, write my.{name}"
+    if name == "my":
+        return "I don't know what 'my' is. my is the object itself, so it only works inside a kind's actions, like: " \
+               "func feed(): my.hunger -= 1"
+    return None
+
+
+def own_file_help(name, owner, shown):
+    """as_money(1) after import money.tuf: a name one of the program's own files makes, used without the dot. owner is
+    what it was imported as (money), shown the file as messages show it (money.tuf)."""
+    return f"I don't know what '{name}' is. It's in {shown}, so write {owner}.{name}"
+
+
+def object_brackets(kind, fields, owner, key, then=""):
+    """The tip for rex["name"]: an object's fields are read (and set) with a dot. key: the key written, when known."""
+    field = key if isinstance(key, str) and key in fields else fields[0] if fields else "name"
+    return f"Use its fields with a dot, like {owner or 'thing'}.{field}{then}"
+
+
+def where_text(e):
+    """node_text, and an object's fields too: rex.owner.name (1.5.0)."""
+    if e.kind == "attr":
+        obj = where_text(e.obj)
+        return None if obj is None else f"{obj}.{e.name}"
+    return node_text(e)
 
 
 class Builtin:
     def __init__(self, name, fn, takes_err=False):
         self.name, self.fn = name, fn
         self.takes_err = takes_err  # number(), text(), print()...: an err given to them doesn't stop the program
+        self.fits = {}  # 1.5.0: whether fn takes this many inputs, worked out once for each count (see call_python)
 
 
 class Line:
@@ -697,6 +1116,24 @@ class Line:
 class Module:
     def __init__(self, name, members):
         self.name, self.members = name, members
+
+
+class FileModule(Module):
+    """One of the program's own files, loaded with import money (1.5.0). Its functions and top-level values are used
+    with a dot, money.as_money(6.375) and money.rate: they're its top level's names as they are right now, so a
+    function in it that changes rate changes money.rate too. Every file has a top level of its own (with its own
+    built-ins), so its names never clash with the program's."""
+
+    def __init__(self, name, path, shown, env, base):
+        self.name, self.path, self.shown, self.env = name, path, shown, env
+        self.base = base  # the built-ins every file starts with: they aren't the file's own names
+        self.ready = False  # its top-level code has run to the end (until then, importing it again is a circle)
+
+    @property
+    def members(self):
+        """Its own names: what its top level made (functions, values and its imports)."""
+        base = self.base
+        return {n: v for n, v in self.env.vars.items() if base.get(n, base) is not v}
 
 
 class Native:
@@ -727,15 +1164,20 @@ class Err:
 
 
 ERR = Err()
-LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame", "tdraw")
+TOO_BIG = "That's too big to work out: a number or text this large doesn't fit in memory."  # inside a method
+# 1.5.0: a sum whose answer is too big for a decimal (10 ^ 400 / 3, 2 ^ 99999 * 1.5), which stopped with Python's
+# OverflowError before. Whole numbers have no limit, so this is the only number that's too big to work out.
+TOO_BIG_NUMBER = ("That number is too big to work out. Whole numbers can be any size, but a decimal (what / gives, or "
+                  "a sum with a decimal in it) only goes up to about 1 followed by 308 zeros.")
+LIBRARIES = ("anims", "tgui", "mtgui", "tap", "atgui", "tgame", "tdraw", "tterm", "tmusic")
 # Libraries whose windows are web views (tuff_view.py). A program that uses one runs its Tuff code on a
 # second thread, because the web view needs the main thread.
 VIEW_LIBRARIES = ("atgui", "tgame")
-VIEW_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:" + "|".join(VIEW_LIBRARIES) + r")\b", re.M)
+VIEW_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:" + "|".join(VIEW_LIBRARIES) + r")\b(?!\.tuf)", re.M)
 # The first line a tgame program shows, in yellow, before anything it prints. In TuffCode the line gets an
 # "Open Tuff Engine" button (ide.js handleOsc). --check, --scene and --windowed apps never show it.
 TGAME_NOTICE = "Tuff Engine is here: open this game in TuffCode's Tuff Engine tab (Ctrl+Shift+G) to build it visually."
-TGAME_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+tgame\b", re.M)
+TGAME_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+tgame\b(?!\.tuf)", re.M)
 BUILTIN_NAMES = {"print", "number", "num", "text", "str", "int", "len", "round", "random", "wait", "range", "clear", "sqrt", "abs",
                  "floor", "ceil", "min", "max", "sum", "average",
                  "now", "today", "time", "date", "sin", "cos", "tan", "log"}  # 1.4.0
@@ -760,6 +1202,21 @@ class BreakSignal(Exception):
 class ContinueSignal(Exception):
     def __init__(self, line=None, col=None):
         self.line, self.col = line, col
+
+
+# 1.5.0: return, break and continue in compiled code (see Interpreter.compile_stmt). The statement gives back its Jump
+# instead of raising a signal, and each block hands it straight up to the loop or the function call it's for, which
+# is many times quicker than an exception. Where one would leave compiled code it becomes the signal again
+# (Interpreter.unjump), so everything outside sees what it always did.
+J_RETURN, J_BREAK, J_CONTINUE = "return", "break", "continue"
+
+
+class Jump:
+    __slots__ = ("kind", "line", "col", "value")
+
+    def __init__(self, kind, line, col):
+        self.kind, self.line, self.col = kind, line, col
+        self.value = None  # what a return gives back: set just before, and taken (and cleared) at once
 
 
 def b64(text):
@@ -787,15 +1244,54 @@ def to_text(v, nested=False, inside=()):
         return to_text(v.text, nested)
     if isinstance(v, (Func, Builtin)):
         return f"<func {v.name}>"
+    if isinstance(v, FileModule):
+        return f"<file {v.shown}>"
     if isinstance(v, Module):
         return f"<library {v.name}>"
     if isinstance(v, Native):
         return v.show(nested) if v.show else f"<{v.kind}>"
+    if isinstance(v, Instance):  # Pet(name: "Rex", hunger: 3), and Pet(...) inside itself (rex.best_friend = rex)
+        if any(v is x for x in inside):
+            return f"{v.kind.name}(...)"
+        return v.kind.name + "(" + ", ".join(f"{k}: {to_text(x, True, inside + (v,))}" for k, x in v.fields.items()) + ")"
+    if isinstance(v, Kind):
+        return f"<kind {v.name}>"
     if v is ALL:
         return "all"
     if isinstance(v, Err):
         return "err"
     return str(v)
+
+
+def format_value(v, fmt):
+    """A value in a text template's format (1.5.0). 0.00 rounds to 2 decimals and 000 shows at least 3 digits, both
+    half up, the way people round (2.675 is 2.68, not Python's 2.67), and money is $1,234.50. A width (12) pads text
+    on the right and numbers on the left; >12 and <12 choose."""
+    v = plain(v)
+    zeros, decimals, side, width = TEMPLATE_FORMAT.fullmatch(fmt).groups()
+    is_number = isinstance(v, (int, float)) and not isinstance(v, bool)
+    if width:
+        shown = to_text(v)
+        return shown.rjust(int(width)) if side == ">" or (not side and is_number) else shown.ljust(int(width))
+    if isinstance(v, Err):
+        v.stop(f"The value for the format {fmt}")
+    if not is_number:
+        shown = to_text(v, True)
+        shown = f" ({shown})" if len(shown) <= 30 and shown.isprintable() else ""
+        tip = f" Turn text that holds a number into one first, like {{num(answer):{fmt}}}." \
+            if isinstance(v, str) and re.fullmatch(r"\s*-?[0-9]+(\.[0-9]+)?\s*", v) else ""
+        raise TuffError(f"The format {fmt} only works on numbers, but this is {type_name(v)}{shown}.{tip}")
+    if isinstance(v, float) and not math.isfinite(v):
+        return to_text(v)
+    places = 2 if fmt == "money" else len(decimals or "")
+    d = decimal.Decimal(v if isinstance(v, int) else repr(v))  # repr: 2.675 is the 2.675 that was written
+    room = decimal.Context(prec=max(d.adjusted() + 1, 1) + places + 2)
+    d = d.quantize(decimal.Decimal(1).scaleb(-places), rounding=decimal.ROUND_HALF_UP, context=room)
+    sign = "-" if d < 0 else ""  # -0.001 to 2 places is 0.00
+    if fmt == "money":
+        return f"{sign}${d.copy_abs():,f}"
+    whole, dot, rest = f"{d.copy_abs():f}".partition(".")
+    return sign + whole.zfill(len(zeros)) + dot + rest
 
 
 def type_name(v):
@@ -813,10 +1309,16 @@ def type_name(v):
         return "a dictionary"
     if isinstance(v, Line):
         return "a line"
+    if isinstance(v, FileModule):
+        return f"the file {v.shown}"
     if isinstance(v, Module):
         return "a library"
     if isinstance(v, Native):
         return f"a {v.kind}"
+    if isinstance(v, Instance):
+        return an(v.kind.name)
+    if isinstance(v, Kind):
+        return f"the kind {v.name}"
     if v is ALL:
         return "all"
     if isinstance(v, Err):
@@ -833,27 +1335,30 @@ def truthy(v):
 
 
 def make_file_members(interp):
-    """file (1.4.0): text files and saved data, in the program's own folder unless the path says otherwise. When
-    interp.writes is False (Tuff Engine's preview, and tuff_run for AI agents: TUFF_NO_WRITES=1) the writes are kept
-    in memory for this run only: later reads see them, and nothing on disk changes."""
+    """file (1.4.0): text files and saved data, in the program's own folder unless the path says otherwise (a built
+    app saves in a folder of its own, see Runtime.path). When interp.writes is False (Tuff Engine's preview, and
+    tuff_run for AI agents: TUFF_NO_WRITES=1) the writes are kept in memory for this run only: later reads see them,
+    and nothing on disk changes."""
     rt = interp.rt
     memory = {}  # with writes off: a file's text as this run left it, or None for one it deleted
 
     def where(path, what):
+        """Where the file is read from, where it's written, and its name as the program gave it. A built app writes in
+        a folder of its own, and reads a file packed with it until it has its own copy (see Runtime.path)."""
         p = rt.text(path)
         if not p.strip():
             raise TuffError(f"{what} needs a file name, like \"notes.txt\".")
-        return rt.path(p), p
+        return rt.path(p), rt.save_path(p), p
 
     def spot(full):
         return os.path.normcase(os.path.abspath(full))
 
     def read(path, what="file.read"):
-        full, p = where(path, what)
-        if spot(full) in memory:
-            if memory[spot(full)] is None:
+        full, own, p = where(path, what)
+        if spot(own) in memory:
+            if memory[spot(own)] is None:
                 raise TuffError(f"Couldn't find {p} in your project folder. Check first with file.exists(\"{p}\").")
-            return memory[spot(full)]
+            return memory[spot(own)]
         try:
             interp.room(os.path.getsize(full))
             with open(full, "rb") as f:
@@ -878,17 +1383,17 @@ def make_file_members(interp):
             return data.decode("cp1252", errors="replace"), "cp1252"
 
     def write_text(path, text, mode, what):
-        full, p = where(path, what)
+        full, own, p = where(path, what)
         if not interp.writes:
-            had = memory.get(spot(full)) if spot(full) in memory else (read(path, what) if mode == "a" and os.path.isfile(full) else "")
-            memory[spot(full)] = (had or "") + text if mode == "a" else text
-            interp.room(len(memory[spot(full)]))  # Tuff Engine's preview counts what it keeps
+            had = memory.get(spot(own)) if spot(own) in memory else (read(path, what) if mode == "a" and os.path.isfile(full) else "")
+            memory[spot(own)] = (had or "") + text if mode == "a" else text
+            interp.room(len(memory[spot(own)]))  # Tuff Engine's preview counts what it keeps
             return None
         try:
-            folder = os.path.dirname(full)
+            folder = os.path.dirname(own)
             if folder:
                 os.makedirs(folder, exist_ok=True)
-            with open(full, mode, encoding="utf-8", newline="") as f:
+            with open(own, mode, encoding="utf-8", newline="") as f:
                 f.write(text)
         except OSError as exc:
             raise TuffError(f"Couldn't write {p}: {exc.strerror or exc}.")
@@ -898,26 +1403,27 @@ def make_file_members(interp):
         return write_text(path, rt.text(text), "w", "file.write")
 
     def add(path, text):  # adds a line to the end (makes the file if it isn't there), on a line of its own
-        full, p = where(path, "file.add")
+        full, own, p = where(path, "file.add")
         line = rt.text(text)
         if not interp.writes:
             had = read(path, "file.add") if exists(path) else ""
             return write_text(path, ("\n" if had and not had.endswith("\n") else "") + line + "\n", "a", "file.add")
         try:  # in the file's own way of saving text and ending lines, so a UTF-16 or Excel file stays readable
             with open(full, "rb") as f:
-                had, how = decode(f.read(), p, "file.add")
+                data = f.read()
+            had, how = decode(data, p, "file.add")
         except FileNotFoundError:
-            had, how = "", "utf-8"
+            data, had, how = b"", "", "utf-8"
         except OSError as exc:
             raise TuffError(f"Couldn't read {p}: {exc.strerror or exc}.")
         end = "\r\n" if "\r\n" in had else "\n"
         chunk = ("" if not had or had.endswith("\n") else end) + line.replace("\n", end) + end
         try:
-            folder = os.path.dirname(full)
+            folder = os.path.dirname(own)
             if folder:
                 os.makedirs(folder, exist_ok=True)
-            with open(full, "ab") as f:
-                f.write(chunk.encode(how, errors="replace"))
+            with open(own, "ab") as f:  # (a built app's own copy of a file packed with it starts as that file)
+                f.write((data if own != full else b"") + chunk.encode(how, errors="replace"))
         except OSError as exc:
             raise TuffError(f"Couldn't write {p}: {exc.strerror or exc}.")
         return None
@@ -927,21 +1433,23 @@ def make_file_members(interp):
         return text.split("\n")[:-1] if text.endswith("\n") else (text.split("\n") if text else [])
 
     def exists(path):
-        full = where(path, "file.exists")[0]
-        if spot(full) in memory:
-            return memory[spot(full)] is not None
+        full, own, _ = where(path, "file.exists")
+        if spot(own) in memory:
+            return memory[spot(own)] is not None
         return os.path.isfile(full)
 
     def delete(path):
-        full, p = where(path, "file.delete")
+        full, own, p = where(path, "file.delete")
         if not interp.writes:
             if not exists(path):
                 raise TuffError(f"Couldn't find {p} to delete it.")
-            memory[spot(full)] = None
+            memory[spot(own)] = None
             return None
         try:
-            os.remove(full)
+            os.remove(own)
         except FileNotFoundError:
+            if own != full:  # only in what a built app is packed with, which stays: it has no copy of its own to delete
+                return None
             raise TuffError(f"Couldn't find {p} to delete it.")
         except OSError as exc:
             raise TuffError(f"Couldn't delete {p}: {exc.strerror or exc}.")
@@ -964,7 +1472,13 @@ def make_file_members(interp):
                 same = next(k for k in keys if keys.count(k) > 1)
                 raise TuffError(f"file.save can't keep both {same} and \"{same}\" as keys: saved, every key is text, so they'd be one.")
             return {k: to_json(x, seen) for k, x in zip(keys, v.values())}
-        raise TuffError(f"file.save keeps text, numbers, true/false, nil, lists and dictionaries, not {type_name(v)}.")
+        if isinstance(v, Instance):  # an object (1.5.0): a dictionary that starts with its kind's name, for file.load
+            if any(v is s for s in seen):
+                raise TuffError(f"file.save can't save {type_name(v)} that holds itself.")
+            seen = seen + (v,)
+            return {SAVED_KIND: v.kind.name, **{k: to_json(x, seen) for k, x in v.fields.items()}}
+        raise TuffError(f"file.save keeps text, numbers, true/false, nil, lists, dictionaries and objects made from a kind, "
+                        f"not {type_name(v)}.")
 
     def save(path, value):  # any data, as JSON
         try:
@@ -974,12 +1488,16 @@ def make_file_members(interp):
         return write_text(path, text, "w", "file.save")
 
     def load(path, default=None):
-        full, p = where(path, "file.load")
+        p = where(path, "file.load")[2]
         if not exists(path) and default is not None:
             return default
         text = read(path, "file.load")
+
+        def made(d):  # a saved object whose kind this program has comes back as that kind's object (1.5.0)
+            kind = d.get(SAVED_KIND)
+            return interp.saved_object(interp.kinds[kind], d) if isinstance(kind, str) and kind in interp.kinds else d
         try:
-            return json.loads(text)
+            return json.loads(text, object_hook=made if interp.kinds else None)
         except RecursionError:
             raise TuffError(f"{p} has lists or dictionaries inside each other too many times for file.load.")
         except ValueError:
@@ -1005,7 +1523,9 @@ def method_names(v):
         return tuple(v.methods)
     if isinstance(v, Builtin):
         return ("ascii", "color", "colour", "pen") if v.name == "print" else ()
-    if isinstance(v, (bool, Module, Func)) or v is ALL:
+    if isinstance(v, Instance):
+        return tuple(v.kind.actions)
+    if isinstance(v, (bool, Module, Func, Kind)) or v is ALL:
         return ()
     return None
 
@@ -1037,14 +1557,69 @@ def plain(v):
     return v.text if isinstance(v, Line) else v
 
 
-def call_python(label, fn, args, takes_err=False):
-    """Call a built-in written in Python, turning Python problems into friendly Tuff errors."""
-    try:
-        inspect.signature(fn).bind(*args)
-    except TypeError:
+# 1.5.0: how many inputs each Python function takes, by its code: (the inputs before any *args, whether it has
+# *args, how many inputs after it must be given by name). inspect.signature is slow to ask on every call, and a
+# game asks 60 times a second (game:frame(), player:move(5, 0)): a library makes new functions for each sprite,
+# but they share their code, so this is worked out once for each def in a library.
+INPUT_SHAPES = {}
+PY_FUNCTION, PY_METHOD = types.FunctionType, types.MethodType
+
+
+def fits_inputs(fn, count):
+    """Can fn, a function or method written in Python, be called with this many inputs? True or False (the answer
+    inspect.signature would give), or None when only inspect can tell (a function written in C, a partial...)."""
+    bound = fn.__class__ is PY_METHOD  # a method of a Python object: the object is its first input
+    if bound:
+        fn, count = fn.__func__, count + 1
+    if fn.__class__ is not PY_FUNCTION:
+        return None
+    for _ in range(100):
+        extra = fn.__dict__
+        if not extra:
+            break
+        if "__signature__" in extra or "_partialmethod" in extra or "__partialmethod__" in extra:
+            return None
+        inner = extra.get("__wrapped__")  # functools.wraps (tdraw's guard): it takes what the function inside takes
+        if inner is None:
+            break  # (attributes of its own don't change its inputs)
+        if inner.__class__ is PY_METHOD and not bound:
+            bound, fn, count = True, inner.__func__, count + 1
+        elif inner.__class__ is PY_FUNCTION:
+            fn = inner
+        else:
+            return None
+    else:
+        return None  # wrapped in itself
+    code = fn.__code__
+    shape = INPUT_SHAPES.get(code)
+    if shape is None:
+        shape = INPUT_SHAPES[code] = (code.co_argcount, bool(code.co_flags & inspect.CO_VARARGS), code.co_kwonlyargcount)
+    most, more, named = shape
+    if bound and not most and not more:
+        return None  # a method with no place for its object: inspect can't say
+    defaults = fn.__defaults__
+    if count < (most - len(defaults) if defaults else most) or (count > most and not more):
+        return False
+    if named:  # inputs that must be given by name, which a call from Tuff never does, unless they have defaults
+        given = fn.__kwdefaults__
+        return given is not None and len(given) == named
+    return True
+
+
+def call_python(label, fn, args, takes_err=False, fits=None):
+    """Call a built-in written in Python, turning Python problems into friendly Tuff errors. fits: whether fn takes
+    this many inputs, when that's known already (a Builtin keeps it); otherwise fits_inputs works it out."""
+    if fits is None:
+        fits = fits_inputs(fn, len(args))
+    if fits is None:
+        try:
+            inspect.signature(fn).bind(*args)
+        except TypeError:
+            raise TuffError(f"{label} got the wrong number of inputs ({len(args)}).")
+        except ValueError:
+            pass
+    elif not fits:
         raise TuffError(f"{label} got the wrong number of inputs ({len(args)}).")
-    except ValueError:
-        pass
     if not takes_err:  # an err stops here with the reason it's an err, before Python can say something confusing
         for a in args:
             if isinstance(plain(a), Err):
@@ -1053,6 +1628,10 @@ def call_python(label, fn, args, takes_err=False):
         return fn(*args)
     except (TuffError, ReturnSignal, BreakSignal, ContinueSignal, KeyboardInterrupt, SystemExit, RecursionError):
         raise
+    except OverflowError:  # sqrt(2 ^ 99999), round() of a decimal that went past the biggest one...
+        raise TuffError(f"That number is too big for {label} to work out.") from None
+    except MemoryError:  # range(1, 10 ^ 12): Python gives no reason, so "range() failed:" would say nothing
+        raise TuffError(f"The program ran out of memory inside {label}. Is it making something far too big?") from None
     except Exception as exc:
         raise TuffError(f"{label} failed: {exc}")
 
@@ -1496,6 +2075,9 @@ def ansi_rows(text, runs, look):
 
 class Console:
     animate = True  # SceneConsole: no animations in Tuff Engine's preview
+    # How input() reads a line (sys.stdin.readline when it's None). tterm (1.5.0) reads keys from stdin while a game
+    # runs, and gives input() the answers it read with them.
+    readline = None
 
     def __init__(self, first_id=1):
         self.next_id = first_id
@@ -1648,7 +2230,7 @@ class Console:
             self.ask(prompt, look)
         else:
             self.write(prompt)
-        data = sys.stdin.readline()
+        data = (self.readline or sys.stdin.readline)()
         if data == "":
             raise TuffError("The program asked for an answer, but there was no more input to read.")
         self.rows += 1
@@ -1659,7 +2241,7 @@ class Console:
 
 
 class Env:
-    def __init__(self, parent=None, own_names=False):
+    def __init__(self, parent=None, own_names=False):  # (a function call's is made without this: see make_call)
         self.vars = {}
         self.parent = parent
         self.own_names = own_names  # holds OWN_NAME_BUILTINS: giving one of them a value makes a new variable
@@ -1675,13 +2257,25 @@ class Env:
     def get(self, name):
         env = self.find(name)
         if env is None:
-            known = []
+            known, files = [], []
             e = self
             while e is not None:
                 known.extend(e.vars)
+                files += [(n, v) for n, v in e.vars.items() if isinstance(v, FileModule)]
                 e = e.parent
             if name in LIBRARIES:
                 raise TuffError(f"'{name}' is a library. Add  import {name}  at the top of your file to use it.")
+            me = self.find("my")
+            me = me.vars["my"] if me is not None else None
+            msg = own_field_help(name, *((me.kind.name, me.kind.fields) if isinstance(me, Instance) else (None, ())))
+            if msg:
+                raise TuffError(msg)
+            # 1.5.0, as --check says it: as_money for money.as_money, then self, True and the like.
+            home = next(((n, mod.shown) for n, mod in sorted(files, key=lambda f: f[0]) if name in mod.members), None)
+            if home:
+                raise TuffError(own_file_help(name, *home))
+            if name in PY_NAMES:
+                raise TuffError(f"I don't know what '{name}' is. {PY_NAMES[name]}")
             hint = difflib.get_close_matches(name, known, n=1, cutoff=0.6)
             extra = f" Did you mean '{hint[0]}'?" if hint else " Give it a value first, like: " + name + " = 5"
             raise TuffError(f"I don't know what '{name}' is.{extra}")
@@ -1692,6 +2286,102 @@ class Env:
         if env is None or env.own_names:
             env = self
         env.vars[name] = value
+
+
+def file_of(env):
+    """The file whose names env is in (1.5.0): an imported file's full path, or "" for the program itself. The
+    outermost Env of an imported file has its path (see Interpreter.load)."""
+    while env.parent is not None:
+        env = env.parent
+    return getattr(env, "file", "")
+
+
+# ---- your own files as libraries (1.5.0): import money loads money.tuf, from the importing file's folder or the libs
+# folder there. A library's name (tgame, tap...) always means the library.
+MODULE_FOLDER = "libs"
+# Read and shown by report(): each imported file's full path -> (its text, its name as shown, like libs/money.tuf).
+OWN_FILES = {}
+
+
+def module_file(folder, name):
+    """name.tuf next to a file (in its folder) or in the libs folder there, spelled the way the import spells it (so
+    a program works the same on every system), or None."""
+    want = name + ".tuf"
+    for where in (folder, os.path.join(folder, MODULE_FOLDER)):
+        try:
+            if want in os.listdir(where) and os.path.isfile(os.path.join(where, want)):
+                return os.path.join(where, want)
+        except OSError:
+            pass
+    return None
+
+
+def module_names(folder):
+    """The names of the .tuf files next to a file and in its libs folder, for "did you mean"."""
+    found = []
+    for where in (folder, os.path.join(folder, MODULE_FOLDER)):
+        try:
+            found += [n[:-4] for n in os.listdir(where) if n.endswith(".tuf") and n[:-4].isidentifier()]
+        except OSError:
+            pass
+    return found
+
+
+def import_problem(name, folder, who, others=()):
+    """Why import name can't load a file: it's a built-in's name, or there's no name.tuf there. who: the importing
+    file's name as shown (like shop.tuf). others: names close matches shouldn't offer (the importing file's own)."""
+    path = module_file(folder, name) if folder else None
+    if name in BUILTIN_NAMES or name in OWN_NAME_BUILTINS or name in ("err", "pi", "all"):
+        what = "value" if name in ("err", "pi", "all") else "function"
+        if path:
+            return (f"{name} is one of Tuff's built-in {what}s, so a file called {name}.tuf can't be imported by that name. "
+                    f"Give the file another name, like my_{name}.tuf.")
+        return f"{name} is built into Tuff, so there's nothing to import: use it straight away{', like ' + name + '()' if what == 'function' else ''}."
+    if path:
+        return None
+    nearby = [n for n in module_names(folder) if n not in others] if folder else []
+    hint = difflib.get_close_matches(name, nearby + list(LIBRARIES), n=1, cutoff=0.6)
+    msg = f"There's no {name}.tuf next to {who} (or in a {MODULE_FOLDER} folder there)"
+    if name in PY_NAMES:
+        return f"{msg}, and Tuff doesn't need {name}: {PY_NAMES[name]}"
+    if hint and hint[0] in LIBRARIES:
+        return f"{msg}. Did you mean Tuff's library {hint[0]}?"
+    if hint:
+        return f"{msg}. Did you mean {hint[0]} ({hint[0]}.tuf)?"
+    return f"{msg}, and {name} isn't one of Tuff's libraries ({', '.join(LIBRARIES)})."
+
+
+def library_problem(name, folder, who):
+    """import name, with no .tuf on the end (1.5.0): only Tuff's libraries are imported like that. Why name isn't one.
+    folder: the importing file's folder, or None when it isn't known."""
+    if folder or name in BUILTIN_NAMES or name in OWN_NAME_BUILTINS or name in ("err", "pi", "all"):
+        problem = import_problem(name, folder, who)
+        return problem or f"To import your file {name}.tuf, put .tuf on the end: import {name}.tuf"
+    return (f"{name} isn't one of Tuff's libraries ({', '.join(LIBRARIES)}). Your own files are imported with .tuf on the "
+            f"end, like: import {name}.tuf")
+
+
+def circle_problem(chain):
+    """chain: the files importing each other, as shown, from the first back to it again (shop.tuf, money.tuf, shop.tuf)."""
+    if len(chain) == 2:
+        return f"{chain[0]} imports itself. A file can use its own names straight away, without importing itself."
+    loop = " → ".join(chain)
+    if len(chain) == 3:
+        return (f"{chain[0]} and {chain[1]} import each other ({loop}), so neither can finish loading. Put what they both "
+                "need in a third file, and import that from both.")
+    return (f"These files import each other in a circle ({loop}), so none of them can finish loading. Put what they "
+            "need in another file that doesn't import them.")
+
+
+def module_help(mod, name):
+    """money.as_mony: what money.tuf has instead."""
+    own = sorted(mod.members)  # (A to Z, as the checker lists them)
+    hint = difflib.get_close_matches(name, own, n=1, cutoff=0.6)
+    if hint:
+        return f"{mod.shown} doesn't have '{name}'. Did you mean '{hint[0]}'?"
+    if own:
+        return f"{mod.shown} doesn't have '{name}'. It has: {', '.join(own)}."
+    return f"{mod.shown} doesn't have '{name}': it doesn't make any functions or values at its top level."
 
 
 class Runtime:
@@ -1734,8 +2424,18 @@ class Runtime:
         return Builtin(name, fn)
 
     def path(self, p):
+        """Where the program's file p is read from: a relative path is from the program's folder. A built app reads
+        its own copy first (see save_path), and the one packed with it until it has saved one."""
         p = self.text(p)
-        return p if os.path.isabs(p) else os.path.join(self.interp.base_dir, p)
+        own = self.save_path(p)
+        packed = p if os.path.isabs(p) else os.path.join(self.interp.base_dir, p)
+        return packed if own != packed and not os.path.exists(own) and os.path.exists(packed) else own
+
+    def save_path(self, p):
+        """Where the program's file p is written: next to the program, or in a built app's own folder (data_dir), since
+        the folder a built app runs from is unpacked again each time it starts."""
+        p = self.text(p)
+        return p if os.path.isabs(p) else os.path.join(self.interp.data_dir or self.interp.base_dir, p)
 
     def on_finish(self, fn):
         self.finish_hooks.append(fn)
@@ -1751,12 +2451,133 @@ class Runtime:
         except TuffError as err:
             if err.line is None and getattr(fn, "line", None):  # e.g. a click function asking for inputs
                 err.line = fn.line
+                err.file = file_of(fn.env)  # (where it's written: one of the program's own files, 1.5.0)
             report(err, self.interp.src)
         except RecursionError:
             report(TuffError(f"{getattr(fn, 'name', 'This function')}() called itself too many times."), self.interp.src)
         except (BreakSignal, ContinueSignal) as sig:
             report(TuffError("'break' and 'continue' can only be used inside a loop.", sig.line, sig.col), self.interp.src)
         return False, None
+
+
+# ---------------------------------------------------------------- for the compiled runtime (1.5.0)
+
+def jumps_out(s):
+    """The returns, breaks and continues that can come out of statement s (a loop keeps its own break and continue,
+    and a function's own are its own)."""
+    k = s.kind
+    if k in (J_RETURN, J_BREAK, J_CONTINUE):
+        return {k}
+    if k == "if":
+        out = set()
+        for _, body in s.branches:
+            out |= block_jumps(body)
+        return out | block_jumps(s.else_body or [])
+    if k == "try":
+        return block_jumps(s.body) | block_jumps(s.handler)
+    if k in ("while", "for"):
+        return block_jumps(s.body) - {J_BREAK, J_CONTINUE}
+    return set()
+
+
+def block_jumps(body):
+    out = set()
+    for s in body:
+        out |= jumps_out(s)
+    return out
+
+
+# The quick sums: for each operator, the functions that make a sum's function (a + b, and a + 5, 5 + a, a == "yes"
+# with a number or text written in the program) and a += statement's. Numbers (and two texts, for + and the
+# comparisons) are worked out right there, the way Interpreter.binop would; anything else goes to binop itself
+# (slow), which gives the same answers and the same messages. A / or % by 0 goes there too, and so does a sum
+# whose answer is too big for a decimal (10 ^ 400 / 3: Python's OverflowError). They're written once below and
+# made for each operator, so each one has its operator in it.
+QUICK_SUM = '''
+def @NAME@(@ARGS@, slow, line, col):
+    def binop(env):
+@GET@        if @QUICK@:
+@DO@@TEXTS@        try:
+            return slow("@OP@", a, b)
+        except TuffError as err:
+            if err.line is None:
+                err.line, err.col = line, col
+            raise
+    return binop
+'''
+QUICK_STORE = '''
+def @NAME@(s, get, @ARGS@, slow, hooks, step):
+    name, line, col = s.target.name, s.line, s.col
+
+    def assign(env):
+        if hooks:
+            step(s, env)
+@GET@        names = env.vars
+        if name in names:
+            a = names[name]
+        else:
+            a = get(env)
+            names = None
+        ta = a.__class__
+        if @QUICK@:
+            try:
+                a = a @OP@ b
+            except OverflowError:  # too big for a decimal: binop says so
+                try:
+                    a = slow("@OP@", a, b)
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+@TEXTS@        else:
+            try:
+                a = slow("@OP@", a, b)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        if names is None:
+            env.set(name, a)
+        else:
+            names[name] = a
+        return a
+    return assign
+'''
+QUICK_TEXTS = ("+", "<", ">", "<=", ">=", "==", "!=")  # text with text works the same as in Python
+NUMBER_A, NUMBER_B = "(ta is int or ta is float)", "(tb is int or tb is float)"
+
+
+def quick_makers(op):
+    """One operator's makers: both, number_right, number_left, text_right and text_left (where text is quick), and
+    for +, -, * and /: store, store_number and store_text (+= only)."""
+    nonzero = " and b" if op in ("/", "%") else ""
+    texts = op in QUICK_TEXTS
+    get_a, get_b = "        a = left(env)\n        ta = a.__class__\n", "        b = right(env)\n        tb = b.__class__\n"
+    kinds = [("both", "left, right", get_a + get_b, f"{NUMBER_A} and {NUMBER_B}{nonzero}",
+              "        if ta is str and tb is str:\n            return a @OP@ b\n" if texts else ""),
+             ("number_right", "left, b", get_a, NUMBER_A, ""), ("number_left", "a, right", get_b, NUMBER_B + nonzero, "")]
+    if texts:
+        kinds += [("text_right", "left, b", get_a, "ta is str", ""), ("text_left", "a, right", get_b, "tb is str", "")]
+    do = "            return a @OP@ b\n"
+    if op in ("+", "-", "*", "/", "%"):  # (a comparison is never too big)
+        do = ("            try:\n                return a @OP@ b\n            except OverflowError:  # too big for a decimal: "
+              "binop says so, below\n                pass\n")
+    src = "".join(QUICK_SUM.replace("@NAME@", n).replace("@ARGS@", a).replace("@GET@", g).replace("@QUICK@", q)
+                  .replace("@DO@", do).replace("@TEXTS@", t) for n, a, g, q, t in kinds)
+    if op in ("+", "-", "*", "/"):  # x += 1 and the rest: the value is worked out first, then x, as the tree walker does
+        kinds = [("store", "value", "        b = value(env)\n        tb = b.__class__\n", f"{NUMBER_A} and {NUMBER_B}{nonzero}",
+                  "        elif ta is str and tb is str:\n            a = a @OP@ b\n" if op == "+" else ""),
+                 ("store_number", "b", "", NUMBER_A, "")]
+        if op == "+":
+            kinds.append(("store_text", "b", "", "ta is str", ""))
+        src += "".join(QUICK_STORE.replace("@NAME@", n).replace("@ARGS@", a).replace("@GET@", g).replace("@QUICK@", q)
+                       .replace("@TEXTS@", t) for n, a, g, q, t in kinds)
+    made = {"TuffError": TuffError}
+    exec(compile(src.replace("@OP@", op), f"<tuff quick {op}>", "exec"), made)
+    return made
+
+
+QUICK = {op: quick_makers(op) for op in ("+", "-", "*", "/", "%", "<", ">", "<=", ">=", "==", "!=")}
 
 
 class Interpreter:
@@ -1804,8 +2625,22 @@ class Interpreter:
         self.started = time.perf_counter()
         self.held = []  # the starts of the names[order:pop] being worked out (see eval "slice")
         self.depth = 0  # Tuff functions running inside each other (see MAX_DEPTH)
+        # 1.5.0: each statement and expression is compiled once into a Python function (see compile_stmt), several
+        # times quicker than walking the tree. TUFF_SLOW=1 runs the old tree walker instead, for one release.
+        self.fast = os.environ.get("TUFF_SLOW") != "1"
+        self.codes = {}  # id(node): (node, its compiled function)
+        # A subclass that runs each statement itself (Tuff Engine's preview keeps the line it's on) gets every
+        # statement through its run(), and one with its own binop gets every sum through it (see own).
+        self.routed = type(self).run is not Interpreter.run
+        # The debugger's hook point (1.5.0): functions run as hook(statement, env) just before each statement, in
+        # both runtimes. atgui's app:closed time limit is one. While it's empty it costs one check per statement.
+        self.step_hooks = []
+        self.kinds = {}  # 1.5.0: the program's kinds by name (file.load makes their objects again)
+        self.made_kinds = {}  # id(kind node): (node, its Kind), made once (see s_kind)
         if os.environ.get("TUFF_NO_WRITES") == "1":  # tuff_run for AI agents: file writes stay in memory
             self.writes = False
+        # A built app's own folder, which build.js's launcher names: the files the program saves go there (save_path).
+        self.data_dir = os.environ.get("TUFF_DATA_DIR") or None
         takes_err = {"number", "num", "int", "text", "str", "print"}  # they hand an err back, or show it as "err"
         for name, fn in builtins.items():
             (self.own_names if name in OWN_NAME_BUILTINS else self.globals).vars[name] = Builtin(name, fn, name in takes_err)
@@ -1815,6 +2650,12 @@ class Interpreter:
         self.globals.vars["all"] = ALL
         self.globals.vars["pi"] = math.pi
         self.own_names.vars["err"] = ERR
+        # 1.5.0: the program's own files it imports (import money). Each gets a top level of its own, starting with
+        # these built-ins, and is loaded once: files holds them by their full path (see load).
+        self.path = None  # the program's own file (run_file sets it), so a file that imports it back is a circle
+        self.files = {}
+        self.loading = []  # the files whose top-level code is running right now, the first imported first
+        self.base_globals, self.base_own = dict(self.globals.vars), dict(self.own_names.vars)
 
     def b_text(self, v, decimals=None):
         """text(value), and text(3.14159, 2) is "3.14" (a number with that many decimals, 1.4.0)."""
@@ -1826,7 +2667,10 @@ class Interpreter:
             raise TuffError(f"text(value, decimals) needs a number to show with decimals, not {type_name(v)}.")
         if d > 100:
             raise TuffError(f"text(value, {to_text(d)}): the most decimals it shows is 100.")
-        shown = f"{v:.{max(0, int(d))}f}"
+        places = max(0, int(d))
+        if isinstance(v, int):  # every digit, even of 10 ^ 25 or 2 ^ 99999 (as a decimal it would be rounded, or too big)
+            return str(v) + ("." + "0" * places if places else "")
+        shown = f"{v:.{places}f}"
         return shown[1:] if shown.startswith("-") and not shown.strip("-0.") else shown  # -0.001 to 2 places is 0.00
 
     def b_date(self):
@@ -1837,6 +2681,8 @@ class Interpreter:
 
     def trig(self, name, deg, fn):
         deg = self.num_arg(name, deg)
+        if isinstance(deg, float) and not math.isfinite(deg):  # a decimal that went past the biggest one (inf)
+            raise TuffError(f"{name}({to_text(deg)}) has no answer.")
         if name == "tan" and deg % 180 == 90:
             raise TuffError(f"tan({to_text(deg)}) has no answer: at 90 degrees (and 270) the line is straight up.")
         result = fn(math.radians(deg))
@@ -1886,21 +2732,21 @@ class Interpreter:
         try:
             import tuff_tgui
         except ImportError:
-            raise TuffError("tgui needs Python's tkinter, which isn't installed. Reinstall Python and tick 'tcl/tk and IDLE'.")
+            raise TuffError("tgui can't open its windows: a part it needs isn't installed. Reinstall TuffCode.")
         return tuff_tgui.make_library(self.rt)
 
     def lib_mtgui(self):
         try:
             import tuff_tgui
         except ImportError:
-            raise TuffError("mtgui needs Python's tkinter, which isn't installed. Reinstall Python and tick 'tcl/tk and IDLE'.")
+            raise TuffError("mtgui can't open its windows: a part it needs isn't installed. Reinstall TuffCode.")
         return tuff_tgui.make_library(self.rt, modern=True)
 
     def lib_tdraw(self):
         try:
             import tuff_tdraw
         except ImportError:
-            raise TuffError("tdraw needs Python's tkinter, which isn't installed. Reinstall Python and tick 'tcl/tk and IDLE'.")
+            raise TuffError("tdraw can't open its windows: a part it needs isn't installed. Reinstall TuffCode.")
         return tuff_tdraw.make_library(self.rt, TEXT_COLORS)
 
     def lib_tap(self):
@@ -1922,6 +2768,20 @@ class Interpreter:
         except ImportError as exc:
             raise TuffError(f"tgame couldn't load ({exc}). Reinstall TuffCode.")
         return tuff_tgame.make_library(self.rt)
+
+    def lib_tterm(self):
+        try:
+            import tuff_tterm
+        except ImportError as exc:
+            raise TuffError(f"tterm couldn't load ({exc}). Reinstall TuffCode.")
+        return tuff_tterm.make_library(self.rt)
+
+    def lib_tmusic(self):  # 1.5.0: music from notes
+        try:
+            import tuff_tmusic
+        except ImportError as exc:
+            raise TuffError(f"tmusic couldn't load ({exc}). Reinstall TuffCode.")
+        return tuff_tmusic.make_library(self.rt)
 
     def lib_anims(self):
         con = self.console
@@ -2055,9 +2915,12 @@ class Interpreter:
             raise TuffError(f"{name}() needs text or a number, not {type_name(v)}.")
         try:
             s = v.strip()
-            return float(s) if "." in s else int(s)
+            n = float(s) if "." in s else int(s)
         except ValueError:
             return Err(f"{name}() couldn't turn '{to_text(v)}' into a number")
+        if n.__class__ is float and not math.isfinite(n):  # "1.0e999": past the biggest decimal there is
+            return Err(f"{name}() couldn't turn '{to_text(v)}' into a number: it's too big for a decimal")
+        return n
 
     def b_int(self, v):
         # A whole number, dropping any decimals toward zero: int("42") is 42, int(3.7) and int("3.7") are 3.
@@ -2111,17 +2974,33 @@ class Interpreter:
 
     # statements
     def run_block(self, body, env):
+        if self.fast:
+            return self.unjump(self.compile_block(body)(env))
         result = None
         for stmt in body:
             result = self.run(stmt, env)
         return result
 
     def run(self, s, env):
+        if self.fast:
+            return self.unjump(self.compile_stmt(s)(env))
+        if self.step_hooks:
+            self.step(s, env)
         try:
             return getattr(self, "s_" + s.kind)(s, env)
         except TuffError as e:
             if e.line is None:
                 e.line, e.col = s.line, s.col
+            raise
+
+    def step(self, s, env):
+        """The step hooks, just before statement s runs (see step_hooks)."""
+        try:
+            for hook in tuple(self.step_hooks):
+                hook(s, env)
+        except TuffError as err:
+            if err.line is None:
+                err.line, err.col = s.line, s.col
             raise
 
     def s_expr(self, s, env):
@@ -2135,21 +3014,30 @@ class Interpreter:
                 value = self.binop(s.op[0], self.eval(t, env), value)
             env.set(t.name, value)
             return value
+        if t.kind == "attr":  # rex.hunger = 3, my.hunger -= 1 (1.5.0)
+            return self.set_field(s, self.eval(t.obj, env), value)
         obj = plain(self.eval(t.obj, env))  # the list or dictionary and the key are worked out once: votes[input()] += 1
-        index = getattr(t, "index", None)
-        if t.kind == "slice":  # board[moves:pop] = "X": only 1.3.6's method reading can be stored into
-            which, key, _ = self.part(t, env)
-            if which != "key":
-                raise TuffError("A part like [1:3] can't be changed with =. Make the new text or list with + instead.")
-        else:
-            key = self.eval(index, env)
+        key = self.part_key(t, env) if t.kind == "slice" else self.eval(t.index, env)
+        return self.store(s, obj, key, value)
+
+    def part_key(self, t, env):
+        """board[moves:pop] = "X": only 1.3.6's method reading of a part can be stored into."""
+        which, key, _ = self.part(t, env)
+        if which != "key":
+            raise TuffError("A part like [1:3] can't be changed with =. Make the new text or list with + instead.")
+        return key
+
+    def store(self, s, obj, key, value):
+        """obj[key] = value, +=, -=...: a list's item, or a dictionary's key."""
         if s.op != "=":
-            value = self.binop(s.op[0], self.item(obj, key, t.obj), value)
+            value = self.binop(s.op[0], self.item(obj, key, s.target.obj), value)
         if isinstance(obj, dict):  # ages["sam"] = 15 sets (or adds) a key
             obj[dict_key(key)] = value
             return value
         if not isinstance(obj, list):
-            raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.")
+            tip = f" {object_brackets(obj.kind.name, obj.kind.fields, where_text(s.target.obj), key, ' = ...')}" \
+                if isinstance(obj, Instance) else ""
+            raise TuffError(f"You can only set items in a list, not in {type_name(obj)}.{tip}")
         obj[self.list_index(obj, key)] = value
         return value
 
@@ -2182,14 +3070,7 @@ class Interpreter:
         return None
 
     def s_for(self, s, env):
-        items = plain(self.eval(s.items, env))
-        if isinstance(items, bool) or isinstance(items, (int, float)):
-            raise TuffError(f"Can't loop over a number. Try: for {s.name} in range({to_text(items)}):")
-        if isinstance(items, dict):  # a dictionary: its keys
-            items = list(items)
-        if not isinstance(items, (list, str)):
-            raise TuffError(f"Can't loop over {type_name(items)}.")
-        for item in list(items):
+        for item in self.for_items(s, plain(self.eval(s.items, env))):
             env.set(s.name, item)
             try:
                 self.run_block(s.body, env)
@@ -2199,19 +3080,187 @@ class Interpreter:
                 continue
         return None
 
+    def for_items(self, s, items):
+        """What a for loop goes through: a copy of the list or text (so the loop can change it), or a dictionary's keys."""
+        if isinstance(items, bool) or isinstance(items, (int, float)):
+            raise TuffError(f"Can't loop over a number. Try: for {s.name} in range({to_text(items)}):")
+        if isinstance(items, dict):  # a dictionary: its keys
+            items = list(items)
+        if not isinstance(items, (list, str)):
+            raise TuffError(f"Can't loop over {type_name(items)}.")
+        return list(items)
+
     def s_func(self, s, env):
         env.vars[s.name] = Func(s.name, s.params, s.body, env, s.line)
         return None
 
+    # ---- kinds (1.5.0): kind Pet:, rex = Pet("Rex"), rex.hunger, rex:feed()
+    def s_kind(self, s, env):
+        """kind Pet: makes the kind. run_file runs it before the rest of the program, like a func, and again where it's
+        written; it's made only once, so every Pet comes from the same kind."""
+        got = self.made_kinds.get(id(s))
+        if got is None or got[0] is not s:
+            actions = {f.action: Func(f.name, f.params, f.body, env, f.line, self.compile_block(f.body) if self.fast else None)
+                       for f in s.actions}
+            kind = Kind(s.name, tuple(f.target.name for f in s.fields), tuple(f.value for f in s.fields), actions, env, s.line)
+            got = self.made_kinds[id(s)] = (s, kind)
+        env.vars[s.name] = self.kinds[s.name] = got[1]
+        return None
+
+    def make_object(self, kind, args, loose=False):
+        """Pet("Rex"): a new Pet. The inputs fill its fields in order; any left over start with their kind's value,
+        worked out now, for this object. loose (a library calling back): extra inputs are dropped."""
+        fields = kind.fields
+        if len(args) > len(fields):
+            if not loose:
+                raise TuffError(kind_inputs_help(kind.name, fields, len(args)))
+            args = args[:len(fields)]
+        made = dict(zip(fields, args))
+        if len(args) < len(fields):
+            self.starting_values(kind, made, fields[len(args):], kind.defaults[len(args):])
+        return Instance(kind, made)
+
+    def starting_values(self, kind, made, names, defaults):
+        """Work out these fields' starting values, for a new object. A field that starts with a new object of its own
+        kind (kind Node: next = Node()) would make objects without end: that stops like a function calling itself."""
+        stop = f"{kind.name}() was made inside itself too many times. Does a field of {kind.name} start with a new {kind.name}()? Start it with nil."
+        if self.depth >= MAX_DEPTH:
+            raise TuffError(stop)
+        self.depth += 1
+        try:
+            for name, default in zip(names, defaults):
+                made[name] = self.eval(default, kind.env)
+        except RecursionError:
+            raise TuffError(stop)
+        finally:
+            self.depth -= 1
+
+    def saved_object(self, kind, saved):
+        """file.load's object, from the dictionary file.save made of it: a field the save doesn't have (the kind got
+        a new one since) starts with its kind's value, and a key that isn't one of the kind's fields is left out."""
+        made = {name: saved[name] for name in kind.fields if name in saved}
+        missing = [(name, default) for name, default in zip(kind.fields, kind.defaults) if name not in saved]
+        if missing:
+            self.starting_values(kind, made, *zip(*missing))
+        return Instance(kind, {name: made[name] for name in kind.fields})
+
+    def call_action(self, e, obj, args):
+        """rex:feed(): one of the object's actions, run with my as the object."""
+        kind = obj.kind
+        fn = kind.actions.get(e.name)
+        if fn is None:
+            raise TuffError(action_help(kind.name, kind.fields, kind.actions, e.name, where_text(e.obj)))
+        if len(args) != len(fn.params):
+            raise TuffError(action_inputs_help(where_text(e.obj) or kind.name, e.name, len(fn.params), len(args), getattr(e, "bare", False)))
+        return self.invoke(fn, args, me=obj)
+
+    def set_field(self, s, obj, value):
+        """rex.hunger = 3 and my.hunger -= 1 (value is already worked out): one of the object's fields. An object
+        only has its kind's fields, so a typo is an error instead of a new field."""
+        t = s.target
+        if obj.__class__ is not Instance:
+            if isinstance(obj, Kind):
+                raise TuffError(kind_not_object(obj.name, f".{t.name} = ..."))
+            tip = f" A dictionary's values are set with [ ], like {where_text(t.obj) or 'd'}[\"{t.name}\"] = ..." if isinstance(obj, dict) else ""
+            raise TuffError(f"Only objects made from a kind have fields to set with '.', and this is {type_name(obj)}.{tip}")
+        fields = obj.fields
+        if t.name not in fields:
+            raise TuffError(field_help(obj.kind.name, fields, obj.kind.actions, t.name, where_text(t.obj)))
+        if s.op != "=":
+            value = self.binop(s.op[0], fields[t.name], value)
+        fields[t.name] = value
+        return value
+
     def s_import(self, s, env):
+        if getattr(s, "own", False):  # import money.tuf (1.5.0): one of the program's own files, even one called tmusic.tuf
+            env.set(s.name, self.load(s.name, env))
+            return None
         if s.name == "file":  # built in, so there's nothing to load
             return None
-        if s.name not in LIBRARIES:
-            hint = difflib.get_close_matches(s.name, LIBRARIES, n=1, cutoff=0.5)
-            extra = f" Did you mean '{hint[0]}'?" if hint else f" Available libraries: {', '.join(LIBRARIES)}."
-            raise TuffError(f"There's no library called '{s.name}'.{extra}")
-        env.set(s.name, Module(s.name, getattr(self, "lib_" + s.name)()))
-        return None
+        if s.name in LIBRARIES:  # without .tuf, a library's name is always the library
+            env.set(s.name, Module(s.name, getattr(self, "lib_" + s.name)()))
+            return None
+        here = file_of(env)
+        who = OWN_FILES[here][1] if here in OWN_FILES else self.program_name()
+        raise TuffError(library_problem(s.name, os.path.dirname(here) if here else self.base_dir, who))
+
+    def shown(self, path):
+        """A file's name as messages show it: from the program's folder, like libs/money.tuf."""
+        try:
+            rel = os.path.relpath(path, self.base_dir)
+        except ValueError:  # on another drive
+            return os.path.basename(path)
+        return os.path.basename(path) if rel.startswith("..") else rel.replace(os.sep, "/")
+
+    def program_name(self):
+        """The program's own file as shown (its imports are found in the program's folder), or "the program"."""
+        if self.path and os.path.normcase(os.path.dirname(os.path.abspath(self.path))) == os.path.normcase(os.path.abspath(self.base_dir)):
+            return os.path.basename(self.path)
+        return "the program"
+
+    def load(self, name, env):
+        """import money (1.5.0): money.tuf, from the folder of the file that imports it (or the libs folder there), as a
+        FileModule. Its top-level code runs the first time it's imported, and every import after that gets the same
+        one. An error in it is reported in it (err.file), with its own line."""
+        here = file_of(env)
+        folder = os.path.dirname(here) if here else self.base_dir
+        who = OWN_FILES[here][1] if here in OWN_FILES else self.program_name()
+        problem = import_problem(name, folder, who, (os.path.basename(here or self.path or "")[:-4],))
+        if problem:
+            raise TuffError(problem)
+        path = os.path.abspath(module_file(folder, name))
+        key = os.path.normcase(path)
+        mod = self.files.get(key)
+        running = [self.program_name()] + [m.shown for m in self.loading]
+        if running[-1] != who:  # (an import in a function of a file that has loaded)
+            running.append(who)
+        if self.path and key == os.path.normcase(os.path.abspath(self.path)):  # the program itself, which is running
+            raise TuffError(circle_problem(running + [running[0]]))
+        if mod is not None:
+            if not mod.ready:  # still running its top-level code: an import further in came back to it
+                raise TuffError(circle_problem(running[1 + self.loading.index(mod):] + [mod.shown]))
+            return mod
+        shown = self.shown(path)
+        try:
+            src = source_text(path)
+        except (OSError, UnicodeDecodeError) as exc:
+            raise TuffError(unreadable(path, exc, shown))
+        OWN_FILES[path] = (src, shown)
+        try:
+            program = Parser(tokenize(src)).program()
+        except TuffError as err:
+            err.file = path
+            raise
+        own = Env(own_names=True)
+        own.vars.update(self.base_own)
+        own.file = path  # (see file_of)
+        top = Env(own)
+        top.vars.update(self.base_globals)
+        mod = self.files[key] = FileModule(name, path, shown, top, self.base_globals)
+        self.loading.append(mod)
+        try:
+            for stmt in program:  # its functions can be used anywhere in it, even above where they're written
+                if stmt.kind == "func":
+                    self.run(stmt, top)
+            self.run_block(program, top)
+        except TuffError as err:
+            del self.files[key]
+            if err.file is None and err.line is not None:
+                err.file = path
+            raise
+        except (ReturnSignal, BreakSignal, ContinueSignal) as sig:
+            del self.files[key]
+            word = {ReturnSignal: "return", BreakSignal: "break", ContinueSignal: "continue"}[type(sig)]
+            err = TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}.", sig.line, sig.col)
+            err.file = path
+            raise err
+        except BaseException:
+            del self.files[key]
+            raise
+        finally:
+            self.loading.pop()
+        mod.ready = True
+        return mod
 
     def s_flush(self, s, env):
         self.console.clear(None)
@@ -2228,6 +3277,8 @@ class Interpreter:
 
     # expressions
     def eval(self, e, env):
+        if self.fast:
+            return self.compile_expr(e)(env)
         try:
             return self.eval_node(e, env)
         except TuffError as err:
@@ -2247,12 +3298,8 @@ class Interpreter:
             return self.print_builtin
         if k == "input":
             prompt = "" if e.prompt is None else to_text(self.eval(e.prompt, env))
-            look = None
-            if getattr(e, "looks", None) is not None:  # input:color("Name? ", "green")
-                look = read_look("input:color", [self.eval(a, env) for a in e.looks], pen=True)  # (no animations)
-            if look is not None or self.pen:  # with print:pen on, the question has the pen's look too
-                look = (look or Look()).with_pen(self.pen)
-            return self.console.input(prompt, look)
+            looks = getattr(e, "looks", None)  # input:color("Name? ", "green")
+            return self.ask(prompt, None if looks is None else [self.eval(a, env) for a in looks])
         if k == "binop":
             return self.binop(e.op, self.eval(e.left, env), self.eval(e.right, env))
         if k == "and":
@@ -2264,10 +3311,7 @@ class Interpreter:
         if k == "not":
             return not truthy(self.eval(e.value, env))
         if k == "neg":
-            v = plain(self.eval(e.value, env))
-            if not isinstance(v, (int, float)) or isinstance(v, bool):
-                raise TuffError(f"Can't make {type_name(v)} negative.")
-            return -v
+            return self.negative(self.eval(e.value, env))
         if k == "list":
             return [self.eval(x, env) for x in e.items]
         if k == "dict":
@@ -2279,39 +3323,91 @@ class Interpreter:
             return self.held[-1]
         if k == "slice":  # s[1:3]: positions 1 to 3, both included (like range); s[:3] from the start, s[2:] to the end
             obj = plain(self.eval(e.obj, env))
-            which, first, last = self.part(e, env)
-            if which == "key":  # names[order:pop]: 1.3.6's method call gave the position or key
-                return self.item(obj, first, e.obj)
-            if not isinstance(obj, (list, str)):
-                raise TuffError(f"Only text and lists have parts like [1:3], not {type_name(obj)}.")
-            size = len(obj)
-            a, b = max(0, self.spot(e, first, 0, size)), min(size - 1, self.spot(e, last, size - 1, size))
-            return obj[a:b + 1] if a <= b else obj[0:0]
+            return self.cut(e, obj, *self.part(e, env))
+        if k == "fstr":  # a text template: f"{name} has {score + 1} points" (1.5.0)
+            pieces = [p if isinstance(p, str) else self.shape(p, self.eval(p.value, env)) for p in e.parts]
+            self.room(sum(sys.getsizeof(p) for p in pieces))
+            return "".join(pieces)
         if k == "call":
             return self.call(e, env)
         if k == "method":
             try:
                 return self.method(e, env)
             except (OverflowError, MemoryError):  # a number or text too big for the computer, inside a method
-                raise TuffError("That's too big to work out: a number or text this large doesn't fit in memory.")
+                raise TuffError(TOO_BIG)
         if k == "attr":
-            obj = self.eval(e.obj, env)
-            if isinstance(obj, Builtin) and e.obj.kind == "var" and e.obj.name in PY_NAMES:  # time.sleep(1)
-                raise TuffError(f"Tuff has no {e.obj.name}.{e.name}. {PY_NAMES[e.obj.name]}")
-            if not isinstance(obj, Module):
-                kind = "list" if isinstance(obj, list) else "text" if isinstance(obj, str) else "dict" if isinstance(obj, dict) else None
-                raise TuffError(dot_help(type_name(obj), e.obj, e.name, kind))
-            if e.name not in obj.members:
-                raise TuffError(f"{obj.name} doesn't have '{e.name}'. It has: {', '.join(obj.members)}.")
-            return obj.members[e.name]
+            return self.member(e, self.eval(e.obj, env))
         raise TuffError(f"Internal error: unknown expression '{k}'.")
+
+    # what the expressions above do once their parts are worked out (the compiled runtime uses them too)
+    def ask(self, prompt, looks):
+        """input's question (with input:color's look words, already worked out), then the answer."""
+        look = None
+        if looks is not None:
+            look = read_look("input:color", looks, pen=True)  # (no animations)
+        if look is not None or self.pen:  # with print:pen on, the question has the pen's look too
+            look = (look or Look()).with_pen(self.pen)
+        return self.console.input(prompt, look)
+
+    def negative(self, v):
+        v = plain(v)
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            raise TuffError(f"Can't make {type_name(v)} negative.")
+        return -v
+
+    def cut(self, e, obj, which, first, last):
+        """x[a:b] once x and part(e) are worked out."""
+        if which == "key":  # names[order:pop]: 1.3.6's method call gave the position or key
+            return self.item(obj, first, e.obj)
+        if not isinstance(obj, (list, str)):
+            raise TuffError(f"Only text and lists have parts like [1:3], not {type_name(obj)}.")
+        size = len(obj)
+        a, b = max(0, self.spot(e, first, 0, size)), min(size - 1, self.spot(e, last, size - 1, size))
+        return obj[a:b + 1] if a <= b else obj[0:0]
+
+    def member(self, e, obj):
+        """library.name, and an object's field: rex.hunger (1.5.0)"""
+        if obj.__class__ is Instance:
+            if e.name in obj.fields:
+                return obj.fields[e.name]
+            raise TuffError(field_help(obj.kind.name, obj.kind.fields, obj.kind.actions, e.name, where_text(e.obj)))
+        if isinstance(obj, Kind):
+            raise TuffError(kind_not_object(obj.name, f".{e.name}"))
+        if isinstance(obj, Builtin) and e.obj.kind == "var" and e.obj.name in PY_NAMES:  # time.sleep(1)
+            raise TuffError(f"Tuff has no {e.obj.name}.{e.name}. {PY_NAMES[e.obj.name]}")
+        if not isinstance(obj, Module):
+            kind = "list" if isinstance(obj, list) else "text" if isinstance(obj, str) else "dict" if isinstance(obj, dict) else None
+            raise TuffError(dot_help(type_name(obj), e.obj, e.name, kind))
+        if obj.__class__ is FileModule:  # money.rate: its top level's value as it is now (1.5.0)
+            v = obj.env.vars.get(e.name, obj)
+            if v is obj or obj.base.get(e.name, obj) is v:
+                raise TuffError(module_help(obj, e.name))
+            return v
+        if e.name not in obj.members:
+            raise TuffError(f"{obj.name} doesn't have '{e.name}'. It has: {', '.join(obj.members)}.")
+        return obj.members[e.name]
 
     def room(self, size):
         """Something about size bytes big is about to be made. Only Tuff Engine's preview keeps count."""
 
+    def shape(self, part, v):
+        """One { } of a text template, shown: as say shows the value, or in the { }'s format (0.00, money...)."""
+        if part.fmt is None:
+            return to_text(v)
+        try:
+            return format_value(v, part.fmt)
+        except TuffError as err:
+            if err.line is None:
+                err.line, err.col = part.line, part.col  # at the format
+            raise
+
     def repeat(self, text, times):
-        if len(text) * times > 500_000_000:
-            raise TuffError(f"That text would be {len(text) * times} characters long, too long to make.")
+        if not text or times <= 0:  # (Python can't repeat even "" more times than a list can hold)
+            return ""
+        size = len(text) * times
+        if size > 500_000_000:
+            raise TuffError(f"That text would be {size} characters long, too long to make." if size < 10 ** 15 else
+                            "That text would be far too long to make.")  # (not a number with thousands of digits)
         return text * times
 
     LEFT_OUT = object()  # a part's end that isn't written: s[:3], s[2:]
@@ -2371,7 +3467,9 @@ class Interpreter:
                 raise TuffError(f"{owner} doesn't have {shown}.{tip}")
             return obj[key]
         if not isinstance(obj, (list, str)):
-            raise TuffError(f"Can't use [ ] on {type_name(obj)}.")
+            tip = f" {object_brackets(obj.kind.name, obj.kind.fields, where_text(obj_node), plain(key))}." \
+                if isinstance(obj, Instance) else ""
+            raise TuffError(f"Can't use [ ] on {type_name(obj)}.{tip}")
         return obj[self.list_index(obj, key)]
 
     def list_index(self, obj, index):
@@ -2379,7 +3477,8 @@ class Interpreter:
         if not isinstance(index, int) or isinstance(index, bool):
             raise TuffError(f"List positions must be whole numbers, not {type_name(index)}.")
         if not -len(obj) <= index < len(obj):
-            raise TuffError(f"Position {index} is outside this {'list' if isinstance(obj, list) else 'text'} (it has {len(obj)} items, starting at 0).")
+            where = f"Position {index} is" if abs(index) < 10 ** 15 else "That position is far"  # (not thousands of digits)
+            raise TuffError(f"{where} outside this {'list' if isinstance(obj, list) else 'text'} (it has {len(obj)} items, starting at 0).")
         return index
 
     def binop(self, op, a, b):
@@ -2392,57 +3491,69 @@ class Interpreter:
                 return not (isinstance(a, Err) and isinstance(b, Err))
             (a if isinstance(a, Err) else b).stop(f"Can't use {op} here, because one side")
         num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
-        if op == "+":
-            if isinstance(a, str) or isinstance(b, str):
-                return to_text(a) + to_text(b)
-            if num(a) and num(b):
-                return a + b
-            if isinstance(a, list) and isinstance(b, list):
-                return a + b
-        elif op == "==":
-            return a == b and type(a) is type(b) or (num(a) and num(b) and a == b)
-        elif op == "!=":
-            return not self.binop("==", a, b)
-        elif op in ("<", ">", "<=", ">="):
-            if (num(a) and num(b)) or (isinstance(a, str) and isinstance(b, str)):
-                return {"<": a < b, ">": a > b, "<=": a <= b, ">=": a >= b}[op]
-            raise TuffError(f"Can't compare {type_name(a)} with {type_name(b)} using {op}.")
-        elif op == "*":
-            if num(a) and num(b):
-                return a * b
-            if isinstance(a, str) and isinstance(b, int) and not isinstance(b, bool):
-                return self.repeat(a, b)
-            if isinstance(b, str) and isinstance(a, int) and not isinstance(a, bool):
-                return self.repeat(b, a)
-        elif num(a) and num(b):
-            if op == "-":
-                return a - b
-            if op == "^":
-                try:
-                    result = a ** b
-                except (OverflowError, ZeroDivisionError):
-                    raise TuffError("That number is too big (or impossible) to work out.")
-                if isinstance(result, complex):
-                    raise TuffError("A negative number can't be raised to a fraction.")
-                return result
-            if b == 0:
-                raise TuffError("You can't divide by zero.")
-            if op == "/":
-                return a / b
-            if op == "%":
-                return a % b
+        try:  # a whole number too big to be a decimal (10 ^ 400 / 3, 2 ^ 99999 * 1.5) is an OverflowError in Python
+            if op == "+":
+                if isinstance(a, str) or isinstance(b, str):
+                    return to_text(a) + to_text(b)
+                if num(a) and num(b):
+                    return a + b
+                if isinstance(a, list) and isinstance(b, list):
+                    return a + b
+            elif op == "==":
+                return a == b and type(a) is type(b) or (num(a) and num(b) and a == b)
+            elif op == "!=":
+                return not self.binop("==", a, b)
+            elif op in ("<", ">", "<=", ">="):
+                if (num(a) and num(b)) or (isinstance(a, str) and isinstance(b, str)):
+                    return {"<": a < b, ">": a > b, "<=": a <= b, ">=": a >= b}[op]
+                raise TuffError(f"Can't compare {type_name(a)} with {type_name(b)} using {op}.")
+            elif op == "*":
+                if num(a) and num(b):
+                    return a * b
+                if isinstance(a, str) and isinstance(b, int) and not isinstance(b, bool):
+                    return self.repeat(a, b)
+                if isinstance(b, str) and isinstance(a, int) and not isinstance(a, bool):
+                    return self.repeat(b, a)
+            elif num(a) and num(b):
+                if op == "-":
+                    return a - b
+                if op == "^":
+                    try:
+                        result = a ** b
+                    except ZeroDivisionError:  # 0 ^ -1 is 1 / 0
+                        raise TuffError(f"0 ^ {to_text(b)} has no answer: it's the same as dividing by zero.")
+                    if isinstance(result, complex):
+                        raise TuffError("A negative number can't be raised to a fraction.")
+                    return result
+                if b == 0:
+                    raise TuffError("You can't divide by zero.")
+                if op == "/":
+                    return a / b
+                if op == "%":
+                    return a % b
+        except OverflowError:
+            raise TuffError(TOO_BIG_NUMBER) from None
         verb = {"+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "use % on", "^": "use ^ on"}[op]
         raise TuffError(f"Can't {verb} {type_name(a)} and {type_name(b)}.")
 
     def call(self, e, env):
         fn = self.eval(e.fn, env)
         if e.fn.kind == "var" and e.fn.name in BUILTIN_NAMES and not isinstance(fn, (Builtin, Func)):
-            raise TuffError(f"'{e.fn.name}' was given a value ({to_text(fn, True)}), so it isn't the built-in {e.fn.name}() any more. Use another name for your variable.")
+            self.not_builtin(e, fn)
         args = [self.eval(a, env) for a in e.args]
         return self.invoke(fn, args)
 
-    def invoke(self, fn, args, loose=False):
+    def not_builtin(self, e, fn):
+        raise TuffError(f"'{e.fn.name}' was given a value ({to_text(fn, True)}), so it isn't the built-in {e.fn.name}() any more. Use another name for your variable.")
+
+    def invoke(self, fn, args, loose=False, me=None):
+        """Call fn with args. me: the object, for one of its kind's actions (my in it)."""
         if isinstance(fn, Builtin):
+            if self.fast:  # how many inputs it takes is worked out once for each count (see Builtin.fits)
+                fits = fn.fits.get(len(args))
+                if fits is None:
+                    fits = fn.fits[len(args)] = accepts(fn.fn, len(args))
+                return call_python(fn.name + "()", fn.fn, args, fn.takes_err, fits)
             return call_python(fn.name + "()", fn.fn, args, fn.takes_err)
         if isinstance(fn, Func):
             if loose and len(args) > len(fn.params):
@@ -2452,25 +3563,57 @@ class Interpreter:
                 raise TuffError(f"{fn.name}() needs {want} input{'s' if want != 1 else ''}, but got {len(args)}.")
             local = Env(fn.env)
             local.vars.update(zip(fn.params, args))
+            if me is not None:
+                local.vars["my"] = me
             if self.depth >= MAX_DEPTH:  # (deep enough for real work; a runaway stops here before it eats the memory)
                 raise TuffError(f"{fn.name}() called itself too many times.")
             self.depth += 1
             try:
-                return self.run_block(fn.body, local)
+                if fn.code is None:
+                    return self.run_block(fn.body, local)
+                out = fn.code(local)
+                if out.__class__ is Jump:
+                    if out.kind is J_RETURN:
+                        value, out.value = out.value, None
+                        return value
+                    self.unjump(out)  # a break or continue outside any loop in it: on to a loop around the call, as before
+                return out
             except ReturnSignal as r:
                 return r.value
+            except TuffError as err:  # (1.5.0) its line is in the file the function is written in
+                if err.file is None and err.line is not None:  # (one without a line gets the call's, in the caller's file)
+                    err.file = file_of(fn.env)
+                raise
             except RecursionError:
                 raise TuffError(f"{fn.name}() called itself too many times.")
             except MemoryError:
                 raise TuffError(f"The program ran out of memory inside {fn.name}(). Is something growing without end?")
             finally:
                 self.depth -= 1
+        if isinstance(fn, Kind):  # Pet("Rex"): a new object (1.5.0)
+            return self.make_object(fn, args, loose)
         raise TuffError(f"{to_text(fn, True)} isn't a function, so it can't be called with ( ).")
 
     def method(self, e, env):
         obj = self.eval(e.obj, env)
         args = [self.eval(a.value if a.kind == "say" else a, env) for a in e.args]
+        return self.method_call(e, obj, args)
+
+    def method_call(self, e, obj, args):
+        """obj:name(args), once obj and args are worked out."""
+        if obj.__class__ is Instance:  # rex:feed(), one of its kind's actions (1.5.0)
+            return self.call_action(e, obj, args)
         name = e.name
+        if isinstance(obj, Kind):
+            raise TuffError(kind_not_object(obj.name, f":{name}()"))
+        if isinstance(obj, Native):  # a library's object, like game:frame() (first: a game calls these all the time)
+            fn = obj.methods.get(name)
+            if fn is None:
+                options = [m for m in obj.methods if m != "page" or obj.kind == "window"]
+                raise TuffError(method_help(a_kind(obj.kind).capitalize(), name, options))
+            return call_python(f"{obj.kind}:{name}", fn, args)
+        if isinstance(obj, Builtin) and obj.name == "print":
+            return self.print_method(e.obj.kind == "sayfn", name, args)
 
         def need(count):
             if len(args) != count:
@@ -2479,15 +3622,6 @@ class Interpreter:
         def no_inputs():
             if args:
                 raise TuffError(f":{name} doesn't take an input. Write :{name}() or just :{name}.")
-
-        if isinstance(obj, Builtin) and obj.name == "print":
-            return self.print_method(e.obj.kind == "sayfn", name, args)
-        if isinstance(obj, Native):
-            fn = obj.methods.get(name)
-            if fn is None:
-                options = [m for m in obj.methods if m != "page" or obj.kind == "window"]
-                raise TuffError(method_help(a_kind(obj.kind).capitalize(), name, options))
-            return call_python(f"{obj.kind}:{name}", fn, args)
 
         if isinstance(obj, Line):
             if name in ("rewrite", "append"):
@@ -2647,6 +3781,648 @@ class Interpreter:
         tip = PY_ONLY.get(name.lower())
         raise TuffError(msg + (f" {tip}" if tip and "instead" not in msg else ""))
 
+    # ---------------------------------------------------------------- the compiled runtime (1.5.0)
+    # compile_stmt and compile_expr turn a node, once, into a Python function of the env it runs in. It does just that
+    # node's job and calls its parts' functions straight away: nothing works out what kind of node it is each time,
+    # and numbers, names, comparisons and loops have quick paths. Everything else goes through the helpers the tree
+    # walker uses (binop, item, store, method_call...), so the answers and messages are the same, and each function
+    # puts its node's line and column on an error that has none, just where eval and run do. return, break and
+    # continue give back a Jump. A subclass keeps its hooks: with its own run() (Tuff Engine's preview), every
+    # statement goes through it, and with its own binop, item, store or method_call, there's no quick path past it.
+
+    def compile_stmt(self, s):
+        """Statement s as a function of env, made once: it gives back what the statement gives, or a Jump."""
+        got = self.codes.get(id(s))
+        if got is None or got[0] is not s:
+            got = self.codes[id(s)] = (s, self.make_stmt(s))
+        return got[1]
+
+    def compile_expr(self, e):
+        """Expression e as a function of env, made once."""
+        got = self.codes.get(id(e))
+        if got is None or got[0] is not e:
+            got = self.codes[id(e)] = (e, self.make_expr(e))
+        return got[1]
+
+    def compile_block(self, body):
+        """A block as one function of env: it gives back its last statement's value (a function with no return gives
+        that back), or the Jump on its way out."""
+        if self.routed:  # each statement through the subclass's run(), which gives back no Jumps (see unjump)
+            run, stmts = self.run, tuple(body)
+
+            def block(env):
+                result = None
+                for s in stmts:
+                    result = run(s, env)
+                return result
+            return block
+        fns = tuple(self.compile_stmt(s) for s in body)
+        jumps = bool(block_jumps(body))
+        if not fns:
+            return lambda env: None
+        if len(fns) == 1:
+            return fns[0]
+        if len(fns) == 2:
+            first, second = fns
+            if jumps:
+                def block(env):
+                    out = first(env)
+                    if out.__class__ is Jump:
+                        return out
+                    return second(env)
+            else:
+                def block(env):
+                    first(env)
+                    return second(env)
+            return block
+        if jumps:
+            def block(env):
+                result = None
+                for fn in fns:
+                    result = fn(env)
+                    if result.__class__ is Jump:
+                        return result
+                return result
+        else:
+            def block(env):
+                result = None
+                for fn in fns:
+                    result = fn(env)
+                return result
+        return block
+
+    def unjump(self, out):
+        """Where a Jump would leave compiled code, it becomes the signal the tree walker raises."""
+        if out.__class__ is Jump:
+            value, out.value = out.value, None
+            if out.kind is J_RETURN:
+                raise ReturnSignal(value, out.line, out.col)
+            raise (BreakSignal if out.kind is J_BREAK else ContinueSignal)(out.line, out.col)
+        return out
+
+    def own(self, name):
+        """Does this interpreter use Interpreter's own helper called name? (Then a quick path can skip it.)"""
+        return getattr(type(self), name) is getattr(Interpreter, name)
+
+    def make_stmt(self, s):
+        k = s.kind
+        hooks, step = self.step_hooks, self.step
+        if k == "expr":
+            value = self.compile_expr(s.expr)
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                return value(env)
+            return run
+        if k == "assign":
+            return self.make_assign(s)
+        if k == "if":
+            tests = tuple((self.compile_expr(c), self.compile_block(b)) for c, b in s.branches)
+            other = None if s.else_body is None else self.compile_block(s.else_body)
+            if len(tests) == 1:
+                ((test, then),) = tests
+
+                def run(env):
+                    if hooks:
+                        step(s, env)
+                    v = test(env)
+                    if v is True or (v is not False and truthy(v)):
+                        return then(env)
+                    return None if other is None else other(env)
+                return run
+            if len(tests) == 2:  # if, elif
+                (test, then), (test2, then2) = tests
+
+                def run(env):
+                    if hooks:
+                        step(s, env)
+                    v = test(env)
+                    if v is True or (v is not False and truthy(v)):
+                        return then(env)
+                    v = test2(env)
+                    if v is True or (v is not False and truthy(v)):
+                        return then2(env)
+                    return None if other is None else other(env)
+                return run
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                for test, then in tests:
+                    v = test(env)
+                    if v is True or (v is not False and truthy(v)):
+                        return then(env)
+                return None if other is None else other(env)
+            return run
+        if k in ("while", "for"):
+            return self.make_loop(s)
+        if k == "try":
+            body, handler, name = self.compile_block(s.body), self.compile_block(s.handler), s.name
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                try:
+                    return body(env)
+                except TuffError as err:
+                    if name:
+                        env.set(name, err.msg)
+                    return handler(env)
+            return run
+        if k == "func":
+            name, params, body, line = s.name, s.params, s.body, s.line
+            code = self.compile_block(body)
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                env.vars[name] = Func(name, params, body, env, line, code)
+                return None
+            return run
+        if k in (J_RETURN, J_BREAK, J_CONTINUE):
+            jump = Jump(J_RETURN if k == J_RETURN else J_BREAK if k == J_BREAK else J_CONTINUE, s.line, s.col)  # (kinds are checked with is)
+            value = self.compile_expr(s.value) if k == J_RETURN and s.value is not None else None
+            if value is None:
+                def run(env):
+                    if hooks:
+                        step(s, env)
+                    return jump
+                return run
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                jump.value = value(env)
+                return jump
+            return run
+
+        def run(env):  # import, flush, kind: the tree walker's own (they're run once, or seldom)
+            if hooks:
+                step(s, env)
+            try:
+                return getattr(self, "s_" + k)(s, env)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = s.line, s.col
+                raise
+        return run
+
+    def make_assign(self, s):
+        hooks, step = self.step_hooks, self.step
+        t, op = s.target, s.op
+        value = self.compile_expr(s.value)
+        if t.kind == "var" and op == "=":
+            name = t.name
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                v = value(env)
+                names = env.vars
+                if name in names:
+                    names[name] = v
+                else:
+                    env.set(name, v)
+                return v
+            return run
+        if t.kind == "var":  # x += 1 (the value first, then x, as the tree walker does)
+            get, binop, sign = self.compile_expr(t), self.binop, op[0]
+            if self.own("binop"):
+                make, b = QUICK[sign], s.value
+                if b.kind == "const" and b.value.__class__ in (int, float) and (b.value != 0 or sign != "/"):
+                    return make["store_number"](s, get, b.value, binop, hooks, step)  # x += 1
+                if b.kind == "const" and b.value.__class__ is str and "store_text" in make:
+                    return make["store_text"](s, get, b.value, binop, hooks, step)  # s += "!"
+                return make["store"](s, get, value, binop, hooks, step)
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                v = value(env)
+                try:
+                    v = binop(sign, get(env), v)
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = s.line, s.col
+                    raise
+                env.set(t.name, v)
+                return v
+            return run
+        if t.kind == "attr":  # rex.hunger = 3, my.hunger -= 1 (1.5.0): the value first, then the object, as set_field does
+            obj_of, set_field, name = self.compile_expr(t.obj), self.set_field, t.name
+            quick = op == "=" and self.own("set_field")
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                try:
+                    v = value(env)
+                    obj = obj_of(env)
+                    if quick and obj.__class__ is Instance:
+                        fields = obj.fields
+                        if name in fields:
+                            fields[name] = v
+                            return v
+                    return set_field(s, obj, v)
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = s.line, s.col
+                    raise
+            return run
+        obj_of = self.compile_expr(t.obj)  # the list or dictionary and the key are worked out once: votes[input()] += 1
+        if t.kind == "slice":
+            part_key = self.part_key
+
+            def key_of(env):
+                return part_key(t, env)
+        else:
+            key_of = self.compile_expr(t.index)
+        store = self.store
+        quick = op == "=" and t.kind == "index" and self.own("store")
+
+        def run(env):
+            if hooks:
+                step(s, env)
+            try:
+                v = value(env)
+                obj = plain(obj_of(env))
+                key = key_of(env)
+                if quick:  # (what store does for a list's position or a dictionary's text or whole-number key)
+                    if obj.__class__ is list:
+                        if key.__class__ is int and -len(obj) <= key < len(obj):
+                            obj[key] = v
+                            return v
+                    elif obj.__class__ is dict and (key.__class__ is str or key.__class__ is int):
+                        obj[key] = v
+                        return v
+                return store(s, obj, key, v)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = s.line, s.col
+                raise
+        return run
+
+    def make_loop(self, s):
+        hooks, step = self.step_hooks, self.step
+        body = self.compile_block(s.body)
+        jumps = bool(block_jumps(s.body))  # a return in it can come out (its own break and continue stop here)
+        if s.kind == "while":
+            test = self.compile_expr(s.cond)
+
+            def run(env):
+                if hooks:
+                    step(s, env)
+                while True:
+                    v = test(env)
+                    if not (v is True or (v is not False and truthy(v))):
+                        return None
+                    try:
+                        out = body(env)
+                    except BreakSignal:  # from a function called in the loop, as with the tree walker
+                        return None
+                    except ContinueSignal:
+                        continue
+                    if jumps and out.__class__ is Jump:
+                        if out.kind is J_BREAK:
+                            return None
+                        if out.kind is J_RETURN:
+                            return out
+            return run
+        items_of, for_items, name = self.compile_expr(s.items), self.for_items, s.name
+
+        def run(env):
+            if hooks:
+                step(s, env)
+            try:
+                items = for_items(s, plain(items_of(env)))
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = s.line, s.col
+                raise
+            names = env.vars
+            for item in items:
+                if name in names:
+                    names[name] = item
+                else:
+                    env.set(name, item)
+                try:
+                    out = body(env)
+                except BreakSignal:
+                    return None
+                except ContinueSignal:
+                    continue
+                if jumps and out.__class__ is Jump:
+                    if out.kind is J_BREAK:
+                        return None
+                    if out.kind is J_RETURN:
+                        return out
+            return None
+        return run
+
+    def make_expr(self, e):
+        k = e.kind
+        line, col = e.line, e.col
+        if k == "const":
+            value = e.value
+            return lambda env: value
+        if k == "var":
+            name = e.name
+
+            def var(env):
+                names = env.vars
+                if name in names:
+                    return names[name]
+                up = env.parent
+                while up is not None:
+                    names = up.vars
+                    if name in names:
+                        return names[name]
+                    up = up.parent
+                try:
+                    return env.get(name)  # it isn't anywhere: Env.get says so, with a "did you mean"
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return var
+        if k == "binop":
+            return self.make_binop(e)
+        if k in ("and", "or"):
+            left, right = self.compile_expr(e.left), self.compile_expr(e.right)
+            if k == "and":
+                def both(env):
+                    v = left(env)
+                    return right(env) if v is True or (v is not False and truthy(v)) else v
+                return both
+
+            def either(env):
+                v = left(env)
+                return v if v is True or (v is not False and truthy(v)) else right(env)
+            return either
+        if k == "not":
+            value = self.compile_expr(e.value)
+
+            def opposite(env):
+                v = value(env)
+                return not (v is True or (v is not False and truthy(v)))
+            return opposite
+        if k == "list":
+            items = tuple(self.compile_expr(x) for x in e.items)
+            return lambda env: [item(env) for item in items]
+        if k == "index":
+            return self.make_index(e)
+        if k == "call":
+            return self.make_call(e)
+        if k == "method":
+            return self.make_method(e)
+        if k == "neg":
+            value, negative = self.compile_expr(e.value), self.negative
+
+            def neg(env):
+                v = value(env)
+                if v.__class__ is int or v.__class__ is float:
+                    return -v
+                try:
+                    return negative(v)
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return neg
+        if k == "say":
+            value, say_text = self.compile_expr(e.value), self.say_text
+
+            def say(env):
+                try:
+                    return say_text(to_text(value(env)))
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return say
+        if k == "dict":
+            pairs = tuple((self.compile_expr(key), self.compile_expr(v)) for key, v in zip(e.keys, e.values))
+
+            def table(env):
+                try:
+                    return {dict_key(key(env)): value(env) for key, value in pairs}
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return table
+        if k == "slice":
+            return self.make_slice(e)
+        if k == "attr":
+            obj_of, member, name, quick = self.compile_expr(e.obj), self.member, e.name, self.own("member")
+
+            def attr(env):
+                try:
+                    obj = obj_of(env)
+                    if quick and obj.__class__ is Instance:  # rex.hunger (1.5.0)
+                        fields = obj.fields
+                        if name in fields:
+                            return fields[name]
+                    return member(e, obj)
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return attr
+        if k == "input":
+            prompt = None if e.prompt is None else self.compile_expr(e.prompt)
+            looks = getattr(e, "looks", None)
+            looks = None if looks is None else tuple(self.compile_expr(a) for a in looks)
+            ask = self.ask
+
+            def answer(env):
+                try:
+                    shown = "" if prompt is None else to_text(prompt(env))
+                    return ask(shown, None if looks is None else [look(env) for look in looks])
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return answer
+        if k == "held":  # the start of names[order:pop], already worked out (see part)
+            held = self.held
+            return lambda env: held[-1]
+
+        def other(env):  # sayfn, and anything new: the tree walker's own
+            try:
+                return self.eval_node(e, env)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        return other
+
+    def make_binop(self, e):
+        op, line, col = e.op, e.line, e.col
+        left, right, binop = self.compile_expr(e.left), self.compile_expr(e.right), self.binop
+        if op in QUICK and self.own("binop"):
+            make = QUICK[op]
+            kind = lambda x: x.kind == "const" and {int: "number", float: "number", str: "text"}.get(x.value.__class__)
+            right_kind, left_kind = kind(e.right), kind(e.left)  # a number or text written in the program
+            if right_kind and right_kind + "_right" in make and (e.right.value != 0 or op not in ("/", "%")):
+                return make[right_kind + "_right"](left, e.right.value, binop, line, col)
+            if left_kind and left_kind + "_left" in make:
+                return make[left_kind + "_left"](e.left.value, right, binop, line, col)
+            return make["both"](left, right, binop, line, col)
+
+        def sums(env):  # ^, or a subclass's own binop
+            a = left(env)
+            b = right(env)
+            try:
+                return binop(op, a, b)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        return sums
+
+    def make_index(self, e):
+        line, col = e.line, e.col
+        obj_of, key_of, item = self.compile_expr(e.obj), self.compile_expr(e.index), self.item
+        quick = self.own("item") and self.own("list_index")
+
+        def index(env):
+            try:
+                obj = plain(obj_of(env))
+                key = key_of(env)
+                if quick:  # (what item does for a list's or a text's position, or a dictionary's key that's there)
+                    if obj.__class__ is list or obj.__class__ is str:
+                        if key.__class__ is int and -len(obj) <= key < len(obj):
+                            return obj[key]
+                    elif obj.__class__ is dict and (key.__class__ is str or key.__class__ is int) and key in obj:
+                        return obj[key]
+                return item(obj, key, e.obj)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        return index
+
+    def make_slice(self, e):
+        line, col = e.line, e.col
+        obj_of, cut, part = self.compile_expr(e.obj), self.cut, self.part
+        if e.alt is None and self.own("part"):  # s[1:3], s[:n]: what part works out, without looking anything up
+            start = None if e.start is None else self.compile_expr(e.start)
+            end = None if e.end is None else self.compile_expr(e.end)
+            left_out = self.LEFT_OUT
+
+            def piece(env):
+                try:
+                    obj = plain(obj_of(env))
+                    first = left_out if start is None else plain(start(env))
+                    return cut(e, obj, "part", first, left_out if end is None else plain(end(env)))
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return piece
+
+        def piece(env):  # names[order:pop]: both readings (part works it out)
+            try:
+                obj = plain(obj_of(env))
+                return cut(e, obj, *part(e, env))
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        return piece
+
+    def make_call(self, e):
+        line, col = e.line, e.col
+        fn_of, args = self.compile_expr(e.fn), tuple(self.compile_expr(a) for a in e.args)
+        shadowable = e.fn.kind == "var" and e.fn.name in BUILTIN_NAMES  # len = 5, then len(x)
+        not_builtin, invoke, interp = self.not_builtin, self.invoke, self
+        quick = self.own("invoke")
+        new_env = object.__new__
+
+        def call(env):
+            try:
+                fn = fn_of(env)
+                kind = fn.__class__
+                if shadowable and kind is not Builtin and not isinstance(fn, (Builtin, Func)):
+                    not_builtin(e, fn)
+                values = [arg(env) for arg in args]
+                if quick and kind is Func:  # what invoke does, once its checks pass, without the call to it
+                    names, code = fn.params, fn.code
+                    if code is not None and len(values) == len(names) and interp.depth < MAX_DEPTH:
+                        local = new_env(Env)
+                        local.vars = {names[0]: values[0]} if len(names) == 1 else dict(zip(names, values))
+                        local.parent, local.own_names = fn.env, False
+                        interp.depth += 1
+                        try:
+                            out = code(local)
+                        except ReturnSignal as r:
+                            return r.value
+                        except TuffError as err:  # (1.5.0) its line is in the file the function is written in
+                            if err.file is None and err.line is not None:
+                                err.file = file_of(fn.env)
+                            raise
+                        except RecursionError:
+                            raise TuffError(f"{fn.name}() called itself too many times.")
+                        except MemoryError:
+                            raise TuffError(f"The program ran out of memory inside {fn.name}(). Is something growing without end?")
+                        finally:
+                            interp.depth -= 1
+                        if out.__class__ is Jump:
+                            if out.kind is J_RETURN:
+                                value, out.value = out.value, None
+                                return value
+                            interp.unjump(out)  # a break or continue outside any loop in it: on to a loop around the call
+                        return out
+                elif quick and kind is Builtin:
+                    fits = fn.fits.get(len(values))
+                    if fits is not None:
+                        return call_python(fn.name + "()", fn.fn, values, fn.takes_err, fits)
+                return invoke(fn, values)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        return call
+
+    def make_method(self, e):
+        line, col = e.line, e.col
+        obj_of = self.compile_expr(e.obj)
+        args = tuple(self.compile_expr(a.value if a.kind == "say" else a) for a in e.args)
+        method_call = self.method_call
+        quick = QUICK_METHODS.get((e.name, len(args))) if self.own("method_call") else None
+        if quick is not None:  # items:add(x), d:has(k), name:upper()...: done here for a list, a dictionary or text
+            def method(env):
+                try:
+                    try:
+                        obj = obj_of(env)
+                        values = [arg(env) for arg in args]
+                        fn = quick.get(obj.__class__)
+                        if fn is not None:
+                            return fn(obj, *values)
+                        return method_call(e, obj, values)
+                    except (OverflowError, MemoryError):
+                        raise TuffError(TOO_BIG)
+                except TuffError as err:
+                    if err.line is None:
+                        err.line, err.col = line, col
+                    raise
+            return method
+
+        def method(env):
+            try:
+                try:
+                    obj = obj_of(env)
+                    return method_call(e, obj, [arg(env) for arg in args])
+                except (OverflowError, MemoryError):  # a number or text too big for the computer, inside a method
+                    raise TuffError(TOO_BIG)
+            except TuffError as err:
+                if err.line is None:
+                    err.line, err.col = line, col
+                raise
+        return method
+
 
 # ---------------------------------------------------------------- checking without running
 
@@ -2662,7 +4438,7 @@ PY_NAMES = {
     "open": "Use file.read(\"notes.txt\") and file.write(\"notes.txt\", text). They work in your program's folder.",
     "datetime": "now(), today() and date() give the time and the date.",
     "length": "Use len(value) for how long some text or a list is.",
-    "self": "Tuff has no classes. Keep things in variables and functions.",
+    "self": "Tuff has no classes: make a kind (kind Pet:), and in its actions the object itself is my, like my.hunger.",
 }
 # Methods from other languages, and the Tuff method that does the same job.
 PY_METHODS = {
@@ -2677,6 +4453,31 @@ SIMPLE_METHODS = {"text": ("upper", "lower", "trim", "has", "split", "replace", 
                   "list": ("add", "remove", "pop", "has", "sort", "reverse", "join", "find"),
                   "dict": ("has", "get", "set", "remove", "keys", "values", "size"),
                   "line": ("rewrite", "append", "clear", "text", "play")}
+
+
+def _added(items, x):
+    items.append(x)
+    return items
+
+
+def _set(d, k, v):
+    d[dict_key(k)] = v
+    return d
+
+
+# 1.5.0: the methods the compiled runtime does itself, by (name, how many inputs): {the kind of value: what
+# method_call would do for it}. Anything else (another kind, a Line, a library's object) goes to method_call.
+QUICK_METHODS = {
+    ("add", 1): {list: _added},
+    ("has", 1): {dict: lambda d, k: dict_key(k) in d, str: lambda s, x: to_text(x) in s},
+    ("get", 1): {dict: lambda d, k: d.get(dict_key(k), None)},
+    ("get", 2): {dict: lambda d, k, default: d.get(dict_key(k), default)},
+    ("set", 2): {dict: _set},
+    ("upper", 0): {str: str.upper}, ("lower", 0): {str: str.lower}, ("trim", 0): {str: str.strip},
+    ("keys", 0): {dict: list}, ("values", 0): {dict: lambda d: list(d.values())}, ("size", 0): {dict: len},
+    ("starts", 1): {str: lambda s, x: s.startswith(to_text(x))}, ("ends", 1): {str: lambda s, x: s.endswith(to_text(x))},
+    ("find", 1): {str: lambda s, x: s.find(to_text(x))}, ("count", 1): {str: lambda s, x: s.count(to_text(x))},
+}
 ONE_INPUT = {"has", "add", "remove", "play"}
 INPUTS = {"replace": (2, 2), "set": (2, 2), "get": (1, 2), "pad_left": (1, 2), "pad_right": (1, 2), "split": (0, 1), "join": (0, 1),
           "sort": (0, 1), "starts": (1, 1), "ends": (1, 1), "find": (1, 1), "count": (1, 1)}  # 1.4.0's: (fewest, most) inputs
@@ -2740,6 +4541,9 @@ def leaves_folder(path, folder):
 
 def accepts(fn, count):
     """Can fn be called with this many inputs? (True when we can't tell.)"""
+    fits = fits_inputs(fn, count)
+    if fits is not None:
+        return fits
     try:
         inspect.signature(fn).bind(*([None] * count))
         return True
@@ -2823,6 +4627,22 @@ def tap_tables():
         except Exception:
             _TAP = {}
     return _TAP or None
+
+
+_TMUSIC = None
+
+
+def tmusic_tables():
+    """tmusic's functions ("lib"), a song's methods ("kinds") and the library itself ("module": its note reader and the
+    rest of the checks the run makes too), without making or playing a sound. None when it can't be loaded."""
+    global _TMUSIC
+    if _TMUSIC is None:
+        try:
+            import tuff_tmusic
+            _TMUSIC = {**tuff_tmusic.tables(), "module": tuff_tmusic}
+        except Exception:
+            _TMUSIC = {}
+    return _TMUSIC or None
 
 
 _ATGUI = None
@@ -3418,6 +5238,22 @@ def tdraw_pen_methods():
     return tuff_tdraw.PEN_METHODS
 
 
+_TTERM = None
+
+
+def tterm_tables():
+    """What the checker knows about a tterm screen (1.5.0): its methods and the checks it shares with the runtime.
+    None without tuff_tterm.py."""
+    global _TTERM
+    if _TTERM is None:
+        try:
+            import tuff_tterm
+            _TTERM = tuff_tterm.tables()
+        except ImportError:
+            _TTERM = False
+    return _TTERM or None
+
+
 def nodes(x):
     """Every node inside a node, or inside a list of nodes."""
     if isinstance(x, N):
@@ -3440,6 +5276,7 @@ class Scope:
         self.parent, self.name = parent, name
         self.names = set()
         self.funcs = {}
+        self.kind = None  # an action's scope: the name of its kind (my is that kind's object)
 
     def chain(self):
         s = self
@@ -3462,6 +5299,47 @@ PY_ONLY = {
     "substr": "Take a part with [ ], like t[0:4] (positions 0 to 4, both included).",
     "slice": "Take a part with [ ], like items[1:3] (positions 1 to 3, both included).",
 }
+
+# tgame's sprite-sheet animation (1.5.0): the sprite methods Checker.check_flipbook looks at.
+FLIP_METHODS = ("frames", "frame", "animation", "play")
+
+
+class OwnFile:
+    """What the checker knows about one of the program's own files (import money, 1.5.0), read but never run: the
+    names its top level makes, its functions and their inputs, and the imports it always runs first. Each file is
+    checked on its own, so its other mistakes are for its own check."""
+
+    VALUE_KINDS = ("$text", "$number", "$list", "$dict", "$bool")
+
+    def __init__(self, path):
+        self.path = path
+        self.error = None  # a mistake that stops it before it runs (it can't be read, or a syntax mistake): a TuffError
+        self.names = self.funcs = None  # None: not known
+        self.first = []  # the names it imports before anything else can happen (only imports, functions and plain values above them)
+        try:
+            program = Parser(tokenize(source_text(path))).program()
+        except TuffError as err:
+            self.error = err
+            return
+        except (OSError, UnicodeDecodeError) as exc:
+            self.error = TuffError(unreadable(path, exc, os.path.basename(path)))
+            return
+        self.checker = c = Checker(program)
+        c.collect(program, c.top)
+        c.user = c.everywhere | set(c.func_count)
+        self.names = c.top.names | set(c.funcs)
+        self.funcs = {name: params for name, params in c.funcs.items() if c.only_func(name)}  # certainly functions
+        for s in program:
+            if s.kind == "import":
+                if getattr(s, "own", False):  # (only a file, with .tuf, can import back in a circle)
+                    self.first.append(s.name)
+            elif s.kind not in ("func", "assign", "expr") or any(n.kind in ("call", "method", "input") for n in nodes(s)):
+                break
+
+    def value_kind(self, name):
+        """What its top-level value called name is ("$number"...), when that's certain and plain."""
+        kind = self.checker.var_kind(name, frozenset())
+        return kind if kind in self.VALUE_KINDS else None
 
 
 class Checker:
@@ -3502,8 +5380,13 @@ class Checker:
     TAP_MAKES = {"get": "response", "post": "response", "put": "response", "delete": "response", "data": "$dict"}
     TAP_GIVES = {"response": {"status": "$number", "ok": "$bool", "text": "$text"}}
 
-    def __init__(self, program, base_dir=None):
+    def __init__(self, program, base_dir=None, path=None, folder=None):
         self.program = program
+        # 1.5.0: the file being checked (where it is, or will be: TuffCode checks a copy of the editor's text), and the
+        # folder its imports come from, or None when that isn't known. Then its own files aren't checked.
+        self.path, self.folder = path, folder
+        self.own_files = {}  # full path -> OwnFile
+        self.own_by_name = {}  # an imported name -> its OwnFile, or None
         self.problems = []
         self.funcs = {}  # top-level functions: name -> params (made at the top, or in a top-level block)
         self.func_nodes = {}
@@ -3512,9 +5395,11 @@ class Checker:
         self.params = set()
         self.loop_vars = set()
         self.imports = set()
+        self.own_imports = set()  # the names imported with .tuf (1.5.0): import money.tuf
         self.interp = Interpreter()
         self.builtins = {**self.interp.own_names.vars, **self.interp.globals.vars}
         self.memo = {}
+        self.sums = {}  # id(binop node): its value, for sums of numbers written in the program (see number_sum)
         self.held = []  # the kinds of the starts of names[order:pop] being checked (see as_method)
         self.anims = None
         self.calls = {}  # name -> every line it's called on, like name(...)
@@ -3526,6 +5411,8 @@ class Checker:
         self.statement_call = None  # a call on a line of its own: its answer isn't used
         self.trying = 0  # inside how many try: blocks (a wrong key there may be on purpose: catch gets its message)
         self.base_dir = base_dir
+        self.flip_names = None  # the animations the program's sprites make (run() fills it in: animation_names)
+        self.kinds = {}  # the program's kinds (1.5.0): name -> its kind node, with its fields and actions
 
     # ---- what the program makes, and where
     def collect(self, body, scope, top_level=True):
@@ -3572,6 +5459,21 @@ class Checker:
                 scope.names.add(s.name)
                 self.everywhere.add(s.name)
                 self.imports.add(s.name)
+                if getattr(s, "own", False):
+                    self.own_imports.add(s.name)
+            elif k == "kind":  # kind Pet: (1.5.0): its name is the program's, and each action is like a function with my
+                scope.names.add(s.name)
+                self.everywhere.add(s.name)
+                self.kinds[s.name] = s
+                for f in s.actions:
+                    inner = Scope(scope, f.name)
+                    inner.names.update(f.params)
+                    inner.names.add("my")
+                    inner.kind = s.name
+                    self.scope_of[id(f)] = inner
+                    self.everywhere.update(f.params)
+                    self.params.update(f.params)
+                    self.collect(f.body, inner, False)
 
     def run(self):
         self.collect(self.program, self.top)
@@ -3579,6 +5481,7 @@ class Checker:
         kinds = [self.kind(n) for n in nodes(self.program) if n.kind == "call" and n.fn.kind == "attr"]
         self.makes_window = "window" in kinds
         self.makes_game = "game" in kinds or "world" in kinds  # tgame: atgui widgets on its panels and screens
+        self.flip_names = self.animation_names()  # the animations sprite:play can play (None: can't know them all)
         self.body(self.program, self.top, in_loop=False)
         self.check_top_level()
         self.check_one_terrain()
@@ -3593,11 +5496,94 @@ class Checker:
         self.problems.append((node.line, node.col, msg))
 
     def what(self, kind):
+        if kind.startswith("%"):  # an object made from a kind (1.5.0), and the kind itself
+            return an(kind[1:])
+        if kind.startswith("$kind:"):
+            return f"the kind {kind[6:]}"
+        if kind.startswith("$module:"):
+            return "a library"
+        if kind == "ttscreen":
+            return "a tterm screen"
         return "a function" if kind.startswith("$libfn:") else self.TYPE.get(kind) or a_kind(kind.lstrip("@"))
 
     def only_func(self, name):
         """True when name is one top-level function and never anything else."""
         return self.func_count.get(name) == 1 and name not in self.assigned and name not in self.params and name not in self.loop_vars
+
+    # ---- kinds (1.5.0)
+    def only_kind(self, name):
+        """True when name is one of the program's kinds and never anything else, so name(...) makes that kind's object."""
+        return name in self.kinds and name not in self.assigned and name not in self.params and name not in self.loop_vars \
+            and name not in self.func_count
+
+    def fields_of(self, kind):
+        return [f.target.name for f in self.kinds[kind].fields]
+
+    def actions_of(self, kind):
+        """{action's name: its inputs}"""
+        return {f.action: f.params for f in self.kinds[kind].actions}
+
+    def has_own_files(self):
+        """Does the program import files of its own? (Their kinds can have any fields and actions.)"""
+        return bool(self.own_imports) or any(name not in LIBRARIES and name != "file" for name in self.imports)
+
+    def is_field(self, name):
+        """Could thing.name be an object's field? (One of the program's kinds has it, or it can't be told.)"""
+        return self.has_own_files() or any(name in self.fields_of(k) for k in self.kinds)
+
+    def brackets_tip(self, obj, target, index, then):
+        """The tip after "Can't use [ ] on a Pet." (as Interpreter.item and store give it), or "" for a kind itself."""
+        if not obj.startswith("%"):
+            return ""
+        key = index.value if index.kind == "const" else None
+        return f" {object_brackets(obj[1:], self.fields_of(obj[1:]), where_text(target), key, then)}" + ("" if then else ".")
+
+    def object_side(self, a, b):
+        """Is one side of a sum certainly an object (or a kind), and the other certainly a value the run can name the
+        same way (a number, text, a list...)?"""
+        sure = lambda x: x in ("$number", "$text", "$list", "$dict", "$bool", "$nil") or (x or "").startswith(("%", "$kind:"))
+        return any((x or "").startswith(("%", "$kind:")) for x in (a, b)) and sure(a) and sure(b)
+
+    def field_hint(self, name):
+        """' Did you mean 'hunger'?' with the closest field any of the program's kinds has, or ''."""
+        hint = difflib.get_close_matches(name, sorted({f for k in self.kinds for f in self.fields_of(k)}), n=1, cutoff=0.6)
+        return f" Did you mean '{hint[0]}'?" if hint else ""
+
+    def check_kind_attr(self, e, obj, store=None):
+        """rex.hunger where rex is certainly a Pet ("%Pet"), or Pet.name on the kind itself ("$kind:Pet"). store: the
+        line, when e is what it stores into (rex.hunger = 3)."""
+        if obj.startswith("$kind:"):
+            self.problem(store or e, kind_not_object(obj[6:], f".{e.name}" + (" = ..." if store else "")))
+            return
+        kind = obj[1:]
+        fields = self.fields_of(kind)
+        if e.name not in fields:
+            self.problem(store or e, field_help(kind, fields, self.actions_of(kind), e.name, where_text(e.obj)))
+
+    def check_field_store(self, s):
+        """rex.hunger = 3: rex is an object that has that field. Text, lists, dictionaries, libraries and the rest have
+        no fields to set (as set_field says)."""
+        t = s.target
+        obj = self.kind(t.obj)
+        if obj is None:
+            return
+        if obj.startswith(("%", "$kind:")):
+            self.check_kind_attr(t, obj, store=s)
+        elif obj in self.TYPE or obj.startswith(("$module:", "$libfn:")):
+            tip = f" A dictionary's values are set with [ ], like {where_text(t.obj) or 'd'}[\"{t.name}\"] = ..." if obj == "$dict" else ""
+            self.problem(s, f"Only objects made from a kind have fields to set with '.', and this is {self.what(obj)}.{tip}")
+
+    def check_action(self, e, obj):
+        """rex:feed() where rex is certainly a Pet: an action Pet has, with as many inputs as it takes."""
+        if obj.startswith("$kind:"):
+            self.problem(e, kind_not_object(obj[6:], f":{e.name}()"))
+            return
+        kind = obj[1:]
+        actions = self.actions_of(kind)
+        if e.name not in actions:
+            self.problem(e, action_help(kind, self.fields_of(kind), actions, e.name, where_text(e.obj)))
+        elif len(e.args) != len(actions[e.name]):
+            self.problem(e, action_inputs_help(where_text(e.obj) or kind, e.name, len(actions[e.name]), len(e.args), e.bare))
 
     def returns_function(self, name):
         """Does this function give back another function? (Then calling it in a handler spot is fine.)"""
@@ -3620,11 +5606,15 @@ class Checker:
             return None
         if name in OWN_NAME_BUILTINS and name in self.everywhere and name not in self.top.names:
             return None  # only functions make their own variables with this name; everywhere else it's the built-in
+        if name == "my" and self.kinds:
+            return None  # in an action, my is its object (kind reads the node's of_kind); elsewhere, can't be sure
         kinds = set()
-        if name in self.imports:
+        if name in self.imports and not (name in self.own_imports and self.own_file(name) is None):  # (a file that can't be read isn't the library)
             kinds.add("$module:" + name)
         if name in self.func_count:
             kinds.add("$func")
+        if name in self.kinds:
+            kinds.add("$kind:" + name)
         if name in self.params or name in self.loop_vars:
             kinds.add(None)
         for s in self.assigned.get(name, []):
@@ -3654,6 +5644,8 @@ class Checker:
             return "$list"
         if k == "dict":
             return "$dict"
+        if k == "fstr":
+            return "$text"
         if k == "held":  # the start of names[order:pop] (see Parser.index)
             return self.held[-1] if self.held else self.kind(e.of, seen)
         if k == "slice":  # a part of text is text, a part of a list a list
@@ -3667,8 +5659,12 @@ class Checker:
             return "$builtin"
         if k == "input":
             return "$text"
+        if k == "var" and getattr(e, "of_kind", None):  # an action's my: its kind's object (1.5.0)
+            return "%" + e.of_kind
         if k == "var":
             return self.var_kind(e.name, seen)
+        if k == "call" and e.fn.kind == "var" and self.only_kind(e.fn.name):  # Pet("Rex"): a Pet
+            return "%" + e.fn.name
         if k == "not" or (k == "binop" and e.op in self.COMPARE):
             return "$bool"
         if k == "neg":
@@ -3684,6 +5680,9 @@ class Checker:
             return "$number" if self.kind(e.left, seen) == self.kind(e.right, seen) == "$number" else None
         if k == "attr":
             lib = self.kind(e.obj, seen)
+            own = self.own_file(lib[8:]) if lib and lib.startswith("$module:") else None
+            if own is not None and own.names is not None and e.name not in own.funcs:  # money.rate: a value in money.tuf
+                return own.value_kind(e.name) if e.name in own.names else None
             return f"$libfn:{lib[8:]}.{e.name}" if lib and lib.startswith("$module:") else None
         if k == "call" and e.fn.kind == "var" and e.fn.name not in self.user:
             name = e.fn.name
@@ -3694,12 +5693,16 @@ class Checker:
                 return "window"
             if lib == "$module:tap":
                 return self.TAP_MAKES.get(e.fn.name)
+            if lib == "$module:tmusic":
+                return "song" if e.fn.name == "song" else None
             if lib == "$module:atgui":
                 return "@window" if e.fn.name == "window" else None
             if lib == "$module:tgame":
                 return {"window": "game", "world": "world"}.get(e.fn.name)
             if lib == "$module:tdraw":
                 return "tdpen" if e.fn.name == "pen" else None
+            if lib == "$module:tterm":
+                return "ttscreen" if e.fn.name == "screen" else None
             return None
         if k == "method":
             if self.is_print(e.obj):  # say:ascii(...) and say:color(...) say a line, like say does
@@ -3709,6 +5712,10 @@ class Checker:
                 return self.atgui_kind(obj[1:], e)
             if obj in self.TAP_GIVES:
                 return self.TAP_GIVES[obj].get(e.name)
+            if obj == "ttscreen":
+                return (tterm_tables() or {}).get("gives", {}).get(e.name)
+            if obj == "song":  # tmusic's (1.5.0): song:track gives the song back
+                return {"track": "song", "length": "$number"}.get(e.name)
             if self.is_tgame(obj):
                 tg = tgame_tables()
                 return tg["gives"].get(obj, {}).get(e.name) if tg else None
@@ -3750,11 +5757,13 @@ class Checker:
         k = s.kind
         if k == "func":
             self.body(s.body, self.scope_of[id(s)], False, True)
+        elif k == "kind":  # its fields' starting values (worked out at the top, for each new object) and its actions
+            for f in s.fields:
+                self.expr(f.value, self.top)
+            for f in s.actions:
+                self.body(f.body, self.scope_of[id(f)], False, True)
         elif k == "import":
-            if s.name not in LIBRARIES and s.name != "file":
-                hint = difflib.get_close_matches(s.name, LIBRARIES, n=1, cutoff=0.5)
-                extra = f" Did you mean '{hint[0]}'?" if hint else f" Available libraries: {', '.join(LIBRARIES)}."
-                self.problem(s, f"There's no library called '{s.name}'.{extra}")
+            self.check_import(s)
         elif k == "assign":
             target = s.target.name if s.target.kind == "var" else None
             if s.op != "=" and target:
@@ -3769,9 +5778,17 @@ class Checker:
                 self.check_store(s, s.target.obj, s.target.index)
             elif s.target.kind == "slice":  # board[moves:pop] = "X": like the read form, then stored into
                 self.check_slice(s.target, scope, store=s)
+            elif s.target.kind == "attr":  # rex.hunger = 3, my.hunger -= 1 (1.5.0)
+                self.expr(s.target.obj, scope)
+                self.check_field_store(s)
             if s.op == "=" and target in self.func_count and target not in self.params and target not in self.loop_vars \
                     and self.kind(s.value) not in ("$func", "$builtin"):
                 self.problem(s, f"{target} is a function, and giving it a value replaces it, so {target}() won't work afterwards. Use another name for the value.")
+            elif s.op == "=" and target in self.kinds and target not in self.params and target not in self.loop_vars \
+                    and s.line > self.kinds[target].line and not (self.kind(s.value) or "").startswith("$kind:") \
+                    and any(x.kind == "call" and x.fn.kind == "var" and x.fn.name == target and x.line > s.line for x in nodes(self.program)):
+                self.problem(s, f"{target} is a kind, and giving it a value replaces it, so {target}(...) won't make new objects "
+                                "afterwards. Use another name for the value.")
             self.expr(s.value, scope)
         elif k == "expr":
             self.statement_call = s.expr
@@ -3798,6 +5815,8 @@ class Checker:
             self.expr(s.items, scope)
             if self.kind(s.items) == "$number":
                 self.problem(s, f"Can't loop over a number. Try: for {s.name} in range(...):")
+            elif (self.kind(s.items) or "").startswith(("%", "$kind:")):  # for x in rex: (1.5.0)
+                self.problem(s, f"Can't loop over {self.what(self.kind(s.items))}.")
             self.check_range_len(s)
             self.body(s.body, scope, True, in_func)
         elif k == "return":
@@ -3864,6 +5883,11 @@ class Checker:
         elif k == "attr":
             self.expr(e.obj, scope)
             self.check_attr(e)
+        elif k == "fstr":  # f"{name} has {score} points": the code in each { }, and its format (1.5.0)
+            for part in e.parts:
+                if not isinstance(part, str):
+                    self.expr(part.value, scope)
+                    self.check_format(part)
         elif k == "method":
             self.expr(e.obj, scope)
             pos = self.HANDLER_POS.get(e.name)
@@ -3878,13 +5902,21 @@ class Checker:
         name = e.name
         if name in self.builtins or any(name in s.names for s in scope.chain()):
             return
+        kind = next((s.kind for s in scope.chain() if s.kind), None)  # inside an action: hunger for my.hunger (1.5.0)
+        msg = own_field_help(name, kind, self.fields_of(kind) if kind else ())
+        if msg:
+            self.problem(e, msg)
+            return
         if name in self.everywhere:
             owners = sorted({f"{n}()" for n, sc in self.scope_names() if name in sc})
             where = owners[0] if len(owners) == 1 else "other functions"
             self.problem(e, f"'{name}' is only set inside {where}, so it only exists there. Give it a value at the top of the program (like {name} = 0) so this line can use it.")
             return
+        home = self.own_home(name)
         if name in LIBRARIES:
             msg = f"'{name}' is a library. Add  import {name}  at the top of your file to use it."
+        elif home:
+            msg = own_file_help(name, *home)
         elif name in PY_NAMES:
             msg = f"I don't know what '{name}' is. {PY_NAMES[name]}"
         else:
@@ -3901,6 +5933,81 @@ class Checker:
                 seen.add(id(sc))
                 yield sc.name, sc.names
 
+    # ---- the program's own files (1.5.0): import money
+    def own_file(self, name):
+        """The OwnFile for name when it's one of the program's own files this file can import, else None (a library,
+        no such file, or a folder that isn't known)."""
+        if (name in LIBRARIES and name not in self.own_imports) or name == "file" or not self.folder:
+            return None
+        if name not in self.own_by_name:  # (kind() asks often: the folder is read once for each name)
+            path = module_file(self.folder, name)
+            self.own_by_name[name] = self.read_own(path) if path else None
+        return self.own_by_name[name]
+
+    def read_own(self, path):
+        path = os.path.abspath(path)
+        if path not in self.own_files:
+            self.own_files[path] = OwnFile(path)
+        return self.own_files[path]
+
+    def own_name(self, path):
+        """A file's name as messages show it: from this file's folder, like libs/money.tuf."""
+        rel = os.path.relpath(path, self.folder) if self.folder else os.path.basename(path)
+        return os.path.basename(path) if rel.startswith("..") else rel.replace(os.sep, "/")
+
+    def own_home(self, name):
+        """(what it's imported as, the file as shown) for one of the files this file imports that makes name, or None."""
+        for owner in sorted(self.own_imports):
+            own = self.own_file(owner)
+            if own is not None and own.names and name in own.names:
+                return owner, self.own_name(own.path)
+        return None
+
+    def check_import(self, s):
+        """import money: there's a money.tuf to load (next to this file or in libs), it reads, and it doesn't come back
+        here in a circle. A library's name always loads the library, even with a file of that name here."""
+        name, me = s.name, os.path.normcase(os.path.abspath(self.path)) if self.path else None
+        if self.trying:  # try: import extras, catch: ...: a file that may not be there, on purpose
+            return
+        if not getattr(s, "own", False):  # without .tuf, only a library: import tmusic is Tuff's, even with a tmusic.tuf here
+            if name not in LIBRARIES and name != "file":
+                self.problem(s, library_problem(name, self.folder, os.path.basename(self.path) if self.path else "this file"))
+            return
+        who = os.path.basename(self.path) if self.path else "this file"
+        problem = import_problem(name, self.folder, who, (os.path.basename(self.path or "")[:-4],))
+        if problem or not self.folder:  # (with the folder unknown, only a built-in's name is certain)
+            if problem and (self.folder or name in BUILTIN_NAMES or name in OWN_NAME_BUILTINS or name in ("err", "pi", "all")):
+                self.problem(s, problem)
+            return
+        own = self.own_file(name)
+        if own.error is not None:
+            where = f" on line {own.error.line}" if own.error.line else ""
+            self.problem(s, f"{self.own_name(own.path)} has a mistake{where}, so {s.word} {name}.tuf stops the program there: {own.error.msg}")
+            return
+        chain = self.circle(name, [(me, who)], self.folder)
+        if chain:
+            self.problem(s, circle_problem(chain))
+
+    def circle(self, name, trail, folder):
+        """Importing name from folder, with trail the files on the way here ((key, shown) each, this file first): the
+        files of a circle of imports it starts, from the first file in it back to that file, or None. Only the imports
+        each file always runs first count (see OwnFile.first)."""
+        if name == "file" or len(trail) > 30:
+            return None
+        path = module_file(folder, name)
+        if not path:
+            return None
+        key, shown = os.path.normcase(os.path.abspath(path)), self.own_name(path)
+        for i, (k, _) in enumerate(trail):
+            if k == key:
+                return [s for _, s in trail[i:]] + [shown]
+        own = self.read_own(path)
+        for more in own.first:
+            chain = self.circle(more, trail + [(key, shown)], os.path.dirname(os.path.abspath(path)))
+            if chain:
+                return chain
+        return None
+
     def lib_members(self, lib):
         if lib == "anims":
             if self.anims is None:
@@ -3915,9 +6022,19 @@ class Checker:
                 except TuffError:
                     return None
             return self.tdraw
+        if lib == "tterm":
+            if getattr(self, "tterm", None) is None:
+                try:
+                    self.tterm = {n: b.fn for n, b in self.interp.lib_tterm().items()}
+                except TuffError:
+                    return None
+            return self.tterm
         if lib == "tap":
             tap = tap_tables()
             return tap["lib"] if tap else None
+        if lib == "tmusic":
+            tm = tmusic_tables()
+            return tm["lib"] if tm else None
         if lib == "atgui":
             at = atgui_tables()
             return at["lib"] if at else None
@@ -4030,6 +6147,9 @@ class Checker:
                 if s.name in made:
                     self.problem(s, f"There are two functions called {s.name}. This one replaces the one on line {made[s.name]}. Give them different names.")
                 made[s.name] = s.line
+                if s.name in self.kinds:  # (1.5.0)
+                    self.problem(s, f"There's a kind called {s.name} on line {self.kinds[s.name].line}, and a function with the same "
+                                    "name replaces it (or it replaces the function). Give them different names.")
 
     def loop_items(self, e, seen=frozenset()):
         """What a for loop over e gives its variable: the kinds of the items (None when that can't be told), and
@@ -4148,17 +6268,66 @@ class Checker:
             self.problem(e, "Can't multiply a list. Write the items out, like [0, 0, 0], or add them with :add in a loop.")
         elif op == "*" and a == b == "$text":
             self.problem(e, f"Can't multiply text and text.{tip}")
+        elif (op in self.MATHS or op in self.ORDER) and self.object_side(a, b) and not (op == "+" and "$text" in (a, b)):
+            # rex + 1, rex < other (1.5.0): an object is never a number (only + with text works: it joins them)
+            if op in self.ORDER:
+                self.problem(e, f"Can't compare {self.what(a)} with {self.what(b)} using {op}.")
+            else:
+                verb = {"+": "add", "-": "subtract", "*": "multiply", "/": "divide", "%": "use % on", "^": "use ^ on"}[op]
+                self.problem(e, f"Can't {verb} {self.what(a)} and {self.what(b)}.")
         elif op == "+" and a == "$list" and b == "$text":
             self.problem(e, "This turns the list into text. To add one item, use :add, or join two lists: items + [\"jam\"].")
         elif op == "+" and b == "$number" and e.left.kind == "binop" and e.left.op == "+" and self.kind(e.left) == "$text" \
                 and self.kind(e.left.right) == "$number" and not (e.left.right.kind == "const" and e.right.kind == "const"):
-            self.problem(e, "+ works left to right, and the text before has already turned the numbers into text, so they're stuck together (\"Total: \" + 10 + 2 gives \"Total: 102\"). Put the sum in brackets: \"Total: \" + (a + b)")
+            self.problem(e, "+ works left to right, and the text before has already turned the numbers into text, so they're stuck together (\"Total: \" + 10 + 2 gives \"Total: 102\"). Put the sum in brackets: \"Total: \" + (a + b), or use a text template: f\"Total: {a + b}\"")
         elif op == "+" and {a, b} == {"$text", "$number"} and typed is not None and self.describe(typed):
             self.problem(e, f"{self.describe(typed)} is typed text, so + sticks them together (\"5\" + 1 gives \"51\"). Use number({self.describe(typed)}) to add.")
         if op == "*" and "$text" in (a, b):
             n = e.right if a == "$text" else e.left
             if self.is_decimal(n):
                 self.problem(n, "This is a decimal (it comes from /), even if it looks whole, so it can't repeat text. Use floor(...) around the division.")
+        if op in self.MATHS and not self.trying:
+            self.check_too_big(e)
+
+    def check_too_big(self, e):
+        """10 ^ 400 / 3: a sum of numbers written in the program whose answer is too big for a decimal (1.5.0). Only
+        the part that goes too big is reported (in try:, it may be on purpose)."""
+        try:
+            if self.number_sum(e.left) is None or self.number_sum(e.right) is None:
+                return
+        except TuffError:
+            return  # (a part of it is reported already)
+        try:
+            self.number_sum(e)
+        except TuffError as err:
+            if err.msg == TOO_BIG_NUMBER:
+                self.problem(e, err.msg)
+
+    def number_sum(self, e):
+        """The value of a sum made only of numbers written in the program, like 2 ^ 10 * 1.5, worked out as the
+        program would; None when it isn't one, or it's a whole number too long to work out quickly here. Raises the
+        program's TuffError when it can't be worked out."""
+        k = e.kind
+        if k == "const":
+            return e.value if e.value.__class__ in (int, float) else None
+        if k == "neg":
+            v = self.number_sum(e.value)
+            return None if v is None else -v
+        if k != "binop" or e.op not in self.MATHS:
+            return None
+        if id(e) in self.sums:
+            return self.sums[id(e)]
+        a = self.number_sum(e.left)
+        b = None if a is None else self.number_sum(e.right)
+        if b is None:
+            return None
+        if a.__class__ is int and b.__class__ is int and abs(a) > 1 and (
+                (e.op == "^" and b * a.bit_length() > 1_000_000) or (e.op == "*" and a.bit_length() + b.bit_length() > 1_000_000)):
+            value = None  # a whole number with hundreds of thousands of digits: fine, but slow to work out here
+        else:
+            value = self.interp.binop(e.op, a, b)
+        self.sums[id(e)] = value
+        return value
 
     def as_method(self, e):
         """For x[a:b] with a glued ':' (Parser.index): True when it's 1.3.6's method call (a is a list, text or a
@@ -4226,18 +6395,20 @@ class Checker:
             self.problem(s, "You can only set items in a list, not in text. Build new text with + instead.")
         elif obj == "$dict":
             self.check_key(index)
+        elif (obj or "").startswith(("%", "$kind:")):  # rex["name"] = "Rex" (1.5.0)
+            self.problem(s, f"You can only set items in a list, not in {self.what(obj)}.{self.brackets_tip(obj, target, index, ' = ...')}")
 
     def check_key(self, key):
         """A dictionary's key is text or a number (dict_key), in { }, d[key] and d:get, :set, :has and :remove."""
         kk = self.kind(key)
-        if kk in ("$list", "$dict", "$bool", "$nil") and not self.trying:
-            self.problem(key, f"A dictionary's keys can be text or numbers, not {self.TYPE[kk]}.")
+        if (kk in ("$list", "$dict", "$bool", "$nil") or (kk or "").startswith(("%", "$kind:"))) and not self.trying:
+            self.problem(key, f"A dictionary's keys can be text or numbers, not {self.what(kk)}.")
 
     def check_part(self, e):
         """s[a:b]: the positions are whole numbers, and only text and lists have parts."""
         obj = self.kind(e.obj)
-        if obj in ("$dict", "$number", "$bool", "$nil", "$func", "$builtin") or (obj or "").startswith("$module:"):
-            self.problem(e, f"Only text and lists have parts like [1:3], not {self.TYPE.get(obj, 'a library')}.")
+        if obj in ("$dict", "$number", "$bool", "$nil", "$func", "$builtin") or (obj or "").startswith(("$module:", "%", "$kind:")):
+            self.problem(e, f"Only text and lists have parts like [1:3], not {self.what(obj)}.")
             return
         for end in (e.start, e.end):
             if end is None:
@@ -4254,6 +6425,10 @@ class Checker:
         """x[i], or 1.3.6's names[order:pop], where the method call gives i (index)."""
         index = e.index if index is None else index
         idx = self.kind(index)
+        obj = self.kind(e.obj)
+        if (obj or "").startswith(("%", "$kind:")):  # rex["name"]: an object's fields use a dot (1.5.0)
+            self.problem(e, f"Can't use [ ] on {self.what(obj)}.{self.brackets_tip(obj, e.obj, index, '')}")
+            return
         if idx == "$text" and self.kind(e.obj) in ("$list", "$text"):  # (a dictionary's keys are often text)
             who = self.describe(index)
             self.problem(e, "List positions must be whole numbers, not text." + (f" Use number({who})." if who and self.typed(index) else ""))
@@ -4273,10 +6448,15 @@ class Checker:
         gui = gui_tables()
         if gui is None:
             return True
-        if name in (tdraw_pen_methods() or ()):
+        if self.has_own_files() or any(name in self.actions_of(k) for k in self.kinds):  # an object's action (1.5.0)
+            return True
+        if name in (tdraw_pen_methods() or ()) or name in (tterm_tables() or {}).get("methods", ()):
             return True
         at = atgui_tables()
         if at is not None and any(name in m for m in at["kinds"].values()):
+            return True
+        tm = tmusic_tables()
+        if tm is None or any(name in m for m in tm["kinds"].values()):
             return True
         tap = tap_tables()
         tg = tgame_tables()
@@ -4298,11 +6478,115 @@ class Checker:
                     self.problem(a, err.msg)
                     return
 
+    # ---- tmusic (1.5.0): notes, instruments, speeds and volumes written in the code, checked the way the run checks them
+    def check_tmusic(self, e):
+        """tmusic.play(notes, instrument, speed) and tmusic.song(speed). (Not in a try: block, whose catch may be there
+        for that mistake, like a program that shows what tmusic says about a bad note.)"""
+        tm = tmusic_tables()
+        if tm is None or self.trying:
+            return
+        args = e.args
+        if e.fn.name == "song":
+            self.check_music_number(args[0] if args else None, "tmusic.song", "speed")
+            return
+        if e.fn.name != "play" or not args or self.kind(args[0]) == "song":  # tmusic.play(song) plays the song
+            return
+        notes, instrument = self.fixed_text(args[0]), self.fixed_text(args[1]) if len(args) > 1 else "piano"
+        lib = tm["module"]
+        if lib.is_instrument(notes) and len(args) > 1 and instrument is not None and not lib.is_instrument(instrument):
+            self.problem(e, 'tmusic.play takes the notes first, then the instrument, like tmusic.play("C4 E4 G4", "piano").')
+            return
+        self.check_notes(args[0], args[1] if len(args) > 1 else None, "tmusic.play")
+        if len(args) > 2:
+            self.check_music_number(args[2], "tmusic.play", "speed")
+
+    def check_song(self, e, bare_fix):
+        """A song's methods (tmusic.song), how many inputs they got, and what's written in them."""
+        tm = tmusic_tables()
+        methods = tm["kinds"]["song"] if tm else None
+        if methods is None:
+            return
+        name, n, args = e.name, len(e.args), e.args
+        if name not in methods:
+            self.problem(e, method_help("A song", name, list(methods)))
+        elif not accepts(methods[name], n):
+            self.problem(e, bare_fix if e.bare and accepts(methods[name], 0) else f"song:{name} got the wrong number of inputs ({n}).")
+        elif self.trying:  # (what's written in it: see check_tmusic)
+            return
+        elif name == "track":
+            lib = tm["module"]
+            first, second = self.fixed_text(args[0]), self.fixed_text(args[1])
+            if lib.is_instrument(second) and first is not None and not lib.is_instrument(first):
+                self.problem(e, 'song:track takes the instrument first, then the notes, like song:track("piano", "C4 E4 G4").')
+                return
+            self.check_notes(args[1], args[0], "song:track")
+            if n > 2:
+                self.check_music_number(args[2], "song:track", "volume")
+        elif name == "save":
+            path = self.fixed_text(args[0])
+            if path is not None and tm["module"].save_problem(path):
+                self.problem(args[0], tm["module"].save_problem(path))
+            elif path is None and self.kind(args[0]) in ("$number", "$list", "$dict", "$bool", "$nil"):
+                self.problem(args[0], 'song:save needs a file name, like song:save("theme.wav").')
+
+    def check_notes(self, notes_arg, instrument_arg, who):
+        """Notes in quotes (or in a name given them once) for an instrument the checker knows (piano when it's left out):
+        the mistake the run would stop at, shown on the note itself when it can tell where that is in the line."""
+        lib = tmusic_tables()["module"]
+        instrument = "piano" if instrument_arg is None else self.fixed_text(instrument_arg)
+        if instrument is None:
+            if self.kind(instrument_arg) in ("$number", "$list", "$dict", "$bool", "$nil"):
+                self.problem(instrument_arg, lib.not_an_instrument(who, self.what(self.kind(instrument_arg))))
+            return  # (a name the checker can't know: it could be the drums)
+        try:
+            instrument = lib.find_instrument(instrument)
+        except lib.MusicError as err:
+            self.problem(instrument_arg, err.msg)
+            return
+        text = self.fixed_text(notes_arg)
+        if text is None:
+            if self.kind(notes_arg) in ("$number", "$list", "$dict", "$bool", "$nil"):
+                self.problem(notes_arg, lib.not_notes(who, self.what(self.kind(notes_arg))))
+            return
+        try:
+            lib.read_notes(text, instrument == "drums", who)
+        except lib.MusicError as err:
+            where = notes_arg
+            # written right here, with nothing a \ makes in it (a \n or a \" would move the note): the note's own column
+            if notes_arg.kind == "const" and err.at is not None and not any(c in text for c in "\n\t\\\"'"):
+                where = Tok("STR", text, notes_arg.line, notes_arg.col + 1 + err.at)
+            self.problem(where, err.msg)
+
+    def check_music_number(self, arg, who, what):
+        """A speed (beats a minute) or a volume (0 to 100) written in the code that can't be right."""
+        if arg is None:
+            return
+        lib = tmusic_tables()["module"]
+        if arg.kind == "const" and isinstance(arg.value, (int, float)) and not isinstance(arg.value, bool):
+            problem = lib.speed_problem(arg.value, who) if what == "speed" else lib.volume_problem(arg.value)
+            if problem:
+                self.problem(arg, problem)
+        elif self.kind(arg) in ("$text", "$list", "$dict", "$bool", "$nil"):
+            self.problem(arg, lib.not_a_number(who, what, self.what(self.kind(arg))))
+
+    def plays_and_waits(self, x):
+        """tmusic.play(...) or song:play(): they wait until the music ends."""
+        if x.kind == "call" and x.fn.kind == "attr" and x.fn.name == "play" and self.kind(x.fn.obj) == "$module:tmusic":
+            return "tmusic.play"
+        if x.kind == "method" and x.name == "play" and self.kind(x.obj) == "song":
+            return f"{x.obj.name if x.obj.kind == 'var' else 'song'}:play"
+        return None
+
     def check_call(self, e, scope):
         fn, n = e.fn, len(e.args)
         if fn.kind == "var":
             name = fn.name
             local = any(name in s.names for s in scope.chain() if s is not self.top)
+            if name in self.kinds:  # Pet("Rex"): at most one input for each field (1.5.0)
+                fields = self.fields_of(name)
+                if self.only_kind(name) and not local and n > len(fields):
+                    self.problem(e, kind_inputs_help(name, fields, n))
+                return
             if self.only_func(name) and not local:
                 want = len(self.funcs[name])
                 if n != want:
@@ -4323,18 +6607,53 @@ class Checker:
                             break
                 elif name in ("number", "num", "int") and n == 1:
                     self.check_number_input(e.args[0], name)
+                elif name == "len" and n == 1 and (self.kind(e.args[0]) or "").startswith(("%", "$kind:")):  # len(rex)
+                    self.problem(e, f"len() needs text, a list or a dictionary, not {self.what(self.kind(e.args[0]))}.")
             elif name not in self.builtins and not local:
                 kind = self.var_kind(name, frozenset())
-                if kind and not kind.startswith(("$module:", "$libfn:")) and kind not in ("$func", "$builtin"):
+                if kind and not kind.startswith(("$module:", "$libfn:", "$kind:")) and kind not in ("$func", "$builtin"):
                     self.problem(e, f"'{name}' is {self.what(kind)}, not a function, so it can't be called with ( ).")
         elif fn.kind == "attr":
             lib = self.kind(fn.obj)
-            if lib and lib.startswith("$module:"):
+            own = self.own_file(lib[8:]) if lib and lib.startswith("$module:") else None
+            if own is not None:  # money.as_money(6.375) (1.5.0): one of the program's own files
+                params = (own.funcs or {}).get(fn.name)
+                value = own.names is not None and fn.name in own.names and params is None and own.value_kind(fn.name)
+                if params is not None and len(params) != n:
+                    want = len(params)
+                    self.problem(e, f"{lib[8:]}.{fn.name}() needs {want} input{'s' if want != 1 else ''}, but got {n}.")
+                elif value:
+                    self.problem(e, f"{lib[8:]}.{fn.name} is {self.what(value)} in {self.own_name(own.path)}, not a function, so it "
+                                    f"can't be called with ( ). Use it without brackets: {lib[8:]}.{fn.name}")
+            elif lib and lib.startswith("$module:"):
                 members = self.lib_members(lib[8:]) or {}
                 if fn.name in members and not accepts(members[fn.name], n):
                     self.problem(e, f"{lib[8:]}.{fn.name}() got the wrong number of inputs ({n}).")
                 elif lib == "$module:anims" and fn.name in members:
                     self.check_anims_looks(e)
+                elif lib == "$module:tterm" and fn.name == "screen":
+                    t = tterm_tables()
+                    for arg, what in zip(e.args, ("width", "height")):
+                        msg = t and arg.kind in ("const", "neg") and t["size_problem"](self.number_of(arg), what, t["most"][what])
+                        if msg:
+                            self.problem(arg, msg)
+                elif lib == "$module:tmusic" and fn.name in members:
+                    self.check_tmusic(e)
+
+    def check_format(self, part):
+        """f"{name:0.00}": a number's format (0.00, 000 or money) on something that is never a number. (A width
+        pads anything.)"""
+        if part.fmt is None or TEMPLATE_FORMAT.fullmatch(part.fmt).group(4):
+            return
+        kind = self.kind(part.value)
+        if kind not in ("$text", "$list", "$dict", "$bool", "$nil", "$line", "$func", "$builtin"):
+            return
+        name = node_text(part.value)
+        what = f"{name} is" if name and part.value.kind != "const" else "this is"
+        tip = ""
+        if kind == "$text" and self.typed(part.value):
+            tip = f" input gives text, so turn it into a number first: {{num({name or 'answer'}):{part.fmt}}}."
+        self.problem(part, f"The format {part.fmt} only works on numbers, but {what} {self.what(kind)}.{tip}")
 
     def check_number_input(self, a, name):
         """number(), num() and int() give err for text that isn't a number, but anything else that isn't text or a
@@ -4390,10 +6709,25 @@ class Checker:
 
     def check_attr(self, e):
         obj = self.kind(e.obj)
+        own = self.own_file(obj[8:]) if obj and obj.startswith("$module:") else None
+        if own is not None:  # money.as_mony (1.5.0): the names money.tuf makes at its top level
+            if own.names is not None and e.name not in own.names:
+                shown, names = self.own_name(own.path), sorted(own.names)
+                hint = difflib.get_close_matches(e.name, names, n=1, cutoff=0.6)
+                if hint:
+                    self.problem(e, f"{shown} doesn't have '{e.name}'. Did you mean '{hint[0]}'?")
+                elif names:
+                    self.problem(e, f"{shown} doesn't have '{e.name}'. It has: {', '.join(names)}.")
+                else:
+                    self.problem(e, f"{shown} doesn't have '{e.name}': it doesn't make any functions or values at its top level.")
+            return
         if obj is not None and obj.startswith("$module:"):
             members = self.lib_members(obj[8:])
             if members is not None and e.name not in members:
                 self.problem(e, f"{obj[8:]} doesn't have '{e.name}'. It has: {', '.join(members)}.")
+            return
+        if obj is not None and obj.startswith(("%", "$kind:")):  # rex.hunger (1.5.0)
+            self.check_kind_attr(e, obj)
             return
         if e.obj.kind == "var" and e.obj.name in PY_NAMES and obj in ("$builtin", None) and e.obj.name not in self.user:
             self.problem(e, f"Tuff has no {e.obj.name}.{e.name}. {PY_NAMES[e.obj.name]}")
@@ -4409,9 +6743,12 @@ class Checker:
         # Unknown value: only a library can use '.', and libraries only have these.
         gui = gui_tables()
         members = {"window"} | set(self.lib_members("anims") or {}) | set(self.lib_members("tap") or {}) | \
-            set(self.lib_members("tgame") or {})
-        if gui is not None and e.name not in members and e.obj.kind == "var" and e.obj.name not in self.imports:
-            self.problem(e, dot_help("not a library", e.obj, e.name))
+            set(self.lib_members("tgame") or {})  # (not tmusic's play: hero.play("walk") is a sprite's :play)
+        # (Since 1.5.0 an object has fields: p.name in a function given a Pet. Only a name no kind has is certain.)
+        if gui is not None and e.name not in members and e.obj.kind == "var" and e.obj.name not in self.imports and not self.is_field(e.name) \
+                and e.obj.name != "my":  # (a my outside every action is reported by use)
+            self.problem(e, dot_help("not a library", e.obj, e.name) if not self.kinds else
+                         f"Nothing in this program has a field '{e.name}'." + self.field_hint(e.name))
 
     def is_print(self, e):
         """The built-in print (or say, in say:ascii): its :methods are print:ascii, print:color and print:pen."""
@@ -4454,14 +6791,23 @@ class Checker:
         name, n = e.name, len(e.args)
         start = e.obj.of if e.obj.kind == "held" else e.obj  # names[q:pop x]: q
         owner = start.name if start.kind == "var" else "thing"
+        if obj is not None and obj.startswith(("%", "$kind:")):  # rex:feed(), one of its kind's actions (1.5.0)
+            self.check_action(e, obj)
+            return
         if obj is None:
             if not self.method_exists(name):
                 tip = PY_ONLY.get(name.lower())
+                actions = sorted({a for k in self.kinds for a in self.actions_of(k)})  # p:fead() in a function given a Pet
+                hint = difflib.get_close_matches(name, actions, n=1, cutoff=0.6)
+                tip = f"Did you mean :{hint[0]}?" if hint else tip
                 self.problem(e, f"Nothing in Tuff has :{name}." + (f" {tip}" if tip else ""))
             return
         bare_fix = f"{owner}:{name} doesn't take an input, so what comes after it was read as one. Write {owner}:{name}() instead."
         if obj.startswith("$libfn:"):
             self.problem(e, f"'{owner}' is the function {obj[7:]} itself, not what it makes. Add brackets, like: {owner} = {obj[7:]}(...)")
+            return
+        if obj == "ttscreen":
+            self.check_tterm(e, owner)
             return
         if obj.startswith("@"):
             self.check_atgui(e, obj[1:])
@@ -4527,6 +6873,15 @@ class Checker:
             names = tdraw_pen_methods()
             if names and name not in names:
                 self.problem(e, method_help("A pen", name, names))
+            elif names and name == "shape" and e.args and not self.trying:  # pen:shape("arrow") (1.5.0)
+                import tuff_tdraw
+                look = self.fixed_text(e.args[0])
+                if look is not None and " ".join(look.strip().lower().split()) not in tuff_tdraw.PEN_SHAPES:
+                    self.problem(e.args[0], 'pen:shape takes "turtle", "arrow", "big arrow", "circle", "square" or "triangle" '
+                                            '(pen:hide() hides it).')
+            return
+        if obj == "song":  # tmusic's song (1.5.0)
+            self.check_song(e, bare_fix)
             return
         gui = gui_tables()
         tap = tap_tables() if obj in self.TAP_GIVES else None
@@ -4550,6 +6905,66 @@ class Checker:
                 self.check_file_input(e.args[0] if e.args else None, "icon")
             elif name == "set" and obj == "dropdown" and e.obj.kind == "var" and e.args:
                 self.check_dropdown_set(e)
+
+    @staticmethod
+    def number_of(e):
+        """The number an input is, when it's written in the program (5, -2), else None."""
+        if e.kind == "neg":
+            v = Checker.number_of(e.value)
+            return None if v is None else -v
+        if e.kind == "const" and isinstance(e.value, (int, float)) and not isinstance(e.value, bool):
+            return e.value
+        return None
+
+    def check_tterm(self, e, owner):
+        """A tterm screen's methods (1.5.0): their names and inputs, colours and keys written as text, put's one
+        character and every_frame's function."""
+        t = tterm_tables()
+        if t is None:
+            return
+        name, n, methods = e.name, len(e.args), t["methods"]
+        if name not in methods:
+            self.problem(e, method_help("A screen", name, list(methods)))
+            return
+        if not accepts(methods[name], n):
+            if e.bare and accepts(methods[name], 0):
+                self.problem(e, f"{owner}:{name} doesn't take an input, so what comes after it was read as one. Write {owner}:{name}() instead.")
+            else:
+                self.problem(e, f"{owner}:{name} got the wrong number of inputs ({n}).")
+            return
+
+        def text(i):
+            return e.args[i].value if n > i and e.args[i].kind == "const" and isinstance(e.args[i].value, str) else None
+        at = t["color_at"].get(name)
+        if at is not None and text(at) is not None:
+            msg = t["color_problem"](text(at), f"screen:{name}", TEXT_COLORS)
+            if msg:
+                self.problem(e.args[at], msg)
+        if name in ("pressed", "held", "press") and text(0) is not None:
+            key = t["key_name"](text(0))
+            if key is None:
+                self.problem(e.args[0], t["key_problem"](text(0), f"screen:{name}"))
+            elif key == "any" and name == "press":
+                self.problem(e.args[0], t["press_any"])
+            elif key == "escape" and name != "press":
+                self.problem(e.args[0], f'Esc ends screen:every_frame, so {owner}:{name}("{text(0)}") is never true. Use another key, like "p" for a pause.')
+        if name == "put" and text(2) is not None and t["char_problem"](text(2)):
+            self.problem(e.args[2], t["char_problem"](text(2)))
+        if name == "every_frame":
+            fn = e.args[0]
+            if fn.kind == "call" and fn.fn.kind == "var" and self.only_func(fn.fn.name) and not self.returns_function(fn.fn.name):
+                f = fn.fn.name
+                self.problem(fn, f"Pass the function's name without brackets: {f}, not {f}(). With brackets it runs once, before the game starts, instead of every frame.")
+            elif fn.kind == "method":
+                target = f"{fn.obj.name}:{fn.name}" if fn.obj.kind == "var" else f":{fn.name}"
+                self.problem(fn, f"{target} runs right away here, while this line runs. Make a small function (func step(dt): {target}) and pass its name.")
+            elif fn.kind == "const" and isinstance(fn.value, str):
+                self.problem(fn, f"This needs a function name, not text. Write {fn.value} without the quotes, and make it with func {fn.value}(dt):")
+            elif fn.kind == "var" and self.only_func(fn.name) and len(self.funcs[fn.name]) > 1:
+                want = len(self.funcs[fn.name])
+                self.problem(fn, f"{fn.name}() needs {want} inputs, but screen:every_frame only gives it 1 (dt, the seconds since the last frame). Write it as: func {fn.name}(dt):")
+            elif self.kind(fn) in self.TYPE and self.kind(fn) not in ("$func", "$builtin"):
+                self.problem(fn, t["frame_fn"])
 
     def check_dropdown_set(self, e):
         """box:set "Large" on a dropdown whose choices are written out and never changed."""
@@ -4744,6 +7159,9 @@ class Checker:
                             self.problem(x, f"wait() freezes the game: nothing moves or redraws until it's over. To do something later, use {owner}:after(seconds, fn).")
                         elif x.kind == "input":
                             self.problem(x, "input reads from the console and freezes the game while it waits.")
+                        elif self.plays_and_waits(x):
+                            self.problem(x, f"{self.plays_and_waits(x)} waits until the music ends, so the game freezes until then. "
+                                            f"Play a song in a game with {owner}:sound(song), or {owner}:music(song) for music that repeats.")
         base = self.base_dir
         if base and os.path.abspath(base).lower().startswith(os.path.abspath(tempfile.gettempdir()).lower()):
             base = None  # a snippet in a temporary folder: its files aren't next to it
@@ -4761,6 +7179,83 @@ class Checker:
             self.check_physics_number(e, rule)
         if obj in tg.get("kit_inputs", {}) and name in tg["kit_inputs"][obj]:
             self.check_kit_inputs(e, obj, tg)
+        if obj == "sprite" and name in FLIP_METHODS:
+            self.check_flipbook(e)
+
+    def check_flipbook(self, e):
+        """Sprite-sheet animation (1.5.0): sprite:frames, :frame, :animation and :play written with something that
+        can't be right. Frames are numbered from 1, a picture is cut into 1 or more frames each way, an animation has a
+        list of frames and a speed above 0, and :play's second input is true or false. :play with a name no
+        sprite:animation in the program makes, but only when every one of them names its animation as text, and the
+        program makes the game and imports no files of its own (they could make more: animation_names)."""
+        name, args = e.name, e.args
+        o = e.obj.name if e.obj.kind == "var" else "hero"
+        example = f'{o}:animation("walk", [1, 2, 3, 4], 10)'
+
+        def number(a):
+            if a.kind == "neg" and a.value.kind == "const" and isinstance(a.value.value, (int, float)) and not isinstance(a.value.value, bool):
+                return -a.value.value
+            if a.kind == "const" and isinstance(a.value, (int, float)) and not isinstance(a.value, bool):
+                return a.value
+            return None
+
+        def frame_no(a):  # a frame number written in the code that can't be one
+            v = number(a)
+            if v is not None and (v < 1 or v != int(v)):
+                self.problem(a, f"Frames are numbered from 1 (the top left one), so there's no frame {to_text(v)}.")
+
+        if name == "frames":
+            for a in args:
+                v = number(a)
+                if v is not None and (v < 1 or v != int(v)):
+                    self.problem(a, f"{o}:frames needs how many frames across, then how many down (1 if you leave it out), "
+                                    f"as whole numbers from 1, like {o}:frames(4) or {o}:frames(4, 2).")
+        elif name == "frame" and args:
+            frame_no(args[0])
+        elif name == "animation" and len(args) >= 2:
+            first, frames = args[0], args[1]
+            if first.kind == "const" and not isinstance(first.value, str):
+                self.problem(first, f"{o}:animation needs a name as text first, like {example}.")
+            if frames.kind == "list":
+                if not frames.items:
+                    self.problem(frames, f"An animation needs at least one frame, like {example}.")
+                for a in frames.items:
+                    frame_no(a)
+            elif self.kind(frames) in ("$number", "$text", "$bool", "$dict"):
+                self.problem(frames, f"{o}:animation needs its frames as a list, like {example}.")
+            fps = number(args[2]) if len(args) > 2 else None
+            if fps is not None and fps <= 0:
+                self.problem(args[2], f"{o}:animation's last input is how many frames a second, above 0, like {example}.")
+        elif name == "play" and args:
+            if len(args) > 1 and args[1].kind == "const" and not isinstance(args[1].value, bool):
+                self.problem(args[1], f"{o}:play's second input is true (again and again, the same as leaving it out) or "
+                                      f"false (once), like {o}:play(\"jump\", false).")
+            wanted = self.fixed_text(args[0])
+            known = self.flip_names
+            if wanted is not None and known is not None and wanted not in known:
+                if known:
+                    listed = ", ".join(f'"{n}"' for n in sorted(known))
+                    close = difflib.get_close_matches(wanted, sorted(known), n=1, cutoff=0.6)
+                    hint = f' Did you mean "{close[0]}"?' if close else ""
+                    self.problem(args[0], f"There's no animation called \"{wanted}\". This program makes {listed}.{hint}")
+                else:
+                    self.problem(args[0], f"There's no animation called \"{wanted}\". Make it first, like "
+                                          f"{o}:animation(\"{wanted}\", [1, 2, 3, 4], 10), then {o}:play(\"{wanted}\").")
+
+    def animation_names(self):
+        """Every name the program's sprite:animation calls give (as text), or None when the checker can't know them
+        all: one is made from a variable or a sum, the program imports a file of its own, or it doesn't make the game
+        itself (a file of functions another program imports, which may make the animations)."""
+        if not self.makes_game or self.own_imports or any(name not in LIBRARIES for name in self.imports):
+            return None
+        names = set()
+        for n in nodes(self.program):
+            if n.kind == "method" and n.name == "animation" and n.args:
+                text = self.fixed_text(n.args[0])
+                if text is None:
+                    return None
+                names.add(text)
+        return names
 
     def check_physics_inputs(self, e, obj, fn, physics, bare_fix):
         """How many inputs a physics method got. A spot ([x, y, z], or [x, y] in 2D) can go in place of its x, y and z,
@@ -5308,6 +7803,8 @@ class Checker:
 Checker.HANDLER_POS = {**Checker.HANDLER_POS, "clicked": 0, "hover": 0, "focus": 0, "key": 1, "closed": 0, "item": 1}
 # And the game kit's: enemy:on_death(gone), npc:on_talk(talk), game:countdown(60, times_up).
 Checker.HANDLER_POS = {**Checker.HANDLER_POS, "on_death": 0, "on_talk": 0, "countdown": 1}
+# 1.5.0: hero:on_done(landed), when an animation that plays once ends.
+Checker.HANDLER_POS = {**Checker.HANDLER_POS, "on_done": 0}
 
 
 # ---------------------------------------------------------------- Tuff Engine's preview (tuff.py --scene)
@@ -5366,9 +7863,9 @@ class SceneInterpreter(Interpreter):
     def binop(self, op, a, b):
         x, y = plain(a), plain(b)
         whole = lambda v: isinstance(v, int) and not isinstance(v, bool)
-        if op == "*" and isinstance(x, str) and whole(y):
+        if op == "*" and isinstance(x, str) and x and whole(y):  # ("" * 2 ^ 99999 is just "")
             self.room(sys.getsizeof(x) * max(y, 0))
-        elif op == "*" and isinstance(y, str) and whole(x):
+        elif op == "*" and isinstance(y, str) and y and whole(x):
             self.room(sys.getsizeof(y) * max(x, 0))
         elif op == "+" and isinstance(x, str) and isinstance(y, str):
             self.room(sys.getsizeof(x) + sys.getsizeof(y))
@@ -5393,7 +7890,7 @@ class SceneInterpreter(Interpreter):
         return {name: Builtin(f"anims.{name}", lambda *_a: console.say("")) for name in names}
 
 
-OTHER_WINDOW = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|atgui)\b", re.M)
+OTHER_WINDOW = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|atgui)\b(?!\.tuf)", re.M)
 
 
 def scene_file(game_path, source_path, out_path):
@@ -5403,34 +7900,38 @@ def scene_file(game_path, source_path, out_path):
     data = {"v": 1, "mode": None, "batch": [], "things": [], "player": None, "error": None,
             "tables": tuff_tgame.editor_tables()}
     src = read_source(source_path)
+    every = src and with_imports(game_path, src)  # (1.5.0) with the program's own files it imports
     if src is None:
         data["stopped"] = "unreadable"
-    elif not TGAME_IMPORT.search(src):
+    elif not TGAME_IMPORT.search(every):
         data["stopped"] = "nogame"
-    elif OTHER_WINDOW.search(src):
+    elif OTHER_WINDOW.search(every):
         data["stopped"] = "other-window"   # runs nothing: those libraries open real windows
     else:
         os.environ["TUFF_SCENE"] = "1"
         random.seed(0)
         interp = SceneInterpreter(src, os.path.dirname(os.path.abspath(game_path)))
+        interp.path = os.path.abspath(game_path)
         scene = tuff_tgame.start_scene(interp)
         error = None
 
         def setup():
             program = Parser(tokenize(src)).program()
             for stmt in program:
-                if stmt.kind == "func":
+                if stmt.kind in ("func", "kind"):
                     interp.run(stmt, interp.globals)
             interp.run_block(program, interp.globals)
             for hook in interp.rt.finish_hooks:
                 hook()
 
         try:
-            run_deep(setup, main=bool(TK_IMPORT.search(src)))  # as deep as a real run
+            run_deep(setup, main=bool(TK_IMPORT.search(every)))  # as deep as a real run
         except tuff_tgame.SceneDone:
             pass
         except TuffError as err:
             error = {"line": err.line, "col": err.col, "message": err.msg}
+            if err.file in OWN_FILES:  # (1.5.0) in one of its own files: the line is that file's, so the message says it
+                error = {"line": None, "col": None, "message": f"In {OWN_FILES[err.file][1]}, line {err.line}: {err.msg}"}
         except (ReturnSignal, BreakSignal, ContinueSignal) as sig:
             word = {"ReturnSignal": "return", "BreakSignal": "break", "ContinueSignal": "continue"}[type(sig).__name__]
             error = {"line": sig.line, "col": sig.col, "message": f"'{word}' can't be used here."}
@@ -5452,22 +7953,776 @@ def scene_file(game_path, source_path, out_path):
     return 0
 
 
+# ---------------------------------------------------------------- the debugger (1.5.0: tuff.py --debug PORT file.tuf)
+# TuffCode's Debug button runs a program with TUFF_DEBUG=PORT (or tuff.py --debug PORT file.tuf), and the program
+# connects to TuffCode on that port of this computer. They talk in JSON, one message to a line, so the program's own
+# input and output stay where they always are: say and input work as usual while it's debugged. From TuffCode:
+#   {"cmd": "setBreakpoints", "file": path, "lines": [3, 7]}   a file's breakpoints (all of them, each time)
+#   {"cmd": "continue"}, {"cmd": "pause"}, {"cmd": "next"}, {"cmd": "stepIn"}, {"cmd": "stepOut"}
+#   {"cmd": "watch", "delay": 0.5}   Watch it run: a statement at a time, this many seconds each (0: full speed again)
+#   {"cmd": "frame", "index": 1}     while paused: the names of another function in the call stack
+#   {"cmd": "expand", "path": ["top", "rex"], "open": true}   show (or stop showing) what's inside a value
+#   {"cmd": "stop"}                  end the program
+# The program waits for the first of continue, next, stepIn, stepOut, watch and pause before it starts (the
+# breakpoints come first). To TuffCode:
+#   {"event": "paused", "reason": "breakpoint" | "step" | "error" | "pause", "file", "line", "col", "stack", "scopes",
+#    "frame": 0, "error": the message and "ends": whether it ends the program (for an error: one in a function a
+#    window calls lets the program carry on), "window": "tk" (a tgui, mtgui or tdraw window: it can't redraw
+#    while the program is paused)}. stack: [{"index", "name", "file", "line", "col", "top"}], the function it's in
+#    first and the program's own top level last. scopes: [{"name", "top", "vars"}], the function's names and then its
+#    file's top level; vars: [{"name", "value" (as say shows it, cut short), "type", "more" (how many things are
+#    inside it), "kids" (them, once it's opened with expand)}]
+#   {"event": "watch", ...}   the statement Watch it run is on, with the same fields
+#   {"event": "scopes", "frame", "scopes"}   the names, after frame or expand
+#   {"event": "breakpoints", "file", "lines": [[the line asked for, the line it stops on or null], ...]}
+#   {"event": "asking"}   Pause while input() waits for an answer: it pauses on the next line, once there is one
+#   {"event": "idle"}     Pause while nothing runs (the top level has ended, and the program waits for something to
+#                         happen in its window): it pauses on the next line it runs
+#   {"event": "running"}, {"event": "ended", "code"}
+# With no debugger nothing of this runs: the program gets the usual Interpreter, with no step hook.
+DEBUGGER = None  # the Debugger, when the program runs with one (see main)
+DEBUG_TEXT = 120  # how long a value in the Variables panel can be before it's cut short with …
+DEBUG_ITEMS = 100  # the most items (or keys, or fields) shown inside one value
+DEBUG_NAMES = 300  # the most names shown for a function or a file
+DEBUG_STACK = 40  # the most functions the call stack lists (the program's own top level is always there)
+DEBUG_STARTS = ("continue", "next", "stepIn", "stepOut", "watch", "pause")
+
+
+class DebugFull(Exception):
+    """debug_text has said as much as it shows."""
+
+
+def debug_text(v, room=DEBUG_TEXT):
+    """A value as say shows it, on one line, for the Variables panel: text as it is (the panel's type says it's text),
+    and in quotes inside a list, a dictionary or an object, as say shows it there. Cut short with … past room letters,
+    without working out the rest: a list of a million numbers is as quick to show as a short one."""
+    parts, size = [], 0
+
+    def put(text):
+        nonlocal size
+        parts.append(text)
+        size += len(text)
+        if size > room:
+            raise DebugFull
+
+    def show(x, inside):
+        if x.__class__ is str:
+            text = x[:room + 1].replace("\n", "\\n").replace("\t", "\\t")
+            put(f'"{text}"' if inside else text)
+        elif x.__class__ is int and x.bit_length() > 4000:  # (every digit would take a while to work out)
+            put(f"a whole number {int(x.bit_length() * 0.30103) + 1} digits long")
+        elif x.__class__ in (list, dict, Instance):
+            if any(x is y for y in inside):
+                put("[...]" if x.__class__ is list else "{...}" if x.__class__ is dict else f"{x.kind.name}(...)")
+                return
+            if x.__class__ is list:
+                put("[")
+                pairs = ((None, item) for item in x)
+            elif x.__class__ is dict:
+                put("{")
+                pairs = ((to_text(k, True) + ": ", item) for k, item in x.items())
+            else:
+                put(x.kind.name + "(")
+                pairs = ((k + ": ", item) for k, item in x.fields.items())
+            for i, (key, item) in enumerate(pairs):
+                if i:
+                    put(", ")
+                if key:
+                    put(key)
+                show(item, inside + (x,))
+            put("]" if x.__class__ is list else "}" if x.__class__ is dict else ")")
+        else:
+            put(to_text(x, True).replace("\n", "\\n"))
+
+    try:
+        show(v, ())
+    except DebugFull:
+        return "".join(parts)[:room] + "…"
+    except Exception:  # (a library's own value that couldn't say what it is)
+        return "…"
+    return "".join(parts)
+
+
+def debug_type(v):
+    """What kind of value v is, in a word or two, for the Variables panel: a kind's own name for its objects."""
+    if v is None:
+        return "nil"
+    if isinstance(v, bool):
+        return "true/false"
+    if isinstance(v, (int, float)):
+        return "number"
+    for kind, word in ((str, "text"), (list, "list"), (dict, "dictionary"), (Line, "line"), (FileModule, "file"),
+                       (Module, "library"), (Kind, "kind"), (Err, "err")):
+        if isinstance(v, kind):
+            return word
+    if isinstance(v, Instance):
+        return v.kind.name
+    if isinstance(v, Native):
+        return v.kind
+    return "all" if v is ALL else "function"
+
+
+def debug_seconds(v):
+    """Watch it run's seconds a statement, from TuffCode (0: watching is off)."""
+    try:
+        v = float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return min(max(v, 0.0), 10.0) if math.isfinite(v) else 0.0
+
+
+def debug_paused():
+    """The seconds the debugger has kept the program paused so far: the time limits a window puts on a function
+    (atgui's app:closed, tuff_view's close) leave them out, so a breakpoint there doesn't use them up."""
+    return 0.0 if DEBUGGER is None else DEBUGGER.held()
+
+
+class DebugFrame:
+    """A function that's running, or a file's top-level code: the debugger's call stack is a list of these, the
+    program's own top level first. env holds its names and stmt is the statement it's on (both set as its statements
+    run). known: its file's (DebugFile, breakpoints, the lines the step hook looks out for), see Debugger.know; None
+    for an imported file's top level, whose file is known once its first statement runs (see Debugger.enter)."""
+    __slots__ = ("name", "file", "top", "env", "stmt", "info", "stops", "lines")
+
+    def __init__(self, name, file, top, known):
+        self.name, self.file, self.top = name, file, top
+        self.env = self.stmt = None
+        self.info, self.stops, self.lines = known or (None, frozenset(), frozenset())
+
+
+class DebugFile:
+    """Where a file's statements are. A breakpoint can be put on any line: a blank one, a comment, a func line or an
+    else:, and it stops at the statement the program runs there (see place). loops: each loop's first statement inside
+    it, by its (line, col) -> the loop's line and col, and where its body starts and ends, so a loop that goes round
+    again shows its own line before its first statement, and one written on one line stops there again (see
+    Debugger.round)."""
+
+    def __init__(self, src):
+        self.starts = set()  # the lines a statement starts on
+        self.spans = []  # (first line, last line) of a statement that goes on over more lines (a list written over several)
+        self.funcs = {}  # a func line (an action's too) -> the line of the first statement inside it
+        self.never = set()  # a kind's line and its fields' lines: nothing runs there (the fields are worked out, not run)
+        self.loops = {}
+        try:
+            program = Parser(tokenize(src)).program()
+        except (TuffError, RecursionError):  # a mistake in it: its breakpoints stay where they are
+            program = None
+        self.ok = program is not None
+        self.walk(program or [])
+        self.order = sorted(self.starts)
+
+    def walk(self, body):
+        for s in body:
+            if s.kind == "func":
+                self.funcs[s.line] = next((x.line for x in s.body if x.kind not in ("func", "kind")), None)
+                self.walk(s.body)
+                continue
+            if s.kind == "kind":
+                self.never.add(s.line)
+                for f in s.fields:
+                    self.never.update(range(f.line, max(x.line for x in nodes(f)) + 1))
+                self.walk(s.actions)
+                continue
+            self.starts.add(s.line)
+            if s.kind == "if":
+                for _cond, block in s.branches:
+                    self.walk(block)
+                self.walk(s.else_body or [])
+            elif s.kind in ("while", "for"):
+                first = s.body[0] if s.body else None
+                if first is not None:  # (one on one line too: while n < 3: n += 1)
+                    end = max((x.line, x.col) for x in nodes(s.body))
+                    self.loops[(first.line, first.col)] = (s.line, s.col, (first.line, first.col), end)
+                self.walk(s.body)
+            elif s.kind == "try":
+                self.walk(s.body)
+                self.walk(s.handler)
+            else:
+                last = max(x.line for x in nodes(s))
+                if last > s.line:
+                    self.spans.append((s.line, last))
+
+    def place(self, line):
+        """The line a breakpoint on this line stops on: its own when a statement starts there, a func's first statement
+        for its func line, a statement's first line for the lines it goes on over, else the next statement's. None
+        where nothing ever stops: a kind's fields, and after the last statement."""
+        if not self.ok or line in self.starts:
+            return line
+        if line in self.funcs:
+            return self.funcs[line]
+        if line in self.never:
+            return None
+        for first, last in self.spans:
+            if first < line <= last:
+                return first
+        return next((n for n in self.order if n > line), None)
+
+
+class Debugger:
+    """The program's side of TuffCode's debugger: the step hook (it stops at breakpoints, steps, and shows each
+    statement in Watch it run), the call stack and the names in it, and the line to TuffCode: a thread of its own reads
+    TuffCode's commands, and the program waits on cond while it's paused. One program, so one Debugger (DEBUGGER)."""
+
+    def __init__(self, sock):
+        self.sock = sock
+        self.out = threading.Lock()  # one message at a time, from any thread
+        self.cond = threading.Condition()
+        self.interp = self.main = None
+        self.frames = []  # the call stack (DebugFrames), the program's own top level first
+        self.files = {}  # each file's DebugFile, by its os.path.normcase'd full path, as are asked and bps
+        self.asked = {}  # each file's breakpoints, the lines TuffCode asked for
+        self.bps = {}  # each file's (stops, lines) sets (see place): changed in place, so frames see new ones at once
+        self.known = {}  # (DebugFile, stops, lines) by the path a frame has, for a new frame at each call (see know)
+        self.placing = threading.RLock()  # (TuffCode's breakpoints and the program's first look at a file can come together)
+        self.mode, self.depth = "run", 0  # how it goes on: run, next, in or out, and how deep the step started
+        self.watching = 0.0  # Watch it run's seconds a statement (0: it isn't watching)
+        self.started = False  # TuffCode's first run command has come (see begin)
+        self.command = None  # the command that ends a pause, or starts the program
+        self.asked_pause = self.asking = self.gone = False
+        self.busy = True  # the step hook has more to do than look for breakpoints (see update)
+        self.paused = None  # the call stack while it's paused (the function it's in first), for frame and expand
+        self.shown = 0  # which of them the Variables panel shows
+        self.opened = set()  # the values opened in the Variables panel, by path: ("top", "rex"), ("local", "items", "0")
+        self.since = None  # (frame, line) of the last pause: that line doesn't stop again until the frame runs another
+        self.window = None  # "tk": a tgui, mtgui or tdraw window, which can't redraw while the program is paused
+        self.top_ended = False  # the program's top level has ended: only its windows' functions run now (see top_done)
+        self.held_for, self.held_at = 0.0, None  # the seconds it's been paused, all told, and when this pause began
+        threading.Thread(target=self.listen, name="tuff-debug", daemon=True).start()
+
+    @classmethod
+    def connect(cls, port):
+        """Connects to TuffCode on this port (on this computer): a Debugger, or None when it can't (the program then
+        runs as usual)."""
+        import socket
+        try:
+            sock = socket.create_connection(("127.0.0.1", int(port)), timeout=10)
+            sock.settimeout(None)
+        except (OSError, ValueError, OverflowError):
+            sys.stderr.write("The debugger couldn't start, so the program runs as usual.\n")
+            sys.stderr.flush()
+            return None
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # (each message goes at once)
+        except OSError:
+            pass
+        return cls(sock)
+
+    def attach(self, interp):
+        """The program's interpreter is ready (a DebugInterpreter): its step hook, and wait()'s (see waiting)."""
+        self.interp, self.main = interp, interp.path
+        interp.debugger = self
+        self.frames = [DebugFrame(os.path.basename(interp.path), interp.path, True, self.know(interp.path))]
+        interp.step_hooks.append(self.hook)
+        interp.rt.on_wait(self.waiting)
+        interp.rt.finish_hooks.insert(0, self.top_done)
+        if TK_IMPORT.search(with_imports(interp.path, interp.src)):
+            self.window = "tk"
+
+    # ---- talking to TuffCode
+    def send(self, msg):
+        if self.gone:
+            return
+        data = (json.dumps(msg, separators=(",", ":")) + "\n").encode("utf-8")
+        try:
+            with self.out:
+                self.sock.sendall(data)
+        except OSError:
+            self.leave()
+
+    def listen(self):
+        """The reader thread: TuffCode's commands, as they come."""
+        try:
+            with self.sock.makefile("r", encoding="utf-8", errors="replace") as lines:
+                for line in lines:
+                    try:
+                        msg = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(msg, dict):
+                        try:
+                            self.handle(msg)
+                        except Exception:  # (one odd message mustn't stop the rest)
+                            pass
+        except (OSError, ValueError):
+            pass
+        self.leave()
+
+    def leave(self):
+        """TuffCode has gone: the program runs on as it would without a debugger."""
+        with self.cond:
+            if self.gone:
+                return
+            self.gone = True
+            for sets in self.bps.values():
+                for lines in sets:
+                    lines.clear()
+            self.mode, self.watching, self.asked_pause = "run", 0.0, False
+            if self.paused is not None or not self.started:
+                self.command = "continue"
+            self.started = True
+            self.update()
+            self.cond.notify_all()
+
+    def update(self):
+        """busy: the step hook can't just look for a breakpoint (it's stepping or watching, or asked to pause)."""
+        self.busy = self.mode != "run" or self.watching > 0 or self.asked_pause
+
+    def handle(self, msg):
+        cmd = msg.get("cmd")
+        if cmd == "setBreakpoints":
+            self.set_breakpoints(msg.get("file"), msg.get("lines"))
+        elif cmd in DEBUG_STARTS:
+            tell = False
+            with self.cond:
+                if cmd == "watch":
+                    self.watching = debug_seconds(msg.get("delay"))
+                if not self.started:  # (main waits for it, see begin)
+                    self.command, self.started = cmd, True
+                elif self.paused is not None:
+                    if cmd != "pause" and (cmd != "watch" or self.watching):  # turning Watch it run off keeps it paused
+                        self.command = cmd
+                elif cmd == "pause":
+                    self.asked_pause = True
+                    tell = "asking" if self.asking else "idle" if self.idle() else None
+                elif cmd == "continue":
+                    self.asked_pause = False  # (a pause asked for that hasn't happened yet)
+                self.update()
+                self.cond.notify_all()
+            if tell:
+                self.send({"event": tell})
+        elif cmd == "frame":
+            stack, i = self.paused, msg.get("index")
+            if stack is not None and isinstance(i, int) and 0 <= i < len(stack):
+                self.shown = i
+                self.send({"event": "scopes", "frame": i, "scopes": self.scopes(stack[i])})
+        elif cmd == "expand":
+            path = msg.get("path")
+            if isinstance(path, list) and path and all(isinstance(p, str) for p in path):
+                (self.opened.add if msg.get("open", True) else self.opened.discard)(tuple(path))
+                stack = self.paused
+                if stack is not None:
+                    i = self.shown if self.shown < len(stack) else 0
+                    self.send({"event": "scopes", "frame": i, "scopes": self.scopes(stack[i])})
+        elif cmd == "stop":
+            self.stop()
+
+    def begin(self):
+        """Waits for TuffCode's first run command (its breakpoints come before it)."""
+        with self.cond:
+            while not self.started:
+                self.cond.wait()
+            cmd, self.command = self.command, None
+            self.go(cmd, 1)
+        self.send({"event": "running"})
+
+    def go(self, cmd, depth):
+        """How the program goes on after a pause (or at the start), from the command that ended it."""
+        self.mode, self.depth = {"next": ("next", depth), "stepIn": ("in", depth), "stepOut": ("out", depth)}.get(cmd, ("run", 0))
+        if cmd == "pause":
+            self.asked_pause = True
+        self.update()
+
+    def stop(self):
+        """Stop: the program ends at once, the way TuffCode's Stop button ends a run, wherever it is (paused, waiting
+        for an answer, or in a window's function)."""
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except (OSError, ValueError):
+                pass
+        self.end(130)
+        os._exit(130)
+
+    def end(self, code):
+        """The program has ended: TuffCode hears it, and the line to it closes."""
+        self.send({"event": "ended", "code": code})
+        with self.cond:
+            self.gone = True
+            self.cond.notify_all()
+        try:
+            self.sock.shutdown(2)  # (SHUT_RDWR: the reader thread's file of it would keep it open)
+            self.sock.close()
+        except OSError:
+            pass
+
+    # ---- breakpoints
+    def set_breakpoints(self, file, lines):
+        if not isinstance(file, str) or not file or not isinstance(lines, list):
+            return
+        full = os.path.abspath(file)
+        key = os.path.normcase(full)
+        self.asked[key] = sorted({int(n) for n in lines if isinstance(n, (int, float)) and not isinstance(n, bool)
+                                  and 0 < n < 10_000_000})
+        self.place(key, full, tell=True)
+
+    def file(self, key, full):
+        """A file's DebugFile, made from its code the first time it's needed: the program's, an imported file's, or
+        the file on disk (for breakpoints set before it's loaded)."""
+        info = self.files.get(key)
+        if info is None:
+            src = None
+            if self.interp is not None and os.path.normcase(self.interp.path) == key:
+                src = self.interp.src
+            else:
+                src = next((text for path, (text, _shown) in list(OWN_FILES.items()) if os.path.normcase(path) == key), None)
+            if src is None:
+                try:
+                    src = source_text(full)
+                except (OSError, UnicodeDecodeError):
+                    src = ""
+            info = self.files[key] = DebugFile(src)
+        return info
+
+    def place(self, key, full, tell=False):
+        """A file's (stops, lines) sets: stops are the lines its breakpoints stop on (see DebugFile.place), and lines
+        also have the first statement of each loop with one on its own line or in its body. As the loop goes round
+        again that stops on the loop's line, and lets the line it last paused on stop again (see round and step).
+        tell: TuffCode hears where they stop."""
+        with self.placing:
+            info = self.file(key, full)
+            asked = self.asked.get(key, [])
+            placed = [[n, info.place(n)] for n in asked]
+            stops = {line for _n, line in placed if line is not None}
+            heads = {first for (first, _col), (line, _c, start, end) in info.loops.items()
+                     if line in stops or any(start[0] <= n <= end[0] for n in stops)}
+            sets = self.bps.get(key)
+            if sets is None:
+                sets = self.bps[key] = (set(), set())
+            for have, want in zip(sets, (stops, stops | heads)):
+                have.update(want)  # (new ones first, then the old ones go: a breakpoint that stays is never missed)
+                have.intersection_update(want)
+        if tell:
+            self.send({"event": "breakpoints", "file": full, "lines": placed})
+        return sets
+
+    def know(self, file):
+        """A file's (DebugFile, stops, lines), for its frames: worked out once for each path (the sets change in place)."""
+        known = self.known.get(file)
+        if known is None:
+            key = os.path.normcase(file)
+            with self.placing:
+                known = self.known[file] = (self.file(key, file),) + tuple(self.bps.get(key) or self.place(key, file))
+        return known
+
+    # ---- the step hook
+    def hook(self, s, env):
+        """The step hook, before every statement. It only looks for a breakpoint on the line, unless it's stepping,
+        watching, or asked to pause."""
+        frame = self.frames[-1]
+        if frame.env is not env:
+            if frame.file is None:
+                self.enter(frame, env)
+            frame.env = env
+        last, frame.stmt = frame.stmt, s
+        if self.busy or s.line in frame.lines:
+            try:
+                self.step(frame, s, last)
+            except Exception:  # (a mistake in the debugger must never stop the program)
+                pass
+
+    def enter(self, frame, env):
+        """The first statement of an imported file's top level (see DebugInterpreter.load): its file, from its names."""
+        frame.file = file_of(env) or self.main
+        frame.name = OWN_FILES.get(frame.file, ("", os.path.basename(frame.file)))[1]
+        frame.info, frame.stops, frame.lines = self.know(frame.file)
+
+    def step(self, frame, s, last):
+        head = self.round(frame, s, last)
+        if head is not None:
+            if self.since is not None and self.since[0] is frame:
+                self.since = None  # (round again: its lines can stop again, a loop written on one line's too)
+            if head[0] != s.line:
+                self.stop_at(frame, *head)
+        if s.kind not in ("func", "kind"):  # (making a function or a kind isn't a step)
+            self.stop_at(frame, s.line, s.col)
+
+    def round(self, frame, s, last):
+        """A loop going round again: (line, col) of the loop, when s is its first statement and the statement before it
+        (last) was in it too. It's shown before s, the way the loop checks its condition (or takes its next item) again."""
+        loop = frame.info.loops.get((s.line, s.col)) if last is not None else None
+        if loop is not None and loop[2] <= (last.line, last.col) <= loop[3]:
+            return loop[0], loop[1]
+        return None
+
+    def stop_at(self, frame, line, col):
+        """Pauses on this line if it should (a breakpoint, a step that's done, Pause), or shows it in Watch it run."""
+        since, quiet = self.since, False
+        if since is not None and since[0] is frame:
+            if since[1] == line:
+                quiet = True  # still on the line it paused on (two statements on one line)
+            else:
+                self.since = None
+        depth = len(self.frames)
+        mode = self.mode
+        if self.asked_pause:
+            reason = "pause"
+        elif quiet:
+            reason = None
+        elif line in frame.stops:
+            reason = "breakpoint"
+        elif mode == "in" or (mode == "next" and depth <= self.depth) or (mode == "out" and depth < self.depth):
+            reason = "step"
+        else:
+            reason = None
+        if reason is not None:
+            self.pause(frame, line, col, reason)
+        elif self.watching:
+            self.show_line(frame, line, col)
+
+    def pause(self, frame, line, col, reason, error=None, frames=None, file=None, ends=None):
+        """Stops the program here until TuffCode says how it goes on (this thread waits). frames: the call stack to
+        show, when it isn't the one now (an error's, see failed); file: the error's file; ends: whether the error ends
+        the program."""
+        stack = (frames or self.frames)[::-1]
+        with self.cond:
+            if self.gone:
+                return
+            self.asked_pause = False
+            self.paused, self.shown, self.command = stack, 0, None
+            self.held_at = time.monotonic()
+            self.update()
+        self.send(self.where("paused", stack, line, col, file, reason=reason, error=error, ends=ends))
+        with self.cond:
+            while self.command is None and not self.gone:
+                self.cond.wait()
+            cmd, self.command, self.paused = self.command, None, None
+            self.held_for += time.monotonic() - self.held_at
+            self.held_at = None
+            self.since = (frame, line)
+            self.go(cmd, len(self.frames))
+        self.send({"event": "running"})
+
+    def held(self):
+        """The seconds the program has been paused so far, this pause too (see debug_paused)."""
+        at = self.held_at
+        return self.held_for + (time.monotonic() - at if at is not None else 0.0)
+
+    def show_line(self, frame, line, col):
+        """Watch it run: TuffCode shows the statement it's on (and the names), then it waits a moment before running it.
+        Pause stops it there."""
+        self.send(self.where("watch", self.frames[::-1], line, col))
+        start = time.monotonic()
+        with self.cond:
+            while self.watching and not (self.asked_pause or self.gone):
+                left = start + self.watching - time.monotonic()
+                if left <= 0:
+                    break
+                self.cond.wait(left)
+            asked = self.asked_pause
+        if asked:
+            self.pause(frame, line, col, "pause")
+
+    def waiting(self):
+        """A wait hook (wait() calls it over and over): Pause stops on the wait's line at once."""
+        frame = self.frames[-1] if self.frames else None
+        if self.asked_pause and frame is not None and frame.stmt is not None:
+            self.pause(frame, frame.stmt.line, frame.stmt.col, "pause")
+
+    def asked_for(self, asking):
+        """input() starts (or stops) waiting for an answer: a Pause asked for while it waits is said to TuffCode."""
+        self.asking = asking
+        if asking and self.asked_pause:
+            self.send({"event": "asking"})
+
+    def top_done(self):
+        """A finish hook (the first): the program's top level has ended, and only its windows' functions run now. A
+        Pause that hasn't happened yet waits for one of them (TuffCode hears so)."""
+        if self.frames:
+            self.frames[0].stmt = None
+        self.top_ended = True
+        if self.asked_pause and self.idle():
+            self.send({"event": "idle"})
+
+    def idle(self):
+        """Nothing runs: the top level has ended and none of the program's functions is running, so it waits for
+        something to happen in its window."""
+        return self.top_ended and len(self.frames) == 1
+
+    def failed(self, err):
+        """report() is showing an error (pause on error): it pauses on the error's line first, with the names as they
+        were when it went wrong, then the program goes on to end (err.ends, see ending), or a window's function to
+        its end and the program carries on."""
+        if self.interp is None or self.gone or not err.line:
+            return
+        frames = [f for f in (getattr(err, "frames", None) or self.frames) if f.env is not None]
+        if frames:
+            try:
+                self.pause(frames[-1], err.line, err.col or 1, "error", err.msg, frames, err.file or self.main,
+                           getattr(err, "ends", False))
+            except Exception:  # (the error is shown either way)
+                pass
+
+    # ---- what TuffCode shows
+    def where(self, event, stack, line, col, file=None, **more):
+        """A paused or watch message: where it is, the call stack and the names in its first frame."""
+        here = stack[0]
+        file = file or here.file
+        same = os.path.normcase(file) == os.path.normcase(here.file or "")
+        frames = []
+        for i, f in enumerate(stack):
+            if i and f.stmt is None:  # (the program's top level once it has ended, or a file that's loading)
+                continue
+            at = (line, col) if i == 0 and same else (f.stmt.line, f.stmt.col) if f.stmt is not None else (line, col)
+            frames.append({"index": i, "name": f.name, "file": f.file, "top": f.top, "line": at[0], "col": at[1]})
+        if len(frames) > DEBUG_STACK:  # (a function deep inside itself: the newest ones, and the program's own)
+            more["hidden"] = len(frames) - DEBUG_STACK
+            frames = frames[:DEBUG_STACK - 1] + frames[-1:]
+        msg = {"event": event, "file": file, "line": line, "col": col, "stack": frames, "frame": 0, "scopes": self.scopes(here)}
+        if self.window:
+            msg["window"] = self.window
+        msg.update((k, v) for k, v in more.items() if v is not None)
+        return msg
+
+    def scopes(self, frame):
+        """The names in a frame: its function's own (its inputs and the names it made), then its file's top level."""
+        env = frame.env
+        if env is None:
+            return []
+        top = env
+        while top.parent is not None and not top.parent.own_names:
+            top = top.parent
+        out = []
+        try:
+            if top is not env:
+                names, e = {}, env
+                while e is not None and e is not top:  # (a function made inside another one: that one's names too)
+                    for name, v in e.vars.items():
+                        names.setdefault(name, v)
+                    e = e.parent
+                out.append({"name": frame.name, "top": False, "vars": self.values(names.items(), ("local",))})
+            shown = OWN_FILES.get(frame.file, ("", os.path.basename(frame.file or self.main or "")))[1]
+            out.append({"name": shown, "top": True, "vars": self.values(self.own(top), ("top",))})
+        except RuntimeError:  # (changed while it was read: a window's thread, say)
+            pass
+        return out
+
+    def own(self, env):
+        """A file's own top-level names: not the built-ins, its functions, its kinds or the libraries it imports (a file
+        of the program's own, import money.tuf, is shown: what's in it opens)."""
+        base = self.interp.base_globals if self.interp is not None else {}
+        for name, v in list(env.vars.items()):
+            if base.get(name, base) is v or (v.__class__ in (Func, Kind) and v.name == name) or v.__class__ is Module:
+                continue
+            yield name, v
+
+    def values(self, items, path):
+        out = []
+        for name, v in items:
+            if len(out) >= DEBUG_NAMES:
+                break
+            out.append(self.var(name, v, path))
+        return out
+
+    def var(self, name, v, path):
+        item = {"name": name, "value": debug_text(v), "type": debug_type(v)}
+        inside = self.inside(v)
+        if inside is not None:
+            count, items = inside
+            item["more"] = count
+            here = path + (name,)
+            if count and here in self.opened:
+                kids = []
+                for key, x in items:
+                    if len(kids) >= DEBUG_ITEMS:
+                        break
+                    kids.append(self.var(key, x, here))
+                item["kids"] = kids
+        return item
+
+    def inside(self, v):
+        """(how many, (name, value) for each) of what's inside a value that opens: a list's items, a dictionary's keys,
+        an object's fields, or a file's own names. None for anything else."""
+        if v.__class__ is list:
+            return len(v), ((str(i), x) for i, x in enumerate(v))
+        if v.__class__ is dict:
+            return len(v), ((to_text(k, True), x) for k, x in v.items())
+        if v.__class__ is Instance:
+            return len(v.fields), iter(list(v.fields.items()))
+        if v.__class__ is FileModule:
+            own = list(self.own(v.env))
+            return len(own), iter(own)
+        return None
+
+
+class DebugInterpreter(Interpreter):
+    """The interpreter a debugged program runs with (see Debugger). It keeps the debugger's call stack: a frame for
+    each function running and for each imported file's top-level code. With its own invoke() every call goes through
+    it (the compiled runtime's quicker call is only for Interpreter's own invoke, see own), and an error keeps the
+    call stack it went wrong in (err.frames), for pause on error."""
+    debugger = None
+
+    def step(self, s, env):
+        if len(self.step_hooks) == 1:  # (only the debugger's, which raises no Tuff errors: straight to it)
+            return self.debugger.hook(s, env)
+        return super().step(s, env)
+
+    def invoke(self, fn, args, loose=False, me=None):
+        if fn.__class__ is not Func:
+            return super().invoke(fn, args, loose, me)
+        dbg = self.debugger
+        file = file_of(fn.env) or self.path
+        frames = dbg.frames
+        frames.append(DebugFrame(fn.name, file, False, dbg.known.get(file) or dbg.know(file)))
+        try:
+            return super().invoke(fn, args, loose, me)
+        except TuffError as err:
+            if getattr(err, "frames", None) is None:
+                err.frames = frames[:]
+            raise
+        finally:
+            frames.pop()
+
+    def load(self, name, env):
+        frames = self.debugger.frames
+        frames.append(DebugFrame(name + ".tuf", None, True, None))  # (its file is known once its first statement runs)
+        try:
+            return super().load(name, env)
+        except TuffError as err:
+            if getattr(err, "frames", None) is None:
+                err.frames = frames[:]
+            raise
+        finally:
+            frames.pop()
+
+    def ask(self, prompt, looks):
+        self.debugger.asked_for(True)
+        try:
+            return super().ask(prompt, looks)
+        finally:
+            self.debugger.asked_for(False)
+
+
 # ---------------------------------------------------------------- entry point
 
-def report(err, src):
+def error_lines(err, src):
+    """An error as it's shown: "Tuff error on line 3: ...", then that line of the code and a ^ under its column. One
+    in another of the program's files (err.file, 1.5.0) says which, "Tuff error in money.tuf on line 3: ...", and
+    shows that file's line."""
+    where = ""
+    if err.file in OWN_FILES:
+        src, shown = OWN_FILES[err.file]
+        where = f" in {shown}"
     lines = source_lines(src)
-    out = [f"Tuff error on line {err.line}: {err.msg}" if err.line else f"Tuff error: {err.msg}"]
+    out = [f"Tuff error{where} on line {err.line}: {err.msg}" if err.line else f"Tuff error{where}: {err.msg}"]
     if err.line and 0 < err.line <= len(lines):
         code = lines[err.line - 1]
         gutter = f"  {err.line} | "
         out.append(gutter + code)
         if err.col:
             out.append(" " * (len(gutter) + err.col - 1) + "^")
-    if IDE and err.line:
-        sys.stdout.write(f"\x1b]tuff;error;{err.line};{err.col or 1};{b64(err.msg)}\x07")
+    return out
+
+
+def report(err, src):
+    out = error_lines(err, src)
+    if IDE and err.line:  # TuffCode marks the line (ide.js handleOsc); one in another file adds that file's path
+        other = f";{b64(err.file)}" if err.file in OWN_FILES else ""
+        sys.stdout.write(f"\x1b]tuff;error;{err.line};{err.col or 1};{b64(err.msg)}{other}\x07")
         sys.stdout.flush()
     sys.stderr.write("\n".join(out) + "\n")
     sys.stderr.flush()
+    if DEBUGGER is not None:  # (1.5.0) pause on error: the debugger stops on its line, with the names as they were
+        DEBUGGER.failed(err)
     if WINDOWED:
         SHOWING_BOX.set()
         try:
@@ -5477,6 +8732,13 @@ def report(err, src):
             pass
         finally:
             SHOWING_BOX.clear()
+
+
+def ending(err):
+    """An error that ends the program, as run_file's do (1.5.0): the debugger's pause on error says Continue ends it.
+    One in a function a window calls is reported and the window carries on (see Runtime.call)."""
+    err.ends = True
+    return err
 
 
 WINDOWED = False
@@ -5511,23 +8773,32 @@ def setup_streams():
             os.system("")
 
 
+def source_text(path):
+    """A .tuf file's text. UTF-8 (with or without a BOM), or UTF-16 with its BOM: Notepad's "Unicode", and what Windows
+    PowerShell's > and Out-File write. Raises OSError or UnicodeDecodeError (see unreadable)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    text = data.decode("utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def unreadable(path, exc, shown=None):
+    """Why source_text couldn't read path, for a message (shown: the name it gives the file, else 'path')."""
+    shown = shown or f"'{path}'"
+    if isinstance(exc, FileNotFoundError):
+        return f"There's no file called {shown}."
+    if isinstance(exc, UnicodeDecodeError):
+        return f"{shown} isn't a text file, so it can't be a Tuff program." if b"\x00" in exc.object else \
+            f"{shown} isn't saved as UTF-8, so Tuff can't read it. Save it again as UTF-8, or copy its code into a new TuffCode file."
+    return f"{shown} is a folder, not a .tuf file." if os.path.isdir(path) else f"Couldn't open {shown}: {exc.strerror or exc}."
+
+
 def read_source(path):
     """The program's text, or None after a one-line message when the file can't be read."""
     try:
-        with open(path, "rb") as f:
-            data = f.read()
-        # UTF-8 (with or without a BOM), or UTF-16 with its BOM: Notepad's "Unicode", and what Windows
-        # PowerShell's > and Out-File write.
-        text = data.decode("utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig")
-        return text.replace("\r\n", "\n").replace("\r", "\n")
-    except FileNotFoundError:
-        msg = f"There's no file called '{path}'."
-    except UnicodeDecodeError:
-        msg = f"'{path}' isn't a text file, so it can't be a Tuff program." if b"\x00" in data else \
-            f"'{path}' isn't saved as UTF-8, so Tuff can't read it. Save it again as UTF-8, or copy its code into a new TuffCode file."
-    except OSError as exc:
-        msg = f"'{path}' is a folder, not a .tuf file." if os.path.isdir(path) else f"Couldn't open '{path}': {exc.strerror or exc}."
-    report(TuffError(msg), "")
+        return source_text(path)
+    except (OSError, UnicodeDecodeError) as exc:
+        report(TuffError(unreadable(path, exc)), "")
     return None
 
 
@@ -5547,7 +8818,7 @@ DEEP_STACKS = (512 << 20, 255 << 20, 64 << 20)  # the first one a thread can sta
 # From Python 3.12 (what TuffCode's runtime is built with) Python's own calls don't use the stack, so the usual thread
 # goes as deep: the program's thread gets the usual stack, not a big one that Windows would set aside in full for every run.
 STACK_FREE = sys.version_info >= (3, 12)
-TK_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|tdraw)\b", re.M)
+TK_IMPORT = re.compile(r"^[ \t]*(?:import|mention)[ \t]+(?:tgui|mtgui|tdraw)\b(?!\.tuf)", re.M)
 
 
 def big_stack():
@@ -5634,28 +8905,58 @@ def run_deep(fn, *args, main=False):
     return done.get("value")
 
 
+IMPORT_LINE = re.compile(r"^[ \t]*(?:import|mention)[ \t]+([A-Za-z_]\w*)\.tuf\b", re.M)
+
+
+def with_imports(path, src):
+    """The program's text, then the text of each of its own files it imports (and they import), for what only the
+    whole program can say, like whether it opens a window (see run_program). A file that can't be read is left out."""
+    texts, seen, todo = [src], set(), [(base_folder(path), src)]
+    while todo:
+        folder, text = todo.pop()
+        for name in IMPORT_LINE.findall(text):
+            found = module_file(folder, name)
+            key = found and os.path.normcase(os.path.abspath(found))
+            if not found or key in seen:
+                continue
+            seen.add(key)
+            try:
+                more = source_text(found)
+            except (OSError, UnicodeDecodeError):
+                continue
+            texts.append(more)
+            todo.append((os.path.dirname(found), more))
+    return "\n".join(texts)
+
+
 def run_file(path):
     src = read_source(path)
     if src is None:
         return 1
     try:
         program = Parser(tokenize(src)).program()
-        interp = Interpreter(src, base_folder(path))
+        interp = (Interpreter if DEBUGGER is None else DebugInterpreter)(src, base_folder(path))
+        interp.path = os.path.abspath(path)
+        if DEBUGGER is not None:
+            DEBUGGER.attach(interp)
         for stmt in program:
-            if stmt.kind == "func":
+            if stmt.kind in ("func", "kind"):  # functions and kinds can be used above where they're written
                 interp.run(stmt, interp.globals)
         interp.run_block(program, interp.globals)
         for hook in interp.rt.finish_hooks:
             hook()
     except TuffError as err:
-        report(err, src)
+        report(ending(err), src)
         return 1
     except (ReturnSignal, BreakSignal, ContinueSignal) as sig:
         word = {"ReturnSignal": "return", "BreakSignal": "break", "ContinueSignal": "continue"}[type(sig).__name__]
-        report(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}.", sig.line, sig.col), src)
+        report(ending(TuffError(f"'{word}' can only be used inside a {'function' if word == 'return' else 'loop'}.", sig.line, sig.col)), src)
         return 1
     except MemoryError:  # (1.4.1) a list or text growing without end, outside any function
-        report(TuffError("The program ran out of memory. Is a list or some text growing without end?"), src)
+        report(ending(TuffError("The program ran out of memory. Is a list or some text growing without end?")), src)
+        return 1
+    except OverflowError:  # (1.5.0) the maths says so itself, with the line; this is in case anything is missed
+        report(ending(TuffError(TOO_BIG_NUMBER)), src)
         return 1
     except KeyboardInterrupt:
         return 130
@@ -5666,17 +8967,18 @@ def run_program(path):
     src = read_source(path)
     if src is None:
         return 1
-    if not VIEW_IMPORT.search(src):
+    every = with_imports(path, src)  # (1.5.0) a window library imported by one of its own files counts too
+    if not VIEW_IMPORT.search(every):
         try:
-            return run_deep(run_file, path, main=WINDOWED or bool(TK_IMPORT.search(src)))
+            return run_deep(run_file, path, main=WINDOWED or bool(TK_IMPORT.search(every)))
         except KeyboardInterrupt:
             return 130
-    if TGAME_IMPORT.search(src) and not WINDOWED:
+    if TGAME_IMPORT.search(every) and not WINDOWED:
         Console(first_id=0).say(TGAME_NOTICE, "notice")  # line 0: the program's own lines start at 1
     try:
         import tuff_view
     except ImportError:
-        report(TuffError("This program needs Tuff's window engine (tuff_view.py), which isn't installed next to tuff.py."), src)
+        report(TuffError("This program needs Tuff's window engine, which isn't installed. Reinstall TuffCode."), src)
         return 1
     stack = big_stack()  # for the thread tuff_view.run starts
     try:
@@ -5691,7 +8993,20 @@ def run_program(path):
     return 0 if code is None else code
 
 
-def check_file(path):
+def import_folder(path, real=None):
+    """Where the file's imports are found (1.5.0): next to real (the file path is a copy of, see check_file), else where
+    a run finds them (TUFF_BASE_DIR or the file's folder), or None for a file in the temp folder with no real one."""
+    if real:
+        return os.path.dirname(os.path.abspath(real))
+    if os.environ.get("TUFF_BASE_DIR"):
+        return os.environ["TUFF_BASE_DIR"]
+    full = os.path.abspath(path)
+    return None if os.path.normcase(full).startswith(os.path.normcase(os.path.abspath(tempfile.gettempdir()))) else os.path.dirname(full)
+
+
+def check_file(path, real=None):
+    """--check path, or --check path --as real: path is a copy of real's code (TuffCode checks the editor's text as it
+    is, unsaved too, from a temp file), so its imports are checked from real's folder (1.5.0)."""
     src = read_source(path)
     if src is None:
         return 1
@@ -5701,7 +9016,7 @@ def check_file(path):
         report(err, src)
         return 1
     try:
-        problems = Checker(program, base_folder(path)).run()
+        problems = Checker(program, base_folder(path), real or path, import_folder(path, real)).run()
     except Exception:  # a bug in the checker must never block a correct program
         problems = []
     if problems:
@@ -5725,14 +9040,19 @@ def usage():
 
 
 def main():
+    global DEBUGGER
     setup_streams()
     if hasattr(sys, "set_int_max_str_digits"):  # say 2 ^ 20000 shows every digit (Python stops at 4300)
         sys.set_int_max_str_digits(0)
+        try:  # what writes numbers that long; named here so the packed runtime and built apps take it along
+            import _pylong  # noqa: F401
+        except ImportError:
+            pass
     args = sys.argv[1:]
     if not args:
         print("Welcome to TuffCode, coding made easy.")
         print("TuffCode runs on its own coding language called Tuff, files end in .tuf")
-        print("Run a program with: python tuff.py yourfile.tuf")
+        print("Open a program in TuffCode and press Run.")
         return 0
     if args[0] in ("--help", "-h", "/?"):
         print(usage())
@@ -5741,22 +9061,50 @@ def main():
         if len(args) < 2:
             sys.stderr.write("--check needs a file to check.\n" + usage() + "\n")
             return 2
-        return check_file(args[1])
+        return check_file(args[1], args[3] if len(args) > 3 and args[2] == "--as" else None)
     if args[0] == "--scene":
         if len(args) < 4:
             sys.stderr.write("--scene needs the game file, the source file and the output file.\n")
             return 2
         return scene_file(args[1], args[2], args[3])
+    port = os.environ.pop("TUFF_DEBUG", None)  # (1.5.0) TuffCode's Debug button: see the debugger, above
+    if args[0] == "--debug":
+        if len(args) < 3:
+            sys.stderr.write("--debug needs TuffCode's port and the file to run, like: --debug 5678 main.tuf\n")
+            return 2
+        port, args = args[1], args[2:]
     if args[0].startswith("--") and not os.path.exists(args[0]):
         sys.stderr.write(f"Unknown option '{args[0]}'.\n" + usage() + "\n")
         return 2
+    if port:
+        DEBUGGER = Debugger.connect(port)
+        if DEBUGGER is not None:
+            DEBUGGER.begin()
     code = run_program(args[0])
-    if getattr(sys, "frozen", False) and not WINDOWED and not IDE:
+    if DEBUGGER is not None:
+        DEBUGGER.end(code)
+    if getattr(sys, "frozen", False) and not WINDOWED and not IDE and console_to_type_in():
         try:
             input("\nPress Enter to close...")
         except EOFError:
             pass
     return code
+
+
+def console_to_type_in():
+    """Whether someone can answer a built app's "Press Enter to close...": on Windows, whether it has a console window.
+    A windowed app started with pipes (by a program, or with its output sent to a file) has output but no console,
+    and waiting there would keep it running after its window closed. Elsewhere, whether it's in a terminal."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            return bool(ctypes.windll.kernel32.GetConsoleWindow())
+        except Exception:
+            return True
+    try:
+        return sys.stdin.isatty()
+    except Exception:
+        return False
 
 
 if __name__ == "__main__":

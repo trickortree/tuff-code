@@ -127,7 +127,7 @@ class Lib:
     def ssl_context(self):
         if self.context is None:
             if ssl is None:
-                raise self.rt.error("This copy of Tuff can't use https:// web addresses, because its Python has no ssl module.")
+                raise self.rt.error("This copy of Tuff can't use https:// web addresses: a part it needs is missing. Reinstall TuffCode.")
             context = None
             if sys.platform == "darwin":  # a Mac Python (and a built app) often can't find the system's certificates
                 try:

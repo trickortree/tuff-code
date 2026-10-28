@@ -1,0 +1,37 @@
+mention tgame
+
+# Sprite sheets (1.5.0): hero_sheet.png is 4 frames across and 2 down, 32 x 32 pixels each, every frame its own
+# colour. The hero holds frame 2, walks (4 frames a second, stepped by the page), pauses, and jumps once; the HUD's
+# coin shows frame 6.
+game = tgame.window("Frames", 400, 300)
+game:background("black")
+hero = game:image("hero_sheet.png", 200, 150, 160)
+hero:frames(4, 2)
+hero:animation("walk", [1, 2, 3, 4], 4)
+hero:animation("jump", [5, 6, 7, 8], 8)
+coin = game:hud():image("hero_sheet.png", 36, 36, 48)
+coin:frames(4, 2)
+coin:frame(6)
+
+func done(who, name):
+    say "done " + name + " on frame " + who:frame()
+
+hero:on_done(done)
+
+func hold():
+    hero:frame(2)
+
+func walk():
+    hero:play("walk")
+
+func jump():
+    hero:play("jump", false)
+
+func pause():
+    game:pause("Paused")
+
+func resume():
+    game:resume()
+
+while game:open():
+    game:frame()

@@ -1,6 +1,6 @@
 // What's New: after an update TuffCode shows "Here's what's changed!" once, with that version's notes and pictures
-// (rounded corners), and Help > What's New shows it again. It's modal (Tab stays in it), and closing it gives the
-// focus back, so typing goes into the code again.
+// (rounded corners), and Help > What's New shows it again. It's modal (Tab stays in it, and the IDE's shortcuts wait),
+// and closing it gives the focus back, so typing goes into the code again.
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -60,6 +60,15 @@ export default async (t, ctx) => {
   for (let i = 0; i < 4; i++) { await t.key('Tab'); tabs.push(await focusIn()); }
   for (let i = 0; i < 4; i++) { await t.key('Tab', 8); tabs.push(await focusIn()); }
   check('Tab and Shift+Tab keep the focus inside What\'s New', tabs.every(Boolean), tabs);
+  // ...and the IDE's shortcuts wait while it's open: F9 and F10, which its notes name, don't act on the code behind it.
+  for (const [key, code] of [['F9', 120], ['F10', 121]]) {
+    await t.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key, code: key, windowsVirtualKeyCode: code });
+    await t.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode: code });
+  }
+  await t.sleep(800);
+  const behind = await ev(`({ bps: window.TuffDebug.breakpoints().length, debug: window.TuffDebug.state().state, running: document.querySelector('#btn-run').classList.contains('running') })`);
+  check("F9 and F10 while it's open put no breakpoint and start no run behind it, and the focus stays in it", behind.bps === 0 && behind.debug === 'off' && !behind.running
+    && await focusIn(), behind);
   const editorFocus = () => ev(`(() => { const e = window.TuffIDE.editor(); return !!e && e.hasTextFocus(); })()`);
   const focusName = () => ev(`document.activeElement?.className || document.activeElement?.tagName`);
   await ev(`document.querySelector('#whatsnew [data-a="close"]').click()`);

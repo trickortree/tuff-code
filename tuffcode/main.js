@@ -12,6 +12,8 @@ const updater = require('./updater');
 const plugins = require('./plugins');
 const agents = require('./agents');
 const ai = require('./ai');
+const debug = require('./debug');
+const starters = require('./starters');
 
 const TUFF_INTERPRETER = app.isPackaged
   ? path.join(process.resourcesPath, 'runtime-src', 'tuff.py')
@@ -49,6 +51,7 @@ function saveSettings(patch) {
 const SAMPLE_MAIN = `# Welcome to Tuff!
 # Press Shift+F10 (or the green play button) to run this file.
 # New here? Open the Learn panel (graduation cap on the left).
+# Want a head start? File > New Project... has starter projects to run and change.
 
 name = "world"
 say "Hello, " + name + "!"
@@ -70,8 +73,18 @@ if answer is "yes":
         print("yes AGAIN")
 `;
 
+// Documents/TuffProjects, or TuffProjects in the home folder when Windows can't say where Documents is (on a PC
+// whose Documents is a network folder that isn't there, say)
+function projectsHome() {
+  try {
+    return path.join(app.getPath('documents'), 'TuffProjects');
+  } catch {
+    return path.join(app.getPath('home'), 'TuffProjects');
+  }
+}
+
 async function ensureDefaultProject() {
-  const dir = path.join(app.getPath('documents'), 'TuffProjects', 'HelloTuff');
+  const dir = path.join(projectsHome(), 'HelloTuff');
   const main = path.join(dir, 'main.tuf');
   await fsp.mkdir(dir, { recursive: true });
   if (!fs.existsSync(main)) await fsp.writeFile(main, SAMPLE_MAIN, 'utf8');
@@ -123,10 +136,24 @@ function send(channel, payload) {
 }
 
 // A new run starts over: the second player (if any) goes too, so both copies always run the same code.
-function startRun(file, id) {
+// opts.debug (1.5.0): run it with the debugger. The program connects to debug.js's server (TUFF_DEBUG is its port)
+// and is sent opts.debug.first (its breakpoints, then how it starts); what it says comes back as debug:event.
+let runSeq = 0;
+async function startRun(file, id, opts) {
+  const seq = ++runSeq;
   if (runProc) runProc.kill();
   if (run2Proc) run2Proc.kill();
-  runProc = spawnTuff(file, id, 'run', (proc) => { if (runProc === proc) runProc = null; });
+  debug.close();
+  let env = null;
+  if (opts && opts.debug) {
+    const port = await debug.open(Array.isArray(opts.debug.first) ? opts.debug.first : [], (msg) => send('debug:event', { ...msg, id })).catch(() => null);
+    if (seq !== runSeq) return; // another run started meanwhile
+    if (port) env = { TUFF_DEBUG: String(port) };
+  }
+  runProc = spawnTuff(file, id, 'run', (proc) => {
+    if (runProc === proc) runProc = null;
+    if (env && seq === runSeq) debug.close();
+  }, env);
 }
 
 function startSecond(file, id) {
@@ -134,15 +161,16 @@ function startSecond(file, id) {
   run2Proc = spawnTuff(file, id, 'run2', (proc) => { if (run2Proc === proc) run2Proc = null; });
 }
 
-// Runs a Tuff program and sends what it says to the Run panel as <channel>:data and <channel>:exit.
-function spawnTuff(file, id, channel, ended) {
+// Runs a Tuff program and sends what it says to the Run panel as <channel>:data and <channel>:exit. env: more for its
+// environment (the debugger's port).
+function spawnTuff(file, id, channel, ended, env) {
   const { cmd, args: fullArgs } = tuffCommand([file]);
   const out = (stream, text) => send(`${channel}:data`, { id, stream, text });
   out('cmd', `${cmd} ${fullArgs.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')}\n`);
   const proc = spawn(cmd, fullArgs, {
     cwd: path.dirname(file),
     windowsHide: true,
-    env: { ...process.env, TUFF_IDE: '1', PYTHONIOENCODING: 'utf-8' },
+    env: { ...process.env, TUFF_IDE: '1', PYTHONIOENCODING: 'utf-8', ...env },
   });
   proc.stdout.setEncoding('utf8');
   proc.stderr.setEncoding('utf8');
@@ -151,7 +179,7 @@ function spawnTuff(file, id, channel, ended) {
   proc.stdin.on('error', () => {});
   proc.on('error', (err) => out('stderr', app.isPackaged
     ? `Could not start the Tuff runtime (${err.message}). Try reinstalling TuffCode.\n`
-    : `Could not start Python (${err.message}). Is Python installed?\n`));
+    : `Could not start Tuff (${err.message}). Try reinstalling TuffCode.\n`));
   proc.on('close', (code, signal) => {
     ended(proc);
     send(`${channel}:exit`, { id, code: code ?? (signal ? -1 : 0) });
@@ -208,6 +236,21 @@ ipcMain.handle('settings:get', () => loadSettings());
 ipcMain.handle('settings:set', (_e, patch) => saveSettings(patch));
 
 ipcMain.handle('project:default', () => ensureDefaultProject());
+
+// New Project (starters.js): the starters are in starters/ here, and in resources/starters when installed (package.json's
+// extraResources). New projects go in Documents/TuffProjects, next to HelloTuff, unless Change… picks another folder.
+starters.setup({
+  dir: app.isPackaged ? path.join(process.resourcesPath, 'starters') : path.join(__dirname, 'starters'),
+  folder: projectsHome,
+});
+ipcMain.handle('starters:list', () => starters.list());
+ipcMain.handle('starters:check', (_e, folder, name) => starters.check(folder, name));
+ipcMain.handle('starters:create', (_e, id, folder, name) => starters.create(id, folder, name));
+ipcMain.handle('starters:pickFolder', async (_e, from) => {
+  const res = await dialog.showOpenDialog(win, { title: 'Where should the project go?', defaultPath: starters.nearestFolder(from), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] });
+  return res.canceled ? null : res.filePaths[0];
+});
+
 ipcMain.handle('fs:readDir', (_e, dir) => readDir(dir));
 ipcMain.handle('fs:listAll', (_e, root) => listAllFiles(root));
 // Text files open with the right text whatever saved them: UTF-8 (with or without a BOM), UTF-16 with its
@@ -379,7 +422,8 @@ ipcMain.handle('dialog:openFolder', async () => {
   return res.canceled ? null : res.filePaths[0];
 });
 
-ipcMain.handle('run:start', (_e, file, id) => startRun(file, id));
+ipcMain.handle('run:start', (_e, file, id, opts) => startRun(file, id, opts));
+ipcMain.handle('debug:send', (_e, msg) => debug.send(msg));
 ipcMain.handle('run:input', (_e, text) => {
   if (runProc && runProc.stdin.writable) runProc.stdin.write(text);
 });
@@ -435,13 +479,16 @@ ipcMain.handle('update:reschedule', () => updater.reschedule());
 // Checks Tuff source with tuff.py --check. Used by live error checking and by Tuff AI.
 // Every check gets its own temp file: checks that start in the same millisecond (several tabs at startup, Auto
 // code sort's before and after) used to share one, so a file could be shown another's mistakes.
+// realFile (1.5.0): the .tuf file the source is from. The check reads the editor's text from the temp file but
+// looks for the files it imports (import money) next to the real one (tuff.py --check temp --as real).
 let checkSeq = 0;
-async function checkSource(source) {
+async function checkSource(source, realFile) {
   const dir = path.join(app.getPath('temp'), 'tuffcode-check');
   await fsp.mkdir(dir, { recursive: true });
   const file = path.join(dir, `check-${process.pid}-${++checkSeq}-${Date.now()}.tuf`);
   await fsp.writeFile(file, source, 'utf8');
-  const { cmd, args } = tuffCommand(['--check', file]);
+  const real = typeof realFile === 'string' && /\.tuf$/i.test(realFile) && path.isAbsolute(realFile) && fs.existsSync(path.dirname(realFile)) ? realFile : null;
+  const { cmd, args } = tuffCommand(['--check', file, ...(real ? ['--as', real] : [])]);
   const result = await new Promise((resolve) => {
     let out = '';
     const proc = spawn(cmd, args, { windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
@@ -462,7 +509,7 @@ async function checkSource(source) {
   fsp.rm(file, { force: true }).catch(() => {});
   return result;
 }
-ipcMain.handle('tuff:check', (_e, source) => checkSource(source));
+ipcMain.handle('tuff:check', (_e, source, realFile) => checkSource(source, realFile));
 
 // Tuff Engine's preview: tuff.py --scene runs a tgame program's setup with no window (the editor's text, which may
 // not be saved, with the game file's folder for its pictures) and gives back what it made as JSON. A newer request
@@ -594,11 +641,15 @@ ipcMain.handle('window:close', () => win.close());
 ipcMain.handle('window:isMaximized', () => win.isMaximized());
 ipcMain.handle('app:devtools', () => win.webContents.toggleDevTools());
 
-// The Mac menu bar. On a Mac, text fields only get Cmd+Z/C/V/X/A from Edit menu items. The editor
+// The menu bar. Windows and Linux have none: the window has no frame to show one in, but Electron's default menu
+// (File, Edit, View, Window) would still be there, and its keys work wherever the page leaves a key alone, in a
+// dialog or a text box: Ctrl+W would close the window, Ctrl+R and Ctrl+Shift+R reload it, F11 make it full screen.
+// TuffCode's own shortcuts are all the page's (ide.js), and text boxes there do their own copy, paste and undo.
+// On a Mac, text fields only get Cmd+Z/C/V/X/A from Edit menu items. The editor
 // and TuffCode's own shortcuts still handle their keys first. Close and Reload are left out so
 // Cmd+W and Cmd+R reach the editor's own shortcuts.
-function macMenu() {
-  if (process.platform !== 'darwin') return;
+function appMenu() {
+  if (process.platform !== 'darwin') { Menu.setApplicationMenu(null); return; }
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { role: 'appMenu', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
     { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
@@ -607,7 +658,7 @@ function macMenu() {
 }
 
 app.whenReady().then(() => {
-  macMenu();
+  appMenu();
   protocol.handle('tuffview', serveView);
   createWindow();
   updater.start((s) => send('update:status', s), loadSettings);

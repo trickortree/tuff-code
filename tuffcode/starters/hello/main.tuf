@@ -1,0 +1,44 @@
+# Hello: the basics of Tuff in one small program.
+# Run it with Shift+F10 (or the green play button at the top), answer its
+# questions in the Run window, then change something and run it again.
+
+say:ascii("HELLO", "small", "cyan")        # big letters made of blocks
+say "Welcome to Tuff!"
+
+# input asks a question and gives back what was typed, always as text
+name = input "What's your name? "
+name = name:trim()                         # take away any spaces around it
+if name is "":
+    name = "friend"
+say f"Nice to meet you, {name}!"           # f"..." puts values into the text
+
+# num() turns typed text into a number, or gives err when it can't
+age = num(input "How old are you? ")
+if age is err:
+    say "That isn't a number, but that's OK."
+elif age >= 100:
+    say "Wow, a hundred or more!"
+else:
+    say f"In ten years you'll be {age + 10}."
+
+# A loop: range(1, 3) counts 1, 2 and 3
+for n in range(1, 3):
+    say f"Counting: {n}"
+
+# A function: it takes inputs and gives back an answer
+func shout(words):
+    return words:upper() + "!"
+
+say shout("tuff is fun")
+
+# A list, and a line in each of its colours
+colours = ["red", "orange", "gold", "lime", "sky", "purple"]
+for colour in colours:
+    say:color(f"This line is {colour}.", colour)
+
+say f"Bye for now, {name}!"
+
+# Ideas to try:
+# - Ask for a favourite food, and say something different for pizza.
+# - Make a function that says hello in three languages.
+# - Count down from 10 with range(10, 1, -1) and wait(1) between the numbers.

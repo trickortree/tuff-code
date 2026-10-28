@@ -1,0 +1,7 @@
+<svg viewBox="0 0 120 72" xmlns="http://www.w3.org/2000/svg">
+  <path class="pline faint" d="M10 18h100M10 28h100M10 38h100M10 48h100M10 58h100"/>
+  <ellipse class="t" cx="45" cy="53" rx="8" ry="6" transform="rotate(-20 45 53)"/>
+  <ellipse class="t" cx="77" cy="45" rx="8" ry="6" transform="rotate(-20 77 45)"/>
+  <path class="tline wide" d="M52 51V17l32-7v33"/>
+  <path class="t" d="M50 15l36-8v8l-36 8z"/>
+</svg>

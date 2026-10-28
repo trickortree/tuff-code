@@ -10,7 +10,7 @@ const vm = require('vm');
 const { spawn } = require('child_process');
 const os = require('os');
 
-const VERSION = '1.4.1';
+const VERSION = '1.5.0';
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const RENDERER_JS = path.join(__dirname, '..', 'renderer', 'js');
 
@@ -170,13 +170,14 @@ const TOOLS = [
   },
   {
     name: 'tuff_check',
-    description: 'Check Tuff code for mistakes without running it: syntax, names that are never set or only exist inside another function (with "did you mean"), wrong input counts, event functions that would crash or are passed with brackets, methods a list, text, window or widget doesn\'t have, unknown styles and colors, and Python habits that break in Tuff (range(len(...)), typed text used as a number, "Total: " + a + b, :pop(0)). Pass "file" (path to a .tuf file) or "code". Returns OK, or every problem with its line number, in plain English. Use it on every Tuff file you write or change, especially window (tgui/mtgui) apps, which tuff_run can only test with a self-test (see the guide).',
+    description: 'Check Tuff code for mistakes without running it: syntax, names that are never set or only exist inside another function (with "did you mean"), wrong input counts, event functions that would crash or are passed with brackets, methods a list, text, window or widget doesn\'t have, unknown styles and colors, imports of the project\'s own .tuf files (import money: the file is there, money.as_money exists and gets the right inputs, no files that import each other), and Python habits that break in Tuff (range(len(...)), typed text used as a number, "Total: " + a + b, :pop(0)). Pass "file" (path to a .tuf file) or "code". Returns OK, or every problem with its line number, in plain English. Use it on every Tuff file you write or change, especially window (tgui/mtgui) apps, which tuff_run can only test with a self-test (see the guide).',
     inputSchema: { type: 'object', properties: { file: { type: 'string', description: 'Path to a .tuf file (relative to the project or absolute).' }, code: { type: 'string', description: 'Tuff source code to check.' } } },
     annotations: { readOnlyHint: true },
     async run(a) {
       const src = sourceFile(a);
       try {
-        const r = await runTuff(['--check', src.file], { timeout: 15 });
+        // A "code" snippet sits in a temp folder: --as checks the files it imports (import money) in the project, as tuff_run finds them.
+        const r = await runTuff(['--check', src.file, ...(a.file ? [] : ['--as', path.join(process.cwd(), 'snippet.tuf')])], { timeout: 15 });
         const text = clean(r.out).trim();
         if (r.code === 0) return text || 'OK';
         throw new Error(text || `The check failed (exit code ${r.code}).`);
@@ -185,7 +186,7 @@ const TOOLS = [
   },
   {
     name: 'tuff_run',
-    description: 'Run a Tuff program and return what its Run window shows at the end (lines changed with :rewrite or removed with clear show their final state), with each typed answer shown after its question. Pass "file" or "code", plus optional "input" (the answers to type, one per line) and "timeout_seconds" (default 10, max 60). If the program asks more questions than there are answers, it stops with an error saying so. File writes stay in memory for that run: file.write, file.add, file.save and file.delete work and later reads in the same run see them, but nothing is saved and no file on disk changes. Relative file paths are in the project folder for "code", and in the file\'s own folder for "file", so a snippet can read the project\'s files. Programs that open app windows (tgui/mtgui) show a real window on the user\'s screen until the timeout, so use tuff_check for those.',
+    description: 'Run a Tuff program and return what its Run window shows at the end (lines changed with :rewrite or removed with clear show their final state), with each typed answer shown after its question. Pass "file" or "code", plus optional "input" (the answers to type, one per line) and "timeout_seconds" (default 10, max 60). If the program asks more questions than there are answers, it stops with an error saying so. File writes stay in memory for that run: file.write, file.add, file.save and file.delete work and later reads in the same run see them, but nothing is saved and no file on disk changes. Relative file paths are in the project folder for "code", and in the file\'s own folder for "file", so a snippet can read the project\'s files and import its own .tuf files (import money.tuf loads money.tuf). Programs that open app windows (tgui/mtgui) show a real window on the user\'s screen until the timeout, so use tuff_check for those. A tterm game gets no key presses here: its frames run at once, screen:press("right") gives the next frame a key, it stops 100 frames after the last one, and you see how its screen ended.',
     inputSchema: { type: 'object', properties: { file: { type: 'string' }, code: { type: 'string' }, input: { type: 'string' }, timeout_seconds: { type: 'number' } } },
     async run(a) {
       const src = sourceFile(a);

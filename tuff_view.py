@@ -396,6 +396,13 @@ def _box_up():
     return False
 
 
+def _paused():
+    """The seconds tuff.py's debugger has kept the program paused, at a breakpoint or an error (1.5.0; 0 with no
+    debugger). tuff.py is found the way _box_up finds it."""
+    held = [getattr(sys.modules.get(name), "debug_paused", None) for name in ("tuff", "__main__")]
+    return max([paused() for paused in held if paused is not None] or [0.0])
+
+
 def _stuck_threads(timeout):
     """pywebview's own threads still running after `timeout` seconds (a thread's target is kept while it runs)."""
     def pywebview_threads():
@@ -409,9 +416,8 @@ def _stuck_threads(timeout):
 
 
 def _no_pywebview():
-    """What to do when pywebview isn't installed, with the command for this computer (a Mac has python3, not py)."""
-    python = "py" if sys.platform == "win32" else "python3"
-    return f"App and game windows need pywebview. Install it with:  {python} -m pip install pywebview"
+    """What to say when pywebview isn't installed. It names neither it nor Python: TuffCode's users only know Tuff."""
+    return "App and game windows need Tuff's window engine, which isn't installed. Reinstall TuffCode."
 
 
 QUIET_FLAGS = ["--mute-audio", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
@@ -574,6 +580,9 @@ class _FileHandler(http.server.BaseHTTPRequestHandler):
         base = web
         if rel.startswith("assets/"):
             base, rel = assets, rel[len("assets/"):]
+        elif rel.startswith("shared/"):  # a folder shared by name (SHARED)
+            name, _, rel = rel[len("shared/"):].partition("/")
+            base = SHARED.get(name)
         if not base:
             return self.send_error(404)
         full = os.path.abspath(os.path.join(base, *rel.split("/")))
@@ -592,6 +601,14 @@ class _FileHandler(http.server.BaseHTTPRequestHandler):
 
 _files = None
 _files_lock = threading.Lock()
+# Folders besides a window's assets folder that every window's page can load files from, each by a name (1.5.0:
+# "music", tmusic's songs, made in a folder of their own). The page asks for <its address>shared/<name>/<file>.
+SHARED = {}
+
+
+def share(name, folder):
+    """Lets every window's page load the files in folder, at view.shared_url(name, file)."""
+    SHARED[name] = os.path.abspath(folder)
 
 
 def _file_server():
@@ -697,6 +714,7 @@ class View:
         self._closed = False
         self._close_done = False      # the close handlers have started (they run once)
         self._close_started = None    # ...when (time.monotonic())
+        self._close_paused = 0.0      # ...and how long the debugger had held the program by then (see _paused)
         self._close_finished = False  # ...and they've finished
         self._in_call = 0             # calls into pywebview's window in progress (see _window_call)
         self._failure = None
@@ -1025,6 +1043,14 @@ class View:
             raise ViewError(f"Couldn't find '{path}'. Put the file in {self._assets}.")
         return self._base + "assets/" + urllib.parse.quote(os.path.relpath(full, self._assets).replace(os.sep, "/"))
 
+    def shared_url(self, name, file):
+        """The address the page uses for a file in a folder shared by name (share), like tmusic's songs."""
+        folder = SHARED.get(name)
+        full = os.path.abspath(os.path.join(folder, file)) if folder else ""
+        if not folder or not _inside(full, folder) or not os.path.isfile(full):
+            raise ViewError(f"Couldn't find '{file}' in the shared folder '{name}'.")
+        return self._base + f"shared/{urllib.parse.quote(name)}/" + urllib.parse.quote(os.path.relpath(full, folder).replace(os.sep, "/"))
+
     def _move_sets(self):
         cmds = self._cmds
         for i, p in self._sets.items():
@@ -1134,6 +1160,7 @@ class View:
             if self._close_done:
                 return
             self._close_done = True
+            self._close_paused = _paused()
             self._close_started = time.monotonic()
             try:
                 self._handle(e, t)
@@ -1155,9 +1182,11 @@ class View:
             self._dispatch({"type": "close"})
 
     def _close_overdue(self):
-        """Main thread: the close handlers are still running CLOSE_GRACE s after CLOSE_LIMIT (run() ends the program)."""
+        """Main thread: the close handlers are still running CLOSE_GRACE s after CLOSE_LIMIT (run() ends the program).
+        The time the debugger has held the program since doesn't count (1.5.0): a handler paused there isn't stuck."""
         started = self._close_started
-        return started is not None and not self._close_finished and time.monotonic() > started + CLOSE_LIMIT + CLOSE_GRACE
+        return (started is not None and not self._close_finished
+                and time.monotonic() - (_paused() - self._close_paused) > started + CLOSE_LIMIT + CLOSE_GRACE)
 
     def _handle(self, e, t):
         for i in e.get("path") or ():
@@ -1434,6 +1463,9 @@ class Recorder(View):
         if not _inside(full, self._assets) or not os.path.isfile(full):
             raise ViewError(f"Couldn't find '{path}'. Put the file in {self._assets}.")
         return "asset:" + os.path.relpath(full, self._assets).replace(os.sep, "/")
+
+    def shared_url(self, name, file):
+        return f"shared:{name}/{file}"
 
     def flush(self): pass
     def frame(self): return 0.0

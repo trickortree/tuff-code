@@ -24,7 +24,9 @@ BG = "#1e1f22"
 SPEEDS = {"slow": 3, "normal": 6, "fast": 10, "instant": 0}
 # A pen's methods (the checker knows them from here too).
 PEN_METHODS = ("forward", "back", "left", "right", "go", "jump", "home", "face", "up", "down", "color", "width", "speed",
-               "circle", "square", "triangle", "polygon", "star", "dot", "write", "hide", "show", "x", "y")
+               "circle", "square", "triangle", "polygon", "star", "dot", "write", "hide", "show", "shape", "x", "y")
+# The looks pen:shape takes (1.5.0): Tuff's word, then turtle's own name for it.
+PEN_SHAPES = {"turtle": "turtle", "arrow": "classic", "big arrow": "arrow", "circle": "circle", "square": "square", "triangle": "triangle"}
 CLOSED = "The drawing window was closed, so the drawing stopped."
 
 
@@ -329,6 +331,21 @@ class Pen:
 
     def show(self):
         self.t.showturtle()
+
+    def shape(self, look, size=None):
+        """What the pen looks like (1.5.0): "turtle" (the start), "arrow", "big arrow", "circle", "square" or "triangle".
+        A size after it makes it bigger or smaller (2 is twice as big). The drawing doesn't change."""
+        word = " ".join(self.rt.text(look).strip().lower().split())
+        if word not in PEN_SHAPES:
+            raise self.rt.error('pen:shape takes "turtle", "arrow", "big arrow", "circle", "square" or "triangle" '
+                                '(pen:hide() hides it).')
+        self.t.shape(PEN_SHAPES[word])
+        if size is not None:
+            n = self.num(size, "pen:shape")
+            if n <= 0:
+                raise self.rt.error("pen:shape's size has to be more than 0.")
+            self.t.shapesize(n, n)
+        self.lib.refresh()
 
     def x(self):
         return round(self.t.xcor(), 2)

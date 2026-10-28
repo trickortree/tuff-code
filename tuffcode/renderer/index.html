@@ -7,6 +7,7 @@
   <title>TuffCode</title>
   <link rel="stylesheet" href="styles/ide.css" />
   <link rel="stylesheet" href="styles/intro.css" />
+  <link rel="stylesheet" href="styles/debugger.css" />
 </head>
 <body class="booting">
   <!-- ================= IDE ================= -->
@@ -33,6 +34,7 @@
             <svg class="i-play" data-icon="play-fill"></svg>
             <svg class="i-stop" data-icon="stop-fill"></svg>
           </button>
+          <button class="rw-btn debug" id="btn-debug" title="Debug (Shift+F9): stops at your breakpoints"><svg data-icon="bug-line"></svg></button>
           <button class="rw-btn run2 hidden" id="btn-run2" title="Run a second player: another copy of this game, to host in one and join in the other">
             <svg class="i-players" data-icon="group-fill"></svg>
             <svg class="i-stop" data-icon="stop-fill"></svg>
@@ -147,6 +149,7 @@
                 <li><span>Run Current File</span><kbd>Shift+F10</kbd></li>
                 <li><span>Project View</span><kbd>Alt+1</kbd></li>
               </ul>
+              <button class="btn es-new" id="es-new-project" title="Start from a starter project">New Project…</button>
             </div>
           </div>
         </div>
@@ -171,7 +174,7 @@
               <button id="bottom-hide" title="Hide (Alt+4)"><svg data-icon="minimize-line"></svg></button>
             </div>
           </div>
-          <pre id="run-output"></pre>
+          <div id="run-split"><pre id="run-output"></pre></div> <!-- the debugger's pane goes beside it (debugger.js) -->
           <div id="build-output" class="hidden">
             <div class="bo-empty" id="bo-empty">
               <b>Turn your program into an .exe</b>
@@ -389,11 +392,14 @@
   <script src="js/intro.js"></script>
   <script src="js/autosort.js"></script>
   <script src="js/whats-new.js"></script>
+  <script src="js/tterm.js"></script>
   <script src="js/ide.js"></script>
   <script src="js/learn.js"></script>
   <script src="js/tuff-templates.js"></script>
   <script src="js/studio.js"></script>
   <script src="js/tuff-engine.js"></script>
+  <script src="js/debugger.js"></script>
+  <script src="js/new-project.js"></script>
   <script src="js/plugins.js"></script>
 </body>
 </html>

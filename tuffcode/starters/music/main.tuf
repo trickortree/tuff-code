@@ -1,0 +1,88 @@
+# Music Box: tunes written as notes. Play one, change the instrument, write
+# your own, or save one as a .wav file.
+# Notes look like C4 E4 G4: a letter from A to G, then the octave (C4 is middle
+# C). C#4 is a sharp and Bb3 a flat, *2 makes a note twice as long, /2 half as
+# long, . is a rest, and C4+E4+G4 plays three notes together.
+mention tmusic
+
+tunes = {
+    "Twinkle Twinkle": "C4 C4 G4 G4 | A4 A4 G4*2 | F4 F4 E4 E4 | D4 D4 C4*2",
+    "Ode to Joy": "E4 E4 F4 G4 | G4 F4 E4 D4 | C4 C4 D4 E4 | E4*1.5 D4/2 D4*2",
+    "Up and down": "C4 D4 E4 F4 G4 A4 B4 C5 | C5 B4 A4 G4 F4 E4 D4 C4*2"
+}
+instruments = ["piano", "chip", "bell", "pluck", "organ", "flute"]
+instrument = "piano"
+last_notes = ""                     # the last notes played, for saving
+
+# A little band: three tracks that play together.
+func band_song():
+    song = tmusic.song(110)
+    song:track("piano", "C4+E4+G4*2 A3+C4+E4*2 | F3+A3+C4*2 G3+B3+D4*2")
+    song:track("bass", "C2*2 A1*2 | F1*2 G1*2", 80)
+    song:track("drums", "kick hat snare hat | kick hat snare kick")
+    return song
+
+# Plays some notes. A mistake in them (like H4) is shown, and the music box
+# carries on.
+func play_notes(notes):
+    try:
+        tmusic.play(notes, instrument)
+        last_notes = notes
+    catch problem:
+        say:color(f"Those notes didn't work: {problem}", "orange")
+
+func save_last():
+    if last_notes is "":
+        say "Play a tune first, then save it."
+        return
+    song = tmusic.song(120)
+    song:track(instrument, last_notes)
+    song:save("my_tune.wav")
+    say:color(f"Saved my_tune.wav ({song:length()} seconds) in the project folder.", "lime")
+
+names = tunes:keys()
+say:ascii("MUSIC", "small", "pink")
+while true:
+    say ""
+    number = 1
+    for name in names:
+        say f"  {number}. {name}"
+        number += 1
+    say "  b. A little band (piano, bass and drums)"
+    say "  w. Write your own notes"
+    say f"  i. Change the instrument (now {instrument})"
+    say "  s. Save the last tune as a .wav file"
+    say "  q. Quit"
+    choice = input "Your choice? "
+    choice = choice:trim():lower()
+    if choice is "q" or choice is "":
+        break
+    elif choice is "b":
+        say "Playing the band..."
+        band_song():play()
+    elif choice is "w":
+        notes = input "Your notes, like C4 E4 G4 C5*2: "
+        play_notes(notes)
+    elif choice is "i":
+        say f"Instruments: {instruments:join(", ")}"
+        picked = input "Which one? "
+        picked = picked:trim():lower()
+        if instruments:has(picked):
+            instrument = picked
+        else:
+            say:color(f"There's no {picked}, so it's still {instrument}.", "orange")
+    elif choice is "s":
+        save_last()
+    elif int(choice) is not err and int(choice) >= 1 and int(choice) <= len(names):
+        name = names[int(choice) - 1]
+        say f"Playing {name} on the {instrument}..."
+        play_notes(tunes[name])
+    else:
+        say:color("Type a number or a letter from the list.", "orange")
+
+say "Bye!"
+
+# Ideas to try:
+# - Add your favourite tune to tunes (in notes, of course).
+# - A song:loop() that plays while people pick, and song:stop() to end it.
+# - A "random tune" choice that makes notes from a list with random().

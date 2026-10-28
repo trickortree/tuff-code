@@ -143,6 +143,64 @@ ${NOTES['1.3.0'].notes}`,
 - Claude, Codex, Antigravity and Pumice 1 know all of it.`,
   };
   // 1.4.0, the Toolbox Update (a beta for now: its picture comes later).
+  // 1.5.0, The Workshop Update (being built: these notes grow with each beta).
+  NOTES['1.5.0'] = {
+    images: ['1.png'],
+    notes: `### Text templates
+- \`f"{name} has {score + 1} points"\`: any code inside { }, shown the way say shows it.
+- Formats by example: \`{price:money}\` gives $12.50, \`{x:0.00}\` two decimals (rounded half up), \`{n:000}\` 007, \`{name:12}\` a width.
+
+### Animated sprites
+- \`hero:frames(4)\` cuts a sprite sheet into frames, \`hero:animation("walk", [1, 2, 3, 4], 10)\` names some, and \`hero:play("walk")\` plays them. They pause with the game, and Sprite Studio's "Use in code" writes them for you.
+
+### Your own files
+- \`import money.tuf\` loads money.tuf from the same folder (or a libs folder there). A file can have a library's name too: \`import tmusic.tuf\` is yours, \`import tmusic\` is Tuff's. Its functions and values go after a dot: \`money.as_money(6.375)\`, \`money.rate\`.
+- Each file runs once, however many files import it. Mistakes name the file and line they're in.
+
+### Kinds: your own objects
+- \`kind Pet:\` with fields (\`name = "?"\`, \`hunger = 5\`) and actions (\`func feed(amount):\`). Inside an action, \`my.hunger\` is the pet's own.
+- \`rex = Pet("Rex")\` fills the fields in order. Then \`rex.hunger\`, \`rex:feed(2)\`, and \`file.save\` keeps pets for next time.
+
+### tterm: terminal games
+- \`screen = tterm.screen(40, 20)\` gives a grid of letters in colours. Draw with \`screen:put(x, y, "@", "lime")\`, \`:text\` and \`:box\`, and read keys with \`screen:pressed("space")\` and \`screen:held("left")\`.
+- \`screen:every_frame(step)\` runs a game about 20 times a second, in the Run panel (click it to play), a terminal or a Build exe.
+
+### tmusic: music from notes
+- \`tmusic.play("C4 E4 G4 C5*2", "piano")\` plays a tune.
+- \`song = tmusic.song(120)\`, then \`song:track("chip", "C4 E4 G4 E4")\` for each instrument (piano, chip, bass, pluck, bell, organ, flute and drums). \`song:play()\`, \`song:loop()\`, \`song:save("theme.wav")\`, or a game's \`game:music(song)\`.
+
+### Faster
+- Tuff programs run several times faster: a million-step loop takes a fraction of a second. Library calls are about 5 times quicker too.
+- A sum too big for a decimal (\`10 ^ 400 / 3\`) says so in plain words instead of crashing.
+
+### The debugger
+- Click beside a line number (or press F9) for a red dot, a breakpoint. Press Debug, next to Run (Shift+F9), and the program stops on that line.
+- While it's stopped, Variables shows each name's value (lists, dictionaries and kinds open up) and the call stack shows which function called which. Step Over (F10), Step Into (F11), Step Out (Shift+F11) and Continue (F5) move it on.
+- An error stops it on the line that went wrong, with the names as they were.
+- Watch it run lights up each line as it runs, slow enough to follow, with a speed slider.
+- Breakpoints stay with their lines when the whole file changes at once: Auto Code Sort (and its Undo), Replace in Files, or another program changing the file.
+
+### New Project
+- File > New Project… starts a project from a starter: Hello, Quiz, Habit Tracker, Corner Shop, Snake, Coin Collector, Music Box, Drawing, Weather or a blank one. Give it a name and it opens, ready to run.
+
+### Learn
+- A new section, 1.7 · Workshop: a lesson each for text templates, kinds, actions, your own files, music, a terminal game and animated pictures.
+
+### Tabs
+- **Drag a tab** along the top to move it. Escape while dragging puts it back. Ctrl+Shift+PgUp and Ctrl+Shift+PgDn move the tab you're on, and TuffCode reopens your tabs in that order.
+- **Right-click a tab** to Run it, close the tabs to its left or right, move it, copy its path (or the part inside your project), show it in the Project view or rename it.
+
+### Drawing
+- **Change the pen's look:** \`pen:shape("arrow")\`. It takes "turtle", "arrow", "big arrow", "circle", "square" or "triangle", and a size makes it bigger: \`pen:shape("turtle", 2)\`. \`pen:hide()\` still hides it.
+- After \`pen:\` the editor suggests only what a pen can do. It used to suggest everything, \`app:icon\` too. \`song:\` suggests a song's methods the same way.
+
+### Fixes
+- **Built apps keep what they save:** files from \`file.save\`, \`file.write\`, \`file.add\` and \`song:save\` go in a folder beside the app, named after it (Corner Shop files for Corner Shop), so they're still there next time. If it can't save there (in Program Files, say), it saves in a TuffApps folder in your app data. They used to vanish when the app closed.
+- Build Exe works for a project whose folder has a ; in its name, and a new project's name can't have one.
+- After you open another folder, Run, Rerun (Ctrl+F5), Design Studio and Build use that folder's files, not the last project's.
+- On Windows and Linux, Ctrl+W and Ctrl+R in a box (New Project, Search Everywhere) no longer close or reload TuffCode.
+- Learn: stopping a lesson's program (Stop, or Ctrl+F2) no longer says it hit an error.`,
+  };
   // 1.4.1 fixes 1.4.0 and adds looks to input and anims.
   NOTES['1.4.1'] = {
     images: ['../1.4.0/1.png'],

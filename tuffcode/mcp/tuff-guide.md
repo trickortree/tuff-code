@@ -14,7 +14,7 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `x // 2` | `floor(x / 2)` (or `int(x / 2)`, which drops the decimals toward zero) |
 | `x++`, `x %= 3` | `x += 1`, `x = x % 3` (only `+= -= *= /=` exist) |
 | `str(x)`, `int(s)`, `float(s)` | `str(x)` and `text(x)` both work; `number(s)` or `num(s)` (a decimal only if the text has a "."); `int(s)` for a whole number. There's no `float`. |
-| `f"Hi {name}"`, `.format()` | `"Hi " + name`. Numbers join on their own (`"Score: " + 5`), but put sums in brackets: `"Score: " + (score + 1)` |
+| `f"Hi {name}"` | the same: `f"Hi {name}, you have {score + 1}"` (see "Text templates"), or join with `+`: `"Hi " + name`. Numbers join on their own (`"Score: " + 5`), but put sums in brackets: `"Score: " + (score + 1)` |
 | `items.append(x)` | `items:add(x)` |
 | `s.upper()`, `s.strip()` | `s:upper()`, `s:trim()` |
 | `x in items`, `"a" in s` | `items:has(x)`, `s:has("a")`, `ages:has("sam")` (`in` only appears in `for` loops) |
@@ -24,10 +24,11 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `items.sort()`, `sorted(items, key=f)` | `items:sort()`, `items:sort(f)`, `items:reverse()` |
 | `open("f.txt").read()`, `json.dump` | `file.read("f.txt")`, `file.write`, `file.lines`, `file.save("f.json", data)`, `file.load` |
 | `try:` / `except Exception as e:` | `try:` / `catch e:` (`e` is the message, as text; any name that isn't Tuff's own, like `err` or `text`) |
-| `f"{x:.2f}"` | `text(x, 2)` |
+| `f"{x:.2f}"`, `f"{n:03}"`, `.format()` | formats by example: `f"{x:0.00}"`, `f"{n:000}"`, `f"{price:money}"`, `f"{name:10}"` (see "Text templates"); `text(x, 2)` also works |
 | `range(3)` gives 0, 1, 2 | `range(3)` gives 1, 2, 3, and `range(1, 3)` gives 1, 2, 3: both ends are included |
 | `for i in range(len(items)):` | `for item in items:`, or `for i in range(0, len(items) - 1):` |
-| `thing.method()` | `thing:method()`, with no spaces around the `:` (only libraries use a dot: `mtgui.window(...)`) |
+| `thing.method()` | `thing:method()`, with no spaces around the `:` (a dot is only for libraries, `mtgui.window(...)`, your own files, `money.as_money(5)`, and an object's fields, `rex.hunger`) |
+| `import money` / `from money import as_money` (your own money.py) | `import money.tuf` loads your money.tuf; then `money.as_money(5)` and `money.rate` (see "Your own files") |
 | `&&`, `\|\|`, `!` | `and`, `or`, `not` |
 | `1 < x < 9` | `x > 1 and x < 9` |
 | `a, b = 1, 2` | one per line: `a = 1`, then `b = 2` |
@@ -39,9 +40,10 @@ Tuff is a small, beginner-friendly language made for TuffCode. Files end in `.tu
 | `import random`, `import math`, `import time` | nothing to import. Built in: `random(a, b)` (and `random()` for a decimal from 0 to 1), `sqrt`, `floor`, `ceil`, `round`, `abs`, `min`, `max`, `sum`, `average`, `pi`, `sin`/`cos`/`tan` (in degrees), `log`, `now()`, `today()`, `date()`, `time()`. There's no exp, no `random.choice` (use `items[random(0, len(items) - 1)]`) and no shuffle |
 | `requests.get(url)`, `json.loads(...)` | `mention tap`, then `res = tap.get(url)` and `res:json` (see "tap") |
 | `import pygame` | `mention tgame`, then `game = tgame.window("Title", 800, 600)` (see "tgame") |
-| classes, `lambda`, `exit()` | not in Tuff (see "What Tuff can't do") |
+| `class Pet:`, `self.hunger`, `Pet("Rex")` | `kind Pet:` with fields and actions; inside an action the object is `my`: `my.hunger`. `Pet("Rex")` makes one (see "Kinds") |
+| `lambda`, `exit()` | not in Tuff (see "What Tuff can't do") |
 
-These words are keywords and can't be names: `func return if elif else then while for in break continue and or not is true false nil say input flush import mention`.
+These words are keywords and can't be names: `func return if elif else then while for in break continue and or not is true false nil say input flush import mention`. `try`, `catch`, `kind` and `my` are Tuff's words only where they start a block (`try:`, `kind Pet:`) or, for `my`, inside a kind's action, so a variable of yours called `kind` or `my` still works.
 
 ## Two rules that trip everyone up
 **Rule 1: a method's input without brackets takes the rest of the line.** When what follows a method's name could start a value (a name, a number, text, `-`, `[`, `{`, `not`, `true`, `false` or `nil`), that and the rest of the line are the method's input. `items:has x and ready` means `items:has(x and ready)`, and `say slider:value - 1` gives the slider an input of `-1`. Anything else ends the call: `stack:pop + 10` is normal maths. So whenever more of the line follows a method call, put its inputs in brackets, even empty ones:
@@ -57,7 +59,7 @@ say level - 1
 - Brackets are only optional when the method call ends the line, like `app:heading "Hi"` or `box:set "Done"`.
 - An input that *starts* with a bracket counts as the method's own brackets: `label:set (score) + " points"` means `label:set(score) + " points"`. Wrap the whole input instead: `label:set(text(score) + " points")`.
 
-**Rule 2: names are shared.** A variable made at the top of the program can be changed by any function. Inside a function, `x = 5` (or `for x in ...`) changes the top-level `x` if that already exists when the function runs. Otherwise `x` is a scratch name that only lives inside the function, and disappears when it ends. So:
+**Rule 2: names are shared (within a file).** A variable made at the top of the program can be changed by any function in the same file. (Each of your own files has a top level of its own: see "Your own files".) Inside a function, `x = 5` (or `for x in ...`) changes the top-level `x` if that already exists when the function runs. Otherwise `x` is a scratch name that only lives inside the function, and disappears when it ends. So:
 - give every top-level variable its starting value near the top of the program (`score = 0`), before calling functions that use it;
 - give each function's scratch values names that aren't used anywhere else (`total_count`, not `i`, if the top level has an `i`);
 - never use a built-in's name for your own variable: `sum = 0` replaces `sum()` everywhere. The built-ins are `print`, `text`, `str`, `number`, `num`, `int`, `len`, `round`, `random`, `wait`, `range`, `clear`, `sqrt`, `abs`, `floor`, `ceil`, `min`, `max`, `sum`, `average`, `pi`, `sin`, `cos`, `tan`, `log`, `now`, `today`, `time`, `date`, `file`, `err` and `all`.
@@ -107,6 +109,16 @@ say double(4)
   - So does anything worked out from a decimal: `/=`, `average(...)`, `round(x, 2)`, `number("2.0")`, `abs(-1.0)`, or a sum with a decimal in it.
   - A decimal can't be a list position or repeat text. Use `floor(...)` to get a whole number.
 - **Showing decimals:** decimals show every digit: `0.1 + 0.2` shows 0.30000000000000004, and `1 / 3` shows 0.3333333333333333. Round any worked-out decimal before showing it, with `round(x, 2)` or `one_decimal` / `as_money` from "Patterns". Whole numbers show without `.0`.
+- **Big numbers:** a whole number can be as big as you like: `2 ^ 100` is 1267650600228229401496703205376, and `say` and `text(x, 2)` show every digit. A decimal only goes up to about 1 followed by 308 zeros, so a sum that would make a bigger one stops the program with "That number is too big to work out.", like `10 ^ 400 / 3` (`/` gives a decimal) or `2 ^ 2000 * 1.5`. `tuff_check` finds it before the program runs when the sum is all numbers written in the program. Inside `try:`, `catch` gets the message.
+```tuff
+big = 2 ^ 100                       # a whole number: any size
+say big                             # 1267650600228229401496703205376
+say text(10 ^ 25, 2)                # 10000000000000000000000000.00
+try:
+    say 10 ^ 400 / 3                # too big for a decimal
+catch problem:
+    say problem                     # That number is too big to work out. ...
+```
 - **Built in:** `round(x)`, `round(x, 2)`, `floor`, `ceil`, `abs`, `sqrt`, `min`, `max`, `sum`, `average` (give several numbers or one list), and `pi`.
   - `round` rounds exact halves to the even number: `round(2.5)` is 2 and `round(82.25, 1)` is 82.2. For money and grades, use `round_half_up` from "Patterns".
 - **Random numbers:**
@@ -122,7 +134,7 @@ say double(4)
 
 ## Text
 - **Joining:** join with `+`: `"Hi " + name + "!"`. Anything joined with text becomes text: numbers, true/false, nil and even lists.
-  - `+` works left to right, so `"Total: " + a + b` gives "Total: 23". Put the maths in brackets: `"Total: " + (a + b)`.
+  - `+` works left to right, so `"Total: " + a + b` gives "Total: 23". Put the maths in brackets: `"Total: " + (a + b)`, or use a text template, which needs none: `f"Total: {a + b}"`.
 - **Repeating and letters:**
   - `"ha" * 3` is `"hahaha"`. The number must be whole, and 0 or less gives `""`.
   - Use `len(t)`, `t[0]`, and `t[-1]` for the last letter. `t[0:2]` is the first three letters (see "Text tools and parts").
@@ -134,6 +146,31 @@ say double(4)
   - Single quotes work too: `'it\'s'`.
   - A backslash before any other letter stays as it is, but `\n` and `\t` still mean a new line and a tab, so write file paths with forward slashes: `"pics/cat.png"`.
 - **More tools:** `t:split(",")`, `t:replace("a", "b")`, `items:join(", ")`, parts like `t[1:3]`, `t:starts`, `t:find`, `t:count`, `t:pad_left` and `text(x, 2)` (a number with 2 decimals) are in "Text tools and parts".
+
+## Text templates
+```tuff
+name = "Sam"
+score = 9
+say f"{name} has {score + 1} points"    # Sam has 10 points
+price = 6.375
+say f"Total: {price * 2:money}"         # Total: $12.75
+say f"{2.675:0.00} {7:000} {1 / 3:0.0}" # 2.68 007 0.3
+say f"[{name:6}] [{score:4}]"           # [Sam   ] [   9]
+say f"[{name:>6}] [{score:<4}]"         # [   Sam] [9   ]
+say f"{name:upper()} likes {{braces}}"  # SAM likes {braces}
+ages = {"sam": 14}
+say f'{ages["sam"]}, {ages:get("ann", 0)}, { {"a": 1}["a"] }'   # 14, 0, 1
+```
+- **What goes in the { }:** any value or sum. It's worked out when the line runs and shown the way `say` shows it (`[1, 2]`, `true`, `nil`), so there's no `+` and no brackets to get wrong. The rest is ordinary text: `\n`, `\t` and `\"` work, and so do single quotes: `f'...'`.
+- **Formats** go after a `:` at the end of the { }, written by example:
+  - `0.00` rounds to 2 decimals (`0.0` to one, `0` to a whole number), and `000` shows at least 3 digits (7 is `007`; `000.0` does both). They round halves up, the way people do: 2.675 is 2.68 and 2.5 is 3 (`round` would give 2).
+  - `money` is dollars and cents with commas: 1234.5 is `$1,234.50`, and -1.5 is `-$1.50`.
+  - a width like `12` pads to 12 letters, with text on the left and numbers on the right, so columns line up. `>12` and `<12` choose the side. A longer value isn't cut.
+  - `0.00`, `000` and `money` only work on numbers. Turn typed text into a number first: `{num(answer):0.00}`.
+- **Format or method:** the format starts at the last `:` that isn't inside brackets or quotes, and only when what follows it is a format. So `{price:money}` and `{x:0.00}` are formats, and `{name:upper()}` and `{d:get("k")}` are method calls.
+- **Inside the { }:** quotes can be the template's own (`f"{d:get("k")}"`). A dictionary needs a space after the template's brace, because `{{` shows a brace: `{ {"a": 1}["a"] }`.
+- **Braces:** `{{` and `}}` show `{` and `}`.
+- A template is one line, like any text, and a `#` can't go in its { }. A mistake inside the braces points at its place in the text: `f"{nmae}"` says "I don't know what 'nmae' is. Did you mean 'name'?", and a `{` without its `}` says so.
 
 ## Lists
 ```tuff
@@ -191,6 +228,57 @@ say len(ages)                       # 2 (ages:size() is the same)
 - Written over several lines inside `{ }`, it's one line of code.
 - **Files:** save one with `file.save` (see "Files"), and load it back with `file.load`. A file keeps every key as text, so number keys come back as text: save `{1: "gold"}`, and after `file.load` read it with `d["1"]`, not `d[1]`. The error for a missing key says so.
 - `:size()`, `:get`, `:has`, `:keys` and `:set("bob", 15)` work like a tap data object's (see "tap"), so a function can take either one.
+
+## Kinds: your own objects
+A kind is your own kind of object: a pet with a name and how hungry it is, an enemy with hp and speed, a book with a title and pages. You write its **fields** (each with the value a new one starts with) and its **actions** (functions it can do), and then make as many as you like.
+```tuff
+kind Pet:
+    name = "?"
+    hunger = 5
+    toys = []                       # every new Pet gets a list of its own
+    func feed(amount):
+        my.hunger -= amount         # my is the Pet the action runs on
+        if my.hunger < 0:
+            my.hunger = 0
+    func play(toy):
+        my.toys:add(toy)
+        my:feed(-1)                 # an action can run another one: playing makes it hungrier
+rex = Pet("Rex")                    # the inputs fill the fields in order: name is "Rex", hunger stays 5
+ann = Pet("Ann", 2)
+rex:feed(3)                         # actions use ':'
+rex.hunger += 1                     # fields use '.'
+ann:play("ball")
+say rex                             # Pet(name: "Rex", hunger: 3, toys: [])
+say ann.name + " has " + ann.toys:join(", ") + ", hunger " + ann.hunger    # Ann has ball, hunger 3
+```
+- **Making one:** `Pet("Rex")` fills the fields in the order they're written. Fewer inputs is fine, and the rest start with their values from the kind. More inputs than fields is an error. Each new object works its starting values out again, so `toys = []` gives every Pet its own list.
+- **Fields** use a dot. Read one with `rex.hunger`, and change it with `rex.hunger = 3` or `rex.hunger += 1`. An object has only its kind's fields: `rex.hungr = 3` stops with "Pet doesn't have a field 'hungr'. Did you mean 'hunger'?", and `tuff_check` says so before the program runs.
+- **Actions** are functions written inside the kind, and they run with `:`, like `rex:feed(3)`. Inside one, `my` is the object itself: `my.hunger` is its field, and `my:play("ball")` runs another of its actions. Write `my.hunger`, not `hunger`, for a field. Every other name follows rule 2, as in any function.
+- **Showing one:** `say rex` shows `Pet(name: "Rex", hunger: 3, toys: [])`, and so do `text(rex)`, `f"{rex}"` and text joined with it.
+- **Same object:** objects are shared like lists. After `best = rex`, `best.hunger = 0` changes rex too. `is` (and `==`) is true only for the very same object, so `Pet("Rex") is Pet("Rex")` is false. Compare their fields instead: `a.name is b.name`. `:has`, `:find` and `:remove` on a list look for that same object.
+```tuff
+kind Book:
+    title = ""
+    pages = 0
+    done = false
+books = [Book("Holes", 272), Book("Matilda", 240), Book("Wonder", 310)]
+books[1].done = true
+func by_pages(book):
+    return book.pages
+books:sort(by_pages)                # sort by a field: give :sort a function that gives it
+for book in books:
+    say f"{book.title:8} {book.pages:>4} {book.done}"
+file.save("books.json", books)      # each one is saved with its kind's name
+again = file.load("books.json", [])
+say again[0]                        # Book(title: "Matilda", pages: 240, done: true)
+say again[0].title                  # Matilda
+```
+- **Lists, sorting and files:** objects can go in lists and be a dictionary's values (not its keys). `:sort` on a list of objects needs a function that gives what to sort by, like `by_pages`.
+- `file.save` keeps an object as a dictionary that starts with its kind's name: `{"$kind": "Book", "title": "Holes", "pages": 272, "done": false}`. `file.load` gives back a Book when the program has `kind Book:`. A field the file doesn't have (one you added to the kind later) starts with its kind's value, so old saves still load. In a program without that kind, it stays a dictionary.
+- **Where to write them:** make kinds at the top of the file, like functions. A kind can be used above the line it's written on.
+- **What a kind doesn't have:** a kind can't be made from another kind (no inheritance), and every field can be read and changed from outside (no private fields). `len()`, `[ ]` and `for` don't work on an object: use its fields.
+- An action can't be given to a button or a timer by its name. Give them a function that runs it instead: `func feed_rex():` then `rex:feed(1)`.
+- `kind` and `my` are only Tuff's words where they mean this, so a variable of yours called `kind` or `my` still works. Inside an action, `my` can't be given a value.
 
 ## Text tools and parts
 ```tuff
@@ -319,6 +407,43 @@ board:play("explode")                               # an animation on the line w
   - **A file or pipe** (agents' tuff_run): plain text, and an animation shows only how it ends.
 - Unknown words are mistakes, with a "did you mean": `say:color("x", "redd")`.
 
+## Your own files (import money.tuf)
+A program can be split into files. `import money.tuf` (or `mention money.tuf`) loads money.tuf, from the folder of the file that imports it, or from a folder called `libs` there. Then its functions and top-level values go after a dot, like a library's:
+```tuff
+# money.tuf
+rate = 0.2
+
+# 6.375 -> "$6.38" (the comment above a func is its help when you type money.)
+func as_money(x):
+    return f"{x:money}"
+
+func with_tax(price):
+    return price + price * rate
+
+func set_rate(new_rate):
+    rate = new_rate
+```
+```tuff
+# shop.tuf, next to money.tuf
+import money.tuf
+say money.as_money(6.375)       # $6.38
+say money.with_tax(10)          # 12
+money.set_rate(0.5)
+say money.rate                  # 0.5
+rate = 1                        # shop.tuf's own rate: money.tuf's doesn't change
+say money.with_tax(10)          # 15
+```
+- **Each file has its own top level.** Rule 2 works inside each file: a function in money.tuf uses and changes money.tuf's names, never shop.tuf's, so the same name in two files never clashes.
+- **What other files see:** a file's functions, its top-level values and what it imports. The scratch names inside its functions only live there.
+- **Changing a value:** `money.rate = 2` is an error. Change it with a function in money.tuf, like `set_rate` above.
+- **Once:** a file's top-level code (like a `say` that isn't in a function) runs the first time it's imported. Importing it again, from any file, gives the same one.
+- **Where:** the importing file's folder, then the `libs` folder there. A file in libs imports the other files in libs. The name is spelled exactly as the file is, capitals too, and must be a name Tuff can use (letters, numbers and _).
+- **.tuf on the end:** `import tgame` is always Tuff's tgame, and `import tgame.tuf` is your tgame.tuf, so a file can have a library's name. `import money` without .tuf is a mistake (`tuff_check` says so). A built-in's name can't be a file's: `import random.tuf` says random() is built in.
+- **Two files can't import each other.** If shop.tuf imports money.tuf and money.tuf imports shop.tuf, neither can finish loading, and the error names them. Put what both need in a third file.
+- **Mistakes in money.tuf** are reported there, with its own line: "Tuff error in money.tuf on line 4: ...", and in TuffCode that line jumps to money.tuf.
+- **Files:** `file.read("prices.txt")` in money.tuf reads from the program's folder, like everywhere else.
+- `tuff_check` on shop.tuf knows what money.tuf has: `money.as_mony` gives "money.tuf doesn't have 'as_mony'. Did you mean 'as_money'?", and wrong input counts are caught. Each file is checked on its own, so check money.tuf too. Build exe takes the files a program imports along with it.
+
 ## Libraries
 `import x` and `mention x` mean the same thing. Put them at the top. Library functions use a dot and always need brackets, even with no inputs: `anims.loading()`. On its own, `anims.loading` does nothing.
 - **anims** shows console animations. They stop everything else while they play, so don't use them in window apps.
@@ -331,6 +456,8 @@ board:play("explode")                               # an animation on the line w
 - **atgui** ("advanced tgui") makes apps that look like the Claude or Codex desktop apps: sidebars, lists, chat bubbles, dashboards, menus and pop-ups, all styled from Tuff. See below.
 - **tgame** makes games, like pygame: 2D sprites, keys, the mouse, collisions and sounds, or a 3D world with a player. See below.
 - **tdraw** draws with a pen (a turtle), like Python's turtle: lines, shapes, fills, text and rainbow pens. See below.
+- **tterm** makes terminal games, like Snake or a roguelike: a grid of letters in colours, with keys read as they're pressed. They run in the Run window, a terminal or a Build exe. See below.
+- **tmusic** plays music written as notes, like `"C4 E4 G4 C5*2"`: tunes, songs with several instruments and drums, .wav files and a game's music. See below.
 
 ### tdraw
 ```tuff
@@ -349,6 +476,7 @@ pen:star(100, "gold")       # a colour after the size fills it
 pen:circle(40)              # also pen:square(80), pen:triangle(80), pen:polygon(6, 40), pen:dot(20, "red")
 pen:write("Hello", 24)
 pen:hide()                  # hides the turtle; pen:show() brings it back
+pen:shape("arrow")          # its look: "turtle", "arrow", "big arrow", "circle", "square", "triangle"; pen:shape("turtle", 2) is twice as big
 
 func clicked(x, y):
     pen:go(x, y)
@@ -359,6 +487,96 @@ tdraw.on_click(clicked)     # runs clicked(x, y) on each click
 - The window stays open after the program ends, until it's closed. `wait()` keeps it drawing while the program waits.
 - Several pens can draw at once: call `tdraw.pen()` again.
 - For big drawings, use `pen:speed "instant"`, or they take a while to animate.
+
+### tterm
+```tuff
+mention tterm
+screen = tterm.screen(30, 12)     # 30 across, 12 down (40, 20 if left out)
+x = 15
+
+func step(dt):                    # about 20 times a second; dt is the seconds since the last time
+    if screen:held("left") and x > 1:
+        x -= 1
+    if screen:held("right") and x < 28:
+        x += 1
+    screen:clear()                # draw each frame from nothing
+    screen:box(0, 0, 30, 12, "gray")
+    screen:text(2, 0, f" x is {x} ", "gold")
+    screen:put(x, 6, "@", "lime")
+    if screen:pressed("q"):
+        screen:stop()             # ends every_frame after this frame
+
+screen:every_frame(step)          # runs step until screen:stop() or Esc
+say f"You stopped at {x}."
+```
+- x goes right from 0 and y goes **down** from 0, one cell per letter. A spot off the screen draws nothing, and decimals round down.
+- **Drawing:** `screen:put(x, y, "@", "lime")` draws one character (a space rubs one out), `screen:text(x, y, "words", "gold")` writes to the right, `screen:box(x, y, width, height, "gray")` draws a border, and `screen:clear()` rubs out everything. The colour is optional, and it's any colour name or `"#rrggbb"`.
+- **Reading it:** `screen:get(x, y)` is the character there: `" "` when it's empty, `""` off the screen. It's handy for walls: `if screen:get(x, y) is "#":`.
+- **Keys:** `screen:pressed("space")` is true if the key went down since the last frame (and again as a held key repeats), and `screen:held("left")` is true while it's held. Keys are a letter, a number, `space`, `enter`, `tab`, `backspace`, `delete`, `up`, `down`, `left`, `right` or `"any"`. Esc always ends the game, and a terminal never sees Shift, Ctrl or Alt on their own.
+- **Where it runs:**
+  - **TuffCode's Run window:** the game takes the keys when it starts, and again when it's clicked. Esc ends it and lets go of the keys. Clicking somewhere else lets go too, and the game carries on.
+  - **A terminal and a Build exe:** it draws at the top of the terminal and reads the keys straight away. The terminal is always put back afterwards, even after an error or Ctrl+C.
+  - **With no one to press keys** (`tuff_run`, a pipe or a file): frames don't wait for the clock, and each one is 0.05 seconds of game time. `screen:press("right")` gives the next frame a key, and `screen:press("down", 30)` gives it to frame 30. The game stops by itself 100 frames after the last key, and only how the screen ends is shown.
+- The screen shows after each frame, while the program waits (`wait(0.1)` in a loop of its own), and when the program ends. Things said with `say` go below it.
+- One character fills one cell. Most emoji are two cells wide, so they may not line up everywhere.
+
+A small Snake. Steer with the arrow keys, and eat the `*`:
+```tuff
+mention tterm
+screen = tterm.screen(24, 12)
+snake = [[6, 6], [5, 6], [4, 6]]
+dx = 1
+dy = 0
+turn = "right"
+food = [15, 6]
+timer = 0
+alive = true
+
+func step(dt):
+    for key in ["up", "down", "left", "right"]:
+        if screen:pressed(key):
+            turn = key
+    timer += dt
+    if timer >= 0.15:
+        timer = 0
+        move()
+    screen:clear()
+    screen:box(0, 0, 24, 12, "gray")
+    screen:put(food[0], food[1], "*", "red")
+    for part in snake:
+        screen:put(part[0], part[1], "o", "lime")
+    if not alive:
+        screen:text(7, 5, "GAME OVER", "red")
+        screen:stop()
+
+func move():
+    if turn is "up" and dy is 0:
+        dx = 0
+        dy = -1
+    elif turn is "down" and dy is 0:
+        dx = 0
+        dy = 1
+    elif turn is "left" and dx is 0:
+        dx = -1
+        dy = 0
+    elif turn is "right" and dx is 0:
+        dx = 1
+        dy = 0
+    head = [snake[0][0] + dx, snake[0][1] + dy]
+    if screen:get(head[0], head[1]) is not " " and head != food:
+        alive = false
+        return
+    snake = [head] + snake
+    if head == food:
+        food = [random(1, 22), random(1, 10)]
+    else:
+        snake:pop()
+
+screen:every_frame(step)
+say f"Your snake was {len(snake)} long."
+```
+- The keys only choose the next turn, and `move()` makes it, so the snake can't double back on itself.
+- `screen:get` says what's in the cell ahead: a wall or the snake's own body ends the game.
 
 ### tap
 ```tuff
@@ -382,6 +600,59 @@ say sent:status
 - **What :json gives is an ordinary dictionary** (see "Dictionaries"): `user["name"]`, `user:get("name")` (nil if it's missing), `user:has("name")`, `user:keys()`, `len(user)`, and `user["name"] = value`. Objects inside are dictionaries too: `user["address"]["city"]`. `for name in user:` goes through its names. JSON's names are always text, so a name like `"1"` is read with `user["1"]`.
 - **tap.data()** is an empty dictionary, the same as `{}`. Older programs used it with `:set` to build what they send, and they still work.
 - **Waiting:** each call waits for the answer, and a window freezes while it waits.
+
+### tmusic
+Music from notes: write a tune as text, and tmusic plays it, repeats it, saves it as a .wav file or makes it a game's music. Its sounds are made by Tuff itself, so there's nothing to install.
+```tuff
+mention tmusic
+
+tmusic.play("C4 E4 G4 C5*2", "piano")     # plays the notes, then the program goes on
+
+song = tmusic.song(120)                   # a song at 120 beats a minute
+song:track("piano", "C4 E4 G4 E4 | F4 A4 C5 . | G4 B4 D5 B4 | C5*4")
+song:track("bass", "C3*4 | F3*4 | G2*4 | C3*4", 70)    # 70: a volume from 0 to 100
+song:track("drums", "kick hat snare hat | kick hat snare hat | kick hat snare hat | kick kick snare .")
+say song:length()                         # 8 (seconds)
+song:play()                               # plays it once, and waits until it ends
+song:save("theme.wav")                    # a .wav file in your project folder
+```
+- **Notes:** a letter from `C D E F G A B`, then `#` (sharp) or `b` (flat) if it needs one, then its octave from 0 to 8. `C4` is middle C, `A4` is 440 Hz and `C5` is one octave higher than `C4`. Upper or lower case both work (`c#4`), and spaces go between notes, not commas.
+- **Rests and lengths:** `.` is a rest. Every note and rest is one beat. `*2` makes it twice as long and `/2` half as long: `C4*2`, `E4/2`, `.*4` (4 beats of quiet), and also `*1.5`, `/3` and `*3/2`.
+- **Chords and bars:** `C4+E4+G4` plays notes together. `|` is a bar line: it changes nothing, it only makes the notes easier to read.
+- **Instruments:** `piano`, `chip` (like old game consoles), `bass`, `pluck` (a plucked string, like a guitar), `bell`, `organ`, `flute` and `drums`. In `song:track` the instrument comes first, and in `tmusic.play` it comes after the notes (piano if you leave it out).
+- **Drums** are a track of their own, with `kick`, `snare`, `hat`, `clap`, `tom` and `crash` in place of notes: `song:track("drums", "kick hat snare hat")`. They take `.`, `*2`, `/2` and `+` too (`kick+crash`).
+- **A song:** `tmusic.song(speed)` makes one (the speed is beats a minute, from 20 to 400; 120 if you leave it out). `song:track(instrument, notes, volume)` adds a track: every track starts at the beginning and they play together, and the song is as long as its longest track.
+- **Playing:**
+  - `tmusic.play(notes, instrument, speed)` and `song:play()` play once and **wait until the music ends**, like `wait`.
+  - `song:loop()` plays the song over and over while the program goes on (a quiz with music, say), until `song:stop()`.
+  - Music stops when the program ends, but a tune played once plays to its end first.
+  - `song:length()` is how long the song is in seconds, and `song:save("theme.wav")` saves it in your project folder (only as .wav).
+- **Where you hear it:** in TuffCode's Run panel, in a terminal and in an app made with Build exe (Windows and Mac). **In a file or a pipe** (an agent's `tuff_run`, or `> out.txt`) there's no sound, and `tmusic.play` and `song:play()` go on at once. Tuff Engine's preview plays no music either.
+- **The first time** a song plays or saves, tmusic makes its sound, which takes a moment for a long song. It keeps it, so the same notes play at once after that, even in the next run.
+- **Mistakes** stop the program with what's wrong and which note it is, like `"C9#" (note 3) has its # after the octave`, and `--check` finds them before the run in notes written in quotes.
+
+In a tgame game, `game:music(song)` plays a song over and over in the game itself, and `game:sound(song)` plays one once while the game goes on. Don't use `tmusic.play` or `song:play()` in a game: they wait until the music ends, and the game freezes while they wait.
+```tuff
+mention tgame
+mention tmusic
+
+game = tgame.window("Music Game", 600, 400)
+theme = tmusic.song(140)
+theme:track("chip", "E5 G5 A5 G5 | E5 D5 C5 . | D5 F5 G5 F5 | D5 C5 B4 .")
+theme:track("drums", "kick hat snare hat | kick hat snare hat | kick hat snare hat | kick kick snare hat")
+ding = tmusic.song(240)
+ding:track("bell", "E6 B6*2")
+game:music(theme)                 # over and over, until game:stop_music()
+star = game:circle(300, 200, 30, "gold")
+
+func picked(thing):
+    game:sound(ding)              # once, and the game goes on
+    thing:move(40, 0)
+
+star:clicked picked
+while game:open():
+    game:frame()
+```
 
 ### atgui
 Modern app windows made of real HTML and CSS, without writing any HTML. Most of mtgui works the same (`heading`, `text`, `button`, `input`, `:set`, `:value`, `:change`, `app:every`, `app:ask`...; see "App windows" below), plus everything here.
@@ -503,7 +774,7 @@ while game:open():                            # until the window is closed
 - **Keys and the mouse:** `game:held("left")` is true while a key is down, and `game:pressed("space")` only in the frame it went down. Keys are letters, numbers, space, enter, escape, shift, up, down, left and right; `"mouse"` is the mouse button. `game:mouse_x()` and `game:mouse_y()`.
 - **Values on things:** `tree:set("hp", 3)` and `tree:get("hp")` (nil if it was never set).
 - **More:** `hud = game:hud()` is a layer on top for drawn scores (real buttons and menus go on a panel or a screen: see "Menus, buttons and screens in games" below), `game:group()` holds things that move together (`:add`, `:move`, `:count`, `:clear`), `game:random_spot(20)` keeps to a grid of 20, `game:camera(x, y)` scrolls, `game:time()` and `game:fps()`.
-- **Sound:** `game:sound "coin"` plays beep, coin, jump, hit, boom, chop, laser, pop, click, step, powerup, win or lose, or a .wav, .mp3 or .ogg file. `game:music "song.mp3"` repeats, and `game:stop_music()`.
+- **Sound:** `game:sound "coin"` plays beep, coin, jump, hit, boom, chop, laser, pop, click, step, powerup, win or lose, or a .wav, .mp3 or .ogg file. `game:music "song.mp3"` repeats, and `game:stop_music()`. Both play a song made with tmusic too: `game:music(theme)` (see "tmusic").
 - **Pause and game over:** `game:pause("Paused")`, `game:resume()` and `game:paused()`. `game:game_over("Score: 5", start)` stops the game and shows the message; pressing space then runs `start`, which should put everything back.
 
 **The callback style.** Instead of a loop, give tgame functions to run. The program then keeps going until its window closes.
@@ -577,6 +848,48 @@ while game:open():
 - **The player:** `"first person"` or `"third person"`. Solid things block the way and can be stood on. `player:walk_speed 6`, `:jump_height 2`, `:hold "sword"` (axe, pickaxe, sword, torch or hammer), and `game:looking_at()` is the object in the middle of the view, or nil.
 - **Without a player:** `game:camera_at(x, y, z)` with `game:look_at(thing)`, or `game:follow(thing)` (behind it), or `game:orbit(thing)` (drag to turn around it).
 - **Testing a game:** add `game:after(2, selftest)`, call your functions in `func selftest():`, `say` what you find, and end it with `game:close()`.
+
+#### Animated pictures (sprite sheets)
+A sprite sheet is one picture with every frame of a character in it, in a grid. Cut it into frames, name some of them as animations, and play them: the game window steps through the frames by itself.
+```tuff
+mention tgame
+
+game = tgame.window("Hero", 600, 400)
+hero = game:image("hero_sheet.png", 300, 200, 64)   # one frame will be 64 wide
+hero:frames(4, 2)                                   # 4 across, 2 down: frames 1 to 8
+hero:animation("walk", [1, 2, 3, 4], 10)            # a name, its frames, how many a second
+hero:animation("jump", [5, 6, 7, 8], 12)
+jumping = false
+
+func landed(who, name):                             # "jump" has shown its last frame
+    jumping = false
+
+hero:on_done(landed)
+
+while game:open():
+    dt = game:frame()
+    moving = false
+    if game:held("left"):
+        hero:move(-200 * dt, 0)
+        moving = true
+    if game:held("right"):
+        hero:move(200 * dt, 0)
+        moving = true
+    if game:pressed("space") and not jumping:
+        jumping = true
+        hero:play("jump", false)                    # once: it stays on frame 8, then landed runs
+    if not jumping:
+        if moving:
+            hero:play("walk")                       # already playing: it carries on
+        else:
+            hero:frame(1)                           # standing still
+```
+- **Frames:** `hero:frames(4)` cuts a picture into 4 frames side by side, and `hero:frames(4, 2)` into 4 across and 2 down. Every frame is the same size. They're numbered from 1, left to right, then the next row down. After `:frames` the sprite is one frame big: as wide as the width `game:image` was given (or one frame's own size without one), and `:touches` uses that size.
+- **One frame:** `hero:frame(3)` shows frame 3 and stops any animation. `hero:frame()` gives the frame it shows now.
+- **Animations:** `hero:animation("walk", [1, 2, 3, 4], 10)` names frames in the order they show, and how many show a second (10 if you leave it out). Any frames work, in any order: `[1, 2, 3, 2]`, or `range(5, 8)`. Make the animations after `:frames`.
+- **Playing:** `hero:play("walk")` plays again and again. Playing the animation that's already playing carries on, so it can go in every frame of a loop. `hero:play("jump", false)` plays once and stays on its last frame, then `hero:on_done(landed)` runs `landed(sprite, name)` (a function can leave out the inputs it doesn't need: `func landed():` works too). `hero:stop()` stops on the frame it shows.
+- Animations go by the game's time: they hold still while the game is paused and slow down in `game:slow_mo`. Pictures on the HUD (`hud:image`) animate the same way, in a 2D game or a 3D world. 3D worlds have no flat pictures in the world itself, so sprite sheets are for 2D games and HUDs.
+- **Sprite Studio** (in TuffCode's sidebar) draws the frames and saves them with a sprite sheet, and its "Use in code" writes these lines for you.
 
 #### Menus, buttons and screens in games
 Real buttons, text boxes and menus go on a **panel** (pinned to a place on the game) or a **screen** (a layer over the whole game, for a title screen, a shop, a pause menu or game over). They work in 2D and 3D, and they're atgui's own widgets, so they look and work exactly as in the atgui section.
@@ -1252,7 +1565,7 @@ func one_decimal(x):
         return text(od_n) + ".0"
     return text(od_n)
 
-# Money: 6.375 -> "$6.38", 18 -> "$18.00", -1.5 -> "-$1.50"
+# Money: 6.375 -> "$6.38", 18 -> "$18.00", -1.5 -> "-$1.50" (f"{x:money}" does it too, with commas)
 func as_money(x):
     mo_cents = floor(round(abs(x) * 100, 6) + 0.5)
     mo_rest = mo_cents % 100
@@ -1285,11 +1598,29 @@ func remove_at(items, position):
 ```
 In a window app, check a text box before using it: `if num(bill:value()) is err: status:set "Type a number"`.
 
+## How fast Tuff is
+- Since 1.5.0, Tuff turns each part of a program into quick code once, before it runs it, instead of working out what every line means each time it runs. Loops are 3 to 6 times faster than in 1.4: a million steps take about half a second.
+- Everything else is the same: the answers, the error messages, and the line and column each error points at.
+- A library's functions and methods, like `game:frame()` and `player:move(5, 0)`, are quick to call too: about a millionth of a second each on a typical PC (about 5 times quicker than in 1.4), so a game's every-frame code has time for plenty of them.
+- A function can call itself about 10,000 calls deep (see "Functions").
+- To build a long text in a loop, add the pieces to a list and join them at the end (`parts:add(word)`, then `parts:join(" ")`). Adding to the text itself copies all of it every time.
+- When you run Tuff in a terminal, `TUFF_SLOW=1` runs a program with the old way instead, for 1.5 only. Use it to check whether something that changed is the new speed-up's fault.
+```tuff
+# A million steps, and how long they took
+start = time()
+total = 0
+for i in range(1, 1000000):
+    total += i % 7
+say total
+say "That took " + round(time() - start, 2) + " seconds"
+```
+
 ## Making a good program
 - Keep the program's state in a few top-level variables (`score`, `tasks`), each set near the top, and write one small function per action.
 - A `refresh()` function that rewrites every label from that state keeps the screen right. Call it after each change.
 - Check what people type, and show a friendly message instead of letting the program stop with an error.
 - Use clear names, keep functions short, and follow the two rules above.
+- When a program grows to a few hundred lines, move each group of functions that belong together into a file of its own, like money.tuf (see "Your own files").
 
 ## Using the tools
 - **`tuff_check`** checks code without running it. Run it on every file you write or change. It catches:
@@ -1297,7 +1628,9 @@ In a window app, check a text box before using it: `if num(bill:value()) is err:
     - syntax mistakes;
     - names that are never set, or only set inside another function;
     - built-ins replaced by variables;
-    - functions made twice.
+    - functions made twice;
+    - your own files: an import with no file to load, files that import each other, a file named like a library, and names or input counts another file doesn't have (`money.as_mony`).
+    - an object's fields and actions that its kind doesn't have (`rex.hungr`, `rex:fead()`), and more inputs than a kind has fields.
   - **Calls and events:**
     - wrong input counts;
     - event functions that would crash, are passed with brackets, or use `wait` or `input`;
@@ -1311,6 +1644,7 @@ In a window app, check a text box before using it: `if num(bill:value()) is err:
     - the `range(len(...))` off-by-one;
     - `:pop(0)`;
     - text mixed with numbers, like typed answers used as numbers or `"Total: " + a + b`;
+    - a template's number format on text, like `f"{name:0.00}"`;
     - chained comparisons;
     - `or "y"` in a condition;
     - lines whose answer is thrown away.
@@ -1320,8 +1654,9 @@ In a window app, check a text box before using it: `if num(bill:value()) is err:
   - widgets that don't fit the window.
 - **`tuff_run`** runs a console program with your answers. It shows the final Run window, with each answer after its question; lines changed with `:rewrite` or `clear` show their final state. If the program asks more questions than there are answers, it stops with an error saying so.
   - **Files:** writes stay in memory for that run. `file.write`, `file.add`, `file.save` and `file.delete` work, and later reads in the same run see them, but nothing is saved and no file on disk changes. To change the user's files, edit them yourself.
-  - **Folders:** with `"code"`, relative paths are in the project folder, so a snippet can read the project's files. With `"file"`, they're in that file's folder.
+  - **Folders:** with `"code"`, relative paths are in the project folder, so a snippet can read the project's files and import its own .tuf files (`import money`). With `"file"`, they're in that file's folder.
   - When you run Tuff another way (in a terminal), set `TUFF_NO_WRITES=1` for the same in-memory writes, and `TUFF_BASE_DIR=<folder>` to make relative paths start in that folder instead of the program's.
+  - **tterm games:** no one presses keys there, so add them with `screen:press("right")` before `screen:every_frame` (each one is the next frame's key; `screen:press("down", 30)` is frame 30's). The frames run straight away, the game stops 100 frames after the last key, and you see how the screen ended. Take the presses out afterwards.
 - **Testing a window program:** window programs open a real window, so test them with a self-test.
   1. Add `app:after(0.5, selftest)` just before the last line.
   2. Write `func selftest():` so that it calls your event functions, uses `say` to show what it finds, and ends with `app:close`.
@@ -1331,11 +1666,11 @@ In a window app, check a text box before using it: `if num(bill:value()) is err:
 ## What Tuff can't do
 Tuff has none of these:
 - the internet except through `tap`, or files outside text and JSON (`file`);
-- classes, or `lambda` (give a function's name instead, like `words:sort(by_len)`);
+- classes with inheritance or private fields (a kind has neither: see "Kinds"), or `lambda` (give a function's name instead, like `words:sort(by_len)`);
 - tuples or sets (use lists and dictionaries);
 - default or keyword inputs;
 - exp, or other maths beyond sin, cos, tan, log and sqrt;
-- formatting beyond `text(x, 2)` and `:pad_left` / `:pad_right`;
+- formats beyond a template's (`0.00`, `000`, `money` and a width), `text(x, 2)` and `:pad_left` / `:pad_right`;
 - drawing, sound, or keyboard and mouse events in tgui and mtgui (see "How a window app runs"). atgui has key shortcuts, hover and clicks on any widget, and a game made with `tgame` has all of them;
 - `exit()`, or Python modules.
 

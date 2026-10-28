@@ -1,7 +1,7 @@
 {
   "name": "tuffcode",
   "productName": "TuffCode",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "TuffCode - the IDE for the Tuff language",
   "author": "trickortree",
   "repository": "github:trickortree/tuff-code",
@@ -9,9 +9,9 @@
   "scripts": {
     "start": "electron .",
     "test:e2e": "node test/e2e/run.mjs",
-    "build:runtime": "py -3 -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --hidden-import tuff_tdraw --hidden-import tuff_tap --hidden-import tuff_atgui --hidden-import ssl --hidden-import certifi --hidden-import tuff_view --add-data ../tuff_view_web:tuff_view_web --hidden-import tuff_tgame --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py",
+    "build:runtime": "py -3 -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --hidden-import tuff_tdraw --hidden-import tuff_tterm --hidden-import tuff_tap --hidden-import tuff_tmusic --hidden-import tuff_atgui --hidden-import ssl --hidden-import certifi --hidden-import tuff_view --add-data ../tuff_view_web:tuff_view_web --hidden-import tuff_tgame --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py",
     "dist": "npm run build:runtime && electron-builder --win nsis --x64 --publish never",
-    "build:runtime:mac": "python3 -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --hidden-import tuff_tdraw --hidden-import tuff_tap --hidden-import tuff_atgui --hidden-import ssl --hidden-import certifi --hidden-import tuff_view --add-data ../tuff_view_web:tuff_view_web --hidden-import tuff_tgame --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py",
+    "build:runtime:mac": "python3 -m PyInstaller --noconfirm --clean --onedir --console --name tuff-runtime --paths .. --hidden-import tuff_tgui --hidden-import tuff_tdraw --hidden-import tuff_tterm --hidden-import tuff_tap --hidden-import tuff_tmusic --hidden-import tuff_atgui --hidden-import ssl --hidden-import certifi --hidden-import tuff_view --add-data ../tuff_view_web:tuff_view_web --hidden-import tuff_tgame --distpath ../build/runtime --workpath ../build/work --specpath ../build ../tuff.py",
     "dist:mac": "npm run build:runtime:mac && electron-builder --mac dmg zip --publish never"
   },
   "build": {
@@ -31,6 +31,8 @@
       "plugins.js",
       "ai.js",
       "ai-worker.mjs",
+      "debug.js",
+      "starters.js",
       "plugins/**/*",
       "mcp/**/*",
       "renderer/**/*",
@@ -60,8 +62,16 @@
         "to": "runtime-src/tuff_tdraw.py"
       },
       {
+        "from": "../tuff_tterm.py",
+        "to": "runtime-src/tuff_tterm.py"
+      },
+      {
         "from": "../tuff_tap.py",
         "to": "runtime-src/tuff_tap.py"
+      },
+      {
+        "from": "../tuff_tmusic.py",
+        "to": "runtime-src/tuff_tmusic.py"
       },
       {
         "from": "../tuff_atgui.py",
@@ -78,6 +88,10 @@
       {
         "from": "../tuff_tgame.py",
         "to": "runtime-src/tuff_tgame.py"
+      },
+      {
+        "from": "starters",
+        "to": "starters"
       }
     ],
     "win": {

@@ -2,6 +2,7 @@ window.TUFF_KEYWORDS = [
   'say', 'input', 'func', 'return', 'if', 'elif', 'else', 'then', 'while', 'for', 'in',
   'break', 'continue', 'and', 'or', 'not', 'is', 'true', 'false', 'nil', 'flush', 'import', 'mention',
   'try', 'catch', // 1.4.0 (only at the start of a line with a ':' after them, so they still work as names)
+  'kind', 'my', // 1.5.0 (kind Pet: and an action's my; a program's own variable called kind or my still works)
 ];
 
 window.TUFF_METHOD_DOCS = {
@@ -311,13 +312,13 @@ window.TUFF_DOCS = {
   elif: ['elif condition:', 'Checked when the `if` above it was false.'],
   else: ['else:', 'Runs when nothing above it matched.'],
   then: ['then', 'Starts a block, same as `:`. Writing both (`then:`) works too.'],
-  while: ['while condition:', 'Repeats the block as long as the condition stays true.'],
-  for: ['for item in list:', 'Runs the block once for every item in a list, text or range().'],
+  while: ['while condition:', 'Repeats the block as long as the condition stays true. Loops are quick (1.5.0): a million steps take about a second or less.'],
+  for: ['for item in list:', 'Runs the block once for every item in a list, text or range(). Loops are quick (1.5.0): a million steps take about a second or less.'],
   is: ['a is b', 'True when both sides are equal. Use `is not` for the opposite.'],
   print: ['print(a, b, ...)', 'Like `say`, but takes several values separated by commas.'],
   number: ['number(text)', 'Turns text like "42" into the number 42. Text that is not a number gives err instead of stopping: check with `if number(t) is err:`.'],
   num: ['num(text)', 'Short for number(): num("42") is 42, and text that is not a number gives err.'],
-  int: ['int(value)', 'A whole number, dropping any decimals: int("42") is 42, int(3.7) is 3. Text that is not a number gives err.'],
+  int: ['int(value)', 'A whole number, dropping any decimals: int("42") is 42, int(3.7) is 3. Text that is not a number gives err. A whole number can be as big as you like (2 ^ 100 is fine), but a decimal only goes up to about 1 followed by 308 zeros.'],
   text: ['text(value)', 'Turns any value into text.'],
   str: ['str(value)', 'Same as text(): turns any value into text, like str(5) + " apples".'],
   err: ['err', 'What number(), num() and int() give back for text that is not a number. Check with `if num(answer) is err:`. Using an err in maths stops the program and says why.'],
@@ -329,13 +330,13 @@ window.TUFF_DOCS = {
   flush: ['flush', 'Wipes everything in the Run window. Same as clear(all).'],
   clear: ['clear(lines)', 'Removes the last few lines from the Run window, like clear(2). clear(all) removes everything. (line:clear empties one line you already said.)'],
   all: ['all', 'Means every line, as in clear(all).'],
-  import: ['import library', 'Loads a library of extra functions, like: import anims'],
+  import: ['import name', 'Loads a library of extra functions, like: import anims. It also loads your own files (1.5.0): import money.tuf loads money.tuf from this file\'s folder (or a libs folder there), and its functions and top-level values go after a dot: money.as_money(6.375), money.rate.'],
   anims: ['import anims', 'Ready-made animations: loading, bar, type, countdown.'],
   tgui: ['import tgui', 'Tuff GUI: make real app windows with buttons, text boxes, toggles and more.'],
   mtgui: ['mention mtgui', 'Modern Tuff GUI: like tgui with gradients, gloss, shine and glow.'],
-  tap: ['mention tap', 'Get and send things on the web (HTTP), like Python\'s requests: tap.get, post, put, delete. JSON comes back as dictionaries and lists.'],
+  tap: ['mention tap', 'Get and send things on the web (HTTP): tap.get, post, put, delete. JSON comes back as dictionaries and lists.'],
   tgame: ['mention tgame', 'Make games, like pygame: tgame.window for 2D (sprites, keys, the mouse, collisions, sounds) and tgame.world for 3D (a sky, trees, a first-person player).'],
-  mention: ['mention library', 'Loads a library. Works exactly like import.'],
+  mention: ['mention name', 'Loads a library, or one of your own files (mention money loads money.tuf). Works exactly like import.'],
   sqrt: ['sqrt(number)', 'Square root: sqrt(81) is 9.'],
   abs: ['abs(number)', 'Removes the minus sign: abs(-5) is 5.'],
   floor: ['floor(number)', 'Rounds down: floor(3.7) is 3.'],
@@ -347,6 +348,8 @@ window.TUFF_DOCS = {
   pi: ['pi', '3.14159...'],
   rewrite: ['line:rewrite value', 'Replaces the text of a line you already said.'],
   append: ['line:append value', 'Adds text to the end of a line you already said.'],
+  kind: ['kind Pet:', 'Makes your own kind of object (1.5.0). Under it go its fields, each with the value a new one starts with (name = "?"), and its actions (func feed():). rex = Pet("Rex") makes one: its inputs fill the fields in order. Read and change a field with a dot (rex.hunger = 3), and run an action with a colon (rex:feed()).'],
+  my: ['my.hunger', 'Inside a kind\'s action, my is the object itself: my.hunger reads or changes its field, and my:feed() runs another of its actions.'],
 };
 
 // atgui: its library entry and its methods. TUFF_METHOD_DOCS is one namespace for every library, so a name
@@ -486,6 +489,7 @@ window.TUFF_DOCS = {
     write: ['pen:write("Hello", 24)', 'tdraw: writes text where the pen is. The size is optional.'],
     hide: ['pen:hide()', 'tdraw: hides the turtle (the drawing stays).'],
     show: ['pen:show()', 'tdraw: shows the turtle again.'],
+    shape: ['pen:shape("arrow")', 'tdraw: what the pen looks like: "turtle" (the start), "arrow", "big arrow", "circle", "square" or "triangle". A size after it makes it bigger, like pen:shape("turtle", 2). pen:hide() hides it.'],
     x: ['pen:x()', 'tdraw: where the pen is, across.'],
     y: ['pen:y()', 'tdraw: where the pen is, up and down.'],
   };
@@ -519,7 +523,7 @@ window.TUFF_DOCS = {
     tan: ['tan(degrees)', 'Tangent of an angle in degrees: tan(45) is 1. tan(90) has no answer, so it gives an error.'],
     log: ['log(number, base)', 'The logarithm: log(100, 10) is 2 and log(1000, 10) is 3. Without a base, the natural log.'],
     random: ['random(low, high)', 'A random whole number from low to high, both included, like random(1, 6). If either end has digits after the point, like random(0.5, 2), it gives a decimal in that range (12 / 2 and 1.0 count as whole). random(6) is a whole number from 1 to 6, random(0.5) a decimal from 0 to 0.5, and random() a decimal from 0 to 1.'],
-    text: ['text(value, decimals)', 'Turns any value into text. text(3.14159, 2) is "3.14".'],
+    text: ['text(value, decimals)', 'Turns any value into text. text(3.14159, 2) is "3.14", and a whole number keeps every digit: text(10 ^ 25, 2) is "10000000000000000000000000.00".'],
     len: ['len(value)', 'How many characters are in some text, items in a list, or keys in a dictionary.'],
   });
   const docs = window.TUFF_METHOD_DOCS;
@@ -556,11 +560,143 @@ window.TUFF_DOCS = {
   }
 })();
 
+// 1.5.0: tgame's sprite sheets. A picture cut into frames shows one of them, or plays an animation that steps through
+// them by itself. frame, play and stop are other names' too (game:frame(), line:play, spinner:stop): this use goes at
+// the end of their docs.
+(() => {
+  const docs = window.TUFF_METHOD_DOCS;
+  Object.assign(docs, {
+    frames: ['hero:frames(4, 2)', 'tgame (2D): cuts a picture (a sprite sheet) into frames, 4 across and 2 down (leave out the 2 for one row). They are numbered from 1, left to right, then the next row. It shows frame 1, as wide as game:image\'s width (or one frame\'s own size).'],
+    animation: ['hero:animation("walk", [1, 2, 3, 4], 10)', 'tgame (2D): names some frames of a picture cut with :frames, in the order they show, and how many show a second (10 if you leave it out). Then hero:play("walk").'],
+    on_done: ['hero:on_done(landed)', 'tgame (2D): runs landed(sprite, name) when an animation that plays once, like hero:play("jump", false), has shown its last frame.'],
+  });
+  const also = {
+    frame: 'A picture cut into frames (tgame): hero:frame(3) shows frame 3, and hero:frame() gives the frame it shows now.',
+    play: 'In tgame, hero:play("walk") plays a picture\'s animation again and again, and hero:play("jump", false) plays it once (it stays on its last frame). Playing the one that plays already carries on, so it can go in every frame.',
+    stop: 'In tgame, hero:stop() stops a picture\'s animation on the frame it shows.',
+  };
+  for (const [name, text] of Object.entries(also)) docs[name] = [docs[name][0], `${docs[name][1]} ${text}`];
+})();
+
+// 1.5.0: tterm, terminal games. A screen is a grid of letters the program draws on, with keys read as they're pressed:
+// in the Run panel (click it to play), a terminal or a Build exe. Its own methods' docs start with "tterm" (completions
+// offer them in files that mention tterm); a name another library has too keeps its doc, with this use at the end.
+(() => {
+  window.TUFF_LIBS.tterm = {
+    screen: ['screen = tterm.screen(40, 20)', 'A grid of letters for a terminal game, 40 across and 20 down (40, 20 if you leave them out). x goes right from 0 and y goes down from 0. Draw with :put, :text and :box, read keys with :pressed and :held, and run the game with :every_frame(step).'],
+  };
+  window.TUFF_DOCS.tterm = ['mention tterm', 'Terminal games like Snake: a grid of letters in colours, with keys read as they are pressed. They run in the Run panel (click the game to play; Esc ends it and lets go), a terminal or a Build exe. screen = tterm.screen(40, 20), then screen:every_frame(step).'];
+  const docs = window.TUFF_METHOD_DOCS;
+  const own = {
+    put: ['screen:put(x, y, "@", "lime")', 'puts one character at x, y, in a colour if you give one. A space, " ", rubs a cell out.'],
+    text: ['screen:text(2, 0, "Score: 3", "gold")', 'writes words from x, y to the right, in a colour if you give one.'],
+    box: ['screen:box(0, 0, 40, 20, "gray")', 'draws a border round width by height cells, with its top left corner at x, y.'],
+    clear: ['screen:clear()', 'rubs out the whole screen, to draw the next frame.'],
+    get: ['screen:get(x, y)', 'the character at x, y: " " for an empty cell, "" off the screen. Handy for walls: if screen:get(x, y) is "#".'],
+    pressed: ['screen:pressed("space")', 'true if the key went down since the last frame (a held key\'s repeats count too). Keys: a letter, a number, space, enter, tab, backspace, delete, up, down, left, right or "any". Esc ends the game.'],
+    held: ['screen:held("left")', 'true while the key is held down.'],
+    press: ['screen:press("right")', 'gives the next frame a key, as if it was pressed then (screen:press("down", 30) gives it to frame 30). For testing: with no one to press keys (tuff_run), frames don\'t wait for the clock and the game stops 100 frames after the last key.'],
+    every_frame: ['screen:every_frame(step)', 'runs step(dt) about 20 times a second, with the seconds since the last time, until screen:stop() or Esc. The screen shows after each one.'],
+    stop: ['screen:stop()', 'ends screen:every_frame after this frame. The program carries on after it.'],
+  };
+  for (const [name, [sig, text]] of Object.entries(own)) {
+    docs[name] = docs[name] ? [docs[name][0], `${docs[name][1]} In tterm, ${sig}: ${text}`] : [sig, `tterm: ${text.charAt(0).toUpperCase()}${text.slice(1)}`];
+  }
+})();
+
+// 1.5.0: tmusic, music from notes. play, stop, save, music and sound are other names' too (line:play, spinner:stop,
+// game:save, game:music...): this use goes at the end of their docs, and a file that mentions tmusic is offered a
+// song's methods after ':' (TMUSIC_METHODS). A note in a tmusic string has a hover too (tmusicNoteAt).
+const TMUSIC_METHODS = ['track', 'play', 'loop', 'stop', 'save', 'length'];
+// A tdraw pen's methods (tuff_tdraw.py's PEN_METHODS; a test keeps them the same).
+const TDRAW_PEN_METHODS = ['forward', 'back', 'left', 'right', 'go', 'jump', 'home', 'face', 'up', 'down', 'color', 'width', 'speed',
+  'circle', 'square', 'triangle', 'polygon', 'star', 'dot', 'write', 'hide', 'show', 'shape', 'x', 'y'];
+// A name a library's call made (1.5.0): after pen = tdraw.pen(), pen: offers a pen's methods and nothing else (not
+// app:icon or a list's :add), and after song = tmusic.song(120), song: a song's.
+const LIB_OBJECTS = { 'tdraw.pen': TDRAW_PEN_METHODS, 'tmusic.song': TMUSIC_METHODS };
+function libObjectOf(model, name) {
+  const made = new RegExp(`^\\s*${name}\\s*=\\s*([A-Za-z_]\\w*\\.[A-Za-z_]\\w*)\\s*\\(`);
+  for (const text of model.getLinesContent()) {
+    const m = made.exec(text);
+    if (m && LIB_OBJECTS[m[1]]) return LIB_OBJECTS[m[1]];
+  }
+  return null;
+}
+const TMUSIC_DRUMS = ['kick', 'snare', 'hat', 'clap', 'tom', 'crash'];
+(() => {
+  window.TUFF_LIBS.tmusic = {
+    play: ['tmusic.play("C4 E4 G4 C5*2", "piano")', 'Plays some notes and waits until they end. The instrument is optional (piano), and so is a speed in beats a minute after it (120). A note is a letter from A to G, # or b if it needs one, then its octave: C4 is middle C. . is a rest, *2 twice as long, /2 half, C4+E4+G4 a chord, and | a bar line (only to read). In a pipe (an agent\'s tuff_run) it makes no sound and goes on at once.'],
+    song: ['song = tmusic.song(120)', 'A song, at a speed in beats a minute (120 if you leave it out). Add tracks of notes with song:track("piano", "C4 E4 G4"), then song:play(), song:loop(), song:save("theme.wav") or a game\'s game:music(song).'],
+  };
+  window.TUFF_DOCS.tmusic = ['mention tmusic', 'Music from notes: tmusic.play("C4 E4 G4 C5*2", "piano"), or a song with tracks (piano, chip, bass, pluck, bell, organ, flute and drums) that plays, loops, saves as a .wav or is a tgame game\'s music.'];
+  const docs = window.TUFF_METHOD_DOCS;
+  Object.assign(docs, {
+    track: ['song:track("chip", "C4 E4 G4 E4 | F4 A4 C5 .")', 'tmusic: adds a track to a song: an instrument (piano, chip, bass, pluck, bell, organ, flute or drums), its notes, and a volume from 0 to 100 if you like (100). Tracks play together, all from the start. Drums are kick, snare, hat, clap, tom and crash: song:track("drums", "kick hat snare hat").'],
+    loop: ['song:loop()', 'tmusic: plays the song over and over while the program goes on, until song:stop() or the end of the program.'],
+    length: ['song:length()', 'tmusic: how long the song plays, in seconds.'],
+  });
+  const also = {
+    play: 'In tmusic, song:play() plays a song once and waits until it ends.',
+    stop: 'In tmusic, song:stop() stops a song that is playing.',
+    save: 'In tmusic, song:save("theme.wav") saves a song as a .wav file in your project folder.',
+    music: 'It can play a tmusic song too: game:music(song).',
+    sound: 'It can play a tmusic song once too: game:sound(jingle).',
+  };
+  for (const [name, text] of Object.entries(also)) docs[name] = [docs[name][0], `${docs[name][1]} ${text}`];
+})();
+
+// What a note (or a rest, a chord, a drum) in a tmusic string is, for its hover: "C sharp in octave 4 (277.2 Hz), 1
+// beat." null when it isn't one.
+function tmusicNoteDoc(word) {
+  const m = word.match(/^([^*/]*)((?:[*/]\d+(?:\.\d+)?)*)$/);
+  if (!m || !m[1]) return null;
+  let beats = 1;
+  for (const [, op, n] of m[2].matchAll(/([*/])(\d+(?:\.\d+)?)/g)) beats = op === '*' ? beats * +n : beats / +n;
+  if (!(beats > 0)) return null;
+  const long = `${+beats.toFixed(3)} beat${beats === 1 ? '' : 's'}`;
+  if (m[1] === '.') return `A rest: ${long} of quiet.`;
+  const parts = m[1].split('+').map((p) => {
+    if (TMUSIC_DRUMS.includes(p.toLowerCase())) return `the ${p.toLowerCase()} drum`;
+    const n = p.match(/^([A-Ga-g])([#b]?)([0-8])$/);
+    if (!n) return null;
+    const midi = 12 * (+n[3] + 1) + { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 }[n[1].toLowerCase()] + (n[2] === '#' ? 1 : n[2] === 'b' ? -1 : 0);
+    const hz = 440 * 2 ** ((midi - 69) / 12);
+    return `${n[1].toUpperCase()}${n[2] === '#' ? ' sharp' : n[2] === 'b' ? ' flat' : ''} in octave ${n[3]} (${hz.toFixed(1)} Hz${midi === 60 ? ', middle C' : ''})`;
+  });
+  if (parts.some((p) => !p)) return null;
+  const what = parts.length > 1 ? `A chord: ${parts.join(', ')}` : parts[0][0].toUpperCase() + parts[0].slice(1);
+  return `${what}, ${long}.`;
+}
+
+// The note under the mouse (column, from 1) in a tmusic string: the notes of tmusic.play("...") or song:track(..., "...").
+// { word, doc, start, end } (its columns, end not included), or null.
+function tmusicNoteAt(line, column) {
+  const at = column - 1;
+  for (const s of line.matchAll(/"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/g)) {
+    const from = s.index + 1;
+    if (at < from || at >= s.index + s[0].length - 1) continue;
+    if (!/(\btmusic\.play\s*\(\s*|:track\s*\(\s*("[^"]*"|'[^']*')\s*,\s*)$/.test(line.slice(0, s.index))) return null;
+    for (const w of (s[1] ?? s[2]).matchAll(/[^\s|]+/g)) {
+      const start = from + w.index;
+      if (at >= start && at < start + w[0].length) {
+        const doc = tmusicNoteDoc(w[0]);
+        return doc && { word: w[0], doc, start: start + 1, end: start + 1 + w[0].length };
+      }
+    }
+    return null;
+  }
+  return null;
+}
+
 const TUFF_BUILTINS = ['print', 'number', 'num', 'int', 'text', 'str', 'len', 'round', 'random', 'wait', 'range', 'clear', 'sqrt', 'abs', 'floor', 'ceil', 'min', 'max', 'sum', 'average',
   'now', 'today', 'time', 'date', 'sin', 'cos', 'tan', 'log'];
 // Libraries that are always there, with nothing to mention (1.4.0's file.read...). They aren't functions, and
 // import/mention doesn't offer them.
 const TUFF_READY_LIBS = ['file'];
+// The hover on a text template's f (1.5.0). It isn't in TUFF_DOCS, so a variable called f keeps no doc.
+const TUFF_TEMPLATE_DOC = ['f"{name} has {score + 1} points"', 'A text template: the code in each { } is worked out and shown the way say shows it. '
+  + 'A format can go after a \':\': {x:0.00} (2 decimals, rounded half up), {n:000} (at least 3 digits), {price:money} ($1,234.50), '
+  + 'or a width, {name:12} (text on the left, numbers on the right; >12 and <12 choose). {{ and }} show a brace.'];
 
 // try: and catch: (or catch problem:) at the start of a line, with nothing glued after the ':' (1.4.0). These always
 // start a block. try:say "hi", with the ':' glued to a word, does too unless the program gives try a value (see
@@ -585,18 +721,127 @@ function tryCatchWord(text, own) {
   return /^\s*(try|catch):[A-Za-z_]/.test(text) && own[m[1]] ? null : m[1];
 }
 
-// True when the end of `text` is inside a "string", a 'string' or a # comment.
-function insideStringOrComment(text) {
-  let quote = null;
+// How each character of a line reads: 'c' code, 's' text (in quotes) and '#' a comment, as tuff.py reads it. In a
+// text template (1.5.0) the code in each { } is code, like f"{name} has {score + 1} points"; the f, the quotes, the
+// text, {{ and }}, and the { and } around the code are text. ends: 'text' or 'comment' when the line ends inside one.
+function tuffScan(text) {
+  const kinds = [];
+  const open = []; // the templates the scan is inside: { quote, depth }, depth -1 in its text, else the brackets open in its { }
+  let quote = null; // a plain "string" being read
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
+    const t = open[open.length - 1];
     if (quote) {
-      if (c === '\\') i++;
+      kinds[i] = 's';
+      if (c === '\\') kinds[++i] = 's';
       else if (c === quote) quote = null;
-    } else if (c === '"' || c === "'") quote = c;
-    else if (c === '#') return true;
+    } else if (t && t.depth < 0) {
+      kinds[i] = 's';
+      if (c === '\\' && 'nt\\"\''.includes(text[i + 1] || '#')) kinds[++i] = 's';
+      else if (c === t.quote) open.pop();
+      else if ((c === '{' || c === '}') && text[i + 1] === c) kinds[++i] = 's'; // {{ and }} show a brace
+      else if (c === '{') t.depth = 0;
+    } else if (c === '#') {
+      for (; i < text.length; i++) kinds[i] = '#';
+      return { kinds, ends: 'comment' };
+    } else if (c === '"' || c === "'") {
+      kinds[i] = 's';
+      if (text[i - 1] === 'f' && !/\w/.test(text[i - 2] || '')) {
+        kinds[i - 1] = 's';
+        open.push({ quote: c, depth: -1 });
+      } else quote = c;
+    } else {
+      kinds[i] = 'c';
+      if (t && '([{'.includes(c)) t.depth++;
+      else if (t && (c === ')' || c === ']')) t.depth = Math.max(0, t.depth - 1);
+      else if (t && c === '}') {
+        if (t.depth) t.depth--;
+        else { kinds[i] = 's'; t.depth = -1; } // the } that ends the code
+      }
+    }
   }
-  return quote !== null;
+  return { kinds, ends: quote || (open.length && open[open.length - 1].depth < 0) ? 'text' : null };
+}
+
+// True when the end of `text` is inside a "string", a 'string' or a # comment (and not in the code of an f"{...}").
+function insideStringOrComment(text) {
+  return tuffScan(text).ends !== null;
+}
+
+// ---------------------------------------------------------------- your own files as libraries (1.5.0)
+// import money.tuf loads money.tuf from the file's own folder, or the libs folder there (a library's name is always the
+// library), and its functions and top-level values go after a dot: money.as_money(6.375), money.rate. Completions,
+// hovers and signature help after money. read that file through TuffIDE (an open tab's text, unsaved too).
+const TUFF_MODULE_FOLDER = 'libs';
+
+// The names this file imports that aren't libraries: import money, mention tax.
+function tuffOwnImports(src) {
+  const out = new Set();
+  for (const m of src.matchAll(/^[ \t]*(?:import|mention)[ \t]+([A-Za-z_]\w*)\.tuf\b/gm)) { // import money.tuf, even import tmusic.tuf
+    if (m[1] !== 'file') out.add(m[1]);
+  }
+  return out;
+}
+
+// What a .tuf file makes at its top level: its functions (with their inputs) and values, each with the # comment
+// lines right above it (or the one at the end of its line) as its doc.
+function tuffFileParts(text) {
+  const lines = text.split(/\r?\n/);
+  const funcs = [];
+  const values = [];
+  const seen = new Set();
+  const docOf = (i) => {
+    const doc = [];
+    for (let j = i - 1; j >= 0 && /^\s*#/.test(lines[j]); j--) doc.unshift(lines[j].replace(/^\s*#\s?/, '').replace(/^↳\s*/, ''));
+    const kinds = tuffScan(lines[i]).kinds;
+    const hash = kinds.indexOf('#');
+    if (!doc.length && hash >= 0) doc.push(lines[i].slice(hash + 1).trim());
+    return doc.join('\n').trim();
+  };
+  lines.forEach((line, i) => {
+    let m = line.match(/^func\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?/);
+    if (m && !seen.has(m[1])) {
+      seen.add(m[1]);
+      funcs.push({ name: m[1], params: (m[2] || '').split(',').map((s) => s.trim()).filter(Boolean), doc: docOf(i), line: i + 1 });
+    } else if ((m = line.match(/^([A-Za-z_]\w*)\s*=(?!=)/)) && !seen.has(m[1]) && !window.TUFF_KEYWORDS.includes(m[1])) {
+      seen.add(m[1]);
+      values.push({ name: m[1], doc: docOf(i), line: i + 1 });
+    }
+  });
+  return { funcs, values };
+}
+
+// The file `import name` loads for this model, read (a few seconds' cache): { name, rel, path, funcs, values }, or
+// null when there's no such file or the editor can't read files here (no TuffIDE, or a model that isn't a file).
+const tuffFileCache = new Map();
+async function tuffOwnFile(model, name) {
+  const ide = window.TuffIDE;
+  const file = model.uri && model.uri.scheme === 'file' ? model.uri.fsPath : null;
+  if (!ide || !ide.readText || !file) return null;
+  const sep = file.includes('\\') ? '\\' : '/';
+  const folder = file.slice(0, file.lastIndexOf(sep));
+  for (const [dir, rel] of [[folder, `${name}.tuf`], [folder + sep + TUFF_MODULE_FOLDER, `${TUFF_MODULE_FOLDER}/${name}.tuf`]]) {
+    const path = dir + sep + `${name}.tuf`;
+    const hit = tuffFileCache.get(path);
+    if (hit && Date.now() - hit.at < 3000) {
+      if (hit.parts) return hit.parts;
+      continue;
+    }
+    const text = await ide.readText(path);
+    const parts = text == null ? null : { name, rel, path, ...tuffFileParts(text) };
+    tuffFileCache.set(path, { at: Date.now(), parts });
+    if (parts) return parts;
+  }
+  return null;
+}
+
+// money.as_money's doc (for the hover and the signature help): [how to call it, its doc], or null.
+function tuffOwnDoc(mod, word) {
+  const f = mod.funcs.find((x) => x.name === word);
+  if (f) return [`${mod.name}.${f.name}(${f.params.join(', ')})`, f.doc || `A function in ${mod.rel}.`];
+  const v = mod.values.find((x) => x.name === word);
+  if (v) return [`${mod.name}.${v.name}`, v.doc || `A value in ${mod.rel}. Change it with a function in ${mod.rel}.`];
+  return null;
 }
 
 // Should typing ':' or '.' just before `position` open the suggestion list?
@@ -608,7 +853,7 @@ window.tuffWantsSuggest = function tuffWantsSuggest(model, position) {
   if (insideStringOrComment(before)) return false;
   if (before.endsWith('.')) {
     const lib = before.match(/([A-Za-z_]\w*)\.$/);
-    return !!(lib && window.TUFF_LIBS[lib[1]]);
+    return !!(lib && (window.TUFF_LIBS[lib[1]] || tuffOwnImports(model.getValue()).has(lib[1]) || tuffKinds(model).length)); // one of your files, or rex. lists its fields (1.5.0)
   }
   if (!/[A-Za-z_]\w*:$/.test(before)) return false;
   const atEnd = !line.slice(position.column - 1).trim();
@@ -647,7 +892,7 @@ window.registerTuff = function registerTuff(monaco, accent) {
   monaco.languages.register({ id: 'tuff', extensions: ['.tuf'], aliases: ['Tuff', 'tuff'] });
 
   monaco.languages.setMonarchTokensProvider('tuff', {
-    keywords: window.TUFF_KEYWORDS.filter((k) => !['true', 'false', 'nil'].includes(k)),
+    keywords: window.TUFF_KEYWORDS.filter((k) => !['true', 'false', 'nil', 'kind', 'my'].includes(k)), // kind and my: see below
     constants: ['true', 'false', 'nil', 'err', 'all', 'pi'],
     builtins: TUFF_BUILTINS,
     libs: Object.keys(window.TUFF_LIBS),
@@ -656,9 +901,18 @@ window.registerTuff = function registerTuff(monaco, accent) {
     tokenizer: {
       root: [
         [/#.*$/, 'comment'],
+        [/f"/, 'string', '@fdq'], // a text template (1.5.0): f"{name} has {score + 1} points"
+        [/f'/, 'string', '@fsq'],
+        [/(import|mention)(\s+)([a-zA-Z_]\w*)/, ['keyword', '', 'library']], // a library, or one of your own files (1.5.0)
         [/(func)(\s+)([a-zA-Z_]\w*)/, ['keyword', '', 'function.decl']],
+        // kind Pet: and my.hunger (1.5.0) are Tuff's words; a variable called kind or my is the program's own
+        [/(kind)(\s+)([a-zA-Z_]\w*)(?=\s*:)/, ['keyword', '', 'function.decl']],
+        [/(my)(\.)(?=[a-zA-Z_])/, ['keyword', 'delimiter']],
+        [/my(?=:[a-zA-Z_])/, 'keyword'],
         [/(:)([a-zA-Z_]\w*)/, ['delimiter', 'method']],
-        [/([a-zA-Z_]\w*)(\.)([a-zA-Z_]\w*)/, [{ cases: { '@libs': 'library', '@default': 'identifier' } }, 'delimiter', 'function']],
+        // tgame.window is a library's function; rex.hunger an object's field
+        [/([a-zA-Z_]\w*)(\.)([a-zA-Z_]\w*)/, [{ cases: { '@libs': 'library', '@default': 'identifier' } }, 'delimiter',
+          { cases: { '$1@libs': 'function', '@default': 'identifier' } }]],
         [/[a-zA-Z_]\w*(?=\s*\()/, { cases: { '@keywords': 'keyword', '@builtins': 'predefined', '@default': 'function' } }],
         [/[a-zA-Z_]\w*/, { cases: { '@keywords': 'keyword', '@constants': 'constant', '@builtins': 'predefined', '@libs': 'library', '@default': 'identifier' } }],
         [/\d+(\.\d+)?/, 'number'],
@@ -669,6 +923,16 @@ window.registerTuff = function registerTuff(monaco, accent) {
       ],
       dq: [[/\\./, 'string.escape'], [/"/, 'string', '@pop'], [/[^"\\]+/, 'string']],
       sq: [[/\\./, 'string.escape'], [/'/, 'string', '@pop'], [/[^'\\]+/, 'string']],
+      // A template's text: {{ and }} show a brace, and { starts code, coloured as code until its }.
+      fdq: [[/\{\{|\}\}|\\[nt\\"']/, 'string.escape'], [/\{/, 'delimiter.curly', '@fcode'], [/"/, 'string', '@pop'], [/[^"\\{}]+/, 'string'], [/./, 'string']],
+      fsq: [[/\{\{|\}\}|\\[nt\\"']/, 'string.escape'], [/\{/, 'delimiter.curly', '@fcode'], [/'/, 'string', '@pop'], [/[^'\\{}]+/, 'string'], [/./, 'string']],
+      fcode: [
+        [/:\s*(?:0+(?:\.0+)?|money|[<>]?[1-9]\d*)\s*(?=\})/, 'string.escape'], // its format: {x:0.00}, {price:money}, {name:12}
+        [/\}/, 'delimiter.curly', '@pop'],
+        [/\{/, 'delimiter.curly', '@fdict'], // a dictionary in it: f"{ {"a": 1}["a"] }"
+        { include: '@root' },
+      ],
+      fdict: [[/\}/, 'delimiter.curly', '@pop'], [/\{/, 'delimiter.curly', '@fdict'], { include: '@root' }],
     },
   });
 
@@ -694,12 +958,41 @@ window.registerTuff = function registerTuff(monaco, accent) {
 
   monaco.languages.registerHoverProvider('tuff', {
     provideHover(model, position) {
+      const note = tmusicNoteAt(model.getLineContent(position.lineNumber), position.column); // in a tmusic string (1.5.0)
+      if (note) {
+        return {
+          range: new monaco.Range(position.lineNumber, note.start, position.lineNumber, note.end),
+          contents: [{ value: '```tuff\n' + note.word + '\n```' }, { value: note.doc }],
+        };
+      }
       const word = model.getWordAtPosition(position);
       if (!word) return null;
-      const before = model.getLineContent(position.lineNumber).slice(0, word.startColumn - 1);
+      const line = model.getLineContent(position.lineNumber);
+      const before = line.slice(0, word.startColumn - 1);
+      if (word.word === 'f' && /^["']/.test(line.slice(word.endColumn - 1))) { // the f of a text template
+        return {
+          range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn),
+          contents: [{ value: '```tuff\n' + TUFF_TEMPLATE_DOC[0] + '\n```' }, { value: TUFF_TEMPLATE_DOC[1] }],
+        };
+      }
       const lib = before.match(/(\w+)\.$/);
+      if (lib && tuffOwnImports(model.getValue()).has(lib[1])) { // money.as_money (1.5.0)
+        return tuffOwnFile(model, lib[1]).then((mod) => {
+          const doc = mod && tuffOwnDoc(mod, word.word);
+          return doc ? {
+            range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn),
+            contents: [{ value: '```tuff\n' + doc[0] + '\n```' }, { value: `${doc[1]}\n\n*${mod.rel}, line ${(mod.funcs.find((f) => f.name === word.word) || mod.values.find((v) => v.name === word.word)).line}*` }],
+          } : null;
+        });
+      }
+      const card = kindHover(model, position.lineNumber, word, before, lib);
+      if (card) {
+        return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn),
+          contents: card.map((value) => ({ value })) };
+      }
       // A built-in's name the program gives a value (a 1.3.6 program's log = []) is the program's own variable.
-      const own = TUFF_BUILTINS.includes(word.word) && givesValue(model, word.word);
+      // So is a variable called kind or my (1.5.0).
+      const own = (TUFF_BUILTINS.includes(word.word) || ['kind', 'my'].includes(word.word)) && givesValue(model, word.word);
       const doc = (lib && window.TUFF_LIBS[lib[1]]?.[word.word])
         || (/\w:$/.test(before) && window.TUFF_METHOD_DOCS[word.word])
         || (!own && window.TUFF_DOCS[word.word]);
@@ -723,8 +1016,30 @@ window.registerTuff = function registerTuff(monaco, accent) {
       const before = line.slice(0, word.startColumn - 1);
       if (insideStringOrComment(line.slice(0, position.column - 1))) return { suggestions: [] };
       const libMatch = before.match(/(\w+)\.$/);
+      const kinds = tuffKinds(model);
+      if (libMatch && !window.TUFF_LIBS[libMatch[1]] && !tuffOwnImports(model.getValue()).has(libMatch[1])) { // rex. (1.5.0): its kind's fields, or every kind's when it can't be told
+        const kind = kindOf(model, libMatch[1], position.lineNumber, kinds);
+        const seen = new Set();
+        const fields = (kind ? [kind] : kinds).flatMap((k) => k.fields.map((f) => [k, f])).filter(([, f]) => !seen.has(f.name) && seen.add(f.name));
+        return {
+          suggestions: fields.map(([k, f]) => ({
+            label: f.name, kind: K.Field, insertText: f.name, range, detail: `${k.name} field (starts as ${f.value})`,
+            documentation: `A field of ${k.name}. Read it with ${libMatch[1]}.${f.name}, and change it with ${libMatch[1]}.${f.name} = ...`,
+          })),
+        };
+      }
       if (libMatch) {
         const lib = window.TUFF_LIBS[libMatch[1]];
+        if (tuffOwnImports(model.getValue()).has(libMatch[1])) { // money. (1.5.0): what money.tuf makes
+          return tuffOwnFile(model, libMatch[1]).then((mod) => ({
+            suggestions: mod ? [
+              ...mod.funcs.map((f) => ({ label: f.name, kind: K.Function, insertText: `${f.name}($0)`, insertTextRules: R, range,
+                detail: `${mod.name}.${f.name}(${f.params.join(', ')})`, documentation: f.doc || `A function in ${mod.rel}.` })),
+              ...mod.values.map((v) => ({ label: v.name, kind: K.Variable, insertText: v.name, range,
+                detail: `${mod.name}.${v.name}`, documentation: v.doc || `A value in ${mod.rel}.` })),
+            ] : [],
+          }));
+        }
         if (!lib) return { suggestions: [] };
         return {
           suggestions: Object.entries(lib).map(([name, [sig, docText]]) => ({
@@ -733,7 +1048,25 @@ window.registerTuff = function registerTuff(monaco, accent) {
         };
       }
       if (/^\s*(import|mention)\s+$/.test(before)) {
-        return { suggestions: Object.keys(window.TUFF_LIBS).filter((l) => !TUFF_READY_LIBS.includes(l)).map((l) => ({ label: l, kind: K.Module, insertText: l, range, documentation: window.TUFF_DOCS[l]?.[1] })) };
+        const libs = Object.keys(window.TUFF_LIBS).filter((l) => !TUFF_READY_LIBS.includes(l)).map((l) => ({ label: l, kind: K.Module, insertText: l, range, documentation: window.TUFF_DOCS[l]?.[1] }));
+        // ...and the .tuf files next to this one and in its libs folder (1.5.0), but not this file or a library's name
+        const file = model.uri && model.uri.scheme === 'file' ? model.uri.fsPath : null;
+        if (!file || !window.TuffIDE?.readDir) return { suggestions: libs };
+        const sep = file.includes('\\') ? '\\' : '/';
+        const folder = file.slice(0, file.lastIndexOf(sep));
+        const me = file.slice(file.lastIndexOf(sep) + 1);
+        return Promise.all([window.TuffIDE.readDir(folder), window.TuffIDE.readDir(folder + sep + TUFF_MODULE_FOLDER)]).then(([here, libsDir]) => {
+          const own = [];
+          for (const [entries, rel] of [[here, ''], [libsDir, `${TUFF_MODULE_FOLDER}/`]]) {
+            for (const e of entries || []) {
+              const name = e.name.replace(/\.tuf$/i, '');
+              if (e.isDir || !/\.tuf$/.test(e.name) || !/^[A-Za-z_]\w*$/.test(name) || (!rel && e.name === me)) continue;
+              if (TUFF_BUILTINS.includes(name) || own.some((x) => x.label === `${name}.tuf`)) continue; // (tmusic.tuf too: import tmusic.tuf)
+              own.push({ label: `${name}.tuf`, kind: K.File, insertText: `${name}.tuf`, range, detail: `${rel}${e.name}`, documentation: `Your own file ${rel}${e.name}: its functions and values go after ${name}.` });
+            }
+          }
+          return { suggestions: [...own, ...libs] };
+        });
       }
       if (/\b(say|print):$/.test(before)) { // say:ascii, say:color, say:pen (1.3.5)
         return {
@@ -746,27 +1079,46 @@ window.registerTuff = function registerTuff(monaco, accent) {
         return { suggestions: [{ label: 'color', kind: K.Method, insertText: 'color', range, detail: 'input:color("Name? ", "green")',
           documentation: 'Asks like input, with the question in a look: colours (the letters\', then a bar behind them), "rainbow" and bold/dim/italic/underline. It gives back what was typed.' }] };
       }
+      const objMatch = before.match(/([A-Za-z_]\w*):$/);
+      const kind = objMatch && kindOf(model, objMatch[1], position.lineNumber, kinds);
+      const actions = (kind ? [kind] : kinds).flatMap((k) => k.actions.map((a) => ({
+        label: a.name, kind: K.Method, insertText: a.params.length ? `${a.name}($0)` : `${a.name}()`, insertTextRules: R, range,
+        detail: `${k.name}:${a.name}(${a.params.join(', ')})`, documentation: `An action of ${k.name} (line ${a.line}).`, sortText: `0${a.name}`,
+      })));
+      if (kind) return { suggestions: actions }; // rex: (1.5.0): an object has only its kind's actions
+      const made = objMatch && libObjectOf(model, objMatch[1]);
+      if (made) {
+        // (the detail names it on this object: color's doc starts with say:color, play's with line:play)
+        return { suggestions: made.map((m) => ({ label: m, kind: K.Method, insertText: m, range,
+          detail: `${objMatch[1]}:${m}`, documentation: window.TUFF_METHOD_DOCS[m]?.[1] })) };
+      }
       if (/\w:$/.test(before)) {
         // atgui's, tgame's and tdraw's own methods (their docs start with "atgui", "tgame" or "tdraw") only crowd the
         // list in files that use that library. A game with a panel or a screen uses atgui's widgets too. print's
         // :ascii and :pen come only after say: or print: (above).
         const src = model.getValue();
-        const games = /^\s*(import|mention)\s+tgame\b/m.test(src);
-        const modern = /^\s*(import|mention)\s+atgui\b/m.test(src) || (games && /:\s*(panel|screen|start_screen|main_menu)\b/.test(src));
-        const drawing = /^\s*(import|mention)\s+tdraw\b/m.test(src);
+        const games = /^\s*(import|mention)\s+tgame\b(?!\.tuf)/m.test(src);
+        const modern = /^\s*(import|mention)\s+atgui\b(?!\.tuf)/m.test(src) || (games && /:\s*(panel|screen|start_screen|main_menu)\b(?!\.tuf)/.test(src));
+        const drawing = /^\s*(import|mention)\s+tdraw\b(?!\.tuf)/m.test(src);
+        const terminal = /^\s*(import|mention)\s+tterm\b(?!\.tuf)/m.test(src);
+        const music = /^\s*(import|mention)\s+tmusic\b(?!\.tuf)/m.test(src);
         const names = Object.keys(window.TUFF_METHOD_DOCS).filter((m) => {
           const doc = window.TUFF_METHOD_DOCS[m][1] || '';
           if (m === 'ascii' || m === 'pen') return false;
+          if (music && TMUSIC_METHODS.includes(m)) return true; // a song's (1.5.0), whichever library the doc starts with
+          if (/^tmusic\b/.test(doc)) return music;
           if (/^tdraw\b/.test(doc)) return drawing;
+          if (/^tterm\b/.test(doc)) return terminal;
+          if (terminal && doc.includes('In tterm, ')) return true; // a screen's :pressed, :box... (tgame's names too)
           if (/^In tgame:/.test(doc)) return games || modern;  // a name both have (align, animate...): in either's files
           return (games || !/^tgame\b/.test(doc)) && (modern || !/^atgui\b/.test(doc));
         });
         const methods = new Set([...names, 'clear', 'upper', 'lower', 'trim', 'has', 'add', 'pop']);
         return {
-          suggestions: [...methods].map((m) => ({
+          suggestions: [...actions, ...[...methods].map((m) => ({
             label: m, kind: K.Method, insertText: m, range,
             detail: window.TUFF_METHOD_DOCS[m]?.[0], documentation: window.TUFF_METHOD_DOCS[m]?.[1] || window.TUFF_DOCS[m]?.[1],
-          })),
+          }))],
         };
       }
       const snippets = [
@@ -778,11 +1130,15 @@ window.registerTuff = function registerTuff(monaco, accent) {
         { label: 'while', kind: K.Snippet, insertText: 'while ${1:condition}:\n    $0', insertTextRules: R, detail: 'While loop', range },
         { label: 'for', kind: K.Snippet, insertText: 'for ${1:i} in range(${2:1}, ${3:10}):\n    $0', insertTextRules: R, detail: 'Count loop', range },
         { label: 'line', kind: K.Snippet, insertText: '${1:line} = say "${2:text}"\n${1:line}:rewrite "${3:new text}"', insertTextRules: R, detail: 'Say, then rewrite', range },
+        { label: 'kind', kind: K.Snippet, insertText: 'kind ${1:Pet}:\n    ${2:name} = ${3:"?"}\n    func ${4:feed}():\n        $0', insertTextRules: R, detail: 'Your own kind of object: fields and actions', documentation: window.TUFF_DOCS.kind[1], range },
+        { label: 'f"..."', kind: K.Snippet, insertText: 'f"${1:Hello} {${2:name}\\}$0"', insertTextRules: R, detail: 'Text template: values in { }', documentation: TUFF_TEMPLATE_DOC[1], range },
         { label: 'ask number', kind: K.Snippet, insertText: '${1:n} = num(input "${2:A number?} ")\nwhile ${1:n} is err:\n    say "Please type a number."\n    ${1:n} = num(input "${2:A number?} ")\n$0', insertTextRules: R, detail: 'Ask until they type a number (err)', range },
         { label: 'import anims', kind: K.Snippet, insertText: 'import anims\n', range, detail: 'Load the animations library' },
         { label: 'tap', kind: K.Snippet, insertText: 'mention tap\n\nres = tap.get("${1:https://api.github.com/users/octocat}")\nif res:ok:\n    info = res:json\n    say info:get("${2:name}")\nelse:\n    say "Error " + res:status\n', insertTextRules: R, range, detail: 'Get JSON from the web' },
+        { label: 'tmusic', kind: K.Snippet, insertText: 'mention tmusic\n\nsong = tmusic.song(${1:120})\nsong:track("${2:piano}", "${3:C4 E4 G4 E4 | F4 A4 C5 .}")\nsong:track("drums", "${4:kick hat snare hat | kick hat snare hat}")\nsong:play()\n$0', insertTextRules: R, range, detail: 'A song from notes' },
         { label: 'tgame 2D', kind: K.Snippet, insertText: 'mention tgame\n\ngame = tgame.window("${1:My Game}", 600, 400)\nplayer = game:box(300, 200, 40, 40, "${2:teal}")\nscore = game:text("Score: 0", 300, 30)\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        player:move(-300 * dt, 0)\n    if game:held("right"):\n        player:move(300 * dt, 0)\n    $0\n', insertTextRules: R, range, detail: 'A starter 2D game' },
         { label: 'tgame 3D', kind: K.Snippet, insertText: 'mention tgame\n\ngame = tgame.world("${1:My World}")\ngame:sky "${2:day}"\ngame:island(80)\nplayer = game:player("first person")\nfor i in range(1, 20):\n    tree = game:spawn("tree")\n    tree:clicked ${3:chop}\n\nfunc ${3:chop}(tree):\n    tree:shake()\n    $0\n\nwhile game:open():\n    game:frame()\n', insertTextRules: R, range, detail: 'A starter 3D world' },
+        { label: 'tterm game', kind: K.Snippet, insertText: 'mention tterm\n\nscreen = tterm.screen(${1:40}, ${2:20})\nx = 20\ny = 10\n\nfunc step(dt):\n    if screen:pressed("left"):\n        x -= 1\n    if screen:pressed("right"):\n        x += 1\n    if screen:pressed("up"):\n        y -= 1\n    if screen:pressed("down"):\n        y += 1\n    screen:clear()\n    screen:box(0, 0, ${1:40}, ${2:20}, "gray")\n    screen:put(x, y, "@", "lime")\n    $0\n\nscreen:every_frame(step)\n', insertTextRules: R, range, detail: 'A starter terminal game (tterm)' },
         { label: 'tgui app', kind: K.Snippet, insertText: 'import tgui\n\napp = tgui.window("${1:My App}")\napp:heading "${2:Hello!}"\n\nfunc ${3:clicked}():\n    $0\n\napp:button("${4:Click me}", ${3:clicked})\n', insertTextRules: R, range, detail: 'A starter app window' },
         { label: 'atgui app', kind: K.Snippet, insertText: 'mention atgui\n\napp = atgui.window("${1:My App}", 900, 600)\napp:accent "${2:indigo}"\nside = app:sidebar(220)\nside:heading "${3:My App}"\npages = side:list(["Home", "Settings"])\npages:change opened\ntitle = app:heading "Home"\ncard = app:card\ncard:text "${4:Hello!}"\n\nfunc opened(name):\n    title:set name\n    $0\n', insertTextRules: R, range, detail: 'A modern app with a sidebar' },
       ];
@@ -795,10 +1151,15 @@ window.registerTuff = function registerTuff(monaco, accent) {
       const libs = TUFF_READY_LIBS.map((l) => ({ label: l, kind: K.Module, insertText: l, range, detail: window.TUFF_DOCS[l]?.[0], documentation: window.TUFF_DOCS[l]?.[1] }));
       const seen = new Set([...window.TUFF_KEYWORDS, ...builtins, ...TUFF_READY_LIBS]);
       const ids = [];
-      for (const f of userFuncs(model)) {
+      for (const f of funcsCalled(model)) {
         seen.add(f.name);
         ids.push({ label: f.name, kind: K.Function, insertText: `${f.name}($0)`, insertTextRules: R, range, detail: `func ${f.name}(${f.params.join(', ')})` });
       }
+      for (const k of kinds) { // Pet( makes a Pet (1.5.0)
+        seen.add(k.name);
+        ids.push({ label: k.name, kind: K.Class, insertText: `${k.name}($0)`, insertTextRules: R, range, detail: `kind ${k.name}(${k.fields.map((f) => f.name).join(', ')})`, documentation: kindCard(k)[1] });
+      }
+      for (const k of kinds) for (const a of k.actions) seen.add(a.name); // (an action isn't called on its own)
       for (const m of src.matchAll(/[A-Za-z_]\w{1,}/g)) {
         if (!seen.has(m[0]) && m[0] !== word.word) {
           seen.add(m[0]);
@@ -820,23 +1181,24 @@ function tuffIdents(model) {
   const out = [];
   const lines = model.getLinesContent();
   const own = ownTryCatch(model);
+  const made = tuffKinds(model);
   lines.forEach((text, i) => {
     const block = tryCatchWord(text, own) ? text.search(/\S/) : -1; // where this line's try: or catch: word is
-    let quote = null;
+    // kind is Tuff's word in kind Pet:, and my inside a kind (1.5.0); anywhere else they're the program's own names
+    const soft = { kind: /^kind\s+[A-Za-z_]\w*\s*:/.test(text) ? 0 : -1, my: made.some((k) => k.line < i + 1 && i + 1 <= k.end) };
+    // A kind's field (name = "?") and action (func feed():) aren't variables or functions: they're used as rex.name
+    // and rex:feed(), so renaming a variable called name leaves them alone.
+    const member = made.find((k) => k.fields.some((f) => f.line === i + 1) || k.actions.some((a) => a.line === i + 1));
+    const skip = member ? text.search(/\S/) + (/^\s*func\s/.test(text) ? text.trimStart().match(/^func\s+/)[0].length : 0) : -1;
+    const { kinds } = tuffScan(text); // names in a template's { } count too: f"{score}"
     for (let c = 0; c < text.length;) {
-      const ch = text[c];
-      if (quote) {
-        if (ch === '\\') c += 2;
-        else { if (ch === quote) quote = null; c++; }
-        continue;
-      }
-      if (ch === '"' || ch === "'") { quote = ch; c++; continue; }
-      if (ch === '#') break;
+      if (kinds[c] !== 'c') { c++; continue; }
       const m = /^[A-Za-z_]\w*/.exec(text.slice(c));
       if (m && !/\w/.test(text[c - 1] || '')) {
         const prev = text[c - 1];
-        const word = window.TUFF_KEYWORDS.includes(m[0]) && (!['try', 'catch'].includes(m[0]) || c === block);
-        if (prev !== '.' && prev !== ':' && !word) {
+        const word = window.TUFF_KEYWORDS.includes(m[0]) && (!['try', 'catch', 'kind', 'my'].includes(m[0]) || c === block
+          || (m[0] === 'kind' && c === soft.kind) || (m[0] === 'my' && soft.my));
+        if (prev !== '.' && prev !== ':' && !word && c !== skip) {
           out.push({ name: m[0], line: i + 1, start: c + 1, end: c + 1 + m[0].length });
         }
         c += m[0].length;
@@ -848,13 +1210,95 @@ function tuffIdents(model) {
   return out;
 }
 
+// The file's functions. A kind's actions (1.5.0) come too, with `kind` set to their kind's name: they're called as
+// rex:feed(), never as feed(), so callers that look a name up leave them out (see funcsCalled).
 function userFuncs(model) {
   const out = [];
+  const kinds = tuffKinds(model);
   model.getLinesContent().forEach((text, i) => {
     const m = text.match(/^(\s*)func\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?/);
-    if (m) out.push({ name: m[2], line: i + 1, col: m[1].length + text.slice(m[1].length).indexOf(m[2]) + 1, indent: m[1].length, params: (m[3] || '').split(',').map((s) => s.trim()).filter(Boolean) });
+    const kind = kinds.find((k) => k.line < i + 1 && i + 1 <= k.end && k.actions.some((a) => a.line === i + 1));
+    if (m) out.push({ name: m[2], line: i + 1, col: m[1].length + text.slice(m[1].length).indexOf(m[2]) + 1, indent: m[1].length, params: (m[3] || '').split(',').map((s) => s.trim()).filter(Boolean), kind: kind ? kind.name : null });
   });
   return out;
+}
+
+// The functions a name can call: the file's own, without the kinds' actions.
+function funcsCalled(model) {
+  return userFuncs(model).filter((f) => !f.kind);
+}
+
+// The kinds the file makes (1.5.0): kind Pet: at the start of a line, then its fields (name = "?") and actions
+// (func feed():), indented under it. [{ name, line, end, fields: [{ name, value, line }], actions: [{ name, params, line }] }]
+function tuffKinds(model) {
+  const lines = model.getLinesContent();
+  const out = [];
+  lines.forEach((text, i) => {
+    const m = /^kind\s+([A-Za-z_]\w*)\s*:/.exec(text);
+    if (!m) return;
+    const kind = { name: m[1], line: i + 1, end: blockEnd(model, i + 1), fields: [], actions: [] };
+    let inner = null; // the indent of the kind's own lines
+    for (let j = i + 1; j < kind.end; j++) {
+      const t = lines[j];
+      if (!t.trim() || /^\s*#/.test(t)) continue;
+      const indent = t.length - t.trimStart().length;
+      if (inner === null) inner = indent;
+      if (indent !== inner) continue;
+      let f;
+      if ((f = /^\s*func\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?/.exec(t))) {
+        kind.actions.push({ name: f[1], params: (f[2] || '').split(',').map((x) => x.trim()).filter(Boolean), line: j + 1 });
+      } else if ((f = /^\s*([A-Za-z_]\w*)\s*=(?!=)\s*(.*?)\s*(#.*)?$/.exec(t))) {
+        kind.fields.push({ name: f[1], value: f[2], line: j + 1 });
+      }
+    }
+    out.push(kind);
+  });
+  return out;
+}
+
+// Which kind `name` holds an object of on line `atLine`, when the file says: my inside a kind's action, or a name
+// given Pet(...) (rex = Pet("Rex")). Else null.
+function kindOf(model, name, atLine, kinds = tuffKinds(model)) {
+  if (name === 'my') return kinds.find((k) => k.line < atLine && atLine <= k.end) || null;
+  const made = new RegExp(`^\\s*${name}\\s*=\\s*([A-Za-z_]\\w*)\\s*\\(`);
+  for (const text of model.getLinesContent()) {
+    const m = made.exec(text);
+    const kind = m && kinds.find((k) => k.name === m[1]);
+    if (kind) return kind;
+  }
+  return null;
+}
+
+// The hover for kinds (1.5.0), or null: on a kind's name (Pet, or kind Pet:), on a field after rex. or an action
+// after rex: when rex's kind is known, and on my inside a kind.
+function kindHover(model, lineNumber, word, before, lib) {
+  const kinds = tuffKinds(model);
+  if (!kinds.length) return null;
+  const owner = before.match(/([A-Za-z_]\w*)[.:]$/);
+  if (owner && !(lib && window.TUFF_LIBS[lib[1]])) {
+    const kind = kindOf(model, owner[1], lineNumber, kinds);
+    const f = kind && before.endsWith('.') && kind.fields.find((x) => x.name === word.word);
+    if (f) return ['```tuff\n' + `${owner[1]}.${f.name}` + '\n```', `A field of ${kind.name}. A new ${kind.name} starts with ${f.name} = ${f.value} (line ${f.line}).`];
+    const a = kind && before.endsWith(':') && kind.actions.find((x) => x.name === word.word);
+    if (a) return ['```tuff\n' + `${owner[1]}:${a.name}(${a.params.join(', ')})` + '\n```', `An action of ${kind.name} (line ${a.line}). In it, my is ${owner[1] === 'my' ? 'this' : owner[1]}.`];
+    return null;
+  }
+  if (word.word === 'my' && kindOf(model, 'my', lineNumber, kinds)) {
+    const kind = kindOf(model, 'my', lineNumber, kinds);
+    return ['```tuff\nmy\n```', `This ${kind.name} itself: my.${kind.fields[0]?.name || 'name'} is one of its fields, and my:${kind.actions[0]?.name || 'feed'}() runs one of its actions.`];
+  }
+  const kind = kinds.find((k) => k.name === word.word);
+  return kind ? kindCard(kind) : null;
+}
+
+// What hovering a kind's name shows: the kind as it's written, its fields' starting values and its actions.
+function kindCard(kind) {
+  const lines = [`kind ${kind.name}:`, ...kind.fields.map((f) => `    ${f.name} = ${f.value}`),
+    ...kind.actions.map((a) => `    func ${a.name}(${a.params.join(', ')})`)];
+  const fields = kind.fields.map((f) => f.name);
+  const how = fields.length ? `${kind.name}(...) makes one: its inputs fill ${fields.join(', ')}, in that order (fewer is fine).`
+    : `${kind.name}() makes one.`;
+  return ['```tuff\n' + lines.join('\n') + '\n```', `Your own kind of object, made on line ${kind.line}. ${how}`];
 }
 
 // Last line of the indented block that starts on `line`.
@@ -873,8 +1317,10 @@ function blockEnd(model, line) {
 
 function definitionOf(model, name, atLine) {
   const funcs = userFuncs(model);
-  const fn = funcs.find((f) => f.name === name);
+  const fn = funcs.find((f) => f.name === name && !f.kind);
   if (fn) return { line: fn.line, start: fn.col, end: fn.col + name.length };
+  const kind = tuffKinds(model).find((k) => k.name === name); // kind Pet: (1.5.0)
+  if (kind) return { line: kind.line, start: 6, end: 6 + name.length };
   // An input of the function we're inside.
   const inside = funcs.filter((f) => f.line <= atLine && blockEnd(model, f.line) >= atLine).pop();
   if (inside && inside.params.includes(name)) {
@@ -979,12 +1425,18 @@ function registerTuffNavigation(monaco) {
       const K = L.SymbolKind;
       const symbols = [];
       const seen = new Set();
+      const kinds = tuffKinds(model);
       model.getLinesContent().forEach((text, i) => {
         const line = i + 1;
+        const of = kinds.find((k) => k.line < line && line <= k.end);
         let m;
-        if ((m = text.match(/^\s*func\s+([A-Za-z_]\w*)\s*(\([^)]*\))?/))) {
+        if ((m = text.match(/^kind\s+([A-Za-z_]\w*)/))) { // kind Pet: (1.5.0)
           const end = blockEnd(model, line);
-          symbols.push({ name: m[1], detail: m[2] || '()', kind: K.Function, range: new monaco.Range(line, 1, end, model.getLineMaxColumn(end)), selectionRange: range(line, 1, model.getLineMaxColumn(line)), tags: [] });
+          symbols.push({ name: m[1], detail: 'kind', kind: K.Class, range: new monaco.Range(line, 1, end, model.getLineMaxColumn(end)), selectionRange: range(line, 1, model.getLineMaxColumn(line)), tags: [] });
+        } else if ((m = text.match(/^\s*func\s+([A-Za-z_]\w*)\s*(\([^)]*\))?/))) {
+          const end = blockEnd(model, line);
+          const action = of && of.actions.some((a) => a.line === line);
+          symbols.push({ name: action ? `${of.name}:${m[1]}` : m[1], detail: m[2] || '()', kind: action ? K.Method : K.Function, range: new monaco.Range(line, 1, end, model.getLineMaxColumn(end)), selectionRange: range(line, 1, model.getLineMaxColumn(line)), tags: [] });
         } else if ((m = text.match(/^([A-Za-z_]\w*)\s*=\s*(m?tgui|atgui|tgame)\.(window|world)/))) {
           symbols.push({ name: m[1], detail: `${m[2]} ${m[3]}`, kind: K.Class, range: range(line, 1, model.getLineMaxColumn(line)), selectionRange: range(line, 1, m[1].length + 1), tags: [] });
           seen.add(m[1]);
@@ -1010,13 +1462,30 @@ function registerTuffNavigation(monaco) {
       if (insideStringOrComment(before)) return null;
       const call = callAt(before);
       if (!call) return null;
+      if (call.how === 'lib' && tuffOwnImports(model.getValue()).has(call.lib)) { // money.as_money( (1.5.0)
+        return tuffOwnFile(model, call.lib).then((mod) => {
+          const f = mod && mod.funcs.find((x) => x.name === call.name);
+          if (!f) return null;
+          const label = `${call.lib}.${f.name}(${f.params.join(', ')})`;
+          return {
+            value: { signatures: [{ label, documentation: f.doc || `A function in ${mod.rel}.`, parameters: f.params.map((p) => ({ label: p })) }], activeSignature: 0, activeParameter: Math.min(call.active, Math.max(0, f.params.length - 1)) },
+            dispose() {},
+          };
+        });
+      }
       let sig = null;
       let doc = '';
       if (call.how === 'lib') [sig, doc] = window.TUFF_LIBS[call.lib]?.[call.name] || [];
-      else if (call.how === 'method') [sig, doc] = window.TUFF_METHOD_DOCS[call.name] || [];
-      else {
-        const f = userFuncs(model).find((x) => x.name === call.name);
+      else if (call.how === 'method') {
+        [sig, doc] = window.TUFF_METHOD_DOCS[call.name] || [];
+        const kind = !sig && tuffKinds(model).find((k) => k.actions.some((a) => a.name === call.name)); // rex:eat( (1.5.0)
+        const a = kind && kind.actions.find((x) => x.name === call.name);
+        if (a) { sig = `${kind.name}:${a.name}(${a.params.join(', ')})`; doc = `An action of ${kind.name} (line ${a.line}).`; }
+      } else {
+        const f = funcsCalled(model).find((x) => x.name === call.name);
+        const kind = tuffKinds(model).find((k) => k.name === call.name); // Pet( (1.5.0): one input for each field
         if (f) { sig = `${f.name}(${f.params.join(', ')})`; doc = 'A function in this file.'; }
+        else if (kind && kind.fields.length) { sig = `${kind.name}(${kind.fields.map((x) => x.name).join(', ')})`; doc = kindCard(kind)[1]; }
         else [sig, doc] = window.TUFF_DOCS[call.name] || [];
       }
       const inner = sig && sig.match(/\(([^)]*)\)/);
@@ -1055,7 +1524,7 @@ function registerTuffNavigation(monaco) {
     provideHover(model, position) {
       const w = wordAt(model, position);
       if (!w) return null;
-      const f = userFuncs(model).find((x) => x.name === w.word);
+      const f = funcsCalled(model).find((x) => x.name === w.word) || userFuncs(model).find((x) => x.name === w.word);
       if (!f) return null;
       const above = f.line > 1 ? model.getLineContent(f.line - 1).match(/^\s*#\s*↳\s*(.*)$/) : null;
       return {
