@@ -245,7 +245,9 @@ export default async (t, ctx) => {
   check('Auto Code Sort moving a function down (and x=1 to x = 1): each breakpoint goes with its line', JSON.stringify(sorted) === JSON.stringify(['x = 1', 'say x', 'say "hi " + who']), sorted);
   await t.key('z', ctx.platform === 'darwin' ? 4 : 2);
   await t.sleep(300);
-  check('...and one Ctrl+Z takes the sort back', (await t.code()).replace(/\r\n/g, '\n') === MESSY, await t.code());
+  const back = await ev(`window.TuffDebug.breakpoints().filter((b) => /messy\\.tuf$/i.test(b.path)).flatMap((b) => b.lines)`);
+  check('...and one Ctrl+Z takes the sort back, with the breakpoints on their lines again', (await t.code()).replace(/\r\n/g, '\n') === MESSY
+    && JSON.stringify(back) === '[2,3,5]', [await t.code(), back]);
   for (const b of await ev('window.TuffDebug.breakpoints()')) for (const n of b.lines) await ev(`window.TuffDebug.toggle(${JSON.stringify(b.path)}, ${n})`);
 
   // ---- New Project while a program is paused: it stops, the old project's Design Studio tab goes, and Rerun runs the

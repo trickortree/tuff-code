@@ -69,6 +69,9 @@
   const rel = (p) => (state.root && p.startsWith(state.root) ? p.slice(state.root.length).replace(/^[\\/]/, '') : p);
   const ext = (p) => (basename(p).match(/\.([^.]+)$/) || [, ''])[1].toLowerCase();
   const isUnder = (p, dir) => p === dir || p.startsWith(dir + SEP);
+  // The file run last, while it's in the open folder (after Open Folder or New Project it's the old project's, so Run,
+  // Rerun, Design Studio and Build leave it alone).
+  const lastRun = () => (state.lastRunFile && state.root && isUnder(state.lastRunFile, state.root) ? state.lastRunFile : null);
   const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
   const LANGS = { tuf: 'tuff', py: 'python', js: 'javascript', ts: 'typescript', json: 'json', md: 'markdown', html: 'html', css: 'css', xml: 'xml', yml: 'yaml', yaml: 'yaml', txt: 'plaintext', env: 'ini', ini: 'ini', cfg: 'ini', toml: 'ini', sh: 'shell', bat: 'bat', cmd: 'bat', ps1: 'powershell' };
@@ -713,7 +716,7 @@
   async function openStudio(file) {
     hideMenus();
     const t = activeTab();
-    let target = file || studio.file || (t && ext(t.path) === 'tuf' ? t.path : null) || state.lastRunFile;
+    let target = file || studio.file || (t && ext(t.path) === 'tuf' ? t.path : null) || lastRun();
     if (!target || !(await api.fs.exists(target))) target = join(state.root, 'main.tuf');
     showStudio(target);
   }
@@ -920,7 +923,7 @@
   // window title name it (TuffIDE.activeFile() says the same). Otherwise it's the code tab's file.
   function runTarget() {
     const t = activeTab();
-    return (engine.visible && engine.file) || (t && ext(t.path) === 'tuf' ? t.path : state.lastRunFile);
+    return (engine.visible && engine.file) || (t && ext(t.path) === 'tuf' ? t.path : lastRun());
   }
   function shownTab() {
     return (engine.visible && engine.file && state.tabs.find((x) => x.path === engine.file)) || activeTab();
@@ -1533,22 +1536,29 @@
     if (model.getValue() !== before) return;
     const onScreen = editor.getModel() === model;
     const pos = onScreen ? editor.getPosition() : null;
-    // The sort moves lines about and changes the spaces in them: afterwards each breakpoint goes back on the line with
-    // its text (spaces aside) nearest where it was, and so does the cursor when its own line changed.
-    const flat = (s) => s.replace(/\s+/g, '');
-    const dots = (window.TuffDebug?.breakpoints().find((b) => samePath(b.path, t.path))?.lines || []).map((n) => [n, flat(model.getLineContent(n))]);
-    const here = pos && flat(model.getLineContent(pos.lineNumber));
+    // The sort moves lines about (autosort.js says where each one went): each breakpoint goes with its line, and so does
+    // the cursor when its line moved. One on a line the sort took away (an old note) goes on the next line it kept.
+    const to = new Map(result.from.map((o, k) => [o + 1, k + 1]));
+    const last = model.getLineCount();
+    const where = (n) => { for (let k = n; k <= last; k++) if (to.has(k)) return to.get(k); return result.from.length || 1; };
+    const dots = window.TuffDebug?.breakpoints().find((b) => samePath(b.path, t.path))?.lines || [];
+    const unsorted = model.getAlternativeVersionId();
     model.pushStackElement();
     model.pushEditOperations([], editsTo(model, result.code), () => null);
     model.pushStackElement();
-    const sorted = model.getLinesContent().map(flat);
-    const near = (line, n) => {
-      let best = 0;
-      sorted.forEach((s, i) => { if (s === line && (!best || Math.abs(i + 1 - n) < Math.abs(best - n))) best = i + 1; });
-      return best || Math.min(n, sorted.length);
-    };
-    if (dots.length) window.TuffDebug.setLines(t.path, dots.map(([n, line]) => near(line, n)));
-    if (onScreen && pos && sorted[editor.getPosition().lineNumber - 1] !== here) editor.setPosition({ lineNumber: near(here, pos.lineNumber), column: 1 });
+    if (dots.length) {
+      const moved = dots.map(where);
+      const sorted = model.getAlternativeVersionId();
+      window.TuffDebug.setLines(t.path, moved);
+      // Undo (Ctrl+Z, or the toast's) brings the old text back but would leave the dots where they are: they go back
+      // with it, and Redo takes them to the sorted lines again.
+      model.onDidChangeContent((e) => {
+        const v = model.getAlternativeVersionId();
+        if (e.isUndoing && v === unsorted) window.TuffDebug.setLines(t.path, dots);
+        else if (e.isRedoing && v === sorted) window.TuffDebug.setLines(t.path, moved);
+      });
+    }
+    if (onScreen && pos && editor.getPosition().lineNumber !== where(pos.lineNumber)) editor.setPosition({ lineNumber: where(pos.lineNumber), column: 1 });
     const what = result.summary.length ? result.summary.join(', ') : 'tidied up';
     const text = `Auto code sort: ${what.charAt(0).toUpperCase() + what.slice(1)}.`;
     if (!was.ok && now.ok) toast(`${text} That also fixed the mistake in your code.`, 'ok', 6000);
@@ -1557,8 +1567,7 @@
   }
 
   async function rerun() {
-    // (only a file in the open folder: after New Project or Open Folder, the one run last is the old project's)
-    if (!state.lastRunFile || !isUnder(state.lastRunFile, state.root)) return runCurrent();
+    if (!lastRun()) return runCurrent();
     await saveAll();
     startRun(state.lastRunFile);
   }
@@ -1622,7 +1631,7 @@
   function buildTarget() {
     const t = activeTab();
     if (t && ext(t.path) === 'tuf') return t.path;
-    return state.lastRunFile || join(state.root, 'main.tuf');
+    return lastRun() || join(state.root, 'main.tuf');
   }
 
   async function refreshIconPreview() {

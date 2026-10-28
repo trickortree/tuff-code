@@ -9492,7 +9492,7 @@ const [ideFile, sortFile, dir] = process.argv.slice(1);
 
   // Auto Code Sort itself (ide.js's autoSort, with autosort.js and a TuffDebug with breakpoints() and setLines): each
   // dot goes back on its own line, the cursor stays on a line the sort left alone and goes to its own line otherwise,
-  // and one undo takes it all back.
+  // and one undo takes it all back, the dots too (redo sorts them again).
   const FILE = 'C:\\proj\\main.tuf';
   const sortCase = async (before, lines, at) => {
     const m = make(before);
@@ -9514,6 +9514,9 @@ const [ideFile, sortFile, dir] = process.argv.slice(1);
       cursor: ed.getPosition(), cursorLine: m.getLineContent(ed.getPosition().lineNumber).trim() === atText };
     await m.undo();
     r.undone = m.getValue() === before;
+    r.undoDots = ids.map((id) => lineOf(m, id));
+    await m.redo();
+    r.redoDots = ids.map((id) => lineOf(m, id));
     return r;
   };
   const MESSY = 'name = input("Name? ")\nif name is "Sam":\n  say "hi Sam"\nelse:\n  say "hello " + name\nsay "bye"\n';
@@ -9521,6 +9524,9 @@ const [ideFile, sortFile, dir] = process.argv.slice(1);
   out.sortIndentCursor = await sortCase(MESSY, [5], [5, 3]);
   // functions go last and imports first, each part gets a header, x=1 becomes x = 1
   out.sortMoved = await sortCase('func greet(who):\n  say "hi " + who\nx=1\nimport tgui\ngreet("Sam")\nsay x\n', [2, 3, 6], [6, 1]);
+  // the same line in a function and in the main program, and in two functions: each dot goes with its own one
+  out.sortSame = await sortCase('func a():\n    say x\nx = 1\nsay x\n', [2, 4], [4, 1]);
+  out.sortTwo = await sortCase('func a():\n    say "hi"\nfunc b():\n    say "hi"\na()\nb()\n', [2, 4], [4, 1]);
   console.log(JSON.stringify(out));
 })().catch((e) => { console.log(JSON.stringify({ crash: String(e.stack || e) })); });
 """
@@ -9563,12 +9569,20 @@ def debug_edits(c):
             "1500 pairs of short texts (LF and CRLF): the edits make exactly the new text, one undo takes them back, and dots and the cursor on the "
             "lines kept stay on them", got["pairs"])
     si, sc, sm = got["sortIndent"], got["sortIndentCursor"], got["sortMoved"]
-    c.check(si == {"calls": 1, "dots": [[3, True], [5, True], [6, True]], "cursor": {"lineNumber": 6, "column": 5}, "cursorLine": True, "undone": True}
+    c.check(si == {"calls": 1, "dots": [[3, True], [5, True], [6, True]], "cursor": {"lineNumber": 6, "column": 5}, "cursorLine": True, "undone": True,
+                   "undoDots": [3, 5, 6], "redoDots": [3, 5, 6]}
             and sc["dots"] == [[5, True]] and sc["cursorLine"] and sc["undone"],
             "Auto Code Sort fixing the indentation: each breakpoint stays on its line, the cursor on a line it left alone stays put (and one on a "
             "line it changed stays on that line), and one undo takes it back", (si, sc))
-    c.check(sm == {"calls": 1, "dots": [[12, True], [5, True], [7, True]], "cursor": {"lineNumber": 7, "column": 1}, "cursorLine": True, "undone": True},
-            "Auto Code Sort moving functions last and imports first (and x=1 to x = 1): each breakpoint goes back on its own line, the cursor too", sm)
+    c.check(sm == {"calls": 1, "dots": [[12, True], [5, True], [7, True]], "cursor": {"lineNumber": 7, "column": 1}, "cursorLine": True, "undone": True,
+                   "undoDots": [2, 3, 6], "redoDots": [12, 5, 7]},
+            "Auto Code Sort moving functions last and imports first (and x=1 to x = 1): each breakpoint goes back on its own line, the cursor too, "
+            "and undo puts the breakpoints back where they were (redo where the sort put them)", sm)
+    ss, s2 = got["sortSame"], got["sortTwo"]
+    c.check(ss["dots"] == [[8, True], [3, True]] and ss["cursor"]["lineNumber"] == 3 and ss["undoDots"] == [2, 4]
+            and s2["dots"] == [[8, True], [12, True]] and s2["cursor"]["lineNumber"] == 12 and s2["undoDots"] == [2, 4],
+            "...with the same line in a function and in the main program, or in two functions, each breakpoint (and the cursor) goes with its own one",
+            (ss, s2))
 
 
 def t_debug(c):
@@ -9819,6 +9833,39 @@ def starters_weather(c, folder, stdin="Testville\nAtlantis\n\n", first=0):
     return result, asked
 
 
+# The file run last, before and after another folder opens: ide.js's runTarget, rerun, buildTarget and openStudio (cut
+# from its source) with no .tuf tab open.
+STALE_RUN = r"""
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[1], 'utf8').replace(/\r\n/g, '\n');
+const line = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n', at)); };
+const fn = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n  }\n', at) + 4); };
+const state = { root: 'C:\\Old', lastRunFile: 'C:\\Old\\main.tuf' };
+let did = [];
+const f = new Function('state', 'engine', 'studio', 'SEP', 'activeTab', 'ext', 'join', 'runCurrent', 'saveAll', 'startRun', 'hideMenus', 'api', 'showStudio',
+  [line('const isUnder = '), line('const lastRun = '), fn('function runTarget('), fn('async function rerun('), fn('function buildTarget('),
+    fn('async function openStudio('), 'return { runTarget, rerun, buildTarget, openStudio };'].join('\n'))(
+  state, { visible: false, file: null }, { file: null }, '\\', () => null, (p) => (p.match(/\.([^.\\]+)$/) || [, ''])[1], (a, b) => `${a}\\${b}`,
+  () => did.push('current'), async () => {}, (p) => did.push('start', p), () => {}, { fs: { exists: async () => true } }, (p) => did.push(p));
+(async () => {
+  const out = [];
+  for (const root of ['C:\\Old', 'C:\\Other']) {
+    state.root = root;
+    const r = { run: f.runTarget() };
+    did = [];
+    await f.rerun();
+    r.rerun = did;
+    r.build = f.buildTarget();
+    did = [];
+    await f.openStudio();
+    r.studio = did[0];
+    out.push(r);
+  }
+  console.log(JSON.stringify(out));
+})().catch((e) => console.log(JSON.stringify({ crash: String(e.stack || e) })));
+"""
+
+
 def t_starters(c):
     """1.5.0, no window and no sound: New Project's starters (tuffcode/starters). Each is listed with its picture and
     passes --check. The console ones run in a pipe with their answers; Snake (tterm) with screen:press keys; Coin
@@ -10055,6 +10102,19 @@ def t_starters(c):
     c.check("if (process.platform !== 'darwin') { Menu.setApplicationMenu(null); return; }" in main,
             "main.js sets no menu on Windows and Linux: the keys of Electron's default one (Ctrl+W closes the window, Ctrl+R reloads it) "
             "would work in the gallery, where the IDE's own shortcuts wait", None)
+    # After New Project or Open Folder the file run last is the old project's: with no .tuf tab open, Run (and Debug),
+    # Rerun, Design Studio and Build go to the new folder's main.tuf instead (ide.js's own functions, from its source).
+    try:
+        p = subprocess.run(["node", "-e", STALE_RUN, os.path.join(app, "renderer", "js", "ide.js")], capture_output=True, text=True, encoding="utf-8", timeout=60)
+        got = json.loads(p.stdout.strip().splitlines()[-1])
+    except FileNotFoundError:
+        got = None
+    except (ValueError, IndexError) as exc:
+        got = {"crash": str(exc), "stderr": p.stderr[-500:]}
+    if got is not None:
+        old, other = "C:\\Old\\main.tuf", "C:\\Other\\main.tuf"
+        c.check(got == [{"run": old, "rerun": ["start", old], "build": old, "studio": old}, {"run": None, "rerun": ["current"], "build": other, "studio": other}],
+                "ide.js: after another folder opens, Run, Rerun, Design Studio and Build leave the old project's file run last alone", got)
 
 
 # ---------------------------------------------------------------- Learn's Section 1.7, the Workshop (1.5.0)
@@ -10185,6 +10245,7 @@ LEARN_150_GOOD = [
     ("workshop-files", 'import money.tuf\n\nsay f"3 tickets: {money.with_tax(3 * 4.5):money}"\n'),  # Lesson 1's :money
     ("workshop-files", 'import money.tuf\n\nsay money.as_money(3 * 4.5 * (1 + money.rate))\n'),  # the tax from money.rate
     ("workshop-files", 'import money.tuf\n\nprice = 3 * 4.5\ntax = price * money.rate\nsay "3 tickets: " + money.as_money(price + tax)\n'),
+    ("workshop-files", 'import money.tuf\n\nsay f"3 tickets: ${money.with_tax(3 * 4.5):0.00}"\n'),  # Lesson 1's $ and {x:0.00}
     ("workshop-tterm", _TTERM_NAMES),
     ("workshop-tterm", _boxed('    if screen:pressed("up") and y >= 2: y -= 1\n    if screen:pressed("down") and y <= 7: y = y + 1\n')),
     ("workshop-tterm", _boxed('    if screen:pressed("up"):\n        y -= 1\n    elif screen:pressed("down"):\n        y += 1\n'
@@ -10559,8 +10620,9 @@ def t_learn_150(c):
 def t_build_pack(c):
     """No window, no packing tool: build_exe_pack_test.mjs runs tuffcode/build.js with PyInstaller stood in for, lays the
     app out as its .exe unpacks it and runs it with the launcher build.js wrote. 1.5.0: a built app run as the real one
-    runs (frozen, unpacked afresh each time, started from another folder) keeps what it saves next to its .exe, or in
-    TuffApps when it can't write there, and reads it back; and a project folder with ; in its path packs."""
+    runs (frozen, unpacked afresh each time, started from another folder) keeps what it saves in "<its name> files"
+    beside its .exe, or in TuffApps when it can't write there, and reads it back; and a project folder with ; in its
+    path packs."""
     sep = ";" if os.name == "nt" else ":"
     try:
         p = subprocess.run(["node", os.path.join(HERE, "build_exe_pack_test.mjs")], capture_output=True, text=True, encoding="utf-8",
@@ -10578,9 +10640,10 @@ def t_build_pack(c):
 
     saves = section("a built app keeps what it saves")
     c.check(saves.count("  ok  ") >= 9 and "FAIL" not in saves,
-            "a built app (run as the real one runs) keeps what it saves next to its .exe, or in TuffApps when it can't write "
-            "there, reads it back the next time it starts, starts from the files packed with it, and imports its own .tuf files "
-            "from the app; not built, a program's files stay next to it", (saves or p.stdout)[-1500:] + p.stderr[-300:])
+            "a built app (run as the real one runs) keeps what it saves in a folder of its own beside its .exe (other files "
+            "beside it aren't taken for its own), or in TuffApps when it can't write there, reads it back the next time it "
+            "starts, starts from the files packed with it, and imports its own .tuf files from the app; not built, a program's "
+            "files stay next to it", (saves or p.stdout)[-1500:] + p.stderr[-300:])
     semi = section(f"a project folder with {sep} in its path")
     c.check(semi.count("  ok  ") >= 6 and "FAIL" not in semi,
             f"a project folder with {sep} in its path builds: every --add-data has one {sep} (it packs copies of the files), and the "

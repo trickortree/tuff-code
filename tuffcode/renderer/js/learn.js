@@ -1015,8 +1015,8 @@
         // (3 * 4.5 * money.rate is only the tax, and 3 * 4.5 + money.rate adds 0.2.)
         const taxed = (out.match(/\d+\.\d+/g) || []).some((n) => Math.abs(Number(n) - 16.2) < 0.005);
         if (!/\bmoney\.with_tax\s*\(/.test(src) && !(/\bmoney\.rate\b/.test(src) && taxed)) return 'Add the tax with money.with_tax(3 * 4.5)';
-        // money.as_money, or Lesson 1's template: f"{money.with_tax(3 * 4.5):money}"
-        if (!/\bmoney\.as_money\s*\(|:\s*money\s*\}/.test(src)) return 'Show it as money: money.as_money(...), or :money in a template';
+        // money.as_money, or Lesson 1's template: f"{money.with_tax(3 * 4.5):money}", or a $ before {...:0.00}
+        if (!/\bmoney\.as_money\s*\(|:\s*money\s*\}|\$\{[^}\n]*:\s*0\.00\s*\}/.test(src)) return 'Show it as money: money.as_money(...), or :money in a template';
         return lines(out).some((l) => /\$\d/.test(l)) ? true : 'Say the price, like: say money.as_money(money.with_tax(3 * 4.5))';
       },
     },

@@ -125,6 +125,7 @@
     return { lines: lines2, changed, fixes };
   }
 
+  // A chunk's lines (and comments) are their places in lines, so sort can say where each line went.
   function chunkify(lines) {
     const chunks = [];
     let pending = [];
@@ -134,27 +135,27 @@
       const l = lines[i];
       if (l.level === -1) {
         const next = lines.slice(i + 1).find((x) => x.level !== -1);
-        if (current && next && next.level > 0) { current.lines.push(''); continue; }
+        if (current && next && next.level > 0) { current.lines.push(i); continue; }
         if (pending.length) { chunks.push({ type: 'comments', lines: pending, blankBefore }); pending = []; }
         current = null;
         blankBefore = true;
         continue;
       }
       if (l.level > 0 || l.cont) {
-        if (current) current.lines.push(l.text);
-        else chunks.push({ type: 'main', lines: [...pending, l.text], blankBefore }), (pending = []), (blankBefore = false);
+        if (current) current.lines.push(i);
+        else chunks.push({ type: 'main', lines: [...pending, i], blankBefore }), (pending = []), (blankBefore = false);
         continue;
       }
       const body = l.text.trim();
-      if (body.startsWith('#')) { pending.push(l.text); continue; }
+      if (body.startsWith('#')) { pending.push(i); continue; }
       const type = /^(import|mention)\s/.test(body) ? 'import' : /^func\s/.test(body) ? 'func' : 'main';
-      current = { type, head: body, comments: pending, lines: [l.text], blankBefore };
+      current = { type, head: body, comments: pending, lines: [i], blankBefore };
       chunks.push(current);
       pending = [];
       blankBefore = false;
     }
     if (pending.length) chunks.push({ type: 'comments', lines: pending, blankBefore });
-    for (const c of chunks) while (c.lines && c.lines[c.lines.length - 1] === '') c.lines.pop();
+    for (const c of chunks) while (c.lines.length && lines[c.lines[c.lines.length - 1]].text === '') c.lines.pop();
     return chunks;
   }
 
@@ -196,10 +197,12 @@
   function sort(source) {
     const eol = source.includes('\r\n') ? '\r\n' : '\n';
     const original = source.split(/\r?\n/);
-    const cleaned = original.filter((l) => !HEADER_RE.test(l.trim()) && !NOTE_RE.test(l.trim()));
+    const kept = original.map((_, i) => i).filter((i) => !HEADER_RE.test(original[i].trim()) && !NOTE_RE.test(original[i].trim()));
+    const cleaned = kept.map((i) => original[i]);
     const removedNotes = original.length - cleaned.length;
     const { lines, changed, fixes } = reindent(cleaned);
     const chunks = chunkify(lines);
+    const texts = (ks) => ks.map((k) => lines[k].text);
 
     const intro = [];
     let i = 0;
@@ -221,42 +224,45 @@
       || (funcs.length && main.some((c) => order(c) > order(funcs[0])));
 
     const allText = cleaned.join('\n');
-    const mainText = main.map((c) => [...(c.comments || []), ...c.lines].join('\n')).join('\n');
+    const mainText = main.map((c) => texts([...(c.comments || []), ...c.lines]).join('\n')).join('\n');
     const sections = [imports.length, main.length, funcs.length].filter(Boolean).length;
     const withHeaders = sections >= 2;
     const out = [];
-    const blank = () => { if (out.length && out[out.length - 1] !== '') out.push(''); };
+    const from = []; // each line of out: the line of source it came from (from 0), or -1 for a header, a note or a gap
+    const put = (ks) => { for (const k of ks) { out.push(lines[k].text); from.push(kept[k]); } };
+    const add = (line) => { out.push(line); from.push(-1); };
+    const blank = () => { if (out.length && out[out.length - 1] !== '') add(''); };
 
-    for (const c of intro) { if (c.blankBefore) blank(); out.push(...c.lines); }
+    for (const c of intro) { if (c.blankBefore) blank(); put(c.lines); }
     if (imports.length) {
       blank();
-      if (withHeaders) out.push(header('Libraries'));
-      for (const c of imports) out.push(...c.comments, ...c.lines);
+      if (withHeaders) add(header('Libraries'));
+      for (const c of imports) put([...c.comments, ...c.lines]);
     }
     if (main.length) {
       blank();
-      if (withHeaders) out.push(header('Main program'));
+      if (withHeaders) add(header('Main program'));
       main.forEach((c, k) => {
         if (k > 0 && c.blankBefore) blank();
-        out.push(...(c.comments || []), ...c.lines);
+        put([...(c.comments || []), ...c.lines]);
       });
     }
     let notesAdded = 0;
     if (funcs.length) {
       blank();
-      if (withHeaders) out.push(header('Functions'));
+      if (withHeaders) add(header('Functions'));
       funcs.forEach((c, k) => {
         if (k > 0) blank();
         const m = c.head.match(/^func\s+([A-Za-z_]\w*)\s*(?:\(([^)]*)\))?/);
         if (m) {
-          out.push(functionNote(m[1], (m[2] || '').split(',').map((s) => s.trim()).filter(Boolean), mainText, allText));
+          add(functionNote(m[1], (m[2] || '').split(',').map((s) => s.trim()).filter(Boolean), mainText, allText));
           notesAdded++;
         }
-        out.push(...c.comments, ...c.lines);
+        put([...c.comments, ...c.lines]);
       });
     }
-    while (out.length && out[out.length - 1] === '') out.pop();
-    while (out.length && out[0] === '') out.shift();
+    while (out.length && out[out.length - 1] === '') { out.pop(); from.pop(); }
+    while (out.length && out[0] === '') { out.shift(); from.shift(); }
     const code = out.join(eol) + eol;
 
     const summary = [];
@@ -265,7 +271,7 @@
     if (notesAdded > removedNotes) summary.push(`added ${plural(notesAdded - Math.min(notesAdded, removedNotes), 'note')}`);
     else if (notesAdded) summary.push('refreshed the notes');
     if (fixes) summary.push(`tidied spacing on ${plural(fixes, 'line')}`);
-    return { code, summary };
+    return { code, summary, from };
   }
 
   const api = { sort };

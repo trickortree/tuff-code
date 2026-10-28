@@ -218,8 +218,9 @@ if (plain.app) {
 }
 
 // 1.5.0: a built app runs from the folder it unpacks into each time it starts, which goes when it closes. So what its
-// program saves goes in the folder its .exe is in (on a Mac, the one its .app is in), or in TuffApps in the user's data
-// folder when that one can't be written to, and the next start reads it back, starting from the files packed with it.
+// program saves goes in "<the app's name> files" beside its .exe (on a Mac, beside its .app), or in TuffApps in the
+// user's data folder when the .exe's folder can't be written to, and the next start reads it back, starting from the
+// files packed with it.
 // Its own .tuf files still come from the app. Run here as the real app runs: frozen, unpacked afresh each time, its .exe
 // in dist, started from another folder; and the user's data folder is one of the test's own.
 console.log('== Build exe: a built app keeps what it saves');
@@ -258,9 +259,11 @@ if (keep.app) {
   check(r.status === 0 && saidFrozen(r) === 'run 1, the helper.tuf it was built with|apple 0.45, notes packed line / run 1|false true true',
     'the first run reads the files packed with it (prices.json, notes.txt), and file.delete leaves a packed file there',
     { status: r.status, stdout: r.stdout, stderr: r.stderr });
-  const mine = (f) => path.join(dist, f);
+  const mine = (f) => path.join(dist, 'Keeps Files Test files', f);
   check(text(mine('runs.json')) === '1' && text(mine('notes.txt')) === 'packed line\nrun 1\n' && text(mine('tune.wav'))?.startsWith('RIFF')
-    && !fs.existsSync(mine('gone.txt')), 'file.save, file.add (after the packed text) and song:save go next to the .exe', fs.readdirSync(dist));
+    && !fs.existsSync(mine('gone.txt')) && !['runs.json', 'notes.txt', 'tune.wav'].some((f) => fs.existsSync(path.join(dist, f))),
+  'file.save, file.add (after the packed text) and song:save go in "Keeps Files Test files" beside the .exe, not loose beside it',
+  { dist: fs.readdirSync(dist), mine: fs.existsSync(mine('')) && fs.readdirSync(mine('')) });
   const inside = (f) => fs.existsSync(path.join(keep.app.bundle, f));
   check(!inside('runs.json') && text(path.join(keep.app.bundle, 'tune.wav')) === 'a tune it was built with'
     && text(path.join(keep.app.bundle, 'notes.txt')) === 'packed line\n' && inside('prices.json')
@@ -268,10 +271,14 @@ if (keep.app) {
   'and none of it goes in the folder the app unpacks into (it goes when the app closes), inside a Mac\'s .app, or where it was started from',
   { unpacked: fs.readdirSync(keep.app.bundle), elsewhere: fs.readdirSync(elsewhere) });
   write(mine('helper.tuf'), 'func hello():\n    return "a helper.tuf next to the .exe"\n');
+  // (and files with its files' names loose beside the .exe, another app's or anyone's, as in a Downloads folder)
+  write(path.join(dist, 'runs.json'), '41');
+  write(path.join(dist, 'prices.json'), '{"apple": 9.99}\n');
   r = runFrozen(keep.app, exe);
   check(r.status === 0 && saidFrozen(r) === 'run 2, the helper.tuf it was built with|apple 0.45, notes packed line / run 1 / run 2|false true true'
-    && text(mine('runs.json')) === '2', 'the next start (unpacked afresh) reads them back, and its own .tuf files still come from the app',
-  { status: r.status, stdout: r.stdout, stderr: r.stderr });
+    && text(mine('runs.json')) === '2' && text(path.join(dist, 'runs.json')) === '41',
+  'the next start (unpacked afresh) reads them back, its own .tuf files still come from the app, and files loose beside the .exe '
+    + '(another app\'s runs.json and prices.json) aren\'t taken for its own', { status: r.status, stdout: r.stdout, stderr: r.stderr });
   // A folder that can't be written to (Program Files, or a Mac app run where it was downloaded): here one that isn't there.
   const locked = path.join(scratch, 'Not There', path.basename(keep.app.exe));
   const own = path.join(tuffApps, 'Keeps Files Test');

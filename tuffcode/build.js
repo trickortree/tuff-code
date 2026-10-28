@@ -342,8 +342,9 @@ async function build(opts, emit) {
     'if os.path.isfile(icon):',
     '    os.environ["TUFF_APP_ICON"] = icon',
     // The app runs from base, a folder it unpacks into each time it starts, which goes when it closes. So the files its
-    // program saves (file.save, song:save) go in the folder the app is in (on a Mac, the one its .app is in), found out
-    // once here. When that one can't be written to (Program Files, or a Mac app run where it was downloaded), they go in
+    // program saves (file.save, song:save) go in "<the app's name> files" beside it (on a Mac, beside its .app), found
+    // out once here: a folder of its own, so another app's best.json beside it is never read as this one's. When the
+    // folder it's in can't be written to (Program Files, or a Mac app run where it was downloaded), they go in
     // TuffApps/<the app's name> in the user's data folder, beside tgame's TuffSaves: tuff.py makes it when it first saves.
     'def _data_folder():',
     '    folder = os.path.dirname(os.path.abspath(sys.executable))',
@@ -351,7 +352,7 @@ async function build(opts, emit) {
     '        folder = os.path.dirname(os.path.dirname(os.path.dirname(folder)))',
     '    try:',
     '        tempfile.TemporaryFile(dir=folder).close()',
-    '        return folder',
+    `        return os.path.join(folder, ${JSON.stringify(`${name} files`)})`,
     '    except OSError:',
     '        pass',
     '    home = os.path.expanduser("~")',
