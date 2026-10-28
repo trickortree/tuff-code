@@ -896,6 +896,172 @@
     },
   ];
 
+  // 1.5.0, the Workshop: text templates, kinds, your own files, tmusic, tterm and sprite sheets.
+  // Two lessons use files of their own: Learn writes them next to the lesson's file when it starts (see ensureLessonFile).
+  const MONEY_TUF = '# money.tuf: functions for prices, made by Learn for Section 1.7, Lesson 4.\n# Another file in this folder uses them with: import money.tuf\n\n# The tax: 0.2 is 20%\nrate = 0.2\n\n# A price as money: 6.375 -> "$6.38"\nfunc as_money(x):\n    return f"{x:money}"\n\n# The price with the tax added: 10 -> 12\nfunc with_tax(price):\n    return price + price * rate\n';
+  // walker.png: an explorer in a green cap, 4 frames of a walk side by side, 16 x 16 pixels drawn 6 times bigger.
+  const WALKER_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAYAAAABgCAMAAAAjKlW7AAAAJFBMVEUAAAAiHjAus2wceEj/z57oqHj/sCDWiApAYLAoPnpuQiBKLBQCMTXPAAAADHRSTlMA//////////////8JxFAmAAABq0lEQVR42u3b0W7CMAxGYcY2YOP933dScxMpSlRqMmL0nStUocTdkd1foTud8FLO/gQEEAACCMCSfAxRvw4wgkAAASDgXfPPeUg8S8xLKVnq1wFGEAEggADkyj/xLDEvpeSqXwcYQQSAAAKwWgr6PMSe5/7slJKrfh1gBBEAAgjAailoazeP/gb0PyklS/06wAgiAAQQgNVS0PfGODnUn1dLWVnq1wFGEAEggADkSkHtU361lJWlfh1gBBEAAgjAmllofO4Rea94XkrJVb8OMIIIAAEEYM0UdKm4btRXIv9pPi+l5KpfBxhBBIAAArBy/umliGNZonz/WnHpEDmrmVf/eJd6r4KzICMIBBAAAqSg9m2Zyw6OpazZKW5/5eNzIR1gBBEAAgjAmlnoVlGe5vWV+Bs7tx1EdplXf6/anwZnQUYQCCAABOTNQuVpHs8P7ZrtOm3GiO9V55PnrtmrXwoygkAAASDgPVLQfeO3InKKcq/orVOuP2vHskJ9F/HVxuvsv1MdYAQRAAIIQK4UdCxLRFJQZMc2BcVXezQF9e5XBxhBBIAAAvAi/gAlfim9ZZKPvQAAAABJRU5ErkJggg==';
+  const WORKSHOP = [
+    {
+      id: 'workshop-templates',
+      title: 'Text templates',
+      body: `<p>Put an <code>f</code> before the quotes and text becomes a <b>template</b>: whatever is in <code>{ }</code> is worked out and put in its place. <code>f"{name} has {score + 1} points"</code> needs no <code>+</code> and no brackets.</p>
+             <p>A <b>format</b> after a <code>:</code> says how it looks: <code>{price:money}</code> is dollars and cents, <code>{x:0.00}</code> has 2 decimals, <code>{n:000}</code> at least 3 digits, and <code>{name:8}</code> pads it to 8 letters, so columns line up.</p>`,
+      example: 'name = "Sam"\nscore = 9\nsay f"{name} has {score + 1} points"\nprice = 6.375\nsay f"Two of them: {price * 2:money}"\nsay f"{1 / 3:0.00} and {7:000}"\nsay f"[{name:6}] [{score:4}]"',
+      task: 'Say each snack with its price as money, lined up with a width like <code>{snack:8}</code>, then the total. Make every line with a template.',
+      starter: '# Section 1.7, Lesson 1: Text templates\n# Say each snack with its price as money, lined up, then the total. Make every line with f"...".\n\nsnacks = {"popcorn": 1.2, "apple": 0.45, "juice": 1.85}\n',
+      solution: 'snacks = {"popcorn": 1.2, "apple": 0.45, "juice": 1.85}\ntotal = 0\nfor snack in snacks:\n    price = snacks[snack]\n    total += price\n    say f"{snack:8} {price:money}"\nsay f"Total:   {total:money}"\n',
+      check: (src, out) => {
+        const templates = src.match(/\bf("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')/g) || [];
+        if (!templates.length) {
+          // { } in plain quotes: the f is missing, so they're shown just as they are.
+          return /["'][^"'\n]*\{[^}\n]*\}/.test(src) ? 'Put an f right before the quotes, or the { } show just as they are: say f"{snack:8} {price:money}"'
+            : 'Make each line with a template: say f"{snack:8} {price:money}"';
+        }
+        if (!templates.some((t) => /:\s*money\s*\}/.test(t))) return 'Show the prices as money: put :money at the end of the { }, like {price:money}';
+        // Three snacks, then the total: four lines with money in them.
+        const money = lines(out).filter((l) => /\$\d/.test(l)).length;
+        if (money < 3) return 'Say each snack with its price, in a loop: for snack in snacks: say f"{snack:8} {snacks[snack]:money}"';
+        if (money > 3) return true;
+        return /\+=|\b(\w+)\s*=\s*\1\s*\+|\bsum\s*\(/.test(src) ? 'Say the total as money too: say f"Total: {total:money}"'
+          : 'Then add the prices up (total += price, in the loop) and say f"Total: {total:money}"';
+      },
+    },
+    {
+      id: 'workshop-kinds',
+      title: 'Kinds and fields',
+      body: `<p>A <b>kind</b> is your own kind of object, like a pet or a book. Write <code>kind Pet:</code> and under it its <b>fields</b>, each with the value a new one starts with: <code>name = "?"</code> and <code>hunger = 5</code>.</p>
+             <p><code>rex = Pet("Rex")</code> makes one: the inputs fill the fields in order, and the rest keep their starting values. Read a field with a dot, <code>rex.hunger</code>, and change it with <code>rex.hunger += 1</code>. <code>say rex</code> shows them all.</p>`,
+      example: 'kind Pet:\n    name = "?"\n    hunger = 5\n\nrex = Pet("Rex")\nann = Pet("Ann", 2)\nrex.hunger += 1\nsay rex.name + " is this hungry: " + rex.hunger\nsay f"{ann.name} is this hungry: {ann.hunger}"\nsay rex',
+      task: 'Make <code>kind Book:</code> with a <code>title</code> and <code>pages</code>. Make two books, then say how many pages they have altogether.',
+      starter: '# Section 1.7, Lesson 2: Kinds and fields\n# Make kind Book: with a title and pages, make two books,\n# then say how many pages they have altogether.\n\n',
+      solution: 'kind Book:\n    title = ""\n    pages = 0\n\nholes = Book("Holes", 272)\nwonder = Book("Wonder", 310)\nsay f"{holes.title} and {wonder.title}: {holes.pages + wonder.pages} pages"\n',
+      check: (src, out) => {
+        const kind = src.match(/^kind[ \t]+(\w+)[ \t]*:/m);
+        if (!kind) return 'Start your own kind with: kind Book:';
+        // Its fields: the lines indented under it with a starting value. The hints name one that starts as a number.
+        const fields = [];
+        let count = null;
+        for (const line of src.slice(kind.index).split('\n').slice(1)) {
+          if (!line.trim()) continue;
+          if (!/^[ \t]/.test(line)) break;
+          const field = line.match(/^[ \t]+(\w+)[ \t]*=(?!=)[ \t]*(-?\d)?/);
+          if (field) fields.push(field[1]);
+          if (field && field[2] && !count) count = field[1];
+        }
+        if (fields.length < 2) return `Give ${kind[1]} two fields, indented under it, each with a starting value: title = "" and pages = 0`;
+        if ((src.match(new RegExp(`\\b${kind[1]}\\s*\\(`, 'g')) || []).length < 2) return `Make two of them, like: holes = ${kind[1]}("Holes", 272)`;
+        count = count || fields[fields.length - 1];
+        const read = `[A-Za-z_]\\w*\\.(?:${fields.join('|')})\\b`;
+        if (!new RegExp(read).test(src)) return `Read a field with a dot, like: holes.${count}`;
+        if (!new RegExp(`${read}\\s*\\+|\\+=?\\s*${read}`).test(src)) return `Add the two books' ${count} together: holes.${count} + wonder.${count}`;
+        return lines(out).length ? true : `Say how many there are, like: say f"{holes.${count} + wonder.${count}} ${count}"`;
+      },
+    },
+    {
+      id: 'workshop-actions',
+      title: 'Actions and my',
+      body: `<p>A kind can have <b>actions</b> too: functions written inside it, indented like its fields. They run with a colon, like <code>rex:feed(3)</code>.</p>
+             <p>Inside an action, <code>my</code> is the object it runs on, so <code>my.hunger</code> is that pet's own field. Every pet gets the same actions, and each one changes only its own fields.</p>`,
+      example: 'kind Pet:\n    name = "?"\n    hunger = 5\n    func feed(amount):\n        my.hunger -= amount\n        if my.hunger < 0:\n            my.hunger = 0\n    func play():\n        my.hunger += 2\n        say my.name + " played"\n\nrex = Pet("Rex")\nrex:play()\nrex:feed(3)\nsay f"{rex.name} is this hungry: {rex.hunger}"',
+      task: 'Give <code>Hero</code> an action, <code>func hurt(damage):</code>, that takes the damage off <code>my.hp</code>. Hurt your hero twice, then say how much hp is left.',
+      starter: '# Section 1.7, Lesson 3: Actions and my\n# Give Hero an action, func hurt(damage):, that takes the damage off my.hp.\n# Then hurt your hero twice and say how much hp is left.\n\nkind Hero:\n    name = "?"\n    hp = 10\n\nsam = Hero("Sam")\n',
+      solution: 'kind Hero:\n    name = "?"\n    hp = 10\n    func hurt(damage):\n        my.hp -= damage\n        if my.hp < 0:\n            my.hp = 0\n\nsam = Hero("Sam")\nsam:hurt(3)\nsam:hurt(4)\nsay f"{sam.name} has {sam.hp} hp left"\n',
+      check: (src, out) => {
+        if (!/^kind[ \t]+\w+[ \t]*:/m.test(src)) return 'Keep the kind: kind Hero:, with name = "?" and hp = 10 under it';
+        // An action is a func indented under the kind; one at the left edge is an ordinary function.
+        const action = src.match(/^[ \t]+func[ \t]+(\w+)/m);
+        if (!action) {
+          return /^func\b/m.test(src) ? 'Move the func into the kind, indented under hp = 10, so it\'s the hero\'s own action'
+            : 'Give Hero an action: under hp = 10, indented the same, write func hurt(damage):';
+        }
+        if (!/\bmy\.\w+[ \t]*(-=|=(?!=))/.test(src)) return 'In the action, take the damage off the hero\'s own hp: my.hp -= damage';
+        const uses = (src.match(new RegExp(`\\b\\w+:${action[1]}\\b`, 'g')) || []).length;
+        if (!uses) return `Run the action on your hero with a colon: sam:${action[1]}(3)`;
+        if (uses < 2) return `Hurt your hero twice: sam:${action[1]}(3), then sam:${action[1]}(4)`;
+        return lines(out).length ? true : 'Say how much hp is left: say f"{sam.name} has {sam.hp} hp left"';
+      },
+    },
+    {
+      id: 'workshop-files',
+      title: 'Your own files',
+      files: { 'money.tuf': MONEY_TUF },
+      body: `<p>A program can be split into files. <code>import money.tuf</code> loads money.tuf from the same folder, and its functions and values go after a dot, like a library's: <code>money.as_money(6.375)</code> and <code>money.rate</code>.</p>
+             <p>Each file has its own names, so a <code>rate</code> in your program never changes money.tuf's. Learn has put a money.tuf in the lessons folder for this lesson: open it to see what's inside. Any .tuf file you make next to your program is imported the same way.</p>`,
+      example: 'import money.tuf\n\nprice = 6.375\nsay "Price: " + money.as_money(price)\nsay "With tax: " + money.as_money(money.with_tax(price))\nsay "The tax rate is " + money.rate',
+      task: 'Import <code>money.tuf</code> and say what 3 tickets at 4.5 each cost with tax, as money.',
+      starter: '# Section 1.7, Lesson 4: Your own files\n# money.tuf is next to this file, in the lessons folder. Import it, then say\n# what 3 tickets at 4.5 each cost with tax, as money.\n\n',
+      solution: 'import money.tuf\n\ntickets = 3 * 4.5\nsay "3 tickets: " + money.as_money(money.with_tax(tickets))\n',
+      check: (src, out) => {
+        if (!/^\s*(import|mention)\s+money\.tuf\b/m.test(src)) return 'Load the file first, with .tuf on the end: import money.tuf';
+        if (!/\bmoney\.with_tax\s*\(/.test(src)) return 'Work out the price with tax with money.with_tax(3 * 4.5)';
+        if (!/\bmoney\.as_money\s*\(/.test(src)) return 'Show it as money with money.as_money(...)';
+        return lines(out).some((l) => /\$\d/.test(l)) ? true : 'Say the price, like: say money.as_money(money.with_tax(3 * 4.5))';
+      },
+    },
+    {
+      id: 'workshop-music',
+      title: 'Music from notes',
+      body: `<p><code>tmusic</code> plays tunes written as notes: a letter from C to B and its octave, so <code>C4</code> is middle C. <code>.</code> is a rest, <code>*2</code> makes a note twice as long and <code>C4+E4+G4</code> is a chord. <code>tmusic.play("C4 E4 G4 C5*2", "piano")</code> plays a tune and waits until it ends.</p>
+             <p>A <b>song</b> has tracks that play together: <code>song = tmusic.song(120)</code> (120 beats a minute), a <code>song:track("bass", "C3*4")</code> for each instrument, then <code>song:play()</code>. Try piano, chip, bass, pluck, bell, organ and flute, and drums, which play kick, snare and hat instead of notes.</p>`,
+      example: 'mention tmusic\n\ntmusic.play("C4 D4 E4 C4 | E4 F4 G4*2", "chip")\n\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4 E4 | F4 A4 C5 . | G4 B4 D5 B4 | C5*4")\nsong:track("drums", "kick hat snare hat | kick hat snare hat | kick hat snare hat | kick kick snare .")\nsong:play()\nsay "That song is " + song:length() + " seconds long"',
+      task: 'Play a short tune with <code>tmusic.play</code>, then make a song with two tracks, like a tune and a bass line, and play it.',
+      starter: '# Section 1.7, Lesson 5: Music from notes\n# Play a short tune with tmusic.play, then make a song with two tracks and play it.\n\nmention tmusic\n\n',
+      solution: 'mention tmusic\n\ntmusic.play("G4 E4 E4*2 | F4 D4 D4*2", "bell")\n\nsong = tmusic.song(140)\nsong:track("flute", "E5 G5 A5 G5 | E5 D5 C5 . | D5 E5 F5 E5 | D5 C5 C5*2")\nsong:track("bass", "C3*4 | A2*4 | F2*4 | G2*2 C3*2")\nsong:play()\n',
+      check: (src) => {
+        if (!/^\s*(import|mention)\s+tmusic\b/m.test(src)) return 'Start with: mention tmusic';
+        if (!/tmusic\.play\s*\(/.test(src)) return 'Play a tune first: tmusic.play("C4 E4 G4 C5*2", "piano")';
+        const song = src.match(/(\w+)\s*=\s*tmusic\.song\s*\(/);
+        if (!song) return 'Make a song: song = tmusic.song(120)';
+        if ((src.match(new RegExp(`\\b${song[1]}:track\\b`, 'g')) || []).length < 2) return `Give it two tracks that play together: ${song[1]}:track("piano", "C4 E4 G4*2") and ${song[1]}:track("bass", "C3*4")`;
+        return new RegExp(`\\b${song[1]}:play\\b`).test(src) ? true : `Play the song after its tracks: ${song[1]}:play()`;
+      },
+    },
+    {
+      id: 'workshop-tterm',
+      title: 'A terminal game',
+      body: `<p><code>tterm</code> makes games out of letters, right in the Run window. <code>screen = tterm.screen(20, 10)</code> is a grid 20 across and 10 down, and <code>screen:put(x, y, "@", "lime")</code> draws one letter on it. x goes right and y goes <b>down</b>.</p>
+             <p><code>screen:every_frame(step)</code> runs <code>step(dt)</code> about 20 times a second until you press <kbd>Esc</kbd>. In it, <code>screen:pressed("left")</code> is true when that key was just pressed, and <code>screen:clear()</code> rubs out the last frame. If the keys stop working, click the Run window.</p>`,
+      example: 'mention tterm\n\nscreen = tterm.screen(20, 8)\nx = 3\n\nfunc step(dt):\n    if screen:pressed("right") and x < 18:\n        x += 1\n    if screen:pressed("left") and x > 1:\n        x -= 1\n    screen:clear()\n    screen:box(0, 0, 20, 8, "gray")\n    screen:text(2, 0, f" x is {x} ", "gold")\n    screen:put(x, 4, "@", "lime")\n\nscreen:every_frame(step)\nsay f"You stopped at {x}."',
+      task: 'Make the <code>@</code> move up and down too, with the up and down arrows, and keep it inside the box.',
+      starter: '# Section 1.7, Lesson 6: A terminal game\n# Make the @ move up and down too, with the up and down arrows, and keep it inside the box.\n# Press Esc to stop. If the keys stop working, click the Run window.\n\nmention tterm\n\nscreen = tterm.screen(20, 10)\nx = 10\ny = 5\n\nfunc step(dt):\n    if screen:pressed("left") and x > 1:\n        x -= 1\n    if screen:pressed("right") and x < 18:\n        x += 1\n    screen:clear()\n    screen:box(0, 0, 20, 10, "gray")\n    screen:put(x, y, "@", "lime")\n\nscreen:every_frame(step)\n',
+      solution: 'mention tterm\n\nscreen = tterm.screen(20, 10)\nx = 10\ny = 5\n\nfunc step(dt):\n    if screen:pressed("left") and x > 1:\n        x -= 1\n    if screen:pressed("right") and x < 18:\n        x += 1\n    if screen:pressed("up") and y > 1:\n        y -= 1\n    if screen:pressed("down") and y < 8:\n        y += 1\n    screen:clear()\n    screen:box(0, 0, 20, 10, "gray")\n    screen:put(x, y, "@", "lime")\n\nscreen:every_frame(step)\n',
+      check: (src) => {
+        if (!/^\s*(import|mention)\s+tterm\b/m.test(src)) return 'Start with: mention tterm';
+        if (!/tterm\.screen\s*\(/.test(src)) return 'Make the screen: screen = tterm.screen(20, 10)';
+        if (!/:every_frame\b/.test(src)) return 'Run step every frame: screen:every_frame(step)';
+        if (!/:(pressed|held)\s*\(?\s*["']up["']/.test(src)) return 'Check the up arrow with: if screen:pressed("up") and y > 1:';
+        if (!/:(pressed|held)\s*\(?\s*["']down["']/.test(src)) return 'Now the down arrow: if screen:pressed("down") and y < 8:';
+        if (!/\by\s*(-=|=\s*y\s*-)/.test(src)) return 'Up goes towards the top, where y is smaller: y -= 1';
+        if (!/\by\s*(\+=|=\s*y\s*\+)/.test(src)) return 'Down makes y bigger: y += 1';
+        return /\by\s*>=?\s*\d/.test(src) && /\by\s*<=?\s*\d/.test(src) ? true : 'Keep the @ inside the box, as left and right do: if screen:pressed("up") and y > 1:';
+      },
+    },
+    {
+      id: 'workshop-sheets',
+      title: 'Animated pictures',
+      files: { 'walker.png': { base64: WALKER_PNG } },
+      body: `<p>A <b>sprite sheet</b> is one picture with every frame of a character in it, side by side. Learn has put one in the lessons folder for this lesson: walker.png, 4 frames of a walk. Sprite Studio, in the sidebar, draws your own.</p>
+             <p>In a game, <code>hero:frames(4)</code> cuts the picture into its 4 frames. <code>hero:animation("walk", [1, 2, 3, 4], 8)</code> names some frames and how many show a second, and <code>hero:play("walk")</code> plays them again and again (playing it every frame just carries on). <code>hero:frame(1)</code> shows one frame and stops.</p>`,
+      example: 'mention tgame\n\ngame = tgame.window("Walker", 600, 300)\ngame:background "sky"\nhero = game:image("walker.png", 100, 200, 96)\nhero:frames(4)\nhero:animation("walk", [1, 2, 3, 4], 8)\nhero:play("walk")\nhero:speed(80, 0)\nhero:on_edge "wrap"\n\nwhile game:open():\n    game:frame()',
+      task: 'Cut walker.png into its frames and make a <code>"walk"</code> animation. Play it while left or right is held, and show frame 1 when the walker stands still.',
+      starter: '# Section 1.7, Lesson 7: Animated pictures\n# Cut walker.png into its 4 frames and make a "walk" animation.\n# Play it while left or right is held, and show frame 1 when standing still.\n\nmention tgame\n\ngame = tgame.window("Walker", 600, 300)\ngame:background "sky"\nhero = game:image("walker.png", 300, 200, 96)\nhero:on_edge "stop"\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        hero:move(-150 * dt, 0)\n    if game:held("right"):\n        hero:move(150 * dt, 0)\n',
+      solution: 'mention tgame\n\ngame = tgame.window("Walker", 600, 300)\ngame:background "sky"\nhero = game:image("walker.png", 300, 200, 96)\nhero:on_edge "stop"\nhero:frames(4)\nhero:animation("walk", [1, 2, 3, 4], 8)\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        hero:move(-150 * dt, 0)\n    if game:held("right"):\n        hero:move(150 * dt, 0)\n    if game:held("left") or game:held("right"):\n        hero:play("walk")\n    else:\n        hero:frame(1)\n',
+      check: (src) => {
+        if (!/:frames\s*\(/.test(src)) return 'Cut the picture into its 4 frames: hero:frames(4)';
+        // The game's loop runs until the window closes, so what comes after it is too late.
+        const loop = src.search(/^[ \t]*while\b/m);
+        const before = (re) => loop < 0 || src.search(re) < loop;
+        if (!before(/:frames\s*\(/)) return 'Cut it into frames before the game starts: put hero:frames(4) above while game:open():';
+        if (!/:animation\s*\(/.test(src)) return 'Name the walk and its frames: hero:animation("walk", [1, 2, 3, 4], 8)';
+        if (!before(/:animation\s*\(/)) return 'Make the animation before the game starts: put it above while game:open():';
+        if (!/:play\s*\(?\s*["']/.test(src)) return 'Play the walk while an arrow is held: hero:play("walk")';
+        if (!/^[ \t]+[^\n]*:play\s*\(?\s*["']/m.test(src)) return 'Play the walk in the loop, only while left or right is held: if game:held("right"): hero:play("walk")';
+        return /:frame\s*\(\s*\d/.test(src) ? true : 'When no arrow is held, stand still on frame 1: else: hero:frame(1)';
+      },
+    },
+  ];
+
   // 1.3.5: tdraw, drawing with a pen (a turtle).
   const TDRAW = [
     {
@@ -980,12 +1146,14 @@
 
   LOOK.forEach((l) => { l.section = 'look'; });
   TOOLBOX.forEach((l) => { l.section = 'tools'; });
+  WORKSHOP.forEach((l) => { l.section = 'workshop'; });
   TDRAW.forEach((l) => { l.section = 'tdraw'; });
 
   const SECTIONS = [
     { id: 'basics', title: 'Basics', lessons: BASICS, prefix: '' },
     { id: 'look', title: 'Section 1.5 · Make it look good', optional: true, lessons: LOOK, prefix: 'look-' },
     { id: 'tools', title: 'Section 1.6 · Toolbox', optional: true, lessons: TOOLBOX, prefix: 'tools-' },
+    { id: 'workshop', title: 'Section 1.7 · Workshop', optional: true, lessons: WORKSHOP, prefix: 'workshop-' },
     { id: 'tgui', title: 'Section 2 · Build apps', optional: true, lessons: TGUI, prefix: 'tgui-' },
     { id: 'mtgui', title: 'Section 2.1 · Modern apps', optional: true, lessons: MTGUI, prefix: 'mtgui-' },
     { id: 'atgui', title: 'Section 2.2 · Advanced apps', optional: true, lessons: ATGUI, prefix: 'atgui-' },
@@ -1038,10 +1206,23 @@
   async function ensureLessonFile(l) {
     if (!(await api.fs.exists(lessonDir()))) await api.fs.createDir(lessonDir());
     const p = lessonPath(l);
+    let made = false;
     if (!(await api.fs.exists(p))) {
       await api.fs.writeFile(p, l.starter);
-      await ide.refreshTree();
+      made = true;
     }
+    // 1.5.0: the files a lesson's program uses (money.tuf, a sprite sheet), next to it, unless they're there already.
+    // A picture goes through the files bridge plugins save theirs with: it takes base64, inside the open project.
+    for (const [name, data] of Object.entries(l.files || {})) {
+      const f = ide.join(lessonDir(), name);
+      if (await api.fs.exists(f)) continue;
+      try {
+        if (typeof data === 'string') await api.fs.writeFile(f, data);
+        else await api.plugins.writeFile(f, data.base64, 'base64');
+        made = true;
+      } catch {} // (then the run says it can't find the file)
+    }
+    if (made) await ide.refreshTree();
     return p;
   }
 
@@ -1212,10 +1393,10 @@
       render();
     },
     // For the tests (test/e2e/suites/learn-sections.mjs): the sections in order with their lessons, and a
-    // lesson's own check (true, or the hint it would show).
+    // lesson's own check (true, or the hint it would show). files: what Learn writes next to the lesson's file.
     sections: () => SECTIONS.map((s) => ({
       id: s.id, title: s.title, optional: !!s.optional,
-      lessons: s.lessons.map((l) => ({ id: l.id, title: l.title, file: fileName(l), body: l.body, example: l.example, starter: l.starter, solution: l.solution ?? null })),
+      lessons: s.lessons.map((l) => ({ id: l.id, title: l.title, file: fileName(l), body: l.body, task: l.task, example: l.example, starter: l.starter, solution: l.solution ?? null, files: l.files ?? null })),
     })),
     check: (id, src, out = '') => byId(id).check(withoutComments(src), out),
   };
