@@ -8183,6 +8183,14 @@ LEARN_150_MISTAKES = [
     ("workshop-sheets", _SHEET + 'hero:frames(4)\nhero:animation("walk", [1, 2, 3, 4], 8)\nwhile game:open():\n    dt = game:frame()\n'
                                  '    if game:held("right"):\n        hero:play("walk")\n', "When no arrow is held"),
 ]
+# Slips in these lessons that stop the run, so Learn only shows what the run says: (the program, with money.tuf next to
+# it, and what both runtimes and --check say).
+LEARN_150_SLIPS = [
+    (_HERO + '    func hurt(damage):\n        self.hp -= damage\n\nsam = Hero("Sam")\nsam:hurt(3)\n',
+     "I don't know what 'self' is. Tuff has no classes: make a kind (kind Pet:), and in its actions the object itself is my, like my.hunger."),
+    ('import money.tuf\n\nsay as_money(with_tax(3 * 4.5))\n', "I don't know what 'as_money' is. It's in money.tuf, so write money.as_money"),
+    ('import money.tuf\n\nsay money.as_money(3 * 4.5 * (1 + rate))\n', "I don't know what 'rate' is. It's in money.tuf, so write money.rate"),
+]
 
 
 def learn_150_write(folder, files):
@@ -8281,8 +8289,9 @@ def t_learn_150(c):
     and sprite sheets). learn.js, in Node (learn_test.mjs), lists it after Toolbox. Every lesson's example, starter and
     solution passes --check and runs the same in both runtimes, saying what it should (the game with headless.py, so no
     window, and music through a pipe, so no sound); each check accepts its solution, run for real, and gives its hint
-    for the starter, for empty code and for the mistakes above; and Start lesson writes a lesson's own files (money.tuf
-    and the sprite sheet walker.png) next to its file, where the solutions run."""
+    for the starter, for empty code and for the mistakes above; the slips that stop a run get the same help from both
+    runtimes and --check; and Start lesson writes a lesson's own files (money.tuf and the sprite sheet walker.png) next
+    to its file, where the solutions run."""
     import shutil
     import tuff_tgame
     folder = os.path.join(OUT, "learn_150")
@@ -8425,6 +8434,17 @@ def t_learn_150(c):
         shown = " / ".join(x.strip() for x in code.splitlines() if x.strip() and not x.startswith(("mention", "kind", "snacks =")))[-70:]
         c.check(run[0] == 0 and isinstance(verdict, str) and verdict.startswith(hint),
                 f"{lesson}: '{shown}' runs, and the check says: {hint}", (run[0], run[2][-200:], verdict))
+
+    # Slips that stop the run, where Learn shows the run's message: both runtimes, and --check, say what to write.
+    for i, (code, says) in enumerate(LEARN_150_SLIPS):
+        where = os.path.join(folder, "slip", str(i))
+        runs = [interp_run(where, code, mode == "slow", env=quiet, files=own["workshop-files"]) for mode in ("slow", "fast")]
+        p = subprocess.run(tuff_cmd() + ["--check", os.path.join(where, "program.tuf")], capture_output=True, text=True, encoding="utf-8",
+                           timeout=60, cwd=where, stdin=subprocess.DEVNULL)
+        firsts = [first_error(err) or ("", 1, None, "") for err in (runs[0][2], runs[1][2], p.stderr)]
+        c.check(runs[0] == runs[1] and runs[1][0] == 1 and [f[3] for f in firsts] == [says] * 3 and len({f[1] for f in firsts}) == 1,
+                f"'{code.splitlines()[(firsts[1][1] or 1) - 1].strip()}' stops the run, and both runtimes and --check say: {says[:60]}...",
+                ([f[1:] for f in firsts], runs[1][2][-300:]))
 
     # Start lesson in a project (its folder has a space in its name): the lesson's file, and its own files next to it.
     project = os.path.join(folder, "My Project")

@@ -1080,6 +1080,12 @@ def own_field_help(name, kind, fields):
     return None
 
 
+def own_file_help(name, owner, shown):
+    """as_money(1) after import money.tuf: a name one of the program's own files makes, used without the dot. owner is
+    what it was imported as (money), shown the file as messages show it (money.tuf)."""
+    return f"I don't know what '{name}' is. It's in {shown}, so write {owner}.{name}"
+
+
 def object_brackets(kind, fields, owner, key, then=""):
     """The tip for rex["name"]: an object's fields are read (and set) with a dot. key: the key written, when known."""
     field = key if isinstance(key, str) and key in fields else fields[0] if fields else "name"
@@ -2245,10 +2251,11 @@ class Env:
     def get(self, name):
         env = self.find(name)
         if env is None:
-            known = []
+            known, files = [], []
             e = self
             while e is not None:
                 known.extend(e.vars)
+                files += [(n, v) for n, v in e.vars.items() if isinstance(v, FileModule)]
                 e = e.parent
             if name in LIBRARIES:
                 raise TuffError(f"'{name}' is a library. Add  import {name}  at the top of your file to use it.")
@@ -2257,6 +2264,12 @@ class Env:
             msg = own_field_help(name, *((me.kind.name, me.kind.fields) if isinstance(me, Instance) else (None, ())))
             if msg:
                 raise TuffError(msg)
+            # 1.5.0, as --check says it: as_money for money.as_money, then self, True and the like.
+            home = next(((n, mod.shown) for n, mod in sorted(files, key=lambda f: f[0]) if name in mod.members), None)
+            if home:
+                raise TuffError(own_file_help(name, *home))
+            if name in PY_NAMES:
+                raise TuffError(f"I don't know what '{name}' is. {PY_NAMES[name]}")
             hint = difflib.get_close_matches(name, known, n=1, cutoff=0.6)
             extra = f" Did you mean '{hint[0]}'?" if hint else " Give it a value first, like: " + name + " = 5"
             raise TuffError(f"I don't know what '{name}' is.{extra}")
@@ -5881,8 +5894,11 @@ class Checker:
             where = owners[0] if len(owners) == 1 else "other functions"
             self.problem(e, f"'{name}' is only set inside {where}, so it only exists there. Give it a value at the top of the program (like {name} = 0) so this line can use it.")
             return
+        home = self.own_home(name)
         if name in LIBRARIES:
             msg = f"'{name}' is a library. Add  import {name}  at the top of your file to use it."
+        elif home:
+            msg = own_file_help(name, *home)
         elif name in PY_NAMES:
             msg = f"I don't know what '{name}' is. {PY_NAMES[name]}"
         else:
@@ -5920,6 +5936,14 @@ class Checker:
         """A file's name as messages show it: from this file's folder, like libs/money.tuf."""
         rel = os.path.relpath(path, self.folder) if self.folder else os.path.basename(path)
         return os.path.basename(path) if rel.startswith("..") else rel.replace(os.sep, "/")
+
+    def own_home(self, name):
+        """(what it's imported as, the file as shown) for one of the files this file imports that makes name, or None."""
+        for owner in sorted(self.own_imports):
+            own = self.own_file(owner)
+            if own is not None and own.names and name in own.names:
+                return owner, self.own_name(own.path)
+        return None
 
     def check_import(self, s):
         """import money: there's a money.tuf to load (next to this file or in libs), it reads, and it doesn't come back
