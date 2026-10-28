@@ -6873,6 +6873,12 @@ class Checker:
             names = tdraw_pen_methods()
             if names and name not in names:
                 self.problem(e, method_help("A pen", name, names))
+            elif names and name == "shape" and e.args and not self.trying:  # pen:shape("arrow") (1.5.0)
+                import tuff_tdraw
+                look = self.fixed_text(e.args[0])
+                if look is not None and " ".join(look.strip().lower().split()) not in tuff_tdraw.PEN_SHAPES:
+                    self.problem(e.args[0], 'pen:shape takes "turtle", "arrow", "big arrow", "circle", "square" or "triangle" '
+                                            '(pen:hide() hides it).')
             return
         if obj == "song":  # tmusic's song (1.5.0)
             self.check_song(e, bare_fix)

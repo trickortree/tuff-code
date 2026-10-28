@@ -153,6 +153,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #tabs::-webkit-scrollbar { display: none; }
 .tab { display: flex; align-items: center; gap: 7px; padding: 0 8px 0 12px; height: 100%; flex: none; color: var(--text-dim); position: relative; cursor: default; }
 .tab.enter { animation: tabin .18s ease-out; }
+.tab.dragging { background: var(--bg-hover); color: var(--text); }
+#tabs.dragging, #tabs.dragging * { cursor: grabbing; }
 @keyframes tabin { from { opacity: 0; transform: translateY(6px); } }
 .tab:hover { background: rgba(255,255,255,.03); color: var(--text); }
 .tab.active { color: var(--text); }
@@ -272,6 +274,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* ---------- Context menu / modal / toasts ---------- */
 #context-menu { position: fixed; z-index: 2500; min-width: 220px; padding: 5px; background: #2b2d30; border: 1px solid #43454a; border-radius: 8px; box-shadow: 0 12px 32px rgba(0,0,0,.5); animation: pop .1s ease-out; }
 #context-menu .mi.danger { color: var(--red); }
+#context-menu .mi:disabled { opacity: .4; pointer-events: none; }
 
 #modal { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; background: rgba(0,0,0,.35); }
 .modal-box { width: 380px; padding: 18px; background: #2b2d30; border: 1px solid #4e5157; border-radius: 10px; box-shadow: 0 24px 60px rgba(0,0,0,.6); animation: sein .16s ease-out; }

@@ -69,6 +69,7 @@
   const rel = (p) => (state.root && p.startsWith(state.root) ? p.slice(state.root.length).replace(/^[\\/]/, '') : p);
   const ext = (p) => (basename(p).match(/\.([^.]+)$/) || [, ''])[1].toLowerCase();
   const isUnder = (p, dir) => p === dir || p.startsWith(dir + SEP);
+  let tabDrag = null; // a file tab being dragged along the bar (see endTabDrag)
   // The file run last, while it's in the open folder (after Open Folder or New Project it's the old project's, so Run,
   // Rerun, Design Studio and Build leave it alone).
   const lastRun = () => (state.lastRunFile && state.root && isUnder(state.lastRunFile, state.root) ? state.lastRunFile : null);
@@ -208,6 +209,7 @@
       const b = document.createElement('button');
       b.className = 'mi' + (it.danger ? ' danger' : '');
       b.innerHTML = `<span>${esc(it.label)}</span>${it.sc ? `<span class="sc">${esc(it.sc)}</span>` : ''}`;
+      b.disabled = !!it.disabled; // (greyed out: Close Tabs to the Left on the first tab)
       b.onclick = () => { hideMenus(); it.run(); };
       m.appendChild(b);
     }
@@ -884,9 +886,13 @@
       el.appendChild(tab);
     } else engine.el = null;
     for (const t of state.tabs) {
-      const tab = t.el = tabEl(t.el, 'tab' + (t.path === state.active && !studio.visible && !engine.visible ? ' active' : '') + (isDirty(t) ? ' dirty' : ''));
+      const tab = t.el = tabEl(t.el, 'tab' + (t.path === state.active && !studio.visible && !engine.visible ? ' active' : '') + (isDirty(t) ? ' dirty' : '')
+        + (tabDrag?.moving && tabDrag.t === t ? ' dragging' : ''));
       tab.title = t.path;
       tab.innerHTML = `${fileIcon(basename(t.path))}<span>${esc(basename(t.path))}</span><button class="x" title="Close (Ctrl+F4)">${TuffIcon('close-line')}</button>`;
+      tab.onpointerdown = (e) => {
+        if (e.button === 0 && !e.target.closest('.x')) tabDrag = { t, x: e.clientX, from: state.tabs.indexOf(t), moving: false };
+      };
       tab.onmousedown = (e) => {
         if (e.button === 1) { e.preventDefault(); closeTab(t); }
         else if (e.button === 0 && !e.target.closest('.x')) activate(t);
@@ -894,18 +900,109 @@
       tab.querySelector('.x').onclick = (e) => { e.stopPropagation(); closeTab(t); };
       tab.oncontextmenu = (e) => {
         e.preventDefault();
-        showMenu(e.clientX, e.clientY, [
-          { label: 'Close', sc: 'Ctrl+F4', run: () => closeTab(t) },
-          { label: 'Close Other Tabs', run: () => state.tabs.filter((x) => x !== t).forEach((x) => closeTab(x)) },
-          { label: 'Close All Tabs', run: () => [...state.tabs].forEach((x) => closeTab(x)) },
-          'sep',
-          { label: 'Copy Path', run: () => navigator.clipboard.writeText(t.path) },
-          { label: REVEAL, run: () => api.fs.reveal(t.path) },
-        ]);
+        showMenu(e.clientX, e.clientY, tabMenu(t));
       };
       el.appendChild(tab);
     }
     el.querySelector('.tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  // A file tab's right-click menu (1.5.0: Run, Close to the Left or Right, Move, Copy Relative Path, Show in Project
+  // and Rename were added). What can't be done there (Close Tabs to the Left on the first tab) is greyed out.
+  function tabMenu(t) {
+    const i = state.tabs.indexOf(t);
+    const left = state.tabs.slice(0, i), right = state.tabs.slice(i + 1);
+    const items = [];
+    if (ext(t.path) === 'tuf') items.push({ label: `Run '${basename(t.path)}'`, run: async () => { await saveAll(); startRun(t.path); } }, 'sep');
+    items.push(
+      { label: 'Close', sc: 'Ctrl+F4', run: () => closeTab(t) },
+      { label: 'Close Other Tabs', disabled: !left.length && !right.length, run: () => closeTabs([...left, ...right], t) },
+      { label: 'Close Tabs to the Left', disabled: !left.length, run: () => closeTabs(left, t) },
+      { label: 'Close Tabs to the Right', disabled: !right.length, run: () => closeTabs(right, t) },
+      { label: 'Close All Tabs', run: () => closeTabs([...state.tabs]) },
+      'sep',
+      { label: 'Move Tab Left', sc: 'Ctrl+Shift+PgUp', disabled: !left.length, run: () => moveTab(t, i - 1) },
+      { label: 'Move Tab Right', sc: 'Ctrl+Shift+PgDn', disabled: !right.length, run: () => moveTab(t, i + 1) },
+      'sep',
+      { label: 'Copy Path', run: () => navigator.clipboard.writeText(t.path) },
+      { label: 'Copy Relative Path', run: () => navigator.clipboard.writeText(rel(t.path)) },
+      { label: REVEAL, run: () => api.fs.reveal(t.path) },
+      { label: 'Show in Project', run: () => showInProject(t.path) },
+      'sep',
+      { label: 'Rename File…', run: () => renameEntry(t.path) },
+    );
+    return items;
+  }
+
+  // Closes these tabs. When the one on screen goes, keep (the tab that was right-clicked) comes up, not each next
+  // tab in turn.
+  function closeTabs(list, keep) {
+    if (keep && list.some((x) => x.path === state.active)) activate(keep);
+    for (const x of list) closeTab(x);
+  }
+
+  // Moves a file tab to place i (dragging it, Move Tab Left/Right). TuffCode opens the tabs in this order next time.
+  // (Design Studio's and Tuff Engine's tabs stay in front.)
+  function moveTab(t, i) {
+    const from = state.tabs.indexOf(t);
+    const to = Math.max(0, Math.min(state.tabs.length - 1, i));
+    if (from < 0 || from === to) return false;
+    state.tabs.splice(from, 1);
+    state.tabs.splice(to, 0, t);
+    renderTabs();
+    persistSession();
+    return true;
+  }
+
+  // Where a dragged tab goes: past each tab whose middle the pointer has crossed. rects are the file tabs' boxes in
+  // order, i the dragged tab's place, x the pointer.
+  function tabDropIndex(rects, i, x) {
+    let to = i;
+    while (to > 0 && x < rects[to - 1].left + rects[to - 1].width / 2) to--;
+    if (to === i) while (to < rects.length - 1 && x > rects[to + 1].left + rects[to + 1].width / 2) to++;
+    return to;
+  }
+
+  // Dragging a tab along the bar (1.5.0): once it has moved 5px it follows the pointer, trading places with each tab
+  // it passes, and the bar scrolls at its ends. Escape puts it back where it was. (tabDrag is up with the helpers.)
+  window.addEventListener('pointermove', (e) => {
+    const d = tabDrag;
+    if (!d) return;
+    if (!(e.buttons & 1)) return endTabDrag(); // (let go outside the window)
+    if (!d.moving) {
+      if (Math.abs(e.clientX - d.x) < 5) return;
+      d.moving = true;
+      $('#tabs').classList.add('dragging');
+      d.t.el?.classList.add('dragging');
+    }
+    const bar = $('#tabs');
+    const r = bar.getBoundingClientRect();
+    if (e.clientX < r.left + 24) bar.scrollLeft -= 12;
+    else if (e.clientX > r.right - 24) bar.scrollLeft += 12;
+    const at = state.tabs.indexOf(d.t);
+    if (at >= 0 && state.tabs.every((x) => x.el)) moveTab(d.t, tabDropIndex(state.tabs.map((x) => x.el.getBoundingClientRect()), at, e.clientX));
+  });
+  window.addEventListener('pointerup', () => endTabDrag());
+  window.addEventListener('blur', () => endTabDrag());
+  function endTabDrag(putBack = false) {
+    const d = tabDrag;
+    tabDrag = null;
+    if (!d?.moving) return;
+    $('#tabs').classList.remove('dragging');
+    if (!putBack || !moveTab(d.t, d.from)) renderTabs();
+  }
+
+  // A tab's Show in Project: the Project view, with the folders down to the file open and the file picked.
+  async function showInProject(p) {
+    showSideView('project', true);
+    const dirs = [];
+    for (let d = dirname(p); state.root && d.length > state.root.length && isUnder(d, state.root); d = dirname(d)) dirs.unshift(d);
+    for (const d of dirs) {
+      if (!tree.children.has(d)) await loadChildren(d);
+      tree.expanded.add(d);
+    }
+    renderTree();
+    selectInTree(p);
   }
 
   function cycleTab(dir) {
@@ -1880,6 +1977,8 @@
     liveCheck: { label: 'Check for Mistakes as You Type (on/off)', run: () => { setLiveCheck(state.settings.liveCheck === false); toast(state.settings.liveCheck === false ? 'Live checking is off.' : 'Live checking is on.'); } },
     nextTab: { label: 'Next Tab', sc: 'Ctrl+Tab', run: () => cycleTab(1) },
     prevTab: { label: 'Previous Tab', sc: 'Ctrl+Shift+Tab', run: () => cycleTab(-1) },
+    moveTabLeft: { label: 'Move Tab Left', sc: 'Ctrl+Shift+PgUp', run: () => { const t = activeTab(); if (t) moveTab(t, state.tabs.indexOf(t) - 1); } },
+    moveTabRight: { label: 'Move Tab Right', sc: 'Ctrl+Shift+PgDn', run: () => { const t = activeTab(); if (t) moveTab(t, state.tabs.indexOf(t) + 1); } },
     zoomIn: { label: 'Increase Font Size', sc: 'Ctrl+=', run: zoom(1) },
     zoomOut: { label: 'Decrease Font Size', sc: 'Ctrl+-', run: zoom(-1) },
     zoomReset: { label: 'Reset Font Size', sc: 'Ctrl+0', run: zoom(0) },
@@ -1900,7 +1999,8 @@
     'Ctrl+Alt+S': 'settings', 'Ctrl+Alt+L': 'autoSort', 'Ctrl+S': 'saveAll', 'Ctrl+O': 'openFolder', 'Ctrl+Alt+N': 'newFile', 'Ctrl+F4': 'closeTab', 'Ctrl+W': 'closeTab',
     'Ctrl+Shift+N': 'goToFile', 'Ctrl+E': 'goToFile', 'Alt+1': 'toggleProject', 'Alt+2': 'learn', 'Alt+3': 'plugins', 'Alt+4': 'toggleRun', 'Ctrl+Shift+D': 'studio', 'Ctrl+Shift+G': 'engine',
     'Shift+F10': 'run', 'Ctrl+Shift+F10': 'run', 'Ctrl+F5': 'rerun', 'Ctrl+F2': 'stop', 'Ctrl+F9': 'build',
-    'Ctrl+Tab': 'nextTab', 'Ctrl+Shift+Tab': 'prevTab', 'Ctrl+Shift+I': 'devtools', 'F12': 'goToDefinition',
+    'Ctrl+Tab': 'nextTab', 'Ctrl+Shift+Tab': 'prevTab', 'Ctrl+Shift+PageUp': 'moveTabLeft', 'Ctrl+Shift+PageDown': 'moveTabRight',
+    'Ctrl+Shift+I': 'devtools', 'F12': 'goToDefinition',
     'Ctrl+Shift+F': 'findInFiles', 'Ctrl+Shift+T': 'reopenTab', 'Ctrl+Alt+Z': 'zen',
     'Ctrl+=': 'zoomIn', 'Ctrl++': 'zoomIn', 'Ctrl+Shift++': 'zoomIn', 'Ctrl+-': 'zoomOut', 'Ctrl+0': 'zoomReset',
     'Ctrl+D': 'dupLine', 'Ctrl+Y': 'deleteLine', 'Ctrl+Shift+Z': 'redo', 'Ctrl+R': 'replace',
@@ -1910,7 +2010,7 @@
     ['File', ['newProject', 'newFile', 'newFolder', 'openFolder', 'sep', 'saveAll', 'closeTab', 'sep', 'settings', 'sep', 'exit']],
     ['Edit', ['undo', 'redo', 'sep', 'find', 'replace', 'findInFiles', 'sep', 'renameSymbol', 'autoSort', 'comment', 'dupLine', 'deleteLine', 'selectAll']],
     ['View', ['toggleProject', 'learn', 'plugins', 'toggleRun', 'studio', 'engine', 'sep', 'zen', 'zoomIn', 'zoomOut', 'zoomReset', 'sep', 'settings', 'devtools']],
-    ['Go', ['searchEverywhere', 'goToFile', 'goToSymbol', 'sep', 'goToDefinition', 'findUses', 'sep', 'reopenTab', 'nextTab', 'prevTab']],
+    ['Go', ['searchEverywhere', 'goToFile', 'goToSymbol', 'sep', 'goToDefinition', 'findUses', 'sep', 'reopenTab', 'nextTab', 'prevTab', 'moveTabLeft', 'moveTabRight']],
     // (debug to toggleBreakpoint are the debugger's, debugger.js: a menu leaves out the commands that aren't there)
     ['Run', ['run', 'debug', 'watchRun', 'rerun', 'stop', 'sep', 'debugContinue', 'stepOver', 'stepInto', 'stepOut', 'debugPause', 'toggleBreakpoint',
       'sep', 'build', 'sep', 'liveCheck']],
@@ -2244,6 +2344,7 @@
     if (e.key === 'Shift') { if (!e.repeat) shiftClean = true; return; }
     shiftClean = false;
     if (e.key === 'Escape') hideMenus();
+    if (e.key === 'Escape' && tabDrag?.moving) { e.preventDefault(); e.stopPropagation(); endTabDrag(true); return; }
     if (overlayOpen()) return;
     if (studio.visible && window.TuffStudio?.onKey(e)) {
       e.preventDefault();

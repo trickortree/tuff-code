@@ -489,6 +489,7 @@ window.TUFF_DOCS = {
     write: ['pen:write("Hello", 24)', 'tdraw: writes text where the pen is. The size is optional.'],
     hide: ['pen:hide()', 'tdraw: hides the turtle (the drawing stays).'],
     show: ['pen:show()', 'tdraw: shows the turtle again.'],
+    shape: ['pen:shape("arrow")', 'tdraw: what the pen looks like: "turtle" (the start), "arrow", "big arrow", "circle", "square" or "triangle". A size after it makes it bigger, like pen:shape("turtle", 2). pen:hide() hides it.'],
     x: ['pen:x()', 'tdraw: where the pen is, across.'],
     y: ['pen:y()', 'tdraw: where the pen is, up and down.'],
   };
@@ -607,6 +608,20 @@ window.TUFF_DOCS = {
 // game:save, game:music...): this use goes at the end of their docs, and a file that mentions tmusic is offered a
 // song's methods after ':' (TMUSIC_METHODS). A note in a tmusic string has a hover too (tmusicNoteAt).
 const TMUSIC_METHODS = ['track', 'play', 'loop', 'stop', 'save', 'length'];
+// A tdraw pen's methods (tuff_tdraw.py's PEN_METHODS; a test keeps them the same).
+const TDRAW_PEN_METHODS = ['forward', 'back', 'left', 'right', 'go', 'jump', 'home', 'face', 'up', 'down', 'color', 'width', 'speed',
+  'circle', 'square', 'triangle', 'polygon', 'star', 'dot', 'write', 'hide', 'show', 'shape', 'x', 'y'];
+// A name a library's call made (1.5.0): after pen = tdraw.pen(), pen: offers a pen's methods and nothing else (not
+// app:icon or a list's :add), and after song = tmusic.song(120), song: a song's.
+const LIB_OBJECTS = { 'tdraw.pen': TDRAW_PEN_METHODS, 'tmusic.song': TMUSIC_METHODS };
+function libObjectOf(model, name) {
+  const made = new RegExp(`^\\s*${name}\\s*=\\s*([A-Za-z_]\\w*\\.[A-Za-z_]\\w*)\\s*\\(`);
+  for (const text of model.getLinesContent()) {
+    const m = made.exec(text);
+    if (m && LIB_OBJECTS[m[1]]) return LIB_OBJECTS[m[1]];
+  }
+  return null;
+}
 const TMUSIC_DRUMS = ['kick', 'snare', 'hat', 'clap', 'tom', 'crash'];
 (() => {
   window.TUFF_LIBS.tmusic = {
@@ -1071,6 +1086,12 @@ window.registerTuff = function registerTuff(monaco, accent) {
         detail: `${k.name}:${a.name}(${a.params.join(', ')})`, documentation: `An action of ${k.name} (line ${a.line}).`, sortText: `0${a.name}`,
       })));
       if (kind) return { suggestions: actions }; // rex: (1.5.0): an object has only its kind's actions
+      const made = objMatch && libObjectOf(model, objMatch[1]);
+      if (made) {
+        // (the detail names it on this object: color's doc starts with say:color, play's with line:play)
+        return { suggestions: made.map((m) => ({ label: m, kind: K.Method, insertText: m, range,
+          detail: `${objMatch[1]}:${m}`, documentation: window.TUFF_METHOD_DOCS[m]?.[1] })) };
+      }
       if (/\w:$/.test(before)) {
         // atgui's, tgame's and tdraw's own methods (their docs start with "atgui", "tgame" or "tdraw") only crowd the
         // list in files that use that library. A game with a panel or a screen uses atgui's widgets too. print's

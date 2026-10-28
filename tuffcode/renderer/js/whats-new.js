@@ -186,6 +186,14 @@ ${NOTES['1.3.0'].notes}`,
 ### Learn
 - A new section, 1.7 · Workshop: a lesson each for text templates, kinds, actions, your own files, music, a terminal game and animated pictures.
 
+### Tabs
+- **Drag a tab** along the top to move it. Escape while dragging puts it back. Ctrl+Shift+PgUp and Ctrl+Shift+PgDn move the tab you're on, and TuffCode reopens your tabs in that order.
+- **Right-click a tab** to Run it, close the tabs to its left or right, move it, copy its path (or the part inside your project), show it in the Project view or rename it.
+
+### Drawing
+- **Change the pen's look:** \`pen:shape("arrow")\`. It takes "turtle", "arrow", "big arrow", "circle", "square" or "triangle", and a size makes it bigger: \`pen:shape("turtle", 2)\`. \`pen:hide()\` still hides it.
+- After \`pen:\` the editor suggests only what a pen can do. It used to suggest everything, \`app:icon\` too. \`song:\` suggests a song's methods the same way.
+
 ### Fixes
 - **Built apps keep what they save:** files from \`file.save\`, \`file.write\`, \`file.add\` and \`song:save\` go in a folder beside the app, named after it (Corner Shop files for Corner Shop), so they're still there next time. If it can't save there (in Program Files, say), it saves in a TuffApps folder in your app data. They used to vanish when the app closed.
 - Build Exe works for a project whose folder has a ; in its name, and a new project's name can't have one.

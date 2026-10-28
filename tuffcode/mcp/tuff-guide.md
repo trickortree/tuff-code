@@ -476,6 +476,7 @@ pen:star(100, "gold")       # a colour after the size fills it
 pen:circle(40)              # also pen:square(80), pen:triangle(80), pen:polygon(6, 40), pen:dot(20, "red")
 pen:write("Hello", 24)
 pen:hide()                  # hides the turtle; pen:show() brings it back
+pen:shape("arrow")          # its look: "turtle", "arrow", "big arrow", "circle", "square", "triangle"; pen:shape("turtle", 2) is twice as big
 
 func clicked(x, y):
     pen:go(x, y)

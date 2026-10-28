@@ -10733,6 +10733,214 @@ TESTS.update({"starters": t_starters})  # 1.5.0: New Project's starters
 TESTS.update({"learn_150": t_learn_150})  # 1.5.0: Learn's Section 1.7, the Workshop
 TESTS.update({"build_pack": t_build_pack})  # 1.5.0: Build exe with its packing tool stood in for (a built app's own files)
 
+# The tab bar (1.5.0): ide.js's own tab functions, cut from its source (each from its first line to the } under it) and
+# run in Node with stand-ins for the rest of the page.
+TABS_JS = r"""
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[1], 'utf8').replace(/\r\n/g, '\n');
+const fn = (head) => { const at = src.indexOf(head); return at < 0 ? '' : src.slice(at, src.indexOf('\n  }\n', at) + 4); };
+const heads = ['function tabMenu(', 'function closeTabs(', 'function moveTab(', 'function tabDropIndex(', 'function endTabDrag('];
+const out = { found: heads.map((h) => !!fn(h)) };
+if (out.found.includes(false)) { console.log(JSON.stringify(out)); process.exit(0); }
+const state = { tabs: [], active: null, root: 'C:\\p' };
+const log = [];
+let renders = 0, persists = 0;
+const env = {
+  state, REVEAL: 'Reveal in File Explorer', basename: (p) => p.split('\\').pop(), rel: (p) => p.slice(state.root.length + 1),
+  ext: (p) => (p.match(/\.([^.\\]+)$/) || [, ''])[1].toLowerCase(),
+  renderTabs: () => renders++, persistSession: () => persists++, saveAll: async () => {},
+  activate: (t) => { state.active = t.path; log.push('activate ' + t.path); },
+  closeTab: (t) => { const i = state.tabs.indexOf(t); if (i >= 0) state.tabs.splice(i, 1); log.push('close ' + t.path);
+    if (state.active === t.path) state.active = (state.tabs[i] || state.tabs[i - 1] || {}).path || null; },
+  startRun: (p) => log.push('run ' + p), api: { fs: { reveal: (p) => log.push('reveal ' + p) } },
+  navigator: { clipboard: { writeText: (s) => log.push('copy ' + s) } },
+  showInProject: (p) => log.push('show ' + p), renameEntry: (p) => log.push('rename ' + p),
+  $: () => ({ classList: { add() {}, remove() {} } }),
+};
+const f = new Function(...Object.keys(env), `let tabDrag = null;\n${heads.map(fn).join('\n')}
+return { tabMenu, closeTabs, moveTab, tabDropIndex, endTabDrag, setDrag: (d) => { tabDrag = d; }, getDrag: () => tabDrag };`)(...Object.values(env));
+const T = (name) => ({ path: 'C:\\p\\' + name });
+const four = ['a.tuf', 'b.tuf', 'c.txt', 'd.tuf'];
+const reset = (names, active) => { state.tabs.splice(0, state.tabs.length, ...names.map(T)); state.active = 'C:\\p\\' + active; log.length = 0; renders = persists = 0; };
+const order = () => state.tabs.map((t) => t.path.split('\\').pop());
+const shown = (i) => f.tabMenu(state.tabs[i]).map((it) => (it === 'sep' ? '-' : it.disabled ? `(${it.label})` : it.label));
+const pick = (i, label) => f.tabMenu(state.tabs[i]).find((it) => it.label === label).run();
+(async () => {
+  // tabs 0-100, 100-150 and 150-300 wide: a dragged tab passes another when the pointer crosses its middle
+  const rects = [{ left: 0, width: 100 }, { left: 100, width: 50 }, { left: 150, width: 150 }];
+  out.drop = [[0, 120], [0, 130], [0, 260], [2, 130], [2, 110], [2, 40], [1, 60], [1, 40], [1, 240]].map(([i, x]) => f.tabDropIndex(rects, i, x));
+  reset(['a.tuf', 'b.tuf', 'c.txt'], 'a.tuf');
+  out.move = [f.moveTab(state.tabs[0], 2), order(), f.moveTab(state.tabs[2], 9), order(), f.moveTab(state.tabs[1], -5), order(), renders, persists];
+  reset(['a.tuf', 'b.tuf', 'c.txt'], 'c.txt');
+  out.menuFirst = shown(0);
+  out.menuLast = shown(2);
+  reset(['only.tuf'], 'only.tuf');
+  out.menuOnly = shown(0);
+  reset(four, 'd.tuf'); pick(1, 'Close Tabs to the Right'); out.right = [order(), state.active, [...log]];
+  reset(four, 'a.tuf'); pick(2, 'Close Tabs to the Left'); out.left = [order(), state.active, [...log]];
+  reset(four, 'b.tuf'); pick(0, 'Close Other Tabs'); out.others = [order(), state.active, [...log]];
+  reset(four, 'c.txt'); pick(0, 'Close Tabs to the Right'); out.keepShown = [order(), state.active];
+  reset(four, 'a.tuf'); pick(3, 'Close All Tabs'); out.all = [order(), state.active];
+  reset(four, 'a.tuf'); pick(3, 'Move Tab Left'); out.left1 = [order(), persists];
+  reset(four, 'a.tuf'); pick(0, 'Move Tab Right'); out.right1 = order();
+  reset(four, 'a.tuf'); await pick(1, "Run 'b.tuf'"); pick(2, 'Copy Path'); pick(2, 'Copy Relative Path'); pick(3, 'Reveal in File Explorer');
+  pick(3, 'Show in Project'); pick(1, 'Rename File…'); out.acts = [...log];
+  // dragged a to the end, then Escape: back where it was; a drag that never moved changes nothing
+  reset(['a.tuf', 'b.tuf', 'c.txt'], 'a.tuf');
+  f.setDrag({ t: state.tabs[0], from: 0, moving: true }); f.moveTab(state.tabs[0], 2); out.dragged = order(); f.endTabDrag(true);
+  out.putBack = [order(), f.getDrag()];
+  reset(['a.tuf', 'b.tuf'], 'a.tuf'); f.setDrag({ t: state.tabs[0], from: 0, moving: false }); f.endTabDrag(); out.still = [order(), f.getDrag(), renders, persists];
+  console.log(JSON.stringify(out));
+})();
+"""
+
+
+def t_tabs(c):
+    """The tab bar (1.5.0), with no window: where a dragged tab lands, moving tabs (Move Tab Left/Right too; the order
+    is saved for next time), the right-click menu's items (greyed out where they can't be done, Run only on a .tuf)
+    and what each does, and Escape putting a dragged tab back. The keys and the Go menu are wired up."""
+    ide = os.path.join(REPO, "tuffcode", "renderer", "js", "ide.js")
+    try:
+        p = subprocess.run(["node", "-e", TABS_JS, ide], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the tab bar")
+        return
+    try:
+        got = json.loads(p.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        c.check(False, "the tab bar's checks ran", (p.stdout[-400:], p.stderr[-800:]))
+        return
+    if False in got["found"]:
+        c.check(False, "ide.js has tabMenu, closeTabs, moveTab, tabDropIndex and endTabDrag", got["found"])
+        return
+    c.check(got["drop"] == [0, 1, 2, 2, 1, 0, 1, 0, 2],
+            "a dragged tab takes another's place once the pointer passes that tab's middle, either way, past several at once", got["drop"])
+    c.check(got["move"] == [True, ["b.tuf", "c.txt", "a.tuf"], False, ["b.tuf", "c.txt", "a.tuf"], True, ["c.txt", "b.tuf", "a.tuf"], 2, 2],
+            "moving a tab changes the order (past the ends it stops at the end) and saves it for next time; no move, no save", got["move"])
+    tail = ["-", "Copy Path", "Copy Relative Path", "Reveal in File Explorer", "Show in Project", "-", "Rename File…"]
+    c.check(got["menuFirst"] == ["Run 'a.tuf'", "-", "Close", "Close Other Tabs", "(Close Tabs to the Left)", "Close Tabs to the Right",
+                                 "Close All Tabs", "-", "(Move Tab Left)", "Move Tab Right", *tail],
+            "the first tab's menu: Run for a .tuf, the closes, Move (Left greyed out), the paths and Rename", got["menuFirst"])
+    c.check(got["menuLast"] == ["Close", "Close Other Tabs", "Close Tabs to the Left", "(Close Tabs to the Right)", "Close All Tabs", "-",
+                                "Move Tab Left", "(Move Tab Right)", *tail],
+            "the last tab's menu (a .txt: no Run): to the Right and Move Right greyed out", got["menuLast"])
+    c.check("(Close Other Tabs)" in got["menuOnly"] and "(Move Tab Left)" in got["menuOnly"] and "(Move Tab Right)" in got["menuOnly"],
+            "with one tab, Close Other Tabs and both Moves are greyed out", got["menuOnly"])
+    c.check(got["right"] == [["a.tuf", "b.tuf"], "C:\\p\\b.tuf", ["activate C:\\p\\b.tuf", "close C:\\p\\c.txt", "close C:\\p\\d.tuf"]]
+            and got["left"] == [["c.txt", "d.tuf"], "C:\\p\\c.txt", ["activate C:\\p\\c.txt", "close C:\\p\\a.tuf", "close C:\\p\\b.tuf"]]
+            and got["others"][:2] == [["a.tuf"], "C:\\p\\a.tuf"],
+            "Close Tabs to the Right / Left / Other Tabs close those, and when the file on screen goes the right-clicked tab "
+            "comes up (not each next tab in turn)", [got["right"], got["left"], got["others"]])
+    c.check(got["keepShown"] == [["a.tuf"], "C:\\p\\a.tuf"] and got["all"] == [[], None],
+            "...and Close All Tabs closes every one", [got["keepShown"], got["all"]])
+    c.check(got["left1"] == [["a.tuf", "b.tuf", "d.tuf", "c.txt"], 1] and got["right1"] == ["b.tuf", "a.tuf", "c.txt", "d.tuf"],
+            "Move Tab Left and Right move the right-clicked tab one place", [got["left1"], got["right1"]])
+    c.check(got["acts"] == ["run C:\\p\\b.tuf", "copy C:\\p\\c.txt", "copy c.txt", "reveal C:\\p\\d.tuf", "show C:\\p\\d.tuf", "rename C:\\p\\b.tuf"],
+            "Run, Copy Path, Copy Relative Path, Reveal, Show in Project and Rename do that to the tab's file", got["acts"])
+    c.check(got["dragged"] == ["b.tuf", "c.txt", "a.tuf"] and got["putBack"] == [["a.tuf", "b.tuf", "c.txt"], None]
+            and got["still"] == [["a.tuf", "b.tuf"], None, 0, 0],
+            "Escape while dragging puts the tab back where it was; a click that never dragged moves nothing", [got["putBack"], got["still"]])
+    with open(ide, encoding="utf-8") as f:
+        src = f.read()
+    c.check("'Ctrl+Shift+PageUp': 'moveTabLeft'" in src and "'Ctrl+Shift+PageDown': 'moveTabRight'" in src
+            and "'prevTab', 'moveTabLeft', 'moveTabRight']]" in src and "tab.onpointerdown" in src and "showMenu(e.clientX, e.clientY, tabMenu(t))" in src,
+            "Ctrl+Shift+PgUp/PgDn move the tab on screen, the Go menu has both, and each tab drags and has the menu")
+
+
+# The editor after pen: and song: (1.5.0), in Node.
+PEN_LANG = r"""
+const fs = require('fs'), vm = require('vm');
+const window = {}, ctx = { window };
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);
+let completion = null, hover = null;
+const monaco = { Range: class { constructor(...a) { this.a = a; } }, editor: { defineTheme() {} }, languages: {
+  register() {}, setMonarchTokensProvider() {}, setLanguageConfiguration() {},
+  registerHoverProvider(_id, p) { hover = hover || p; }, registerDefinitionProvider() {}, registerReferenceProvider() {},
+  registerRenameProvider() {}, registerDocumentSymbolProvider() {}, registerSignatureHelpProvider() {}, registerColorProvider() {},
+  registerCompletionItemProvider(_id, p) { completion = p; },
+  CompletionItemKind: new Proxy({}, { get: (_t, k) => k }), CompletionItemInsertTextRule: {}, IndentAction: {}, SymbolKind: {} } };
+window.defineTuffTheme = () => {};
+window.registerTuff(monaco, '#3574f0');
+const model = (src, col) => { const lines = src.split('\n'); return { getLinesContent: () => lines, getLineContent: (n) => lines[n - 1],
+  getValue: () => src, getWordUntilPosition: () => ({ startColumn: col || 1, endColumn: col || 1 }),
+  getWordAtPosition: ({ lineNumber, column }) => { for (const m of lines[lineNumber - 1].matchAll(/\w+/g))
+    if (m.index < column && column <= m.index + m[0].length) return { word: m[0], startColumn: m.index + 1, endColumn: m.index + 1 + m[0].length };
+    return null; } }; };
+const end = (src) => { const lines = src.split('\n'); return { lineNumber: lines.length, column: lines[lines.length - 1].length + 1 }; };
+const items = (src) => completion.provideCompletionItems(model(src, end(src).column), end(src)).suggestions;
+const labels = (src) => items(src).map((s) => s.label);
+const color = items('mention tdraw\npen = tdraw.pen()\npen:').find((s) => s.label === 'color');
+console.log(JSON.stringify({
+  pen: labels('mention tdraw\npen = tdraw.pen()\npen:'),
+  inFunc: labels('import tdraw\nturtle = tdraw.pen()\nfunc draw():\n    turtle:'),
+  later: labels('mention tdraw\npen = tdraw.pen()\nfor i in range(1, 3):\n    pen:'),
+  song: labels('mention tmusic\nsong = tmusic.song(120)\nsong:'),
+  list: labels('x = [1]\nx:'), plain: labels('mention tdraw\nthing = 5\nthing:'),
+  color: color && [color.detail, color.documentation.includes('tdraw')],
+  shapeDoc: window.TUFF_METHOD_DOCS.shape,
+}));
+"""
+
+
+def t_pen(c):
+    """tdraw's pen (1.5.0): pen:shape changes how the pen looks (with a stand-in window, so none opens), the checker
+    knows its words, and the editor offers only a pen's methods after pen: (it used to offer every library's, app:icon
+    and a list's :add too), and only a song's after song:."""
+    import tuff_tdraw
+    folder = os.path.join(OUT, "pen")
+    os.makedirs(folder, exist_ok=True)
+    run_env = {**{k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW")}, "PYTHONIOENCODING": "utf-8", "TUFF_NO_SOUND": "1"}
+
+    def run(name, code, *args):
+        with open(os.path.join(folder, name), "w", encoding="utf-8") as f:
+            f.write(code)
+        p = subprocess.run([sys.executable, *args, name] if args else [sys.executable, "-c", STARTERS_NO_TK, REPO, name], cwd=folder,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, env=run_env, stdin=subprocess.DEVNULL)
+        return p.returncode, p.stdout, p.stderr
+
+    code, out, err = run("shapes.tuf", 'mention tdraw\npen = tdraw.pen()\npen:shape("arrow")\npen:shape("Big  Arrow", 2)\npen:hide()\n'
+                                       'pen:shape("turtle")\npen:shape("circle", 0.5)\nsay "done"\n')
+    calls = json.loads(out.split("PEN ", 1)[1]) if "PEN " in out else {}
+    c.check(code == 0 and "done" in out and calls.get("shape") == 5 and calls.get("shapesize") == 2 and calls.get("hideturtle") == 1,
+            'pen:shape("arrow"), "big arrow" (any case and spacing) with a size, "turtle" and "circle" change the pen\'s look, and '
+            "it can still be hidden", (code, calls, err[-300:]))
+    want = 'pen:shape takes "turtle", "arrow", "big arrow", "circle", "square" or "triangle" (pen:hide() hides it).'
+    code, out, err = run("unknown.tuf", 'mention tdraw\npen = tdraw.pen()\nlook = "hex" + "agon"\npen:shape(look)\n')
+    c.check(code != 0 and want in err and "line 4" in err, "an unknown shape is a Tuff error that lists the shapes", (code, err[-300:]))
+    code, out, err = run("small.tuf", 'mention tdraw\npen = tdraw.pen()\npen:shape("arrow", 0)\n')
+    c.check(code != 0 and "pen:shape's size has to be more than 0." in err, "a size of 0 or less is a Tuff error", (code, err[-300:]))
+    code, out, err = run("check_bad.tuf", 'mention tdraw\npen = tdraw.pen()\npen:shape("hexagon")\n', TUFF, "--check")
+    c.check(code != 0 and want in out + err and "line 3" in out + err, "--check catches a shape word that isn't one", (code, (out + err)[-300:]))
+    code, out, err = run("check_good.tuf", 'mention tdraw\npen = tdraw.pen()\nlook = "triangle"\npen:shape(look, 3)\npen:shape("Square")\n'
+                                           'pen:hide()\npen:show()\n', TUFF, "--check")
+    c.check(code == 0, "--check is happy with real shapes, a size, and a shape in a variable", (code, (out + err)[-300:]))
+    lang = os.path.join(REPO, "tuffcode", "renderer", "js", "tuff-lang.js")
+    try:
+        p = subprocess.run(["node", "-e", PEN_LANG, lang], capture_output=True, text=True, encoding="utf-8", timeout=60)
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped the editor")
+        return
+    try:
+        got = json.loads(p.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        c.check(False, "the editor's checks ran", (p.stdout[-400:], p.stderr[-800:]))
+        return
+    pen = list(tuff_tdraw.PEN_METHODS)
+    c.check(got["pen"] == pen and got["inFunc"] == pen and got["later"] == pen and "shape" in pen,
+            "pen: offers a pen's methods and nothing else (shape too), whatever the pen is called and wherever it's used", got["pen"])
+    c.check("icon" not in got["pen"] and "add" not in got["pen"], "...so not app:icon or a list's :add", got["pen"][:8])
+    c.check(got["song"] == ["track", "play", "loop", "stop", "save", "length"], "song: offers a song's methods and nothing else", got["song"])
+    c.check("add" in got["list"] and "add" in got["plain"] and len(got["plain"]) > len(pen),
+            "a list, or a name a library didn't make, still gets the usual methods", (got["list"][:6], len(got["plain"])))
+    c.check(got["color"] == ["pen:color", True], "a suggestion's detail names it on the pen (pen:color), and its doc has tdraw's use", got["color"])
+    c.check(bool(got["shapeDoc"]) and got["shapeDoc"][0] == 'pen:shape("arrow")' and "big arrow" in got["shapeDoc"][1],
+            "pen:shape has a hover doc", got["shapeDoc"])
+    with open(os.path.join(REPO, "tuffcode", "mcp", "tuff-guide.md"), encoding="utf-8") as f:
+        c.check('pen:shape("arrow")' in f.read(), "the guide for AI helpers teaches pen:shape")
+
+
+TESTS.update({"tabs": t_tabs, "pen": t_pen})  # 1.5.0: dragging tabs and their menu; pen:shape and pen: suggestions
+
 
 def main():
     names = [a for a in sys.argv[1:] if not a.startswith("--") and a not in (arg("--out-dir"), arg("--runtime"))]
