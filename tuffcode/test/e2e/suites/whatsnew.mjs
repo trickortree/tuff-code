@@ -51,6 +51,9 @@ export default async (t, ctx) => {
     await ev(`(() => { const s = document.querySelector('#whatsnew .wn-scroll'); s.scrollTop += Math.round(s.clientHeight * 0.8); return 1; })()`);
     await t.sleep(450);
   }
+  // (the hint and the fade go with a .2 s transition: a slow CI Mac was still at opacity 0.001 when it looked)
+  await waitFor(`(() => { const c = document.querySelector('#whatsnew .wn-card');
+    return getComputedStyle(c.querySelector('.wn-more')).opacity === '0' && getComputedStyle(c.querySelector('.wn-fade')).opacity === '0'; })()`, 3000);
   const last = await look();
   t.info(`${n} scroll pictures`);
   check('At the end, "Scroll for more" and the fade are gone, and the end note says that\'s everything', last.end && last.hint === '0' && last.fade === '0' && /That's everything new in TuffCode/.test(last.note), last);
