@@ -12,6 +12,7 @@ const updater = require('./updater');
 const plugins = require('./plugins');
 const agents = require('./agents');
 const ai = require('./ai');
+const starters = require('./starters.js');
 
 const TUFF_INTERPRETER = app.isPackaged
   ? path.join(process.resourcesPath, 'runtime-src', 'tuff.py')
@@ -208,6 +209,21 @@ ipcMain.handle('settings:get', () => loadSettings());
 ipcMain.handle('settings:set', (_e, patch) => saveSettings(patch));
 
 ipcMain.handle('project:default', () => ensureDefaultProject());
+
+// New Project (starters.js): the starters are in starters/ here, and in resources/starters when installed (package.json's
+// extraResources). New projects go in Documents/TuffProjects, next to HelloTuff, unless Change… picks another folder.
+starters.setup({
+  dir: app.isPackaged ? path.join(process.resourcesPath, 'starters') : path.join(__dirname, 'starters'),
+  folder: () => path.join(app.getPath('documents'), 'TuffProjects'),
+});
+ipcMain.handle('starters:list', () => starters.list());
+ipcMain.handle('starters:check', (_e, folder, name) => starters.check(folder, name));
+ipcMain.handle('starters:create', (_e, id, folder, name) => starters.create(id, folder, name));
+ipcMain.handle('starters:pickFolder', async (_e, from) => {
+  const res = await dialog.showOpenDialog(win, { title: 'Where should the project go?', defaultPath: starters.nearestFolder(from), properties: ['openDirectory', 'createDirectory', 'promptToCreate'] });
+  return res.canceled ? null : res.filePaths[0];
+});
+
 ipcMain.handle('fs:readDir', (_e, dir) => readDir(dir));
 ipcMain.handle('fs:listAll', (_e, root) => listAllFiles(root));
 // Text files open with the right text whatever saved them: UTF-8 (with or without a BOM), UTF-16 with its

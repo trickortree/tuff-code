@@ -31,6 +31,7 @@
       "plugins.js",
       "ai.js",
       "ai-worker.mjs",
+      "starters.js",
       "plugins/**/*",
       "mcp/**/*",
       "renderer/**/*",
@@ -86,6 +87,10 @@
       {
         "from": "../tuff_tgame.py",
         "to": "runtime-src/tuff_tgame.py"
+      },
+      {
+        "from": "starters",
+        "to": "starters"
       }
     ],
     "win": {
