@@ -8335,7 +8335,7 @@ def t_learn_150(c):
     c.check(pic is not None and pic[:2] == (384, 96) and tuff_tgame.image_size(os.path.join(folder, "walker.png")) == (384, 96),
             "walker.png reads whole, as the game window reads it (every CRC and row): 384 x 96, 4 frames of 96 x 96", pic and pic[:2])
     if pic:
-        w, h, rows, alpha = pic
+        rows, alpha = pic[2], pic[3]
         frames = [[tuple(row[i * 96:(i + 1) * 96]) for row in rows] for i in range(4)]
         shown = [sum(alpha(px) > 0 for row in f for px in row) for f in frames]
         c.check(all(alpha(f[0][0]) == 0 and alpha(f[95][95]) == 0 for f in frames) and all(2000 < n < 6000 for n in shown)
@@ -8359,8 +8359,8 @@ def t_learn_150(c):
                 outputs[(l["id"], part)] = "\n".join(run[1])
                 c.check(run[0] == 0 and not run[2].strip(), "...and runs headless, with no window", run[2][-300:])
                 continue
-            slow, fast =(interp_run(os.path.join(where, mode + "_" + part), l[part], mode == "slow", env=quiet, files=own[l["id"]])
-                          for mode in ("slow", "fast"))
+            slow, fast = [interp_run(os.path.join(where, mode + "_" + part), l[part], mode == "slow", env=quiet, files=own[l["id"]])
+                          for mode in ("slow", "fast")]
             outputs[(l["id"], part)] = fast[1]
             want = LEARN_150_SAYS.get((l["id"], part))
             c.check(fast[0] == 0 and not fast[2].strip() and slow == fast and (want is None or fast[1].strip() == want),

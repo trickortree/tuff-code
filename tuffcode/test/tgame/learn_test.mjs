@@ -32,9 +32,8 @@ function load(tuff) {
   return { learn: window.TuffLearn, clicks };
 }
 
-const out = { sections: load({}).learn.sections(), verdicts: [], starts: [] };
-
 const { learn } = load({});
+const out = { sections: learn.sections(), verdicts: [], starts: [] };
 for (const job of plan.checks || []) {
   try {
     out.verdicts.push(learn.check(job.id, job.src, job.out || ''));
