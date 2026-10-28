@@ -10086,6 +10086,11 @@ def _boxed(arrows):
     return _SCREEN + arrows + '    screen:clear()\n    screen:box(0, 0, 20, 10, "gray")\n    screen:put(x, y, "@", "lime")\n\nscreen:every_frame(step)\n'
 
 
+def _walks(lines):
+    """The sprite sheet game with these lines in its loop, after dt = game:frame()."""
+    return _WALK + 'while game:open():\n    dt = game:frame()\n' + lines
+
+
 # The terminal game with up and down the wrong way round (y goes down the screen), and with its stops on the walls.
 _TTERM_SWAPPED = _boxed('    if screen:pressed("up") and y < 8:\n        y += 1\n    if screen:pressed("down") and y > 1:\n        y -= 1\n')
 _TTERM_WALLS = _boxed('    if screen:pressed("up") and y > 0:\n        y -= 1\n    if screen:pressed("down") and y < 9:\n        y += 1\n')
@@ -10093,6 +10098,13 @@ _TTERM_NAMES = _boxed('    if screen:pressed("Up") and y > 1:\n        y -= 1\n 
 # The sprite sheet game with frame 1 only before the loop (the walk never stops), and on every frame (it never starts).
 _SHEETS_BEFORE = _WALK + 'hero:frame(1)\nwhile game:open():\n    dt = game:frame()\n    if game:held("right"):\n        hero:play("walk")\n'
 _SHEETS_ALWAYS = _WALK + 'while game:open():\n    dt = game:frame()\n    if game:held("right"):\n        hero:play("walk")\n    hero:frame(1)\n'
+# ...and with each arrow's own if playing the walk, then frame 1 under an else: under the right arrow's if alone, that
+# else runs while left is held too, so going left it never walks. After an if and an elif, it runs only when neither is.
+_HELD_LEFT = '    if game:held("left"):\n        hero:move(-150 * dt, 0)\n        hero:play("walk")\n'
+_HELD_RIGHT = _HELD_LEFT.replace("left", "right").replace("-150", "150")
+_ELSE_STILL = '    else:\n        hero:frame(1)\n'
+_SHEETS_ELSE = _walks(_HELD_LEFT + _HELD_RIGHT + _ELSE_STILL)
+_SHEETS_ELIF = _walks(_HELD_LEFT + _HELD_RIGHT.replace("if", "elif", 1) + _ELSE_STILL)
 # The mistakes a learner is likely to make in each lesson's task: programs that run (so Learn checks them, instead of
 # pointing at an error), and how the hint its check gives starts.
 LEARN_150_MISTAKES = [
@@ -10106,6 +10118,9 @@ LEARN_150_MISTAKES = [
                                      'say "Total: $" + total\n', "Say the total as money too"),  # Total: $3.5
     ("workshop-templates", 'snacks = {"popcorn": 1.2, "apple": 0.45, "juice": 1.85, "nuts": 2}\nfor snack in snacks:\n'
                            '    say f"{snack:8} {snacks[snack]:money}"\n', "Then add the prices up"),  # four lines of money, but no total
+    ("workshop-templates", _SNACKS + 'total = 0\nfor snack in snacks:\n    total += snacks[snack]\n    say f"{snack:8} {snacks[snack]:money}"\n'
+                                     'say f"Total: ${total:0.0}"\n', "Say the total as money too"),  # Total: $3.5
+    ("workshop-templates", _SNACKS + 'for snack in snacks:\n    say f"{snack:8} ${snacks[snack]:0.00}"\n', "Then add the prices up"),  # $ and {x:0.00}: money
     ("workshop-kinds", 'holes = {"title": "Holes", "pages": 272}\nsay holes["pages"]\n', "Start your own kind"),
     ("workshop-kinds", 'kind Book:\n    title = ""\n\nholes = Book("Holes")\nwonder = Book("Wonder")\nsay holes.title + wonder.title\n', "Give Book two fields"),
     ("workshop-kinds", _BOOK + 'holes = Book("Holes", 272)\nsay holes.pages\n', "Make two of them"),
@@ -10124,6 +10139,9 @@ LEARN_150_MISTAKES = [
     ("workshop-files", 'say f"{3 * 4.5 * 1.2:money}"\n', "Load the file first"),
     ("workshop-files", 'import money.tuf\nsay money.as_money(3 * 4.5)\n', "Add the tax with money.with_tax"),
     ("workshop-files", 'import money.tuf\nsay money.with_tax(3 * 4.5)\n', "Show it as money"),
+    ("workshop-files", 'import money.tuf\nsay money.as_money(3 * 4.5 * money.rate)\n', "Add the tax with money.with_tax"),  # only the tax, $2.70
+    ("workshop-files", 'import money.tuf\nsay money.as_money(3 * 4.5 + money.rate)\n', "Add the tax with money.with_tax"),  # $13.70
+    ("workshop-files", 'import money.tuf\nsay 3 * 4.5 * (1 + money.rate)\n', "Show it as money"),  # 16.2: the tax is on, but not as money
     ("workshop-music", 'mention tmusic\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4")\nsong:track("bass", "C3*3")\nsong:play()\n', "Play a tune first"),
     ("workshop-music", 'mention tmusic\ntmusic.play("C4 E4 G4", "piano")\ntmusic.play("C3*3", "bass")\n', "Make a song"),
     ("workshop-music", 'mention tmusic\ntmusic.play("C4 E4", "piano")\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4")\nsong:play()\n', "Give it two tracks"),
@@ -10146,6 +10164,8 @@ LEARN_150_MISTAKES = [
                                  '    if game:held("right"):\n        hero:play("walk")\n', "When no arrow is held"),
     ("workshop-sheets", _SHEETS_BEFORE, "When no arrow is held"),
     ("workshop-sheets", _SHEETS_ALWAYS, "Put hero:frame(1) under else:"),
+    ("workshop-sheets", _SHEETS_ELSE, "The else runs while left is held too"),
+    ("workshop-sheets", _walks(_HELD_RIGHT + _HELD_LEFT + _ELSE_STILL), "The else runs while right is held too"),
 ]
 # Other right ways to do the tasks, which the checks must accept: each runs, and its check says it's done.
 LEARN_150_GOOD = [
@@ -10153,6 +10173,8 @@ LEARN_150_GOOD = [
                            'say f"juice    {snacks["juice"]:money}"\nsay f"Total:   {snacks["popcorn"] + snacks["apple"] + snacks["juice"]:money}"\n'),
     ("workshop-templates", _SNACKS + "total = 0\nfor snack in snacks:\n    total += snacks[snack]\n    say f'{snack:8} {snacks[snack]:money}'\n"
                            "say f'Total:   {total:money}'\n"),
+    ("workshop-templates", _SNACKS + 'total = 0\nfor snack in snacks:\n    total += snacks[snack]\n    say f"{snack:8} {snacks[snack]:money}"\n'
+                           'say f"Total:   ${total:0.00}"\n'),  # the lesson's {x:0.00}, after a $
     ("workshop-kinds", _BOOKS + 'total = holes.pages\ntotal = total + wonder.pages\nsay total\n'),
     ("workshop-kinds", _BOOKS + 'total = 0\nfor book in [holes, wonder]:\n    total += book.pages\nsay "Pages: " + total\n'),
     ("workshop-kinds", _BOOKS + 'say "They have " + (holes.pages + wonder.pages) + " pages"\n'),
@@ -10161,6 +10183,8 @@ LEARN_150_GOOD = [
     ("workshop-actions", _HERO + '    func heal(amount):\n        my.hp += amount\n    func hurt(damage):\n        my.hp -= damage\n\nsam = Hero("Sam")\n'
                          'sam:hurt(3)\nsam:hurt(4)\nsay f"{sam.name} has {sam.hp} hp left"\n'),
     ("workshop-files", 'import money.tuf\n\nsay f"3 tickets: {money.with_tax(3 * 4.5):money}"\n'),  # Lesson 1's :money
+    ("workshop-files", 'import money.tuf\n\nsay money.as_money(3 * 4.5 * (1 + money.rate))\n'),  # the tax from money.rate
+    ("workshop-files", 'import money.tuf\n\nprice = 3 * 4.5\ntax = price * money.rate\nsay "3 tickets: " + money.as_money(price + tax)\n'),
     ("workshop-tterm", _TTERM_NAMES),
     ("workshop-tterm", _boxed('    if screen:pressed("up") and y >= 2: y -= 1\n    if screen:pressed("down") and y <= 7: y = y + 1\n')),
     ("workshop-tterm", _boxed('    if screen:pressed("up"):\n        y -= 1\n    elif screen:pressed("down"):\n        y += 1\n'
@@ -10169,6 +10193,10 @@ LEARN_150_GOOD = [
                                  '    if game:held("right"):\n        hero:move(150 * dt, 0)\n        hero:play "walk"\n    else:\n        hero:frame 1\n'),
     ("workshop-sheets", _WALK + 'while game:open():\n    dt = game:frame()\n    if game:held("left") or game:held("right"): hero:play("walk")\n'
                                 '    else: hero:frame(1)\n'),
+    ("workshop-sheets", _SHEETS_ELIF),
+    ("workshop-sheets", _walks(_HELD_LEFT + '    else:\n        if game:held("right"):\n            hero:move(150 * dt, 0)\n'
+                               '            hero:play("walk")\n        else:\n            hero:frame(1)\n')),  # an else inside an else
+    ("workshop-sheets", _walks(_HELD_LEFT + _HELD_RIGHT + '    if not game:held("left") and not game:held("right"):\n        hero:frame(1)\n')),
 ]
 # Slips in these lessons that stop the run, so Learn only shows what the run says: (the program, with money.tuf next to
 # it, and what both runtimes and --check say).
@@ -10278,8 +10306,8 @@ def t_learn_150(c):
     window, and music through a pipe, so no sound); each check accepts its solution and the other right ways above, run
     for real, and gives its hint for the starter, for empty code and for the mistakes above (played, the terminal game's
     and the sprite sheet's really go wrong); the slips that stop a run get the same help from both runtimes and --check;
-    and Start lesson writes a lesson's own files (money.tuf and the sprite sheet walker.png) next to its file, where the
-    solutions run."""
+    Start lesson writes a lesson's own files (money.tuf and the sprite sheet walker.png) next to its file, where the
+    solutions run; and a run that was stopped isn't judged, though a real error still is."""
     import shutil
     import tuff_tgame
     folder = os.path.join(HERE, "out", "learn_150")  # never in the temp folder: there --check can't see money.tuf
@@ -10416,6 +10444,15 @@ def t_learn_150(c):
     plays = learn_150_plays(run[3])
     c.check(run[0] == 0 and len(plays) > 1 and plays[1][0] == 10 and all(p[1:] == (None, 1) for p in plays),
             "hero:frame(1) on every frame: while right is held it's frame 1 every time, so it never walks", plays[:4])
+    # With the solution's keys: an else under the right arrow's if alone walks going right, but going left it's frame 1
+    # every time. As an elif, it walks both ways, as the solution does.
+    run = learn_150_game(os.path.join(folder, "sheets_mistakes"), "else", _SHEETS_ELSE, 80, keys)
+    plays = learn_150_plays(run[3])
+    c.check(run[0] == 0 and plays == [(0, None, 1), (10, walk, None), (40, None, 1)] + [(f, None, 1) for f in range(50, 60)],
+            "an else under the right arrow's if alone: it walks going right, but going left it's frame 1 every time", plays)
+    run = learn_150_game(os.path.join(folder, "sheets_mistakes"), "elif", _SHEETS_ELIF, 80, keys)
+    c.check(run[0] == 0 and learn_150_plays(run[3]) == [(0, None, 1), (10, walk, None), (40, None, 1), (50, walk, None), (60, None, 1)],
+            "...and with elif for the right arrow, it walks both ways", learn_150_plays(run[3]))
 
     # Learn's checks (in Node), with what the programs really said: the mistakes above, and the other right ways.
     def ran(where, lesson, code):
@@ -10500,6 +10537,17 @@ def t_learn_150(c):
             "starting a lesson again changes nothing: the money.tuf the learner added to stays as it is", again)
     c.check(back.get("calls", [])[:1] == [["plugins.writeFile", "lessons/walker.png", "base64"]] and os.path.isfile(os.path.join(lessons_dir, "walker.png")),
             "...and a lesson file it needs that was deleted comes back", back)
+    # A run of a lesson's file that was stopped (Stop ends it with -1, the debugger's own stop with 130) isn't judged:
+    # the status line keeps what it said, or stays empty. A real error still is one.
+    templates = next(l for l in lessons if l["id"] == "workshop-templates")
+    hint = verdicts[1]  # the starter's, from above
+    error = "Your program hit an error. Click the red message in the Run window to jump to it."
+    runs =[(-1, "", ""), (0, templates["starter"], outputs[("workshop-templates", "starter")]), (-1, "", ""), (130, "", ""), (1, "", ""),
+            (0, templates["solution"], outputs[("workshop-templates", "solution")]), (-1, "", "")]
+    said = (node({"runs": [{"root": project, "id": "workshop-templates", "runs": [{"code": n, "src": s, "out": o} for n, s, o in runs]}]})
+            .get("runs") or [None])[0]
+    c.check(said == [None, hint, hint, hint, error, "Nice! Lesson complete.", "Nice! Lesson complete."],
+            "a lesson's run that was stopped (exit code -1 or 130) leaves what Learn says as it was; a real error (1) still says so", said)
     # The e2e test knows the new section too.
     with open(os.path.join(HERE, "..", "e2e", "suites", "learn-sections.mjs"), encoding="utf-8") as f:
         suite = f.read()
