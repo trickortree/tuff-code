@@ -4,6 +4,8 @@
 // runs the first Games lesson from the lesson's Run button (the starter, then the solution; tgame's autopilot closes
 // the game), and checks every new lesson: its check accepts its solution and rejects its starter, and its example,
 // starter and solution pass tuff --check. The first internet lesson also runs for real when the internet is there.
+// 1.5.0's Section 1.7 Workshop has lessons with files of their own: Start lesson puts money.tuf and walker.png next to
+// the lesson's file, and "Your own files" runs from its Run button, importing that money.tuf.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -14,8 +16,8 @@ const PLAN = path.join(OUT, 'learn-sections', 'autopilot.json');
 export const meta = { title: 'Learn Tuff: the sections, old progress, and the new lessons\' checks', timeout: 360000, env: { TUFF_TGAME_AUTOPILOT: PLAN } };
 
 const NL = '\n';
-const TITLES = ['Basics', 'Section 1.5 · Make it look good', 'Section 1.6 · Toolbox', 'Section 2 · Build apps', 'Section 2.1 · Modern apps', 'Section 2.2 · Advanced apps', 'Section 3 · The internet', 'Section 4 · Games', 'Section 5 · Drawing'];
-const NEW = ['look', 'tools', 'atgui', 'tap', 'tgame', 'tdraw'];
+const TITLES = ['Basics', 'Section 1.5 · Make it look good', 'Section 1.6 · Toolbox', 'Section 1.7 · Workshop', 'Section 2 · Build apps', 'Section 2.1 · Modern apps', 'Section 2.2 · Advanced apps', 'Section 3 · The internet', 'Section 4 · Games', 'Section 5 · Drawing'];
+const NEW = ['look', 'tools', 'workshop', 'atgui', 'tap', 'tgame', 'tdraw'];
 // What a 1.0.4 profile saved: two Basics lessons, one Build apps lesson and two Modern apps lessons done.
 const OLD_DONE = ['say-hello', 'variables', 'tgui-window', 'mtgui-window', 'mtgui-studio'];
 // Console tap lessons: what to type, and what to use when the internet isn't there.
@@ -26,6 +28,19 @@ const TAP_RUN = {
   'tap-lists': { stand_in: '1. Cats nap.\n2. Cats purr.\n3. Cats climb.\n4. Cats hunt.\n5. Cats sleep.' },
   'tap-weather': { stand_in: 'Right now it is 10.5°C\nThat is 51°F' },
   'tap-post': { stand_in: 'Saved as post number 101' },
+};
+// The Workshop lessons whose checks read what the program said: run for real with Python (next to the lesson's own
+// files), or else this.
+const WORKSHOP_RUN = {
+  'workshop-templates': 'popcorn  $1.20\napple    $0.45\njuice    $1.85\nTotal:   $3.50',
+  'workshop-kinds': 'Holes and Wonder: 582 pages',
+  'workshop-actions': 'Sam has 3 hp left',
+  'workshop-files': '3 tickets: $16.20',
+};
+// A lesson's own files (money.tuf, a sprite sheet as base64), as Learn writes them next to the lesson's file.
+const writeOwnFiles = (dir, files) => {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [name, data] of Object.entries(files || {})) fs.writeFileSync(path.join(dir, name), typeof data === 'string' ? data : Buffer.from(data.base64, 'base64'));
 };
 
 export default async (t, ctx) => {
@@ -60,7 +75,7 @@ export default async (t, ctx) => {
   const tags = await ev(`[...document.querySelectorAll('#learn-body .learn-section')].map((h) => !!h.querySelector('.ls-tag'))`);
   check('Every section but Basics is marked Optional', JSON.stringify(tags) === JSON.stringify([false, ...TITLES.slice(1).map(() => true)]), tags);
   const fresh = secs.filter((s) => NEW.includes(s.id));
-  check('Make it look good, Toolbox, Advanced apps, The internet, Games and Drawing each have 5 to 9 lessons', fresh.length === NEW.length && fresh.every((s) => s.lessons.length >= 5 && s.lessons.length <= 9), fresh.map((s) => [s.id, s.lessons.length]));
+  check('Make it look good, Toolbox, Workshop, Advanced apps, The internet, Games and Drawing each have 5 to 9 lessons', fresh.length === NEW.length && fresh.every((s) => s.lessons.length >= 5 && s.lessons.length <= 9), fresh.map((s) => [s.id, s.lessons.length]));
   const games = fresh.find((s) => s.id === 'tgame');
   check('The last Games lesson is "Make your own game"', games && games.lessons.at(-1).title === 'Make your own game', games && games.lessons.map((l) => l.title));
   const files = secs.flatMap((s) => s.lessons.map((l) => l.file));
@@ -119,6 +134,14 @@ export default async (t, ctx) => {
   for (const s of fresh) {
     for (const l of s.lessons) {
       outputs[l.id] = '';
+      if (WORKSHOP_RUN[l.id]) {
+        const dir = path.join(ctx.tmp, `run_${l.id}`);
+        writeOwnFiles(dir, l.files);
+        fs.writeFileSync(path.join(dir, l.file), l.solution);
+        const r = py ? spawnSync(py[0], [...py.slice(1), path.join(REPO, 'tuff.py'), path.join(dir, l.file)], { cwd: dir, input: '', encoding: 'utf8', timeout: 30000, windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } }) : null;
+        outputs[l.id] = r && r.status === 0 && r.stdout.trim() ? r.stdout : WORKSHOP_RUN[l.id];
+        continue;
+      }
       if (!TAP_RUN[l.id]) continue;
       // The console tap lessons' solutions, run for real when there's Python and the internet.
       const f = path.join(ctx.tmp, `${l.id}.tuf`);
@@ -160,6 +183,7 @@ export default async (t, ctx) => {
   let checked = 0;
   for (const s of secs) {
     for (const l of s.lessons) {
+      writeOwnFiles(ctx.tmp, l.files); // money.tuf and walker.png: --check finds what a program imports and shows
       for (const [kind, code] of [['example', l.example], ['starter', l.starter], ['solution', l.solution]]) {
         if (!code) continue; // the Build an .exe lesson has no starter
         const f = path.join(ctx.tmp, `check_${l.id}_${kind}.tuf`);
@@ -233,6 +257,43 @@ export default async (t, ctx) => {
     if (ran && !st.done && /hit an error/.test(st.text || '')) t.skip('"Your first request" from the lesson', `the request failed here: ${out.slice(-200)}`);
     else check('Running "Your first request" for real finishes the lesson', ran && st.done && /pass/.test(st.cls || ''), { st, out: out.slice(-300) });
   }
+
+  // ---------------------------------------------------------------- Section 1.7: lessons with files of their own
+  const workshop = fresh.find((s) => s.id === 'workshop');
+  const workTitle = 'Section 1.7 · Workshop';
+  await clickEl(sectionHead(workTitle));
+  await waitFor(`${sectionHead(workTitle)}.classList.contains('open')`, 3000);
+  const workCount = await ev(`${sectionHead(workTitle)}.querySelector('.ls-count').textContent`);
+  check(`Clicking "${workTitle}" opens it: ${workshop.lessons.length} lessons, 0 / ${workshop.lessons.length} done`, workCount === `0 / ${workshop.lessons.length}`, workCount);
+  for (const l of workshop.lessons.filter((x) => x.files)) {
+    const file = path.join(LESSONS, l.file);
+    await clickEl(`${lessonEl(l.title)}.querySelector('.lesson-head')`);
+    await waitFor(`${lessonEl(l.title)}.classList.contains('open')`, 3000);
+    await clickEl(`${lessonEl(l.title)}.querySelector('[data-act="open"]')`);
+    const made = await waitFor(`(document.querySelector('#tabs .tab.active') || {}).title === ${JSON.stringify(file)}`, 8000);
+    // money.tuf as text, walker.png as the picture it is: byte for byte what the lesson has.
+    const own = Object.entries(l.files).map(([name, data]) => {
+      const p = path.join(LESSONS, name);
+      return fs.existsSync(p) && fs.readFileSync(p).equals(typeof data === 'string' ? Buffer.from(data, 'utf8') : Buffer.from(data.base64, 'base64'));
+    });
+    check(`Start lesson on "${l.title}" makes lessons/${l.file} with the starter, and ${Object.keys(l.files).join(', ')} next to it`,
+      made && own.every(Boolean) && norm(fs.readFileSync(file, 'utf8')) === norm(l.starter), { made, own, active: await activeTab() });
+  }
+  // "Your own files" from its Run button: the solution imports the money.tuf Learn put next to it.
+  const filesLesson = workshop.lessons.find((l) => l.id === 'workshop-files');
+  const filesFile = path.join(LESSONS, filesLesson.file);
+  if (!(await ev(`${lessonEl(filesLesson.title)}.classList.contains('open')`))) await clickEl(`${lessonEl(filesLesson.title)}.querySelector('.lesson-head')`);
+  await ev(`(async () => { await window.TuffIDE.openFile(${JSON.stringify(filesFile)}); return 1; })()`);
+  await t.setCode(filesLesson.solution);
+  const ranFiles = await runFromLesson(filesLesson.title);
+  await waitFor(`${lessonEl(filesLesson.title)}?.classList.contains('done')`, 4000);
+  const stFiles = await statusOf(filesLesson.title);
+  const outFiles = await ev(`document.querySelector('#run-output').innerText`);
+  const toastsFiles = await ev(`[...document.querySelectorAll('.toast')].map((x) => x.textContent.trim())`);
+  check('Running "Your own files" from its lesson imports the money.tuf Learn made, says $16.20, and the lesson is done',
+    ranFiles && stFiles.done && /pass/.test(stFiles.cls || '') && /\$16\.20/.test(outFiles), { stFiles, out: outFiles.slice(-300) });
+  check('The toast names the section: "Section 1.7 · Lesson 4 complete: Your own files"', toastsFiles.some((x) => x.includes('Section 1.7 · Lesson 4 complete: Your own files')), toastsFiles);
+  await t.shot('learn_workshop.png');
   const after = settings();
   check('The Modern apps lessons are still done at the end', ['mtgui-window', 'mtgui-studio'].every((id) => (after.learnDone || []).includes(id)), after.learnDone);
 };
