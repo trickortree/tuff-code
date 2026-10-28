@@ -6,8 +6,10 @@
 //     node learn_test.mjs path/to/learn.js plan.json
 //
 // plan.json: {"checks": [{"id", "src", "out"}...], "starts": [{"root", "id", "remove": [names in lessons/ to delete
-// first]}...]}. It prints {"sections", "verdicts" (a check's true or hint, or "THREW ..."), "starts": [{"calls",
-// "files"}]}, where calls are the file operations Learn asked for, in order, and files what lessons/ holds after.
+// first]}...], "runs": [{"root", "id", "runs": [{"code", "src", "out"}...]}...]}. It prints {"sections", "verdicts" (a
+// check's true or hint, or "THREW ..."), "starts": [{"calls", "files"}], "runs": [[what the lesson's status line says
+// after each run, or null]]}, where calls are the file operations Learn asked for, in order, and files what lessons/
+// holds after.
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -19,21 +21,23 @@ const plan = JSON.parse(fs.readFileSync(planFile, 'utf8'));
 // One fresh Learn, as the page loads it: window.tuff (the IDE's bridge to the main process) is read when it loads.
 function load(tuff) {
   const clicks = {};
+  const shown = {}; // by selector, the element Learn last looked up in one it made, with what it put there
+  const listeners = {}; // the window's, like tuff:run-finished
   const element = (sel = '') => ({
     sel, style: { setProperty() {} }, dataset: {}, textContent: '', innerHTML: '', className: '',
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
     appendChild: (child) => child, remove() {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }),
     addEventListener: (type, fn) => { if (type === 'click') (clicks[sel] = clicks[sel] || []).push(fn); },
-    querySelector: (s) => element(s), querySelectorAll: () => [],
+    querySelector: (s) => (shown[s] = element(s)), querySelectorAll: () => [],
   });
-  const window = { tuff, addEventListener() {} };
+  const window = { tuff, addEventListener: (type, fn) => (listeners[type] = listeners[type] || []).push(fn) };
   const document = { querySelector: (s) => element(s), querySelectorAll: () => [], createElement: () => element(), body: element('body'), addEventListener() {} };
   vm.runInNewContext(source, { window, document, console, setTimeout, clearTimeout, TuffIcon: () => '<svg></svg>' });
-  return { learn: window.TuffLearn, clicks };
+  return { learn: window.TuffLearn, clicks, shown, listeners };
 }
 
 const { learn } = load({});
-const out = { sections: learn.sections(), verdicts: [], starts: [] };
+const out = { sections: learn.sections(), verdicts: [], starts: [], runs: [] };
 for (const job of plan.checks || []) {
   try {
     out.verdicts.push(learn.check(job.id, job.src, job.out || ''));
@@ -87,6 +91,30 @@ for (const start of plan.starts || []) {
   else calls.push(['no Start lesson button']);
   const files = fs.existsSync(lessons) ? fs.readdirSync(lessons).sort() : [];
   out.starts.push({ calls, files });
+}
+
+// Runs of a lesson's file ending, as ide.js says so (tuff:run-finished, with the exit code and what the run said), with
+// that lesson open: what its status line says after each one. The file holds each run's src while it's checked.
+for (const job of plan.runs || []) {
+  const root = path.resolve(job.root);
+  let src = '';
+  const page = load({ fs: { readFile: async () => src, exists: async () => true } });
+  page.learn.init({
+    root: () => root,
+    join: (a, b) => a.replace(/[\\/]+$/, '') + path.sep + b,
+    settings: () => ({ learnDone: [], learnCurrent: job.id, learnOpen: ['basics'] }),
+    saveSettings() {},
+    toast() {},
+    monacoReady: async () => ({ editor: { colorize: async (code) => code } }),
+  });
+  const file = path.join(root, 'lessons', learn.sections().flatMap((s) => s.lessons).find((l) => l.id === job.id).file);
+  const said = [];
+  for (const run of job.runs) {
+    src = run.src || '';
+    for (const fn of page.listeners['tuff:run-finished'] || []) await fn({ detail: { file, code: run.code, output: run.out || '' } });
+    said.push(page.shown['.lx-status span']?.textContent ?? null);
+  }
+  out.runs.push(said);
 }
 
 console.log(JSON.stringify(out));

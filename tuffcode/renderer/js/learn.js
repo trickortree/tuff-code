@@ -919,7 +919,8 @@
           return /["'][^"'\n]*\{[^}\n]*\}/.test(src) ? 'Put an f right before the quotes, or the { } show just as they are: say f"{snack:8} {price:money}"'
             : 'Make each line with a template: say f"{snack:8} {price:money}"';
         }
-        const moneys = templates.filter((t) => /:\s*money\s*\}/.test(t)).length;
+        // Money: {price:money}, or a $ before {price:0.00} (both say $1.20).
+        const moneys = templates.filter((t) => /:\s*money\s*\}|\$\{[^}\n]*:\s*0\.00\s*\}/.test(t)).length;
         if (!moneys) return 'Show the prices as money: put :money at the end of the { }, like {price:money}';
         // Three snacks, then the total: four lines with money in them, like $3.50 (a total joined on with + says $3.5),
         // made by two templates, the loop's and the total's.
@@ -1010,7 +1011,10 @@
       solution: 'import money.tuf\n\ntickets = 3 * 4.5\nsay "3 tickets: " + money.as_money(money.with_tax(tickets))\n',
       check: (src, out) => {
         if (!/^\s*(import|mention)\s+money\.tuf\b/m.test(src)) return 'Load the file first, with .tuf on the end: import money.tuf';
-        if (!/\bmoney\.with_tax\s*\(/.test(src)) return 'Add the tax with money.with_tax(3 * 4.5)';
+        // The tax: money.with_tax, or money.rate added on, so the run says 16.2 too, as 3 * 4.5 * (1 + money.rate) does.
+        // (3 * 4.5 * money.rate is only the tax, and 3 * 4.5 + money.rate adds 0.2.)
+        const taxed = (out.match(/\d+\.\d+/g) || []).some((n) => Math.abs(Number(n) - 16.2) < 0.005);
+        if (!/\bmoney\.with_tax\s*\(/.test(src) && !(/\bmoney\.rate\b/.test(src) && taxed)) return 'Add the tax with money.with_tax(3 * 4.5)';
         // money.as_money, or Lesson 1's template: f"{money.with_tax(3 * 4.5):money}"
         if (!/\bmoney\.as_money\s*\(|:\s*money\s*\}/.test(src)) return 'Show it as money: money.as_money(...), or :money in a template';
         return lines(out).some((l) => /\$\d/.test(l)) ? true : 'Say the price, like: say money.as_money(money.with_tax(3 * 4.5))';
@@ -1110,7 +1114,35 @@
         const still = rows.map((_, i) => i).filter((i) => shows.test(rows[i]) && inLoop(i));
         if (!still.length) return 'When no arrow is held, stand still on frame 1: else: hero:frame(1)';
         const under = (i) => /^[ \t]*(if|elif|else)\b/.test(rows[i]) || /^[ \t]*(if|elif|else)\b/.test(rows[parent(i)]);
-        return still.every(under) ? true : 'Put hero:frame(1) under else:, so the walker only stands still when no arrow is held';
+        if (!still.every(under)) return 'Put hero:frame(1) under else:, so the walker only stands still when no arrow is held';
+        // Under an else, the if (and elifs) it goes with must check each arrow the game checks. (An if for left, then one for
+        // right with the else: that else runs while left is held too, so going left the walk never plays.)
+        const isIf = (i) => /^[ \t]*(if|elif)\b/.test(rows[i]);
+        const arrows = (ifs) => ['left', 'right'].filter((a) => ifs.some((i) => rows[i].toLowerCase().includes(a)));
+        const checked = arrows(rows.map((_, i) => i).filter(isIf));
+        // The if and elifs an else (or an elif) goes with: the lines at its indent above it, up to the if.
+        const chain = (e) => {
+          const ifs = [];
+          for (let j = e - 1; j >= 0; j--) {
+            if (!rows[j].trim() || depth(j) > depth(e)) continue;
+            if (depth(j) < depth(e) || !isIf(j)) break;
+            ifs.push(j);
+            if (/^[ \t]*if\b/.test(rows[j])) break;
+          }
+          return ifs;
+        };
+        for (const i of still) {
+          let e = /^[ \t]*else\b/.test(rows[i]) ? i : parent(i);
+          if (!/^[ \t]*else\b/.test(rows[e] || '')) continue;
+          const ifs = [];
+          for (; /^[ \t]*(else|elif)\b/.test(rows[e] || ''); e = parent(e)) ifs.push(...chain(e)); // (an else inside an else: both ifs were false)
+          const tested = arrows(ifs);
+          const missed = checked.find((a) => !tested.includes(a));
+          if (tested.length && missed) {
+            return `The else runs while ${missed} is held too, so the walk never plays going ${missed}. Check both arrows in one if: if game:held("left") or game:held("right"): hero:play("walk"), then else: hero:frame(1)`;
+          }
+        }
+        return true;
       },
     },
   ];
@@ -1419,6 +1451,7 @@
     const { file, code, output } = e.detail;
     const l = LESSONS.find((x) => !x.build && file && file.toLowerCase() === lessonPath(x).toLowerCase());
     if (!l) return;
+    if (code < 0 || code === 130) return; // (stopped, with Stop or by the debugger: not judged, so the lesson stays as it was)
     if (code !== 0) {
       status[l.id] = { pass: false, msg: 'Your program hit an error. Click the red message in the Run window to jump to it.' };
     } else {
