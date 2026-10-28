@@ -1,6 +1,7 @@
 // New Project's starters (1.5.0): real projects to start from, in starters/ (resources/starters in an installed
 // TuffCode, see main.js). starters/starters.json lists them in the gallery's order, each as
-// { id, name, about, tags, color, project? (the new folder's name, the name if left out), main? (main.tuf) };
+// { id, name, about, tags, uses? (what it uses, like tgame or import: searched, not shown), color,
+//   project? (the new folder's name, the name if left out), main? (main.tuf) };
 // starters/<id>/ holds its files, and starters/<id>.svg is its card's picture. A new project is a new folder with
 // a copy of those files: an existing folder is never touched, and a name that's taken gets a free one ("Snake 2").
 // Plain Node (no Electron), so the tests can load it.
@@ -35,10 +36,13 @@ async function list() {
     let picture = null;
     try { picture = await fsp.readFile(path.join(where.dir, `${s.id}.svg`), 'utf8'); } catch {}
     out.push({ id: s.id, name: String(s.name), about: String(s.about || ''), tags: Array.isArray(s.tags) ? s.tags.map(String) : [],
+      uses: Array.isArray(s.uses) ? s.uses.map(String) : [],
       color: /^#[0-9a-f]{6}$/i.test(s.color || '') ? s.color : null, project: String(s.project || s.name), main, picture });
   }
   return { starters: out, folder: where.folder() };
 }
+
+const LONGEST = 80; // letters in a project's name (the gallery's name box takes no more)
 
 // What's wrong with a project's name (it becomes a folder's name), or null.
 function nameProblem(name) {
@@ -47,18 +51,21 @@ function nameProblem(name) {
   if (/^\.+$/.test(name)) return 'A name needs a letter or a number in it.';
   if (/[. ]$/.test(name)) return 'A name can\'t end with a dot.';
   if (RESERVED.test(name)) return `${name} is a name Windows keeps for itself. Try another one.`;
-  if (name.length > 80) return 'That name is too long.';
+  if (name.length > LONGEST) return 'That name is too long.';
   return null;
 }
 
 // A name that isn't taken in the folder: the name itself, or with a number after it ("Snake 2", "Snake 3").
-// A name that ends in a number goes on from there: "Room 101" is taken, so "Room 102".
+// A name that ends in a number goes on from there: "Room 101" is taken, so "Room 102". A long name is cut to make
+// room for the number, so the free name is never too long.
 function freeName(folder, name) {
   if (!fs.existsSync(path.join(folder, name))) return name;
   const m = name.match(/^(.*\S) (\d{1,6})$/);
   const stem = m ? m[1] : name;
   for (let n = m ? Number(m[2]) + 1 : 2; n < 10000; n++) {
-    if (!fs.existsSync(path.join(folder, `${stem} ${n}`))) return `${stem} ${n}`;
+    const cut = stem.slice(0, LONGEST - String(n).length - 1).replace(/[\uD800-\uDBFF]$/, ''); // (not half an emoji)
+    const free = `${cut.trimEnd()} ${n}`;
+    if (!fs.existsSync(path.join(folder, free))) return free;
   }
   return null;
 }
@@ -94,6 +101,24 @@ async function copyTree(from, to) {
   }
 }
 
+// Why the project couldn't be made in folder, in plain words, from the error Node gave (its code, like EPERM).
+function folderProblem(err, folder) {
+  switch (err?.code) {
+    case 'EPERM': // (also Windows' Controlled Folder Access, guarding Documents)
+    case 'EACCES':
+    case 'EROFS':
+      return `TuffCode isn't allowed to make folders in ${path.basename(folder) || folder}. Use Change… to choose another folder.`;
+    case 'ENOENT': // a drive that's gone, or a folder taken away meanwhile
+    case 'ENOTDIR':
+      return 'That folder can\'t be reached any more. Use Change… to choose another folder.';
+    case 'ENOSPC':
+    case 'EDQUOT':
+      return 'The disk is full. Make some room, or use Change… to choose another folder.';
+    default:
+      return 'Couldn\'t make the project there. Use Change… to choose another folder.';
+  }
+}
+
 // Makes the project: folder/name with the starter's files in it. Gives { ok, dir, main } (main is the file to
 // open), or what check() gives when it can't, or { ok: false, problem } when making or copying failed.
 async function create(id, folder, name) {
@@ -103,17 +128,25 @@ async function create(id, folder, name) {
   if (!c.ok) return c;
   try {
     await fsp.mkdir(folder, { recursive: true }); // Documents/TuffProjects, the first time
+  } catch (err) {
+    if (err.code === 'EEXIST') return { ok: false, problem: `${path.basename(folder)} is a file, not a folder. Choose another folder.` };
+    return { ok: false, problem: folderProblem(err, folder) };
+  }
+  try {
     await fsp.mkdir(c.target); // not recursive: if the folder appeared meanwhile, this fails instead of mixing files in
   } catch (err) {
     if (err.code === 'EEXIST') return { ok: false, taken: true, free: freeName(folder, path.basename(c.target)), target: c.target };
-    return { ok: false, problem: `Couldn't make the folder: ${err.message}` };
+    return { ok: false, problem: folderProblem(err, folder) };
   }
+  const from = path.join(where.dir, id);
   try {
-    await copyTree(path.join(where.dir, id), c.target);
+    await copyTree(from, c.target);
   } catch (err) {
     // Only what this call made goes: the folder was new a moment ago, and holds just these copies.
     await fsp.rm(c.target, { recursive: true, force: true }).catch(() => {});
-    return { ok: false, problem: `Couldn't copy the starter: ${err.message}` };
+    const rel = typeof err.path === 'string' ? path.relative(from, err.path) : '..';
+    const gone = err.code === 'ENOENT' && !rel.startsWith('..') && !path.isAbsolute(rel); // it was the starter's own file
+    return { ok: false, problem: gone ? 'That starter\'s files are missing. Reinstalling TuffCode brings them back.' : folderProblem(err, folder) };
   }
   return { ok: true, dir: c.target, main: path.join(c.target, starter.main) };
 }

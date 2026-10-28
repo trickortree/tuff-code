@@ -641,7 +641,7 @@ body.sd-dragging, body.sd-dragging * { cursor: grabbing !important; user-select:
    Each card has its starter's colour as --np-tint (starters.json), and its picture (starters/<id>.svg) is drawn with
    the classes below, from the tint and the IDE's own colours, so it follows the accent and the theme. */
 #new-project { position: fixed; inset: 0; z-index: 2900; display: grid; place-items: center; background: rgba(0,0,0,.4); }
-.np-box { width: min(880px, 94vw); height: min(640px, 90vh); display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid #4e5157; border-radius: 12px; box-shadow: 0 30px 80px rgba(0,0,0,.6); overflow: hidden; animation: sein .18s cubic-bezier(.2,.9,.3,1.2); }
+.np-box { width: min(880px, 94vw); height: min(640px, 90vh); display: flex; flex-direction: column; background: var(--bg-panel); border: 1px solid #4e5157; border-radius: 12px; box-shadow: 0 30px 80px rgba(0,0,0,.6); overflow: hidden; animation: sein .18s cubic-bezier(.2,.9,.3,1.2); outline: none; }
 .np-head { flex: none; display: flex; align-items: center; gap: 14px; padding: 14px 12px 14px 22px; border-bottom: 1px solid var(--border); }
 .np-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .np-titles b { font-size: 15px; }
@@ -673,12 +673,15 @@ body.sd-dragging, body.sd-dragging * { cursor: grabbing !important; user-select:
 #np-folder { flex: 1; min-width: 0; height: 32px; line-height: 30px; padding: 0 10px; border-radius: 6px; border: 1px solid #393b40; color: var(--text-dim); font: 12.5px var(--font-code); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
 .np-where .btn { height: 32px; flex: none; }
 .np-bottom { display: flex; align-items: center; gap: 8px; }
-.np-status { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.np-status code { font: 12px var(--font-code); color: var(--text); }
+.np-status { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-dim); white-space: nowrap; overflow: hidden; }
+.np-msg { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* A long path loses its start, like #np-folder: its end is the new folder's name. */
+.np-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; font: 12px var(--font-code); color: var(--text); }
 .np-status.bad { color: var(--red); }
 .np-status.taken { color: var(--yellow); }
-.np-status button { padding: 0; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
-#new-project .btn:disabled { opacity: .45; cursor: default; filter: none; }
+.np-status button { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; padding: 0; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+#new-project .btn:disabled, #new-project .st-x:disabled { opacity: .45; cursor: default; filter: none; }
+#new-project .st-x:disabled:hover { background: none; color: var(--text-dim); }
 .np-pic { --np-paper: color-mix(in srgb, var(--text) 90%, var(--np-tint, var(--accent))); --np-ink: var(--bg-editor);
   height: 86px; display: grid; place-items: center; color: var(--np-tint, var(--accent));
   background: linear-gradient(140deg, color-mix(in srgb, var(--np-tint, var(--accent)) 24%, var(--bg-editor)), color-mix(in srgb, var(--np-tint, var(--accent)) 6%, var(--bg-editor))); }

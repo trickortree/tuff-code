@@ -23,12 +23,20 @@ func describe(code):
     return kinds_of_weather:get(code, "Some weather")
 
 # 0 -> "Today", 1 -> "Tomorrow", then the day of the week, like "Thursday".
-func day_name(days_ahead):
+# The service sends the place's own days, starting with its today, which can
+# be a day after ours (when it's evening in London, it's already tomorrow in
+# Sydney) or a day before. first_day is the place's today, like "2026-10-28".
+func day_name(days_ahead, first_day):
     if days_ahead is 0:
         return "Today"
     if days_ahead is 1:
         return "Tomorrow"
-    return week[(week:find(date()["weekday"]) + days_ahead) % 7]
+    shift = 0                       # how many days the place's today is from ours
+    if first_day > today():         # dates written like this compare as text
+        shift = 1
+    elif first_day < today():
+        shift = -1
+    return week[(week:find(date()["weekday"]) + shift + days_ahead) % 7]
 
 # The place called that (a dictionary with its name, country, latitude and
 # longitude), or nil when there's no such place.
@@ -57,7 +65,7 @@ func show_weather(place):
     say f"  Wind {current["wind_speed_10m"]:0} km/h, humidity {current["relative_humidity_2m"]}%"
     daily = forecast["daily"]
     for i in range(0, len(daily["time"]) - 1):
-        say f"  {day_name(i):9} {describe(daily["weather_code"][i]):16} {daily["temperature_2m_min"][i]:0} to {daily["temperature_2m_max"][i]:0}°C"
+        say f"  {day_name(i, daily["time"][0]):9} {describe(daily["weather_code"][i]):16} {daily["temperature_2m_min"][i]:0} to {daily["temperature_2m_max"][i]:0}°C"
 
 say:color("WEATHER", "sky", "bold")
 say "Type a city to see its weather, or press Enter to stop."

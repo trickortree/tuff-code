@@ -1,6 +1,7 @@
 // New Project (1.5.0): File > New Project… (and the project menu, Search Everywhere and the empty editor's button)
-// opens the starters gallery. Searching, the arrow keys, a name that's taken becoming "Snake 2", Create opening the
-// new folder as the project with its main.tuf, and Esc. New projects go in a scratch folder, never your Documents:
+// opens the starters gallery. Searching, the arrow keys (after a click on the dialog's title too), a name that's taken
+// becoming "Snake 2", Create opening the new folder as the project with its main.tuf, Esc, and the offer of a free
+// name for the longest name there is. New projects go in a scratch folder, never your Documents:
 // the suite sets settings.newProjectFolder first (the gallery remembers the folder it last used).
 import fs from 'node:fs';
 import path from 'node:path';
@@ -65,9 +66,17 @@ export default async (t, ctx) => {
   await arrow('Home', 36);
   s = await state();
   check('Home goes back to the first card', s.sel === 'blank', s);
+  // A click on the dialog's text (its title here) gives the box itself the focus, and the keys still work there
+  const title = await ev(`(() => { const r = document.querySelector('#np-title').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+  await t.click(title.x, title.y);
+  check('a click on the title gives the box the focus', await ev(`!!document.activeElement?.classList.contains('np-box')`), await state());
+  await arrow('ArrowRight', 39);
+  s = await state();
+  check('...and Right still chooses the next card', s.sel === s.cards[1] && s.focus === s.sel, s);
+  await t.click(title.x, title.y);
   await t.key('Escape');
   await t.sleep(200);
-  check('Esc closes it', !(await isOpen()), null);
+  check('Esc closes it, after a click on the title too', !(await isOpen()), null);
   check('...and nothing was made', fs.readdirSync(projects).join() === 'Snake', fs.readdirSync(projects));
 
   // Search Everywhere finds the command; Enter creates the chosen starter
@@ -113,4 +122,27 @@ export default async (t, ctx) => {
   await ev(`(() => { const b = document.querySelector('#new-project'); b.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); return 1; })()`);
   await t.sleep(200);
   check('a click outside the box closes it', !(await isOpen()), null);
+
+  // The longest name, taken: the offer of a free one still shows whole in the status line, and a click takes it
+  const long = 'L'.repeat(80);
+  fs.mkdirSync(path.join(projects, long));
+  await ev(`window.TuffNewProject.open(); 1`);
+  await t.waitFor(`/^Makes /.test(document.querySelector('#np-status')?.textContent || '')`, 5000);
+  await ev(`(() => { const b = document.querySelector('#np-name'); b.focus(); b.value = ${JSON.stringify(long)}; b.dispatchEvent(new Event('input', { bubbles: true })); return 1; })()`);
+  await t.waitFor(`!!document.querySelector('#np-status')?.classList.contains('taken')`, 5000);
+  const offer = await ev(`(() => {
+    const s = document.querySelector('#np-status').getBoundingClientRect();
+    const b = document.querySelector('#np-status [data-a="free"]')?.getBoundingClientRect();
+    return b ? { shown: b.width > 40 && b.left >= s.left - 1 && b.right <= s.right + 1, x: b.left + b.width / 2, y: b.top + b.height / 2 } : null;
+  })()`);
+  check('a long taken name: the offer of a free name shows in the status line', offer?.shown, offer);
+  await t.shot('newproject_long_name.png');
+  if (offer) await t.click(offer.x, offer.y);
+  await t.waitFor(`/^Makes /.test(document.querySelector('#np-status')?.textContent || '')`, 5000);
+  s = await state();
+  check('...and a click on it puts in a free name that fits (78 letters and " 2")', s?.name === `${'L'.repeat(78)} 2` && s.create, s);
+  await t.key('Escape');
+  await t.sleep(200);
+  check('...then Esc closes it, and nothing more was made', !(await isOpen()) && fs.readdirSync(projects).sort().join() === [long, 'Snake', 'Snake 2'].sort().join(),
+    fs.readdirSync(projects));
 };

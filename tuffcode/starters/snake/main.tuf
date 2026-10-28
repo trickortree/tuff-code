@@ -69,9 +69,7 @@ func move():
     head = [snake[0][0] + dx, snake[0][1] + dy]
     if head[0] < 1 or head[0] > width - 2 or head[1] < 1 or head[1] > height - 2 or snake:has(head):
         alive = false
-        if score > best:
-            best = score
-            file.save("best.json", best)
+        keep_best()
         return
     snake = [head] + snake
     if head == food:
@@ -81,10 +79,17 @@ func move():
     else:
         snake:pop()                         # it only grows when it eats
 
+# Keeps a new best score in best.json, for next time.
+func keep_best():
+    if score > best:
+        best = score
+        file.save("best.json", best)
+
 func draw():
     screen:clear()
     screen:box(0, 0, width, height, "gray")
-    screen:text(2, 0, f" Score {score}  Best {best} ", "gold")
+    # The best goes up as soon as this game beats it (it's saved when the game ends)
+    screen:text(2, 0, f" Score {score}  Best {max(best, score)} ", "gold")
     screen:put(food[0], food[1], "*", "red")
     for part in snake:
         screen:put(part[0], part[1], "o", "lime")
@@ -96,6 +101,7 @@ func draw():
 
 start()
 screen:every_frame(step)            # runs step until screen:stop() or Esc
+keep_best()                         # stopped mid-game: a new best still counts
 say f"Thanks for playing! Your best is {best}."
 
 # Ideas to try:

@@ -2,7 +2,9 @@
 // by starters.js). Pick one, name it and choose where it goes; Create makes a new folder with its files, opens it as
 // the project and opens its main.tuf. A name that's taken is never overwritten: the dialog offers a free one
 // ("Snake 2"). The arrow keys move between the cards (Up and Down work in the search box too), Enter creates and Esc
-// closes. The folder picked last is remembered (settings.newProjectFolder); Documents/TuffProjects is the default.
+// closes; a click on the dialog's text or a gap focuses the box itself, so the keys still work after it. While Create
+// is making the project, the dialog stays until it's done. The folder picked last is remembered
+// (settings.newProjectFolder); Documents/TuffProjects is the default.
 (() => {
   const api = window.tuff;
   const ide = () => window.TuffIDE;
@@ -37,7 +39,7 @@
     S.busy = false;
     S.box = document.createElement('div');
     S.box.id = 'new-project';
-    S.box.innerHTML = `<div class="np-box" role="dialog" aria-modal="true" aria-labelledby="np-title">
+    S.box.innerHTML = `<div class="np-box" role="dialog" aria-modal="true" aria-labelledby="np-title" tabindex="-1">
       <div class="np-head">
         <div class="np-titles"><b id="np-title">New Project</b><span>Start from a real project: run it, read it, make it yours.</span></div>
         <label class="np-search">${icon('search-line')}<input id="np-q" type="text" placeholder="Search starters" spellcheck="false" autocomplete="off" aria-label="Search starters" /></label>
@@ -78,7 +80,7 @@
   }
 
   function close(restore = true) {
-    if (!S.box) return;
+    if (!S.box || S.busy) return; // (Esc, Cancel and a click outside wait while Create makes the project)
     S.box.remove();
     S.box = null;
     S.seq++;
@@ -112,13 +114,14 @@
     });
   }
 
-  // The cards the search leaves. Every word typed has to be in a starter's name, about line or tags.
+  // The cards the search leaves. Every word typed has to be in a starter's name, about line or tags, or in what it
+  // uses (not shown on its card: tgame, import, kind...).
   function render() {
     if (!S.box) return;
     const q = $('#np-q', S.box).value.trim();
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     const all = S.starters || [];
-    S.shown = all.filter((s) => words.every((w) => `${s.name} ${s.about} ${s.tags.join(' ')}`.toLowerCase().includes(w)));
+    S.shown = all.filter((s) => words.every((w) => `${s.name} ${s.about} ${s.tags.join(' ')} ${(s.uses || []).join(' ')}`.toLowerCase().includes(w)));
     const grid = $('#np-grid', S.box);
     grid.innerHTML = '';
     for (const s of S.shown) {
@@ -185,18 +188,25 @@
     return res;
   }
 
+  // One line: a long message ends in "…" (the tooltip has all of it), a long path loses its start instead of the new
+  // folder's name, and the offer of a free name is a button of its own, so it always shows.
   function showStatus() {
     const el = $('#np-status', S.box);
     const res = S.status || {};
-    el.className = 'np-status' + (res.taken ? ' taken' : res.problem ? ' bad' : '');
-    if (S.busy) el.textContent = 'Making the project…';
-    else if (res.ok) el.innerHTML = `Makes <code>${esc(res.target)}</code>`;
-    else if (res.taken) el.innerHTML = `There's already a “${esc(basename(res.target))}” there.${res.free ? ` <button type="button" data-a="free">Use “${esc(res.free)}”</button>` : ''}`;
-    else el.textContent = res.problem || '';
-    el.title = res.ok ? res.target : '';
+    const msg = (text) => `<span class="np-msg">${esc(text)}</span>`;
+    el.className = 'np-status' + (S.busy ? '' : res.taken ? ' taken' : res.problem ? ' bad' : '');
+    let said = res.problem || '';
+    if (S.busy) said = 'Making the project…';
+    else if (res.ok) said = `Makes ${res.target}`;
+    else if (res.taken) said = `There's already a “${basename(res.target)}” there.`;
+    if (S.busy || !(res.ok || res.taken)) el.innerHTML = said ? msg(said) : '';
+    else if (res.ok) el.innerHTML = `<span>Makes </span><code class="np-path"><bdi>${esc(res.target)}</bdi></code>`;
+    else el.innerHTML = msg(`${said} `) + (res.free ? `<button type="button" data-a="free" title="Use “${esc(res.free)}”">Use “${esc(res.free)}”</button>` : '');
+    el.title = said;
     const create = $('#np-create', S.box);
     create.disabled = S.busy || !S.sel || !(res.ok || (res.taken && res.free));
     create.textContent = S.busy ? 'Creating…' : 'Create';
+    for (const b of S.box.querySelectorAll('[data-a="cancel"], [data-a="close"], [data-a="change"]')) b.disabled = S.busy;
   }
 
   function showFolder() {
@@ -233,20 +243,23 @@
     if (!res?.ok) { nameBox().focus(); return; }
     S.busy = true;
     showStatus();
+    const folder = S.folder;
     let made;
     try {
-      made = await api.starters.create(s.id, S.folder, nameBox().value);
+      made = await api.starters.create(s.id, folder, nameBox().value);
     } catch (err) {
-      made = { ok: false, problem: String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') };
+      console.error(err); // starters.js says what went wrong itself, so this is something unexpected
+      made = null;
     }
     S.busy = false;
     if (!S.box) return;
     if (!made?.ok) {
-      S.status = made || { ok: false, problem: 'Something went wrong.' };
+      S.status = made || { ok: false, problem: 'Couldn\'t make the project there. Use Change… to choose another folder.' };
       showStatus();
+      // Create was disabled while it worked, which takes the focus from it: the box takes it, so the keys still work
+      if (!S.box.contains(document.activeElement)) $('.np-box', S.box).focus();
       return;
     }
-    const folder = S.folder;
     close(false);
     const I = ide();
     I.saveSettings?.({ newProjectFolder: folder === S.home ? null : folder });
@@ -277,7 +290,8 @@
   function onKey(e) {
     const t = e.target;
     const inSearch = t.id === 'np-q';
-    const onCard = !!t.closest?.('.np-card');
+    // The box itself has the focus after a click on its text or between the cards: the keys work as on a card
+    const onCard = !!t.closest?.('.np-card') || !!t.classList?.contains('np-box');
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
     if (e.key === 'Escape') {
       e.preventDefault();

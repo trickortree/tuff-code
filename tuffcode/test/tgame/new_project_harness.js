@@ -222,6 +222,10 @@ async function createLogic() {
   fs.writeFileSync(path.join(home, 'notes'), 'a file, not a folder');
   check(starters.check(home, 'notes').taken, 'a file with the name counts as taken too', starters.check(home, 'notes'));
   check(starters.check(path.join(home, 'notes'), 'X').problem?.includes('is a file'), 'a file as the folder is refused', starters.check(path.join(home, 'notes'), 'X'));
+  const long = 'L'.repeat(80); // the longest name the gallery's name box takes
+  fs.mkdirSync(path.join(home, long));
+  const longFree = starters.freeName(home, long);
+  check(longFree === `${'L'.repeat(78)} 2` && starters.check(home, longFree).ok, 'an 80-letter name that\'s taken offers a free one that still fits (78 letters and " 2")', longFree);
 
   // the copy skips what a starter run in place leaves (hidden files, __pycache__)
   const fake = path.join(scratch, 'logic', 'fake-starters');
@@ -241,6 +245,46 @@ async function createLogic() {
   const none = await starters.create('nope', home, 'Nope');
   check(!none.ok && none.problem && !fs.existsSync(path.join(home, 'Nope')), 'an unknown starter makes nothing', none);
   check(starters.nearestFolder(path.join(home, 'not', 'there', 'yet')) === home, 'Change… starts in the nearest folder that\'s there', starters.nearestFolder(path.join(home, 'not', 'there', 'yet')));
+  const listed = (await starters.list()).starters;
+  check(Array.isArray(listed[0].uses) && listed[0].uses.length === 0, 'a starter that says nothing about what it uses has an empty uses list', listed[0]);
+
+  // When the project's folder can't be made or filled, it says why in plain words, never Node's own
+  // ("EPERM: operation not permitted, mkdir ..."). Some troubles are real here; the rest come from a stand-in fs call.
+  const plain = (r) => !!(r && !r.ok && r.problem && !/\bE[A-Z]{4,}\b|mkdir|open '|syscall/.test(r.problem));
+  const nowhere = process.platform === 'win32' ? [...'ZYXWVUTSRQ'].find((l) => !fs.existsSync(`${l}:\\`)) : null;
+  if (nowhere) {
+    const r = await starters.create('demo', `${nowhere}:\\TuffProjects`, 'Demo');
+    check(plain(r) && r.problem === 'That folder can\'t be reached any more. Use Change… to choose another folder.',
+      `a folder on a drive that isn't there (${nowhere}:) says so plainly`, r);
+  }
+  const under = await starters.create('demo', path.join(home, 'notes', 'deeper'), 'Demo'); // notes is a file
+  check(plain(under) && under.problem.startsWith('That folder can\'t be reached'), 'a folder that can\'t be made (a file is in its way) says so plainly', under);
+  const failing = (name, code, when = () => true) => {
+    const real = fs.promises[name];
+    fs.promises[name] = async (...args) => {
+      if (!when(...args)) return real.apply(fs.promises, args);
+      const err = new Error(`${code}: made-up trouble, ${name} '${args[0]}'`);
+      err.code = code;
+      err.path = String(args[0]);
+      throw err;
+    };
+    return () => { fs.promises[name] = real; };
+  };
+  let undo = failing('mkdir', 'EPERM');
+  const denied = await starters.create('demo', path.join(home, 'Guarded'), 'Demo');
+  undo();
+  check(plain(denied) && denied.problem === 'TuffCode isn\'t allowed to make folders in Guarded. Use Change… to choose another folder.',
+    'a folder TuffCode may not write in (EPERM, as when Windows guards Documents) says so, and points to Change…', denied);
+  undo = failing('writeFile', 'ENOSPC');
+  const full = await starters.create('demo', home, 'Full');
+  undo();
+  check(plain(full) && full.problem.startsWith('The disk is full.') && !fs.existsSync(path.join(home, 'Full')),
+    'a full disk says so, and the half-made folder is taken away again', { full, there: fs.existsSync(path.join(home, 'Full')) });
+  undo = failing('readFile', 'ENOENT', (p) => String(p).startsWith(path.join(fake, 'demo') + path.sep));
+  const missing = await starters.create('demo', home, 'Missing');
+  undo();
+  check(plain(missing) && missing.problem === 'That starter\'s files are missing. Reinstalling TuffCode brings them back.' && !fs.existsSync(path.join(home, 'Missing')),
+    'a starter whose files are gone says so, and makes nothing', missing);
   starters.setup({ dir: STARTERS });
   return starters;
 }
@@ -255,11 +299,12 @@ async function gallery(starters) {
   const calls = [];
   const settings = {};
   let picked = other;
+  let slow = 0; // ms more that create takes, as on a busy disk
   const api = {
     starters: {
       list: async () => { calls.push(['list']); return starters.list(); },
       check: async (folder, name) => starters.check(folder, name),
-      create: async (id, folder, name) => { calls.push(['create', id, folder, name]); return starters.create(id, folder, name); },
+      create: async (id, folder, name) => { calls.push(['create', id, folder, name]); await sleep(slow); return starters.create(id, folder, name); },
       pickFolder: async (from) => { calls.push(['pickFolder', from]); return picked; },
     },
     fs: { exists: async (p) => fs.existsSync(p) },
@@ -429,6 +474,94 @@ async function gallery(starters) {
   await until(() => name() === 'My Project 2');
   check(name() === 'My Project 2' && !created().length && NP.isOpen(), 'a folder made meanwhile is noticed before anything is copied', { name: name(), created: created() });
   NP.close();
+
+  // The search finds what a starter uses too (starters.json's uses), though its card doesn't show it
+  const ready = () => until(() => /^Makes /.test(status() || ''));
+  NP.open();
+  await ready();
+  for (const [q, want] of [['tgame', ['coins']], ['tterm', ['snake']], ['import', ['habits', 'shop']], ['turtle', ['drawing']], ['tap', ['weather']]]) {
+    type($('#np-q'), q);
+    check(JSON.stringify(cards()) === JSON.stringify(want), `searching "${q}" finds ${want.join(' and ')}, which use it`, cards());
+  }
+  NP.close();
+
+  // A click on the dialog's text or a gap focuses the box itself (tabindex="-1", as the Build and Settings dialogs
+  // do), and the keys still work from there
+  NP.open();
+  await ready();
+  const npBox = $('.np-box');
+  check(npBox.getAttribute('tabindex') === '-1', 'the box itself can take the focus', npBox.getAttribute('tabindex'));
+  npBox.focus();
+  key('ArrowRight');
+  await until(() => sel() === 'hello');
+  check(sel() === 'hello' && document.activeElement.dataset?.id === 'hello', 'with the focus on the box, Right chooses the next card and the focus goes with it',
+    { sel: sel(), focus: document.activeElement.id || document.activeElement.dataset?.id });
+  npBox.focus();
+  key('Tab', { shiftKey: true });
+  check(document.activeElement.id === 'np-create', '...Shift+Tab goes to Create, the last thing in it', document.activeElement.id);
+  npBox.focus();
+  key('Escape');
+  check(!NP.isOpen() && !created().length, 'with the focus on the box, Esc closes the gallery', { open: NP.isOpen(), created: created() });
+
+  // While Create makes the project (slowly here, as on a busy disk), Esc, Cancel, the X and a click outside don't
+  // close the dialog: it stays until it's done, then the IDE opens the project
+  calls.length = 0;
+  slow = 300;
+  NP.open();
+  await ready();
+  const making = name();
+  $('.np-box').focus();
+  key('Enter'); // Enter with the focus on the box creates, too
+  await until(() => $('#np-create')?.textContent === 'Creating…');
+  key('Escape');
+  $('[data-a="cancel"]')?.click(); // (switched off, but a click that came anyway still has to wait)
+  $('[data-a="close"]')?.click();
+  if ($('#new-project')) dispatch($('#new-project'), { type: 'mousedown' });
+  check(NP.isOpen() && $('#np-create')?.textContent === 'Creating…' && status() === 'Making the project…'
+    && ['cancel', 'close', 'change', 'create'].every((a) => $(`[data-a="${a}"]`)?.disabled),
+    'while Create makes the project, Esc, Cancel, the X and a click outside leave the dialog open, and its buttons are off', { open: NP.isOpen(), status: status() });
+  await until(() => calls.some((c) => c[0] === 'openFile'), 5000);
+  check(!NP.isOpen() && JSON.stringify(created().map((c) => c[3])) === JSON.stringify([making])
+    && calls.some((c) => c[0] === 'openFolder' && c[1] === path.join(other, making)), '...then it closes, and the IDE opens the new project', calls);
+  slow = 0;
+
+  // A long name that's taken: the offer of a free name is a button of its own after the message, so it always shows
+  NP.open();
+  await ready();
+  const long = 'L'.repeat(80);
+  fs.mkdirSync(path.join(other, long));
+  if ($('#np-name')) type($('#np-name'), long);
+  await until(() => $('#np-status')?.classList.contains('taken'));
+  const offer = $('#np-status [data-a="free"]');
+  const longFree = `${'L'.repeat(78)} 2`;
+  check(offer && offer.parentNode === $('#np-status') && $('#np-status .np-msg') && !$('#np-status .np-msg').contains(offer) && offer.textContent === `Use “${longFree}”`,
+    'a long taken name: the message and the offer (cut to fit: 78 letters and " 2") are side by side, so the offer always shows', $('#np-status')?.innerHTML.slice(0, 300));
+  offer?.click();
+  await ready();
+  check(name() === longFree && !$('#np-create').disabled, '...and the offer is a name Create takes', { name: name(), status: status() });
+  check($('#np-status .np-path bdi')?.textContent === path.join(other, longFree) && $('#np-status')?.title === status(),
+    'where it goes is a path of its own (a long one loses its start, not the new folder\'s name), and the tooltip has all of it', $('#np-status')?.innerHTML.slice(0, 300));
+  NP.close();
+
+  // A project that can't be made (a file is in the way of the folder) says why plainly, and the box takes the focus
+  // Create lost when it was switched off, so the keys still work
+  calls.length = 0;
+  fs.writeFileSync(path.join(other, 'a file'), 'not a folder');
+  picked = path.join(other, 'a file', 'inside');
+  NP.open();
+  await ready();
+  document.querySelector('[data-a="change"]')?.click();
+  await until(() => $('#np-folder')?.textContent === picked && /^Makes /.test(status() || ''));
+  $('#np-create')?.focus();
+  $('#np-create')?.click();
+  $('#np-create')?.blur(); // as in a browser: a button that's switched off loses the focus
+  await until(() => $('#np-status')?.classList.contains('bad'));
+  check(status() === 'That folder can\'t be reached any more. Use Change… to choose another folder.' && document.activeElement === $('.np-box') && NP.isOpen()
+    && $('[data-a="change"]') && !$('[data-a="change"]').disabled, 'a project that can\'t be made says why in plain words, Change… is on again, and the box has the focus',
+    { status: status(), focus: document.activeElement.className || document.activeElement.id });
+  key('Escape');
+  check(!NP.isOpen() && !calls.some((c) => c[0] === 'openFolder'), '...so Esc still closes it, and nothing was opened', { open: NP.isOpen(), calls });
+  picked = other;
 }
 
 (async () => {

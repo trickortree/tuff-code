@@ -8273,27 +8273,34 @@ def starters_add(folder, code_text, main="main.tuf"):
 
 def starters_snake(c, extra):
     """Snake through a pipe, with screen:press keys (and anything else) put in just before screen:every_frame:
-    (exit code, stdout, stderr, the final screen's rows, the folder)."""
+    (exit code, stdout, stderr, the final screen's rows, the folder). Food the checks don't place goes in the top left
+    corner, out of every check's way: nothing seeds random() in a pipe, and a * on the snake's row would be eaten."""
     folder = starters_copy("snake")
     path = os.path.join(folder, "main.tuf")
     with open(path, encoding="utf-8") as f:
         code_text = f.read()
     hook = "start()\nscreen:every_frame(step)"
-    c.check(hook in code_text, "snake: main.tuf starts the game with start() and screen:every_frame(step)", None)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(code_text.replace(hook, "start()\n" + extra + "screen:every_frame(step)"))
+    spot = "food = [random(1, width - 2), random(1, height - 2)]"
+    c.check(hook in code_text and spot in code_text, "snake: main.tuf starts the game with start() and screen:every_frame(step), "
+            "and puts the food anywhere with random()", None)
+    with open(path, "w", encoding="utf-8") as f:  # (only the first spot: the one after it, for food on the snake, stays random)
+        f.write(code_text.replace(spot, "food = [1, 1]", 1).replace(hook, "start()\n" + extra + "screen:every_frame(step)"))
     code, out, err, _s = starters_run(folder)
     lines = out.splitlines()
     top = next((i for i, x in enumerate(lines) if x.startswith("┌")), None)
     return code, out, err, lines[top:top + 16] if top is not None else [], folder
 
 
-def starters_weather(c, folder):
-    """Weather against a stand-in for Open-Meteo on this computer: the copy's two addresses point at it."""
+def starters_weather(c, folder, stdin="Testville\nAtlantis\n\n", first=0):
+    """Weather against a stand-in for Open-Meteo on this computer: the copy's two addresses point at it. Its three days
+    start first days from today here: they're the place's own days (timezone=auto), so far away they can start
+    tomorrow (1) or yesterday (-1)."""
+    import datetime
     import http.server
     import threading
     import urllib.parse
     asked = []
+    days = [(datetime.date.today() + datetime.timedelta(days=first + i)).isoformat() for i in range(3)]
 
     class Answer(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -8306,7 +8313,7 @@ def starters_weather(c, folder):
             else:
                 body = {"current": {"temperature_2m": 12.6, "apparent_temperature": 10.2, "relative_humidity_2m": 81, "weather_code": 61,
                                     "wind_speed_10m": 14.4},
-                        "daily": {"time": ["2026-10-27", "2026-10-28", "2026-10-29"], "weather_code": [61, 3, 0],
+                        "daily": {"time": days, "weather_code": [61, 3, 0],
                                   "temperature_2m_max": [14.1, 15.9, 17.4], "temperature_2m_min": [8.2, 9.6, 7.5]}}
             data = json.dumps(body).encode("utf-8")
             self.send_response(200)
@@ -8329,7 +8336,7 @@ def starters_weather(c, folder):
         c.check(all(u in code_text for u in urls), "weather: asks Open-Meteo's places and forecast addresses", None)
         with open(path, "w", encoding="utf-8") as f:
             f.write(code_text.replace(urls[0], f'"{base}/geo"').replace(urls[1], f'"{base}/forecast"'))
-        result = starters_run(folder, "Testville\nAtlantis\n\n")
+        result = starters_run(folder, stdin)
     finally:
         server.shutdown()
     return result, asked
@@ -8342,6 +8349,7 @@ def t_starters(c):
     its window, and the Drawing (tdraw) with a stand-in pen; Weather against a stand-in weather service, and with no
     internet. Then the create logic and the gallery in Node (new_project_harness.js), and how the IDE and the built
     app find the starters."""
+    import datetime
     import shutil
     import socket
     import wave
@@ -8355,8 +8363,13 @@ def t_starters(c):
     for s in listed:
         sid = s.get("id")
         c.check(os.path.isfile(os.path.join(STARTERS_DIR, sid, "main.tuf")) and os.path.isfile(os.path.join(STARTERS_DIR, f"{sid}.svg"))
-                and s.get("name") and s.get("about") and isinstance(s.get("tags"), list) and re.fullmatch(r"#[0-9a-f]{6}", s.get("color", "")),
-                f"{sid}: main.tuf, a picture, a name, an about line, tags and a colour", s)
+                and s.get("name") and s.get("about") and isinstance(s.get("tags"), list) and re.fullmatch(r"#[0-9a-f]{6}", s.get("color", ""))
+                and all(isinstance(u, str) and u for u in s.get("uses", [])),
+                f"{sid}: main.tuf, a picture, a name, an about line, tags, what it uses (for the search) and a colour", s)
+    uses = {s.get("id"): s.get("uses", []) for s in listed}
+    c.check(all(lib in uses.get(sid, []) for sid, lib in (("snake", "tterm"), ("coins", "tgame"), ("music", "tmusic"), ("drawing", "tdraw"),
+                                                             ("weather", "tap"), ("habits", "atgui"), ("habits", "import"), ("shop", "import"))),
+            "searching for a library finds the starters that use it (starters.json's uses: tterm, tgame, tmusic, tdraw, tap, atgui, import)", uses)
     left = [os.path.relpath(os.path.join(d, f), STARTERS_DIR) for d, _dirs, files in os.walk(STARTERS_DIR) for f in files
             if f in ("best.json", "habits.json", "receipt.txt", "my_tune.wav", ".DS_Store") or "__pycache__" in d]
     c.check(not left, "no starter has a file a run leaves behind (it would go into every new project)", left)
@@ -8418,16 +8431,24 @@ def t_starters(c):
     c.check(secs < 30, f"music: in a pipe nothing plays, so nothing waits ({secs:.1f} s)", secs)
 
     # ---- Weather: a stand-in weather service, then no internet (a proxy that refuses), with the real addresses
+    weekday = lambda days_on: (datetime.date.today() + datetime.timedelta(days=days_on)).strftime("%A")  # in days from today here
     (code, out, err, _s), asked = starters_weather(c, starters_copy("weather"))
     forecast = next((q for p, q in asked if p == "/forecast"), {})
     c.check(code == 0 and "Testville, Nowhere Land" in out and "Now: Light rain, 13°C (feels like 10°C)" in out
             and "Wind 14 km/h, humidity 81%" in out and re.search(r"Today +Light rain +8 to 14°C", out) and re.search(r"Tomorrow +Cloudy +10 to 16°C", out)
-            and re.search(r"(Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day +Clear sky +8 to 17°C", out) and not err,
-            "weather: finds the place, then shows the weather now and for three days", (out + err)[-800:])
+            and re.search(rf"\n +{weekday(2)} +Clear sky +8 to 17°C", out) and not err,
+            f"weather: finds the place, then shows the weather now and for three days (the third is {weekday(2)})", (out + err)[-800:])
     c.check(forecast.get("latitude") == ["51.5"] and forecast.get("longitude") == ["-0.12"] and "weather_code" in forecast.get("current", [""])[0]
             and "temperature_2m_max" in forecast.get("daily", [""])[0], "weather: asks for the forecast where the place is", asked)
     c.check("I couldn't find a place called Atlantis. Check the spelling?" in out and out.rstrip().endswith("Bye!"),
             "weather: a place that isn't there says so, and Enter stops", out[-300:])
+    # Far away it can be tomorrow already (Sydney, seen from London in the evening), or still yesterday: the days are
+    # the place's own, so the third one is named from the place's today
+    for first, where in ((1, "a day ahead of this computer"), (-1, "a day behind it")):
+        (code, out, err, _s), _asked = starters_weather(c, starters_copy("weather"), "Testville\n\n", first)
+        c.check(code == 0 and re.search(r"Today +Light rain", out) and re.search(r"Tomorrow +Cloudy", out)
+                and re.search(rf"\n +{weekday(first + 2)} +Clear sky +8 to 17°C", out) and not err,
+                f"weather: for a place {where}, Today and Tomorrow are its own, and the third day is {weekday(first + 2)}", (out + err)[-500:])
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     proxy = f"http://127.0.0.1:{s.getsockname()[1]}"  # nothing answers there once it's closed
@@ -8478,8 +8499,11 @@ def t_starters(c):
     code, out, err, screen, folder = starters_snake(c, 'food = [12, 8]\nscreen:press("space", 90)\nscreen:press("up", 100)\n')
     c.check(code == 0 and "@" in screen[1] and "GAME OVER" in "\n".join(screen) and "Best 1" in screen[0] and read_json(os.path.join(folder, "best.json")) == 1,
             "snake: Space plays again after game over, and the new snake turns up into the top wall", out[-900:])
-    code, out, err, screen, folder = starters_snake(c, 'screen:press("q", 10)\n')
-    c.check(code == 0 and "GAME OVER" not in "\n".join(screen) and out.rstrip().endswith("Your best is 0."), "snake: Q stops the game", out[-900:])
+    for key in ("q", "escape"):  # after eating once: the new best counts, though the snake never hit anything
+        code, out, err, screen, folder = starters_snake(c, f'food = [12, 8]\nscreen:press("{key}", 40)\n')
+        c.check(code == 0 and "GAME OVER" not in "\n".join(screen) and "Score 1  Best 1" in screen[0] and read_json(os.path.join(folder, "best.json")) == 1
+                and out.rstrip().endswith("Your best is 1."), f"snake: {'Q' if key == 'q' else 'Esc'} stops the game mid-game, and keeps the new best score",
+                out[-900:])
 
     # ---- Coin Collector: Tuff Engine's preview, then headless.py with a self-test
     folder = starters_copy("coins")
@@ -8537,9 +8561,11 @@ def t_starters(c):
     c.check({"from": "starters", "to": "starters"} in build["extraResources"] and "starters.js" in build["files"],
             "the built app has resources/starters (extraResources) and starters.js", build["extraResources"][-2:])
     main = text_of("main.js")
-    c.check("require('./starters.js')" in main and "path.join(process.resourcesPath, 'starters')" in main
+    c.check("require('./starters')" in main and "path.join(process.resourcesPath, 'starters')" in main
             and all(f"'starters:{n}'" in main for n in ("list", "check", "create", "pickFolder")),
             "main.js finds the starters (resources/starters when built) and answers the gallery's calls", None)
+    c.check(re.search(r"const SAMPLE_MAIN = `[^`]*# Want a head start\? File > New Project\.\.\. has starter projects", main),
+            "a first run's HelloTuff points to File > New Project... (its main.tuf is what opens first)", None)
     c.check("starters: { list: invoke('starters:list')" in text_of("preload.js"), "preload.js gives the page the starters calls", None)
     html = text_of("renderer", "index.html")
     c.check('<script src="js/new-project.js"></script>' in html and 'id="es-new-project"' in html,

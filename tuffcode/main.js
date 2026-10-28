@@ -12,7 +12,7 @@ const updater = require('./updater');
 const plugins = require('./plugins');
 const agents = require('./agents');
 const ai = require('./ai');
-const starters = require('./starters.js');
+const starters = require('./starters');
 
 const TUFF_INTERPRETER = app.isPackaged
   ? path.join(process.resourcesPath, 'runtime-src', 'tuff.py')
@@ -50,6 +50,7 @@ function saveSettings(patch) {
 const SAMPLE_MAIN = `# Welcome to Tuff!
 # Press Shift+F10 (or the green play button) to run this file.
 # New here? Open the Learn panel (graduation cap on the left).
+# Want a head start? File > New Project... has starter projects to run and change.
 
 name = "world"
 say "Hello, " + name + "!"
