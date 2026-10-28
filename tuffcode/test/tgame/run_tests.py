@@ -8128,9 +8128,9 @@ def t_tmusic(c):
 LEARN_150_SAYS = {
     ("workshop-templates", "example"): "Sam has 10 points\nTwo of them: $12.75\n0.33 and 007\n[Sam   ] [   9]",
     ("workshop-templates", "solution"): "popcorn  $1.20\napple    $0.45\njuice    $1.85\nTotal:   $3.50",
-    ("workshop-kinds", "example"): 'Rex is this hungry: 6\nAnn is this hungry: 2\nPet(name: "Rex", hunger: 6)',
+    ("workshop-kinds", "example"): 'Rex\'s hunger: 6\nAnn\'s hunger: 2\nPet(name: "Rex", hunger: 6)',
     ("workshop-kinds", "solution"): "Holes and Wonder: 582 pages",
-    ("workshop-actions", "example"): "Rex played\nRex is this hungry: 4",
+    ("workshop-actions", "example"): "Rex played\nRex's hunger: 4",
     ("workshop-actions", "solution"): "Sam has 3 hp left",
     ("workshop-files", "example"): "Price: $6.38\nWith tax: $7.65\nThe tax rate is 0.2",
     ("workshop-files", "solution"): "3 tickets: $16.20",
@@ -8139,9 +8139,25 @@ LEARN_150_SAYS = {
 }
 _SNACKS = 'snacks = {"popcorn": 1.2, "apple": 0.45, "juice": 1.85}\n'
 _BOOK = 'kind Book:\n    title = ""\n    pages = 0\n\n'
+_BOOKS = _BOOK + 'holes = Book("Holes", 272)\nwonder = Book("Wonder", 310)\n'
 _HERO = 'kind Hero:\n    name = "?"\n    hp = 10\n'
 _SCREEN = 'mention tterm\nscreen = tterm.screen(20, 10)\nx = 10\ny = 5\n\nfunc step(dt):\n'
 _SHEET = 'mention tgame\ngame = tgame.window("Walker", 600, 300)\nhero = game:image("walker.png", 300, 200, 96)\n'
+_WALK = _SHEET + 'hero:frames(4)\nhero:animation("walk", [1, 2, 3, 4], 8)\n'
+
+
+def _boxed(arrows):
+    """The terminal game with these lines for the up and down arrows, in its box (walls at y = 0 and y = 9)."""
+    return _SCREEN + arrows + '    screen:clear()\n    screen:box(0, 0, 20, 10, "gray")\n    screen:put(x, y, "@", "lime")\n\nscreen:every_frame(step)\n'
+
+
+# The terminal game with up and down the wrong way round (y goes down the screen), and with its stops on the walls.
+_TTERM_SWAPPED = _boxed('    if screen:pressed("up") and y < 8:\n        y += 1\n    if screen:pressed("down") and y > 1:\n        y -= 1\n')
+_TTERM_WALLS = _boxed('    if screen:pressed("up") and y > 0:\n        y -= 1\n    if screen:pressed("down") and y < 9:\n        y += 1\n')
+_TTERM_NAMES = _boxed('    if screen:pressed("Up") and y > 1:\n        y -= 1\n    if screen:pressed("arrow down") and y < 8:\n        y += 1\n')
+# The sprite sheet game with frame 1 only before the loop (the walk never stops), and on every frame (it never starts).
+_SHEETS_BEFORE = _WALK + 'hero:frame(1)\nwhile game:open():\n    dt = game:frame()\n    if game:held("right"):\n        hero:play("walk")\n'
+_SHEETS_ALWAYS = _WALK + 'while game:open():\n    dt = game:frame()\n    if game:held("right"):\n        hero:play("walk")\n    hero:frame(1)\n'
 # The mistakes a learner is likely to make in each lesson's task: programs that run (so Learn checks them, instead of
 # pointing at an error), and how the hint its check gives starts.
 LEARN_150_MISTAKES = [
@@ -8151,19 +8167,27 @@ LEARN_150_MISTAKES = [
     ("workshop-templates", _SNACKS + 'for snack in snacks:\n    say f"{snack:8} {snacks[snack]:money}"\n', "Then add the prices up"),
     ("workshop-templates", _SNACKS + 'total = 0\nfor snack in snacks:\n    total += snacks[snack]\n    say f"{snack:8} {snacks[snack]:money}"\n'
                                      'say "Total: " + total\n', "Say the total as money too"),
+    ("workshop-templates", _SNACKS + 'total = 0\nfor snack in snacks:\n    total += snacks[snack]\n    say f"{snack:8} {snacks[snack]:money}"\n'
+                                     'say "Total: $" + total\n', "Say the total as money too"),  # Total: $3.5
+    ("workshop-templates", 'snacks = {"popcorn": 1.2, "apple": 0.45, "juice": 1.85, "nuts": 2}\nfor snack in snacks:\n'
+                           '    say f"{snack:8} {snacks[snack]:money}"\n', "Then add the prices up"),  # four lines of money, but no total
     ("workshop-kinds", 'holes = {"title": "Holes", "pages": 272}\nsay holes["pages"]\n', "Start your own kind"),
     ("workshop-kinds", 'kind Book:\n    title = ""\n\nholes = Book("Holes")\nwonder = Book("Wonder")\nsay holes.title + wonder.title\n', "Give Book two fields"),
     ("workshop-kinds", _BOOK + 'holes = Book("Holes", 272)\nsay holes.pages\n', "Make two of them"),
     ("workshop-kinds", _BOOK + 'holes = Book("Holes", 272)\nwonder = Book("Wonder", 310)\nsay holes\nsay wonder\n', "Read a field with a dot"),
     ("workshop-kinds", _BOOK + 'holes = Book("Holes", 272)\nwonder = Book("Wonder", 310)\nsay f"{holes.title} has {holes.pages} pages"\n'
                                'say f"{wonder.title} has {wonder.pages} pages"\n', "Add the two books' pages together"),
+    ("workshop-kinds", _BOOKS + 'say holes.title + ": " + holes.pages + " pages"\nsay wonder.title + ": " + wonder.pages + " pages"\n',
+     "Add the two books' pages together"),  # + only joins text here
+    ("workshop-kinds", _BOOKS + 'say holes.title + " and " + wonder.title\n', "Add the two books' pages together"),
+    ("workshop-kinds", _BOOKS + 'say "They have " + holes.pages + wonder.pages + " pages"\n', "After words, + joins each number on"),  # 272310
     ("workshop-actions", _HERO + '\nfunc hurt(damage):\n    sam.hp -= damage\n\nsam = Hero("Sam")\nhurt(3)\nhurt(4)\nsay sam.hp\n', "Move the func into the kind"),
     ("workshop-actions", _HERO + '    func hurt(damage):\n        sam.hp -= damage\n\nsam = Hero("Sam")\nsam:hurt(3)\nsam:hurt(4)\nsay sam.hp\n',
      "In the action, take the damage off the hero's own hp"),
     ("workshop-actions", _HERO + '    func hurt(damage):\n        my.hp -= damage\n\nsam = Hero("Sam")\nsay sam.hp\n', "Run the action on your hero"),
     ("workshop-actions", _HERO + '    func hurt(damage):\n        my.hp -= damage\n\nsam = Hero("Sam")\nsam:hurt(3)\nsay sam.hp\n', "Hurt your hero twice"),
     ("workshop-files", 'say f"{3 * 4.5 * 1.2:money}"\n', "Load the file first"),
-    ("workshop-files", 'import money.tuf\nsay money.as_money(3 * 4.5)\n', "Work out the price with tax"),
+    ("workshop-files", 'import money.tuf\nsay money.as_money(3 * 4.5)\n', "Add the tax with money.with_tax"),
     ("workshop-files", 'import money.tuf\nsay money.with_tax(3 * 4.5)\n', "Show it as money"),
     ("workshop-music", 'mention tmusic\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4")\nsong:track("bass", "C3*3")\nsong:play()\n', "Play a tune first"),
     ("workshop-music", 'mention tmusic\ntmusic.play("C4 E4 G4", "piano")\ntmusic.play("C3*3", "bass")\n', "Make a song"),
@@ -8176,12 +8200,40 @@ LEARN_150_MISTAKES = [
                                  '    screen:put(x, y, "@")\n\nscreen:every_frame(step)\n', "Up goes towards the top"),
     ("workshop-tterm", _SCREEN + '    if screen:pressed("up"):\n        y -= 1\n    if screen:pressed("down"):\n        y += 1\n    screen:clear()\n'
                                  '    screen:put(x, y, "@")\n\nscreen:every_frame(step)\n', "Keep the @ inside the box"),
+    ("workshop-tterm", _TTERM_SWAPPED, "Up goes towards the top"),
+    ("workshop-tterm", _TTERM_WALLS, "The box's top wall is at y = 0, so stop the @ at 1"),
+    ("workshop-tterm", _TTERM_WALLS.replace("y > 0", "y > 1"), "The box's bottom wall is at y = 9, so stop the @ at 8"),
     ("workshop-sheets", _SHEET + 'while game:open():\n    game:frame()\nhero:frames(4)\n', "Cut it into frames before the game starts"),
     ("workshop-sheets", _SHEET + 'hero:frames(4)\nwhile game:open():\n    game:frame()\n', "Name the walk and its frames"),
     ("workshop-sheets", _SHEET + 'hero:frames(4)\nhero:animation("walk", [1, 2, 3, 4], 8)\nhero:play("walk")\nwhile game:open():\n    game:frame()\n',
      "Play the walk in the loop"),
     ("workshop-sheets", _SHEET + 'hero:frames(4)\nhero:animation("walk", [1, 2, 3, 4], 8)\nwhile game:open():\n    dt = game:frame()\n'
                                  '    if game:held("right"):\n        hero:play("walk")\n', "When no arrow is held"),
+    ("workshop-sheets", _SHEETS_BEFORE, "When no arrow is held"),
+    ("workshop-sheets", _SHEETS_ALWAYS, "Put hero:frame(1) under else:"),
+]
+# Other right ways to do the tasks, which the checks must accept: each runs, and its check says it's done.
+LEARN_150_GOOD = [
+    ("workshop-templates", _SNACKS + 'say f"popcorn  {snacks["popcorn"]:money}"\nsay f"apple    {snacks["apple"]:money}"\n'
+                           'say f"juice    {snacks["juice"]:money}"\nsay f"Total:   {snacks["popcorn"] + snacks["apple"] + snacks["juice"]:money}"\n'),
+    ("workshop-templates", _SNACKS + "total = 0\nfor snack in snacks:\n    total += snacks[snack]\n    say f'{snack:8} {snacks[snack]:money}'\n"
+                           "say f'Total:   {total:money}'\n"),
+    ("workshop-kinds", _BOOKS + 'total = holes.pages\ntotal = total + wonder.pages\nsay total\n'),
+    ("workshop-kinds", _BOOKS + 'total = 0\nfor book in [holes, wonder]:\n    total += book.pages\nsay "Pages: " + total\n'),
+    ("workshop-kinds", _BOOKS + 'say "They have " + (holes.pages + wonder.pages) + " pages"\n'),
+    ("workshop-actions", _HERO + '    func hurt(damage):\n        my.hp -= damage\n\nsam = Hero("Sam")\nfor i in range(1, 2):\n    sam:hurt(3)\n'
+                         'say f"{sam.name} has {sam.hp} hp left"\n'),
+    ("workshop-actions", _HERO + '    func heal(amount):\n        my.hp += amount\n    func hurt(damage):\n        my.hp -= damage\n\nsam = Hero("Sam")\n'
+                         'sam:hurt(3)\nsam:hurt(4)\nsay f"{sam.name} has {sam.hp} hp left"\n'),
+    ("workshop-files", 'import money.tuf\n\nsay f"3 tickets: {money.with_tax(3 * 4.5):money}"\n'),  # Lesson 1's :money
+    ("workshop-tterm", _TTERM_NAMES),
+    ("workshop-tterm", _boxed('    if screen:pressed("up") and y >= 2: y -= 1\n    if screen:pressed("down") and y <= 7: y = y + 1\n')),
+    ("workshop-tterm", _boxed('    if screen:pressed("up"):\n        y -= 1\n    elif screen:pressed("down"):\n        y += 1\n'
+                              '    if y < 1:\n        y = 1\n    if y > 8:\n        y = 8\n')),
+    ("workshop-sheets", _SHEET + 'hero:frames 4\nhero:animation("walk", [1, 2, 3, 4], 8)\nwhile game:open():\n    dt = game:frame()\n'
+                                 '    if game:held("right"):\n        hero:move(150 * dt, 0)\n        hero:play "walk"\n    else:\n        hero:frame 1\n'),
+    ("workshop-sheets", _WALK + 'while game:open():\n    dt = game:frame()\n    if game:held("left") or game:held("right"): hero:play("walk")\n'
+                                '    else: hero:frame(1)\n'),
 ]
 # Slips in these lessons that stop the run, so Learn only shows what the run says: (the program, with money.tuf next to
 # it, and what both runtimes and --check say).
@@ -8288,10 +8340,11 @@ def t_learn_150(c):
     """1.5.0, headless: Learn's Section 1.7, the Workshop (text templates, kinds, actions, your own files, tmusic, tterm
     and sprite sheets). learn.js, in Node (learn_test.mjs), lists it after Toolbox. Every lesson's example, starter and
     solution passes --check and runs the same in both runtimes, saying what it should (the game with headless.py, so no
-    window, and music through a pipe, so no sound); each check accepts its solution, run for real, and gives its hint
-    for the starter, for empty code and for the mistakes above; the slips that stop a run get the same help from both
-    runtimes and --check; and Start lesson writes a lesson's own files (money.tuf and the sprite sheet walker.png) next
-    to its file, where the solutions run."""
+    window, and music through a pipe, so no sound); each check accepts its solution and the other right ways above, run
+    for real, and gives its hint for the starter, for empty code and for the mistakes above (played, the terminal game's
+    and the sprite sheet's really go wrong); the slips that stop a run get the same help from both runtimes and --check;
+    and Start lesson writes a lesson's own files (money.tuf and the sprite sheet walker.png) next to its file, where the
+    solutions run."""
     import shutil
     import tuff_tgame
     folder = os.path.join(OUT, "learn_150")
@@ -8336,6 +8389,11 @@ def t_learn_150(c):
             "each has a body, an example, a task, a starter and a solution")
     words = " ".join(" ".join(str(l[k]) for k in ("title", "body", "task", "example", "starter", "solution")) for l in lessons)
     c.check(not re.search(r"python|pyinstaller|\bpip\b", words, re.I), "...and none of them mentions Python, pip or PyInstaller")
+    body = {l["id"]: l["body"] for l in lessons}
+    c.check(all("Start lesson puts" in body[i] for i in ("workshop-files", "workshop-sheets")) and "Learn has put" not in words,
+            "the two lessons with files of their own say Start lesson puts them in the lessons folder (they aren't there before)")
+    c.check("Section 4" in body["workshop-sheets"] and "install from Plugins" in body["workshop-sheets"] and "<code>|</code> is a bar line" in body["workshop-music"],
+            "the sprite sheet lesson says what its game is (Section 4 has more) and that Sprite Studio is a plugin; the music one says what | is")
     own = {l["id"]: l["files"] or {} for l in lessons}
     c.check({i: sorted(f) for i, f in own.items() if f} == {"workshop-files": ["money.tuf"], "workshop-sheets": ["walker.png"]},
             "two lessons have files of their own: money.tuf for your own files, walker.png for sprite sheets", {i: sorted(f) for i, f in own.items()})
@@ -8379,13 +8437,18 @@ def t_learn_150(c):
     tterm = next(l for l in lessons if l["id"] == "workshop-tterm")
     c.check(outputs.get(("workshop-tterm", "example"), "").rstrip().endswith("You stopped at 3."), "the tterm example ends 'You stopped at 3.'",
             outputs.get(("workshop-tterm", "example"), "")[-200:])
-    for key, want in (("up", 1), ("down", 8)):
-        keys = "".join(f'screen:press("{key}", {n})\n' for n in range(2, 30, 2))
-        code = tterm["solution"].replace("screen:every_frame(step)", keys + "screen:every_frame(step)")
-        runs = [interp_run(os.path.join(folder, "tterm_" + key + mode), code, mode == "slow") for mode in ("slow", "fast")]
-        rows = [i for i, line in enumerate(runs[1][1].splitlines()) if "@" in line]
-        c.check(runs[0] == runs[1] and runs[1][0] == 0 and rows == [want],
-                f"the tterm solution: pressing {key} 14 times takes the @ to row {want}, against the box", (rows, runs[1][1][-400:]))
+    # The same for a game that writes the keys as "Up" and "arrow down" (its check accepts it, below), and for two
+    # mistakes its check finds: up and down swapped, and stops that let the @ onto the walls.
+    games = [("the tterm solution", tterm["solution"], 1, 8, "against the box"), ('"Up" and "arrow down"', _TTERM_NAMES, 1, 8, "too"),
+             ("up and down swapped", _TTERM_SWAPPED, 8, 1, "the wrong way"), ("stops at y > 0 and y < 9", _TTERM_WALLS, 0, 9, "onto the walls")]
+    for i, (name, game_code, up_row, down_row, how) in enumerate(games):
+        for key, want in (("up", up_row), ("down", down_row)):
+            keys = "".join(f'screen:press("{key}", {n})\n' for n in range(2, 30, 2))
+            code = game_code.replace("screen:every_frame(step)", keys + "screen:every_frame(step)")
+            runs = [interp_run(os.path.join(folder, f"tterm{i}_{key}_{mode}"), code, mode == "slow") for mode in ("slow", "fast")]
+            rows = [r for r, line in enumerate(runs[1][1].splitlines()) if "@" in line]
+            c.check(runs[0] == runs[1] and runs[1][0] == 0 and rows == [want],
+                    f"{name}: pressing {key} 14 times takes the @ to row {want}, {how}", (rows, runs[1][1][-400:]))
 
     # The sprite sheet game, headless: the example walks by itself; the solution walks while an arrow is held.
     sheets = next(l for l in lessons if l["id"] == "workshop-sheets")
@@ -8408,32 +8471,50 @@ def t_learn_150(c):
             and plays[1] == [(0, None, 1), (10, walk, None), (40, None, 1), (50, walk, None), (60, None, 1)],
             "the solution, headless in both runtimes: frame 1 standing, the walk while right or left is held, frame 1 again after",
             (plays, runs[1][2][-300:]))
+    # Two mistakes its check finds, with right held from frame 10 to 40.
+    learn_150_write(os.path.join(folder, "sheets_mistakes"), own["workshop-sheets"])
+    held = {"10": [{"type": "keydown", "code": "ArrowRight"}], "40": [{"type": "keyup", "code": "ArrowRight"}]}
+    run = learn_150_game(os.path.join(folder, "sheets_mistakes"), "before", _SHEETS_BEFORE, 60, held)
+    c.check(run[0] == 0 and learn_150_plays(run[3]) == [(0, None, 1), (10, walk, None)],
+            "hero:frame(1) only before the loop: the walk starts, and never stops after right is let go", learn_150_plays(run[3]))
+    run = learn_150_game(os.path.join(folder, "sheets_mistakes"), "always", _SHEETS_ALWAYS, 60, held)
+    plays = learn_150_plays(run[3])
+    c.check(run[0] == 0 and len(plays) > 1 and plays[1][0] == 10 and all(p[1:] == (None, 1) for p in plays),
+            "hero:frame(1) on every frame: while right is held it's frame 1 every time, so it never walks", plays[:4])
 
-    # Learn's checks (in Node), with what the programs really said.
-    mistakes = []
-    for i, (lesson, code, _hint) in enumerate(LEARN_150_MISTAKES):
-        where = os.path.join(folder, "mistake", str(i))
+    # Learn's checks (in Node), with what the programs really said: the mistakes above, and the other right ways.
+    def ran(where, lesson, code):
         if "mention tgame" in code:
             learn_150_write(where, own[lesson])
-            run = learn_150_game(where, "mistake", code, 5)
-            mistakes.append((run[0], "\n".join(run[1]), run[2]))
-        else:
-            run = interp_run(where, code, False, env=quiet, files=own[lesson])
-            mistakes.append(run)
+            run = learn_150_game(where, "program", code, 5)
+            return run[0], "\n".join(run[1]), run[2]
+        return interp_run(where, code, False, env=quiet, files=own[lesson])
+
+    mistakes = [ran(os.path.join(folder, "mistake", str(i)), lesson, code) for i, (lesson, code, _h) in enumerate(LEARN_150_MISTAKES)]
+    good = [ran(os.path.join(folder, "good", str(i)), lesson, code) for i, (lesson, code) in enumerate(LEARN_150_GOOD)]
     jobs = [{"id": l["id"], "src": l[part], "out": outputs.get((l["id"], part), "")} for l in lessons for part in ("solution", "starter")]
     jobs += [{"id": l["id"], "src": "", "out": ""} for l in lessons]
     jobs += [{"id": lesson, "src": code, "out": run[1]} for (lesson, code, _h), run in zip(LEARN_150_MISTAKES, mistakes)]
+    jobs += [{"id": lesson, "src": code, "out": run[1]} for (lesson, code), run in zip(LEARN_150_GOOD, good)]
     verdicts = node({"checks": jobs}).get("verdicts") or [None] * len(jobs)
-    n = len(lessons)
+    n, m = len(lessons), len(LEARN_150_MISTAKES)
     for i, l in enumerate(lessons):
         solution, starter, empty = verdicts[2 * i], verdicts[2 * i + 1], verdicts[2 * n + i]
         c.check(solution is True and isinstance(starter, str) and not starter.startswith("THREW") and isinstance(empty, str)
                 and not empty.startswith("THREW"), f"{l['id']}: its check accepts the solution, and gives the starter a hint: {starter}",
                 (solution, starter, empty))
-    for (lesson, code, hint), run, verdict in zip(LEARN_150_MISTAKES, mistakes, verdicts[3 * n:]):
-        shown = " / ".join(x.strip() for x in code.splitlines() if x.strip() and not x.startswith(("mention", "kind", "snacks =")))[-70:]
+
+    def shown(code):
+        """The program on one line, without the lines they all have (like the terminal game's screen:clear())."""
+        same = ("mention", "kind", "snacks =", "screen", "x = ", "y = ", "func step")
+        return " / ".join(x.strip() for x in code.splitlines() if x.strip() and not x.strip().startswith(same))[-90:]
+
+    for (lesson, code, hint), run, verdict in zip(LEARN_150_MISTAKES, mistakes, verdicts[3 * n:3 * n + m]):
         c.check(run[0] == 0 and isinstance(verdict, str) and verdict.startswith(hint),
-                f"{lesson}: '{shown}' runs, and the check says: {hint}", (run[0], run[2][-200:], verdict))
+                f"{lesson}: '{shown(code)}' runs, and the check says: {hint}", (run[0], run[2][-200:], verdict))
+    for (lesson, code), run, verdict in zip(LEARN_150_GOOD, good, verdicts[3 * n + m:]):
+        c.check(run[0] == 0 and not run[2].strip() and verdict is True, f"{lesson}: '{shown(code)}' runs, and the check accepts it",
+                (run[0], run[2][-200:], verdict))
 
     # Slips that stop the run, where Learn shows the run's message: both runtimes, and --check, say what to write.
     for i, (code, says) in enumerate(LEARN_150_SLIPS):

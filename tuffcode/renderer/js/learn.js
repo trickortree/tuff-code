@@ -912,17 +912,20 @@
       starter: '# Section 1.7, Lesson 1: Text templates\n# Say each snack with its price as money, lined up, then the total. Make every line with f"...".\n\nsnacks = {"popcorn": 1.2, "apple": 0.45, "juice": 1.85}\n',
       solution: 'snacks = {"popcorn": 1.2, "apple": 0.45, "juice": 1.85}\ntotal = 0\nfor snack in snacks:\n    price = snacks[snack]\n    total += price\n    say f"{snack:8} {price:money}"\nsay f"Total:   {total:money}"\n',
       check: (src, out) => {
-        const templates = src.match(/\bf("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')/g) || [];
+        // A { } is read whole, so quotes in it (f"{snacks["apple"]:money}") don't end the template.
+        const templates = src.match(/\bf("(?:\{[^}\n]*\}|\\.|[^"\\\n{])*"|'(?:\{[^}\n]*\}|\\.|[^'\\\n{])*')/g) || [];
         if (!templates.length) {
           // { } in plain quotes: the f is missing, so they're shown just as they are.
           return /["'][^"'\n]*\{[^}\n]*\}/.test(src) ? 'Put an f right before the quotes, or the { } show just as they are: say f"{snack:8} {price:money}"'
             : 'Make each line with a template: say f"{snack:8} {price:money}"';
         }
-        if (!templates.some((t) => /:\s*money\s*\}/.test(t))) return 'Show the prices as money: put :money at the end of the { }, like {price:money}';
-        // Three snacks, then the total: four lines with money in them.
-        const money = lines(out).filter((l) => /\$\d/.test(l)).length;
+        const moneys = templates.filter((t) => /:\s*money\s*\}/.test(t)).length;
+        if (!moneys) return 'Show the prices as money: put :money at the end of the { }, like {price:money}';
+        // Three snacks, then the total: four lines with money in them, like $3.50 (a total joined on with + says $3.5),
+        // made by two templates, the loop's and the total's.
+        const money = lines(out).filter((l) => /\$\d[\d,]*\.\d\d\b/.test(l)).length;
         if (money < 3) return 'Say each snack with its price, in a loop: for snack in snacks: say f"{snack:8} {snacks[snack]:money}"';
-        if (money > 3) return true;
+        if (money > 3 && moneys > 1) return true;
         return /\+=|\b(\w+)\s*=\s*\1\s*\+|\bsum\s*\(/.test(src) ? 'Say the total as money too: say f"Total: {total:money}"'
           : 'Then add the prices up (total += price, in the loop) and say f"Total: {total:money}"';
       },
@@ -932,7 +935,7 @@
       title: 'Kinds and fields',
       body: `<p>A <b>kind</b> is your own kind of object, like a pet or a book. Write <code>kind Pet:</code> and under it its <b>fields</b>, each with the value a new one starts with: <code>name = "?"</code> and <code>hunger = 5</code>.</p>
              <p><code>rex = Pet("Rex")</code> makes one: the inputs fill the fields in order, and the rest keep their starting values. Read a field with a dot, <code>rex.hunger</code>, and change it with <code>rex.hunger += 1</code>. <code>say rex</code> shows them all.</p>`,
-      example: 'kind Pet:\n    name = "?"\n    hunger = 5\n\nrex = Pet("Rex")\nann = Pet("Ann", 2)\nrex.hunger += 1\nsay rex.name + " is this hungry: " + rex.hunger\nsay f"{ann.name} is this hungry: {ann.hunger}"\nsay rex',
+      example: 'kind Pet:\n    name = "?"\n    hunger = 5\n\nrex = Pet("Rex")\nann = Pet("Ann", 2)\nrex.hunger += 1\nsay rex.name + "\'s hunger: " + rex.hunger\nsay f"{ann.name}\'s hunger: {ann.hunger}"\nsay rex',
       task: 'Make <code>kind Book:</code> with a <code>title</code> and <code>pages</code>. Make two books, then say how many pages they have altogether.',
       starter: '# Section 1.7, Lesson 2: Kinds and fields\n# Make kind Book: with a title and pages, make two books,\n# then say how many pages they have altogether.\n\n',
       solution: 'kind Book:\n    title = ""\n    pages = 0\n\nholes = Book("Holes", 272)\nwonder = Book("Wonder", 310)\nsay f"{holes.title} and {wonder.title}: {holes.pages + wonder.pages} pages"\n',
@@ -954,7 +957,16 @@
         count = count || fields[fields.length - 1];
         const read = `[A-Za-z_]\\w*\\.(?:${fields.join('|')})\\b`;
         if (!new RegExp(read).test(src)) return `Read a field with a dot, like: holes.${count}`;
-        if (!new RegExp(`${read}\\s*\\+|\\+=?\\s*${read}`).test(src)) return `Add the two books' ${count} together: holes.${count} + wonder.${count}`;
+        // Adding up: two of them with a + between, total += one, total = total + one, or sum(...). (holes.title + ": " +
+        // holes.pages only joins text.)
+        const num = `[A-Za-z_]\\w*\\.${count}\\b`;
+        if (!new RegExp(`${num}\\s*\\+\\s*${num}|\\+=\\s*${num}|\\b(\\w+)\\s*=\\s*\\1\\s*\\+\\s*${num}|\\bsum\\s*\\(`).test(src)) {
+          return `Add the two books' ${count} together: holes.${count} + wonder.${count}`;
+        }
+        // "Pages: " + holes.pages + wonder.pages joins one number on, then the other: 272310.
+        if (new RegExp(`["']\\s*\\+\\s*${num}\\s*\\+\\s*${num}`).test(src)) {
+          return `After words, + joins each number on, so they aren't added. Add them first, in brackets: "Pages: " + (holes.${count} + wonder.${count})`;
+        }
         return lines(out).length ? true : `Say how many there are, like: say f"{holes.${count} + wonder.${count}} ${count}"`;
       },
     },
@@ -963,22 +975,26 @@
       title: 'Actions and my',
       body: `<p>A kind can have <b>actions</b> too: functions written inside it, indented like its fields. They run with a colon, like <code>rex:feed(3)</code>.</p>
              <p>Inside an action, <code>my</code> is the object it runs on, so <code>my.hunger</code> is that pet's own field. Every pet gets the same actions, and each one changes only its own fields.</p>`,
-      example: 'kind Pet:\n    name = "?"\n    hunger = 5\n    func feed(amount):\n        my.hunger -= amount\n        if my.hunger < 0:\n            my.hunger = 0\n    func play():\n        my.hunger += 2\n        say my.name + " played"\n\nrex = Pet("Rex")\nrex:play()\nrex:feed(3)\nsay f"{rex.name} is this hungry: {rex.hunger}"',
+      example: 'kind Pet:\n    name = "?"\n    hunger = 5\n    func feed(amount):\n        my.hunger -= amount\n        if my.hunger < 0:\n            my.hunger = 0\n    func play():\n        my.hunger += 2\n        say my.name + " played"\n\nrex = Pet("Rex")\nrex:play()\nrex:feed(3)\nsay f"{rex.name}\'s hunger: {rex.hunger}"',
       task: 'Give <code>Hero</code> an action, <code>func hurt(damage):</code>, that takes the damage off <code>my.hp</code>. Hurt your hero twice, then say how much hp is left.',
       starter: '# Section 1.7, Lesson 3: Actions and my\n# Give Hero an action, func hurt(damage):, that takes the damage off my.hp.\n# Then hurt your hero twice and say how much hp is left.\n\nkind Hero:\n    name = "?"\n    hp = 10\n\nsam = Hero("Sam")\n',
       solution: 'kind Hero:\n    name = "?"\n    hp = 10\n    func hurt(damage):\n        my.hp -= damage\n        if my.hp < 0:\n            my.hp = 0\n\nsam = Hero("Sam")\nsam:hurt(3)\nsam:hurt(4)\nsay f"{sam.name} has {sam.hp} hp left"\n',
       check: (src, out) => {
         if (!/^kind[ \t]+\w+[ \t]*:/m.test(src)) return 'Keep the kind: kind Hero:, with name = "?" and hp = 10 under it';
         // An action is a func indented under the kind; one at the left edge is an ordinary function.
-        const action = src.match(/^[ \t]+func[ \t]+(\w+)/m);
-        if (!action) {
+        const actions = [...src.matchAll(/^[ \t]+func[ \t]+(\w+)/gm)].map((m) => m[1]);
+        if (!actions.length) {
           return /^func\b/m.test(src) ? 'Move the func into the kind, indented under hp = 10, so it\'s the hero\'s own action'
             : 'Give Hero an action: under hp = 10, indented the same, write func hurt(damage):';
         }
         if (!/\bmy\.\w+[ \t]*(-=|=(?!=))/.test(src)) return 'In the action, take the damage off the hero\'s own hp: my.hp -= damage';
-        const uses = (src.match(new RegExp(`\\b\\w+:${action[1]}\\b`, 'g')) || []).length;
-        if (!uses) return `Run the action on your hero with a colon: sam:${action[1]}(3)`;
-        if (uses < 2) return `Hurt your hero twice: sam:${action[1]}(3), then sam:${action[1]}(4)`;
+        // The action that hurts: hurt, or else the one that runs most (a heal can come first).
+        const runs = (a) => (src.match(new RegExp(`\\b\\w+:${a}\\b`, 'g')) || []).length;
+        const name = actions.includes('hurt') ? 'hurt' : actions.reduce((a, b) => (runs(b) > runs(a) ? b : a));
+        // Run in a for or while loop (on its line, or indented under it), it runs more than once.
+        const looped = new RegExp(`^[ \\t]*(?:for|while)\\b[^\\n]*\\b\\w+:${name}\\b|^([ \\t]*)(?:for|while)\\b[^\\n]*:[ \\t]*\\n(?:(?:[ \\t]*|\\1[ \\t]+[^\\n]*)\\n)*?\\1[ \\t]+[^\\n]*\\b\\w+:${name}\\b`, 'm').test(src);
+        if (!runs(name)) return `Run the action on your hero with a colon: sam:${name}(3)`;
+        if (runs(name) < 2 && !looped) return `Hurt your hero twice: sam:${name}(3), then sam:${name}(4)`;
         return lines(out).length ? true : 'Say how much hp is left: say f"{sam.name} has {sam.hp} hp left"';
       },
     },
@@ -987,22 +1003,23 @@
       title: 'Your own files',
       files: { 'money.tuf': MONEY_TUF },
       body: `<p>A program can be split into files. <code>import money.tuf</code> loads money.tuf from the same folder, and its functions and values go after a dot, like a library's: <code>money.as_money(6.375)</code> and <code>money.rate</code>.</p>
-             <p>Each file has its own names, so a <code>rate</code> in your program never changes money.tuf's. Learn has put a money.tuf in the lessons folder for this lesson: open it to see what's inside. Any .tuf file you make next to your program is imported the same way.</p>`,
+             <p>Each file has its own names, so a <code>rate</code> in your program never changes money.tuf's. Start lesson puts a money.tuf next to your lesson file, in the lessons folder: open it to see what's inside. Any .tuf file you make next to your program is imported the same way.</p>`,
       example: 'import money.tuf\n\nprice = 6.375\nsay "Price: " + money.as_money(price)\nsay "With tax: " + money.as_money(money.with_tax(price))\nsay "The tax rate is " + money.rate',
       task: 'Import <code>money.tuf</code> and say what 3 tickets at 4.5 each cost with tax, as money.',
       starter: '# Section 1.7, Lesson 4: Your own files\n# money.tuf is next to this file, in the lessons folder. Import it, then say\n# what 3 tickets at 4.5 each cost with tax, as money.\n\n',
       solution: 'import money.tuf\n\ntickets = 3 * 4.5\nsay "3 tickets: " + money.as_money(money.with_tax(tickets))\n',
       check: (src, out) => {
         if (!/^\s*(import|mention)\s+money\.tuf\b/m.test(src)) return 'Load the file first, with .tuf on the end: import money.tuf';
-        if (!/\bmoney\.with_tax\s*\(/.test(src)) return 'Work out the price with tax with money.with_tax(3 * 4.5)';
-        if (!/\bmoney\.as_money\s*\(/.test(src)) return 'Show it as money with money.as_money(...)';
+        if (!/\bmoney\.with_tax\s*\(/.test(src)) return 'Add the tax with money.with_tax(3 * 4.5)';
+        // money.as_money, or Lesson 1's template: f"{money.with_tax(3 * 4.5):money}"
+        if (!/\bmoney\.as_money\s*\(|:\s*money\s*\}/.test(src)) return 'Show it as money: money.as_money(...), or :money in a template';
         return lines(out).some((l) => /\$\d/.test(l)) ? true : 'Say the price, like: say money.as_money(money.with_tax(3 * 4.5))';
       },
     },
     {
       id: 'workshop-music',
       title: 'Music from notes',
-      body: `<p><code>tmusic</code> plays tunes written as notes: a letter from C to B and its octave, so <code>C4</code> is middle C. <code>.</code> is a rest, <code>*2</code> makes a note twice as long and <code>C4+E4+G4</code> is a chord. <code>tmusic.play("C4 E4 G4 C5*2", "piano")</code> plays a tune and waits until it ends.</p>
+      body: `<p><code>tmusic</code> plays tunes written as notes: a letter from C to B and its octave, so <code>C4</code> is middle C. <code>.</code> is a rest, <code>*2</code> makes a note twice as long and <code>C4+E4+G4</code> is a chord. A <code>|</code> is a bar line: it only makes the notes easier to read. <code>tmusic.play("C4 E4 G4 C5*2", "piano")</code> plays a tune and waits until it ends.</p>
              <p>A <b>song</b> has tracks that play together: <code>song = tmusic.song(120)</code> (120 beats a minute), a <code>song:track("bass", "C3*4")</code> for each instrument, then <code>song:play()</code>. Try piano, chip, bass, pluck, bell, organ and flute, and drums, which play kick, snare and hat instead of notes.</p>`,
       example: 'mention tmusic\n\ntmusic.play("C4 D4 E4 C4 | E4 F4 G4*2", "chip")\n\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4 E4 | F4 A4 C5 . | G4 B4 D5 B4 | C5*4")\nsong:track("drums", "kick hat snare hat | kick hat snare hat | kick hat snare hat | kick kick snare .")\nsong:play()\nsay "That song is " + song:length() + " seconds long"',
       task: 'Play a short tune with <code>tmusic.play</code>, then make a song with two tracks, like a tune and a bass line, and play it.',
@@ -1030,34 +1047,70 @@
         if (!/^\s*(import|mention)\s+tterm\b/m.test(src)) return 'Start with: mention tterm';
         if (!/tterm\.screen\s*\(/.test(src)) return 'Make the screen: screen = tterm.screen(20, 10)';
         if (!/:every_frame\b/.test(src)) return 'Run step every frame: screen:every_frame(step)';
-        if (!/:(pressed|held)\s*\(?\s*["']up["']/.test(src)) return 'Check the up arrow with: if screen:pressed("up") and y > 1:';
-        if (!/:(pressed|held)\s*\(?\s*["']down["']/.test(src)) return 'Now the down arrow: if screen:pressed("down") and y < 8:';
-        if (!/\by\s*(-=|=\s*y\s*-)/.test(src)) return 'Up goes towards the top, where y is smaller: y -= 1';
-        if (!/\by\s*(\+=|=\s*y\s*\+)/.test(src)) return 'Down makes y bigger: y += 1';
-        return /\by\s*>=?\s*\d/.test(src) && /\by\s*<=?\s*\d/.test(src) ? true : 'Keep the @ inside the box, as left and right do: if screen:pressed("up") and y > 1:';
+        // Each arrow's if, with the lines indented under it. (tterm takes "Up", "arrowup" and "up arrow" too.)
+        const arrow = (key) => (src.match(new RegExp(`^([ \\t]*)(?:el)?if\\b[^\\n]*:(?:pressed|held)[ \\t]*\\(?[ \\t]*["'][ \\t]*(?:arrow[ \\t]*)?${key}(?:[ \\t]+arrow)?[ \\t]*["'][^\\n]*(?:\\n(?:[ \\t]*(?=\\n)|\\1[ \\t]+[^\\n]*))*`, 'im')) || [])[0];
+        const up = arrow('up');
+        const down = arrow('down');
+        if (!up) return 'Check the up arrow with: if screen:pressed("up") and y > 1:';
+        if (!down) return 'Now the down arrow: if screen:pressed("down") and y < 8:';
+        // In each one's own if: up makes y smaller (y -= 1, y = y - 1, y = max(1, y - 1)), down makes it bigger.
+        if (!/\by[ \t]*(-=|=(?!=)[^\n]*\by[ \t]*-)/.test(up)) return 'Up goes towards the top, where y is smaller: y -= 1';
+        if (!/\by[ \t]*(\+=|=(?!=)[^\n]*\by[ \t]*\+)/.test(down)) return 'Down makes y bigger: y += 1';
+        if (!/\by[ \t]*>=?[ \t]*\d|\d[ \t]*<=?[ \t]*y\b|\by[ \t]*=[ \t]*max\b/.test(src) || !/\by[ \t]*<=?[ \t]*\d|\d[ \t]*>=?[ \t]*y\b|\by[ \t]*=[ \t]*min\b/.test(src)) {
+          return 'Keep the @ inside the box, as left and right do: if screen:pressed("up") and y > 1:';
+        }
+        // The box's walls: screen:box(0, 0, 20, 10) has them at y = 0 and y = 9. Where an arrow's own if lets y get to
+        // (y > 1 or 1 < y: 1, y >= 1: 0) has to stop short of them.
+        const box = src.match(/:box[ \t]*\(?[ \t]*\d+[ \t]*,[ \t]*(\d+)[ \t]*,[ \t]*\d+[ \t]*,[ \t]*(\d+)/);
+        if (!box) return true;
+        const reach = (block, down) => {
+          const m = block.match(down ? /\by[ \t]*(<=?)[ \t]*(\d+)|(\d+)[ \t]*(>=?)[ \t]*y\b/ : /\by[ \t]*(>=?)[ \t]*(\d+)|(\d+)[ \t]*(<=?)[ \t]*y\b/);
+          if (!m) return null; // (stopped some other way, like if y < 1: y = 1)
+          const n = Number(m[2] ?? m[3]);
+          return (m[1] ?? m[4]).length === 1 ? n : down ? n + 1 : n - 1;
+        };
+        const top = Number(box[1]);
+        const bottom = top + Number(box[2]) - 1;
+        const upTo = reach(up, false);
+        const downTo = reach(down, true);
+        if (upTo !== null && upTo <= top) return `The box's top wall is at y = ${top}, so stop the @ at ${top + 1}: if screen:pressed("up") and y > ${top + 1}:`;
+        if (downTo !== null && downTo >= bottom) return `The box's bottom wall is at y = ${bottom}, so stop the @ at ${bottom - 1}: if screen:pressed("down") and y < ${bottom - 1}:`;
+        return true;
       },
     },
     {
       id: 'workshop-sheets',
       title: 'Animated pictures',
       files: { 'walker.png': { base64: WALKER_PNG } },
-      body: `<p>A <b>sprite sheet</b> is one picture with every frame of a character in it, side by side. Learn has put one in the lessons folder for this lesson: walker.png, 4 frames of a walk. Sprite Studio, in the sidebar, draws your own.</p>
-             <p>In a game, <code>hero:frames(4)</code> cuts the picture into its 4 frames. <code>hero:animation("walk", [1, 2, 3, 4], 8)</code> names some frames and how many show a second, and <code>hero:play("walk")</code> plays them again and again (playing it every frame just carries on). <code>hero:frame(1)</code> shows one frame and stops.</p>`,
+      body: `<p>A <b>sprite sheet</b> is one picture with every frame of a character in it, side by side. Start lesson puts one in the lessons folder: walker.png, 4 frames of a walk. Sprite Studio, a plugin you can install from Plugins (<kbd>Alt+3</kbd>), draws your own.</p>
+             <p>The starter is a small game, like the ones in Section 4: a window, the walker as a picture in it, and a loop that moves it while an arrow is held, with <code>game:held("left")</code>. <code>hero:frames(4)</code> cuts the picture into its 4 frames. <code>hero:animation("walk", [1, 2, 3, 4], 8)</code> names some frames and how many show a second, and <code>hero:play("walk")</code> plays them again and again (playing it every frame just carries on). <code>hero:frame(1)</code> shows one frame and stops.</p>`,
       example: 'mention tgame\n\ngame = tgame.window("Walker", 600, 300)\ngame:background "sky"\nhero = game:image("walker.png", 100, 200, 96)\nhero:frames(4)\nhero:animation("walk", [1, 2, 3, 4], 8)\nhero:play("walk")\nhero:speed(80, 0)\nhero:on_edge "wrap"\n\nwhile game:open():\n    game:frame()',
       task: 'Cut walker.png into its frames and make a <code>"walk"</code> animation. Play it while left or right is held, and show frame 1 when the walker stands still.',
       starter: '# Section 1.7, Lesson 7: Animated pictures\n# Cut walker.png into its 4 frames and make a "walk" animation.\n# Play it while left or right is held, and show frame 1 when standing still.\n\nmention tgame\n\ngame = tgame.window("Walker", 600, 300)\ngame:background "sky"\nhero = game:image("walker.png", 300, 200, 96)\nhero:on_edge "stop"\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        hero:move(-150 * dt, 0)\n    if game:held("right"):\n        hero:move(150 * dt, 0)\n',
       solution: 'mention tgame\n\ngame = tgame.window("Walker", 600, 300)\ngame:background "sky"\nhero = game:image("walker.png", 300, 200, 96)\nhero:on_edge "stop"\nhero:frames(4)\nhero:animation("walk", [1, 2, 3, 4], 8)\n\nwhile game:open():\n    dt = game:frame()\n    if game:held("left"):\n        hero:move(-150 * dt, 0)\n    if game:held("right"):\n        hero:move(150 * dt, 0)\n    if game:held("left") or game:held("right"):\n        hero:play("walk")\n    else:\n        hero:frame(1)\n',
       check: (src) => {
-        if (!/:frames\s*\(/.test(src)) return 'Cut the picture into its 4 frames: hero:frames(4)';
+        // A call with an input, in brackets or not (hero:frames(4), hero:frames 4). game:frame() has none.
+        const given = (name) => new RegExp(`:${name}\\b[ \\t]*(?:\\([ \\t]*[^)\\s]|[\\w"'])`);
+        if (!given('frames').test(src)) return 'Cut the picture into its 4 frames: hero:frames(4)';
         // The game's loop runs until the window closes, so what comes after it is too late.
         const loop = src.search(/^[ \t]*while\b/m);
         const before = (re) => loop < 0 || src.search(re) < loop;
-        if (!before(/:frames\s*\(/)) return 'Cut it into frames before the game starts: put hero:frames(4) above while game:open():';
+        if (!before(/:frames\b/)) return 'Cut it into frames before the game starts: put hero:frames(4) above while game:open():';
         if (!/:animation\s*\(/.test(src)) return 'Name the walk and its frames: hero:animation("walk", [1, 2, 3, 4], 8)';
         if (!before(/:animation\s*\(/)) return 'Make the animation before the game starts: put it above while game:open():';
         if (!/:play\s*\(?\s*["']/.test(src)) return 'Play the walk while an arrow is held: hero:play("walk")';
         if (!/^[ \t]+[^\n]*:play\s*\(?\s*["']/m.test(src)) return 'Play the walk in the loop, only while left or right is held: if game:held("right"): hero:play("walk")';
-        return /:frame\s*\(\s*\d/.test(src) ? true : 'When no arrow is held, stand still on frame 1: else: hero:frame(1)';
+        // Standing still: hero:frame(1) in the loop (or the function game:every_frame runs), under an else or an if.
+        // Once before the loop, the walk never stops; on a line of the loop's own, every frame stops it.
+        const rows = src.split('\n');
+        const depth = (i) => rows[i].match(/^[ \t]*/)[0].length;
+        const parent = (i) => { for (let j = i - 1; j >= 0; j--) if (rows[j].trim() && depth(j) < depth(i)) return j; return -1; };
+        const inLoop = (i) => { for (let j = parent(i); j >= 0; j = parent(j)) if (/^[ \t]*(while|func)\b/.test(rows[j])) return true; return false; };
+        const shows = given('frame');
+        const still = rows.map((_, i) => i).filter((i) => shows.test(rows[i]) && inLoop(i));
+        if (!still.length) return 'When no arrow is held, stand still on frame 1: else: hero:frame(1)';
+        const under = (i) => /^[ \t]*(if|elif|else)\b/.test(rows[i]) || /^[ \t]*(if|elif|else)\b/.test(rows[parent(i)]);
+        return still.every(under) ? true : 'Put hero:frame(1) under else:, so the walker only stands still when no arrow is held';
       },
     },
   ];
