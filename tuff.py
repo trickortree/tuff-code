@@ -8351,14 +8351,16 @@ class Debugger:
 
     def place(self, key, full, tell=False):
         """A file's (stops, lines) sets: stops are the lines its breakpoints stop on (see DebugFile.place), and lines
-        also have the first statement of each loop whose own line has one, which stops on the loop's line as it goes
-        round again (see round). tell: TuffCode hears where they stop."""
+        also have the first statement of each loop with one on its own line or in its body. As the loop goes round
+        again that stops on the loop's line, and lets the line it last paused on stop again (see round and step).
+        tell: TuffCode hears where they stop."""
         with self.placing:
             info = self.file(key, full)
             asked = self.asked.get(key, [])
             placed = [[n, info.place(n)] for n in asked]
             stops = {line for _n, line in placed if line is not None}
-            heads = {first for (first, _col), (line, *_rest) in info.loops.items() if line in stops}
+            heads = {first for (first, _col), (line, _c, start, end) in info.loops.items()
+                     if line in stops or any(start[0] <= n <= end[0] for n in stops)}
             sets = self.bps.get(key)
             if sets is None:
                 sets = self.bps[key] = (set(), set())

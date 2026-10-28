@@ -1,8 +1,8 @@
 # Coin Collector: grab as many coins as you can in 30 seconds, and keep away
 # from the ladybirds. The arrow keys (or W, A, S, D) move. Your best score is
 # saved for next time.
-# The pictures are in the pictures folder. Draw your own (Sprite Studio in the
-# sidebar can), or change these: each one is a row of frames.
+# The pictures are in the pictures folder. Draw your own with Sprite Studio (a
+# plugin: install it from Plugins, Alt+3), or change these: each one is a row of frames.
 mention tgame
 
 game = tgame.window("Coin Collector", 800, 600)

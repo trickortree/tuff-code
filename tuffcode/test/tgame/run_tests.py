@@ -8545,6 +8545,29 @@ def debug_loops(c, slow, mode):
     code, out, _err = link.finish()
     c.check(steps == [(1, None), (2, "0"), (2, "1"), (2, "2"), (3, "3")] and code == 0 and out.strip() == "3",
             f"{mode}: ...and Step Over goes round it once a step", (steps, code, out))
+    deeper = (("a loop's later line", "total = 0\nfor i in range(1, 3):\n    total += i\n    say total\nsay \"done\"\n",
+               4, "total", ["1", "3", "6"], "1\n3\n6\ndone"),
+              ("a loop in a function", "func count(n):\n    i = 0\n    while i < n:\n        i += 1\n        say i\n    return i\n\ncount(3)\n",
+               5, "i", ["1", "2", "3"], "1\n2\n3"),
+              ("a loop in a loop", "for a in range(2):\n    for b in range(2):\n        c = a * 10 + b\n        say c\n",
+               4, "c", ["11", "12", "21", "22"], "11\n12\n21\n22"),
+              ("an if in a loop", "for a in range(1, 3):\n    b = a * 2\n    if b > 0: say b\n", 3, "b", ["2", "4", "6"], "2\n4\n6"))
+    for i, (what, src, line, var, want, said) in enumerate(deeper):
+        name = f"deeper{i}.tuf"
+        folder = debug_project(f"loops_{mode}", {name: src})
+        link = DebugLink(folder, name, slow)
+        link.send("setBreakpoints", file=os.path.join(folder, name), lines=[line])
+        link.send("continue")
+        hits = []
+        for _i in range(8):
+            msg = link.next("paused", "ended")
+            if not msg or msg["event"] == "ended":
+                break
+            hits.append((msg["reason"], msg["line"], debug_names(msg, 0).get(var)))
+            link.send("continue")
+        code, out, _err = link.finish()
+        c.check(hits == [("breakpoint", line, v) for v in want] and code == 0 and out.strip() == said,
+                f"{mode}: a breakpoint on {what}, not its first, stops each time round too (Continue, not just once)", (hits, code, out))
 
 
 def debug_more(c):
