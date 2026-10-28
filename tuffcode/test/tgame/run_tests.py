@@ -10165,6 +10165,8 @@ _HELD_RIGHT = _HELD_LEFT.replace("left", "right").replace("-150", "150")
 _ELSE_STILL = '    else:\n        hero:frame(1)\n'
 _SHEETS_ELSE = _walks(_HELD_LEFT + _HELD_RIGHT + _ELSE_STILL)
 _SHEETS_ELIF = _walks(_HELD_LEFT + _HELD_RIGHT.replace("if", "elif", 1) + _ELSE_STILL)
+# ...and frame 1 under an if of its own that checks only that right isn't held: true while left is held too.
+_SHEETS_IF_NOT = _walks(_HELD_LEFT + _HELD_RIGHT + '    if not game:held("right"):\n        hero:frame(1)\n')
 # The mistakes a learner is likely to make in each lesson's task: programs that run (so Learn checks them, instead of
 # pointing at an error), and how the hint its check gives starts.
 LEARN_150_MISTAKES = [
@@ -10226,6 +10228,8 @@ LEARN_150_MISTAKES = [
     ("workshop-sheets", _SHEETS_ALWAYS, "Put hero:frame(1) under else:"),
     ("workshop-sheets", _SHEETS_ELSE, "The else runs while left is held too"),
     ("workshop-sheets", _walks(_HELD_RIGHT + _HELD_LEFT + _ELSE_STILL), "The else runs while right is held too"),
+    ("workshop-sheets", _SHEETS_IF_NOT, "When left is held, if not game:held(\"right\") is true too"),
+    ("workshop-sheets", _walks(_HELD_LEFT + _HELD_RIGHT + '    if not game:held("left"): hero:frame(1)\n'), "When right is held, if not game:held(\"left\")"),
 ]
 # Other right ways to do the tasks, which the checks must accept: each runs, and its check says it's done.
 LEARN_150_GOOD = [
@@ -10258,6 +10262,9 @@ LEARN_150_GOOD = [
     ("workshop-sheets", _walks(_HELD_LEFT + '    else:\n        if game:held("right"):\n            hero:move(150 * dt, 0)\n'
                                '            hero:play("walk")\n        else:\n            hero:frame(1)\n')),  # an else inside an else
     ("workshop-sheets", _walks(_HELD_LEFT + _HELD_RIGHT + '    if not game:held("left") and not game:held("right"):\n        hero:frame(1)\n')),
+    ("workshop-sheets", _walks(_HELD_LEFT + _HELD_RIGHT + '    if not game:held("left"):\n        if not game:held("right"):\n            hero:frame(1)\n')),
+    ("workshop-sheets", _walks(_HELD_LEFT + '    elif not game:held("right"):\n        hero:frame(1)\n'
+                               '    else:\n        hero:move(150 * dt, 0)\n        hero:play("walk")\n')),  # (after the if for left)
 ]
 # Slips in these lessons that stop the run, so Learn only shows what the run says: (the program, with money.tuf next to
 # it, and what both runtimes and --check say).
@@ -10514,6 +10521,9 @@ def t_learn_150(c):
     run = learn_150_game(os.path.join(folder, "sheets_mistakes"), "elif", _SHEETS_ELIF, 80, keys)
     c.check(run[0] == 0 and learn_150_plays(run[3]) == [(0, None, 1), (10, walk, None), (40, None, 1), (50, walk, None), (60, None, 1)],
             "...and with elif for the right arrow, it walks both ways", learn_150_plays(run[3]))
+    run = learn_150_game(os.path.join(folder, "sheets_mistakes"), "if_not", _SHEETS_IF_NOT, 80, keys)
+    c.check(run[0] == 0 and learn_150_plays(run[3]) == [(0, None, 1), (10, walk, None), (40, None, 1)] + [(f, None, 1) for f in range(50, 60)],
+            "frame 1 under if not game:held(\"right\") of its own: going left it's frame 1 every time too", learn_150_plays(run[3]))
 
     # Learn's checks (in Node), with what the programs really said: the mistakes above, and the other right ways.
     def ran(where, lesson, code):

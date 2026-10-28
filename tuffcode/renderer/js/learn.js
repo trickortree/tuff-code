@@ -1142,6 +1142,16 @@
             return `The else runs while ${missed} is held too, so the walk never plays going ${missed}. Check both arrows in one if: if game:held("left") or game:held("right"): hero:play("walk"), then else: hero:frame(1)`;
           }
         }
+        // The same under an if in the loop of its own that only checks one arrow isn't held: if not game:held("right").
+        for (const i of still) {
+          const e = /^[ \t]*if\b/.test(rows[i]) ? i : parent(i);
+          if (!/^[ \t]*if\b[^\n]*\bnot\b[\s(]*\w+:held\b/.test(rows[e] || '') || !/^[ \t]*(while|func)\b/.test(rows[parent(e)] || '')) continue;
+          const tested = arrows([e]);
+          const missed = checked.find((a) => !tested.includes(a));
+          if (tested.length === 1 && missed) {
+            return `When ${missed} is held, if not game:held("${tested[0]}") is true too, so the walk never plays going ${missed}. Check both arrows in one if: if game:held("left") or game:held("right"): hero:play("walk"), then else: hero:frame(1)`;
+          }
+        }
         return true;
       },
     },
