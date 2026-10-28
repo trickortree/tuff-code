@@ -173,7 +173,17 @@ ${NOTES['1.3.0'].notes}`,
 - Tuff programs run several times faster: a million-step loop takes a fraction of a second. Library calls are about 5 times quicker too.
 - A sum too big for a decimal (\`10 ^ 400 / 3\`) says so in plain words instead of crashing.
 
-More is coming in the next beta: a debugger, a New Project gallery and new Learn lessons.`,
+### The debugger
+- Click beside a line number (or press F9) for a red dot, a breakpoint. Press Debug, next to Run (Shift+F9), and the program stops on that line.
+- While it's stopped, Variables shows each name's value (lists, dictionaries and kinds open up) and the call stack shows which function called which. Step Over (F10), Step Into (F11), Step Out (Shift+F11) and Continue (F5) move it on.
+- An error stops it on the line that went wrong, with the names as they were.
+- Watch it run lights up each line as it runs, slow enough to follow, with a speed slider.
+
+### New Project
+- File > New Project… starts a project from a starter: Hello, Quiz, Habit Tracker, Corner Shop, Snake, Coin Collector, Music Box, Drawing, Weather or a blank one. Give it a name and it opens, ready to run.
+
+### Learn
+- A new section, 1.7 · Workshop: a lesson each for text templates, kinds, actions, your own files, music, a terminal game and animated pictures.`,
   };
   // 1.4.1 fixes 1.4.0 and adds looks to input and anims.
   NOTES['1.4.1'] = {
