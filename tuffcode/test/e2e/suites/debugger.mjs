@@ -1,7 +1,9 @@
 // The Tuff Debugger (1.5.0), driven like a person would: a breakpoint from a click in the gutter, the Debug button,
 // the paused line, the Variables panel and the call stack, F10, F11, Shift+F11 and F5, a value opened, another frame,
 // stepping into the file it imports, pause on error, input() while debugging, Watch it run with Pause and Continue
-// (and the eye again once it has ended), the Run menu, and a plain Run closing the debug pane. The program runs with the Tuff runtime (packaged) or Python
+// (and the eye again once it has ended), the Run menu, and a plain Run closing the debug pane. Then a pause while
+// Search Everywhere is open (the keyboard stays in it), F9 while Design Studio shows, Auto Code Sort keeping the
+// breakpoints on their lines, and New Project while a program is paused. The program runs with the Tuff runtime (packaged) or Python
 // + tuff.py (checkout); it's a console program, so no window opens.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -194,5 +196,78 @@ export default async (t, ctx) => {
   await t.key('Escape');
   await clickSel('#btn-run');
   check('A plain Run closes the debug pane', await t.waitFor(`document.querySelector('#debug-pane').classList.contains('hidden')`, 5000), null);
+  await t.waitFor(`!document.querySelector('#btn-run').classList.contains('running')`, 20000);
+
+  // ---- a pause while a dialog is open (Search Everywhere): the line is lit, and the keyboard stays in the dialog
+  const SLOW = 'say "a"\nwait(2)\nsay "b"\nsay "c"\n';
+  fs.writeFileSync(file('slow.tuf'), SLOW);
+  const dot = (name, line) => ev(`window.TuffDebug.toggle(${JSON.stringify(file(name))}, ${line})`);
+  await open('slow.tuf');
+  await dot('slow.tuf', 3);
+  await clickSel('#btn-debug');
+  await t.waitFor(`window.TuffDebug.state().state === 'running'`, 15000);
+  await ev(`window.TuffIDE.runCommand('searchEverywhere')`);
+  await t.waitFor(`document.activeElement?.id === 'se-input'`, 3000);
+  await t.type('ab', 40);
+  check('A breakpoint reached while Search Everywhere is open lights its line, and the keyboard stays in the search box', await pausedAt(3) && await lit('paused') === 1
+    && await ev(`document.activeElement?.id === 'se-input'`), await state());
+  await t.type('xy', 40);
+  const searched = await ev(`document.querySelector('#se-input').value`);
+  check('...what is typed then goes into the box, not the code', searched === 'abxy' && (await t.code()).replace(/\r\n/g, '\n') === SLOW, [searched, await t.code()]);
+  await t.key('Escape');
+  await fkey('F10', 121);
+  check('...Esc closes it, and F10 steps on in the code', await ev(`document.querySelector('#search-everywhere').classList.contains('hidden')`) && await pausedAt(4), await state());
+  await dot('slow.tuf', 3);
+  await fkey('F5', 116);
+  await ended();
+
+  // ---- F9 while Design Studio shows (the code editor is hidden): only a toast
+  fs.writeFileSync(file('shop.tuf'), 'import tgui\n\nwin = tgui.window("Shop", 420, 360)\ntitle = win:heading("Hello")\nwin:show()\n');
+  await open('shop.tuf');
+  await ev(`window.TuffIDE.editor().setPosition({ lineNumber: 4, column: 1 })`);
+  await ev(`window.TuffIDE.runCommand('studio')`);
+  await t.waitFor(`window.TuffIDE.studioVisible()`, 6000);
+  const dots = JSON.stringify(await ev('window.TuffDebug.breakpoints()'));
+  await fkey('F9', 120);
+  check('F9 while Design Studio shows puts no breakpoint in the hidden code, and says to show the code', JSON.stringify(await ev('window.TuffDebug.breakpoints()')) === dots
+    && await t.waitFor(`[...document.querySelectorAll('#toasts .toast')].some((x) => /Show the code/.test(x.textContent))`, 3000), await ev('window.TuffDebug.breakpoints()'));
+
+  // ---- Auto Code Sort puts each breakpoint back on its own line, and one Ctrl+Z takes the sort back
+  const MESSY = 'func greet(who):\n  say "hi " + who\nx=1\ngreet("Sam")\nsay x\n';
+  fs.writeFileSync(file('messy.tuf'), MESSY);
+  await open('messy.tuf');
+  for (const n of [2, 3, 5]) await dot('messy.tuf', n);
+  await ev(`(() => { const e = window.TuffIDE.editor(); e.setPosition({ lineNumber: 5, column: 1 }); e.focus(); })()`);
+  await ev(`window.TuffIDE.runCommand('autoSort')`);
+  await t.waitFor(`window.TuffIDE.editor().getModel().getValue().includes('# ── Functions')`, 6000);
+  const sorted = await ev(`(() => { const m = window.TuffIDE.editor().getModel();
+    return window.TuffDebug.breakpoints().filter((b) => /messy\\.tuf$/i.test(b.path)).flatMap((b) => b.lines).map((n) => m.getLineContent(n).trim()); })()`);
+  check('Auto Code Sort moving a function down (and x=1 to x = 1): each breakpoint goes with its line', JSON.stringify(sorted) === JSON.stringify(['x = 1', 'say x', 'say "hi " + who']), sorted);
+  await t.key('z', ctx.platform === 'darwin' ? 4 : 2);
+  await t.sleep(300);
+  check('...and one Ctrl+Z takes the sort back', (await t.code()).replace(/\r\n/g, '\n') === MESSY, await t.code());
+  for (const b of await ev('window.TuffDebug.breakpoints()')) for (const n of b.lines) await ev(`window.TuffDebug.toggle(${JSON.stringify(b.path)}, ${n})`);
+
+  // ---- New Project while a program is paused: it stops, the old project's Design Studio tab goes, and Rerun runs the
+  // new project's main.tuf (the gallery makes it in a scratch folder, as newproject.mjs does)
+  await open('slow.tuf');
+  await dot('slow.tuf', 3);
+  await clickSel('#btn-debug');
+  check('(slow.tuf stops at its breakpoint, with the Design Studio tab still open)', await pausedAt(3) && await ev(`!!document.querySelector('#tabs .studio-tab')`), await state());
+  const projects = path.join(path.dirname(ctx.root), 'projects');
+  fs.mkdirSync(projects, { recursive: true });
+  await ev(`window.TuffIDE.saveSettings({ newProjectFolder: ${JSON.stringify(projects)} }); 1`);
+  await ev(`window.TuffNewProject.open(); 1`);
+  await t.waitFor(`!!document.querySelector('#new-project .np-card.sel') && !document.querySelector('#np-create').disabled`, 10000);
+  await t.key('Enter');
+  const made = await t.waitFor(`!document.querySelector('#new-project') && window.TuffIDE.root().startsWith(${JSON.stringify(projects)})`, 15000);
+  check('New Project while it is paused: the program stops, and the pane says so', made && (await state()).state === 'ended'
+    && /The program was stopped/.test(await text('#debug-pane .dbg-status')), [await state(), await text('#debug-pane .dbg-status')]);
+  const tabs = await ev(`[...document.querySelectorAll('#tabs .tab')].map((x) => x.title)`);
+  check("...the old project's Design Studio tab goes, and only the new project's main.tuf is open", tabs.length === 1 && tabs[0].startsWith(projects) && /main\.tuf$/.test(tabs[0]), tabs);
+  await t.waitFor(`!document.querySelector('#btn-run').classList.contains('running')`, 10000);
+  await fkey('F5', 116, 2); // Ctrl+F5: Rerun
+  check("...and Rerun (Ctrl+F5) runs the new project's main.tuf, not slow.tuf", await t.waitFor(`document.querySelector('#run-tab-name').textContent === 'main.tuf'`, 6000),
+    await text('#run-tab-name'));
   await t.waitFor(`!document.querySelector('#btn-run').classList.contains('running')`, 20000);
 };

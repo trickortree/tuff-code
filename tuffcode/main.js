@@ -631,11 +631,15 @@ ipcMain.handle('window:close', () => win.close());
 ipcMain.handle('window:isMaximized', () => win.isMaximized());
 ipcMain.handle('app:devtools', () => win.webContents.toggleDevTools());
 
-// The Mac menu bar. On a Mac, text fields only get Cmd+Z/C/V/X/A from Edit menu items. The editor
+// The menu bar. Windows and Linux have none: the window has no frame to show one in, but Electron's default menu
+// (File, Edit, View, Window) would still be there, and its keys work wherever the page leaves a key alone, in a
+// dialog or a text box: Ctrl+W would close the window, Ctrl+R and Ctrl+Shift+R reload it, F11 make it full screen.
+// TuffCode's own shortcuts are all the page's (ide.js), and text boxes there do their own copy, paste and undo.
+// On a Mac, text fields only get Cmd+Z/C/V/X/A from Edit menu items. The editor
 // and TuffCode's own shortcuts still handle their keys first. Close and Reload are left out so
 // Cmd+W and Cmd+R reach the editor's own shortcuts.
-function macMenu() {
-  if (process.platform !== 'darwin') return;
+function appMenu() {
+  if (process.platform !== 'darwin') { Menu.setApplicationMenu(null); return; }
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { role: 'appMenu', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
     { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
@@ -644,7 +648,7 @@ function macMenu() {
 }
 
 app.whenReady().then(() => {
-  macMenu();
+  appMenu();
   protocol.handle('tuffview', serveView);
   createWindow();
   updater.start((s) => send('update:status', s), loadSettings);
