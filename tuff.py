@@ -9044,6 +9044,10 @@ def main():
     setup_streams()
     if hasattr(sys, "set_int_max_str_digits"):  # say 2 ^ 20000 shows every digit (Python stops at 4300)
         sys.set_int_max_str_digits(0)
+        try:  # what writes numbers that long; named here so the packed runtime and built apps take it along
+            import _pylong  # noqa: F401
+        except ImportError:
+            pass
     args = sys.argv[1:]
     if not args:
         print("Welcome to TuffCode, coding made easy.")
