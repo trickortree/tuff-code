@@ -8122,6 +8122,292 @@ def t_tmusic(c):
                     f"...and runs, saving theme.wav ({secs:.1f} s)", (out + err)[-300:])
 
 
+# ---------------------------------------------------------------- Learn's Section 1.7, the Workshop (1.5.0)
+
+# What the Workshop lessons' console examples and solutions say (through a pipe: no sound, no one to press keys).
+LEARN_150_SAYS = {
+    ("workshop-templates", "example"): "Sam has 10 points\nTwo of them: $12.75\n0.33 and 007\n[Sam   ] [   9]",
+    ("workshop-templates", "solution"): "popcorn  $1.20\napple    $0.45\njuice    $1.85\nTotal:   $3.50",
+    ("workshop-kinds", "example"): 'Rex is this hungry: 6\nAnn is this hungry: 2\nPet(name: "Rex", hunger: 6)',
+    ("workshop-kinds", "solution"): "Holes and Wonder: 582 pages",
+    ("workshop-actions", "example"): "Rex played\nRex is this hungry: 4",
+    ("workshop-actions", "solution"): "Sam has 3 hp left",
+    ("workshop-files", "example"): "Price: $6.38\nWith tax: $7.65\nThe tax rate is 0.2",
+    ("workshop-files", "solution"): "3 tickets: $16.20",
+    ("workshop-music", "example"): "That song is 8 seconds long",
+    ("workshop-music", "solution"): "",
+}
+_SNACKS = 'snacks = {"popcorn": 1.2, "apple": 0.45, "juice": 1.85}\n'
+_BOOK = 'kind Book:\n    title = ""\n    pages = 0\n\n'
+_HERO = 'kind Hero:\n    name = "?"\n    hp = 10\n'
+_SCREEN = 'mention tterm\nscreen = tterm.screen(20, 10)\nx = 10\ny = 5\n\nfunc step(dt):\n'
+_SHEET = 'mention tgame\ngame = tgame.window("Walker", 600, 300)\nhero = game:image("walker.png", 300, 200, 96)\n'
+# The mistakes a learner is likely to make in each lesson's task: programs that run (so Learn checks them, instead of
+# pointing at an error), and how the hint its check gives starts.
+LEARN_150_MISTAKES = [
+    ("workshop-templates", _SNACKS + 'for snack in snacks:\n    say "{snack:8} {snacks[snack]:money}"\n', "Put an f right before the quotes"),
+    ("workshop-templates", _SNACKS + 'for snack in snacks:\n    say snack + " " + text(snacks[snack], 2)\n', "Make each line with a template"),
+    ("workshop-templates", _SNACKS + 'for snack in snacks:\n    say f"{snack:8} {snacks[snack]}"\n', "Show the prices as money"),
+    ("workshop-templates", _SNACKS + 'for snack in snacks:\n    say f"{snack:8} {snacks[snack]:money}"\n', "Then add the prices up"),
+    ("workshop-templates", _SNACKS + 'total = 0\nfor snack in snacks:\n    total += snacks[snack]\n    say f"{snack:8} {snacks[snack]:money}"\n'
+                                     'say "Total: " + total\n', "Say the total as money too"),
+    ("workshop-kinds", 'holes = {"title": "Holes", "pages": 272}\nsay holes["pages"]\n', "Start your own kind"),
+    ("workshop-kinds", 'kind Book:\n    title = ""\n\nholes = Book("Holes")\nwonder = Book("Wonder")\nsay holes.title + wonder.title\n', "Give Book two fields"),
+    ("workshop-kinds", _BOOK + 'holes = Book("Holes", 272)\nsay holes.pages\n', "Make two of them"),
+    ("workshop-kinds", _BOOK + 'holes = Book("Holes", 272)\nwonder = Book("Wonder", 310)\nsay holes\nsay wonder\n', "Read a field with a dot"),
+    ("workshop-kinds", _BOOK + 'holes = Book("Holes", 272)\nwonder = Book("Wonder", 310)\nsay f"{holes.title} has {holes.pages} pages"\n'
+                               'say f"{wonder.title} has {wonder.pages} pages"\n', "Add the two books' pages together"),
+    ("workshop-actions", _HERO + '\nfunc hurt(damage):\n    sam.hp -= damage\n\nsam = Hero("Sam")\nhurt(3)\nhurt(4)\nsay sam.hp\n', "Move the func into the kind"),
+    ("workshop-actions", _HERO + '    func hurt(damage):\n        sam.hp -= damage\n\nsam = Hero("Sam")\nsam:hurt(3)\nsam:hurt(4)\nsay sam.hp\n',
+     "In the action, take the damage off the hero's own hp"),
+    ("workshop-actions", _HERO + '    func hurt(damage):\n        my.hp -= damage\n\nsam = Hero("Sam")\nsay sam.hp\n', "Run the action on your hero"),
+    ("workshop-actions", _HERO + '    func hurt(damage):\n        my.hp -= damage\n\nsam = Hero("Sam")\nsam:hurt(3)\nsay sam.hp\n', "Hurt your hero twice"),
+    ("workshop-files", 'say f"{3 * 4.5 * 1.2:money}"\n', "Load the file first"),
+    ("workshop-files", 'import money.tuf\nsay money.as_money(3 * 4.5)\n', "Work out the price with tax"),
+    ("workshop-files", 'import money.tuf\nsay money.with_tax(3 * 4.5)\n', "Show it as money"),
+    ("workshop-music", 'mention tmusic\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4")\nsong:track("bass", "C3*3")\nsong:play()\n', "Play a tune first"),
+    ("workshop-music", 'mention tmusic\ntmusic.play("C4 E4 G4", "piano")\ntmusic.play("C3*3", "bass")\n', "Make a song"),
+    ("workshop-music", 'mention tmusic\ntmusic.play("C4 E4", "piano")\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4")\nsong:play()\n', "Give it two tracks"),
+    ("workshop-music", 'mention tmusic\ntmusic.play("C4 E4", "piano")\nsong = tmusic.song(120)\nsong:track("piano", "C4 E4 G4")\n'
+                       'song:track("bass", "C3*3")\n', "Play the song after its tracks"),
+    ("workshop-tterm", _SCREEN + '    if screen:pressed("up"):\n        y -= 1\n    screen:clear()\n    screen:put(x, y, "@")\n\nscreen:every_frame(step)\n',
+     "Now the down arrow"),
+    ("workshop-tterm", _SCREEN + '    if screen:pressed("up"):\n        x -= 1\n    if screen:pressed("down"):\n        x += 1\n    screen:clear()\n'
+                                 '    screen:put(x, y, "@")\n\nscreen:every_frame(step)\n', "Up goes towards the top"),
+    ("workshop-tterm", _SCREEN + '    if screen:pressed("up"):\n        y -= 1\n    if screen:pressed("down"):\n        y += 1\n    screen:clear()\n'
+                                 '    screen:put(x, y, "@")\n\nscreen:every_frame(step)\n', "Keep the @ inside the box"),
+    ("workshop-sheets", _SHEET + 'while game:open():\n    game:frame()\nhero:frames(4)\n', "Cut it into frames before the game starts"),
+    ("workshop-sheets", _SHEET + 'hero:frames(4)\nwhile game:open():\n    game:frame()\n', "Name the walk and its frames"),
+    ("workshop-sheets", _SHEET + 'hero:frames(4)\nhero:animation("walk", [1, 2, 3, 4], 8)\nhero:play("walk")\nwhile game:open():\n    game:frame()\n',
+     "Play the walk in the loop"),
+    ("workshop-sheets", _SHEET + 'hero:frames(4)\nhero:animation("walk", [1, 2, 3, 4], 8)\nwhile game:open():\n    dt = game:frame()\n'
+                                 '    if game:held("right"):\n        hero:play("walk")\n', "When no arrow is held"),
+]
+
+
+def learn_150_write(folder, files):
+    """Writes a lesson's own files (text, or {"base64": ...} for a picture) into folder."""
+    os.makedirs(folder, exist_ok=True)
+    for name, data in (files or {}).items():
+        if isinstance(data, dict):
+            with open(os.path.join(folder, name), "wb") as f:
+                f.write(base64.b64decode(data["base64"]))
+        else:
+            with open(os.path.join(folder, name), "w", encoding="utf-8") as f:
+                f.write(data)
+
+
+def learn_150_game(folder, name, code, frames, events=None, slow=False):
+    """A tgame lesson's program, run by headless.py in folder (no window): (exit code, say lines, stderr, the
+    commands it sent the page)."""
+    path = os.path.join(folder, name + ".tuf")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(code)
+    out = os.path.join(folder, name + ".json")
+    args = [sys.executable, os.path.join(HERE, "headless.py"), path, out, str(frames)]
+    if events:
+        with open(os.path.join(folder, name + ".events.json"), "w", encoding="utf-8") as f:
+            json.dump(events, f)
+        args.append(os.path.join(folder, name + ".events.json"))
+    env = {k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_SLOW", "TUFF_TGAME_AUTOPILOT")}
+    env.update(PYTHONIOENCODING="utf-8", TUFF_NO_SOUND="1", **({"TUFF_SLOW": "1"} if slow else {}))
+    p = subprocess.run(args, cwd=folder, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, env=env,
+                       stdin=subprocess.DEVNULL)
+    return p.returncode, [x for x in p.stdout.splitlines() if x.strip()], p.stderr, read_json(out) or []
+
+
+def learn_150_plays(cmds):
+    """[(frame, what :play sent, the frame shown)] for the first picture a game made."""
+    pic = next((cmd[1] for cmd in cmds if cmd[0] == "c" and cmd[3] == "image"), None)
+    return [(f, s.get("play", "-"), s.get("cell")) for f, s in frame_sets(cmds, pic)]
+
+
+def t_learn_150(c):
+    """1.5.0, headless: Learn's Section 1.7, the Workshop (text templates, kinds, actions, your own files, tmusic, tterm
+    and sprite sheets). learn.js, in Node (learn_test.mjs), lists it after Toolbox. Every lesson's example, starter and
+    solution passes --check and runs the same in both runtimes, saying what it should (the game with headless.py, so no
+    window, and music through a pipe, so no sound); each check accepts its solution, run for real, and gives its hint
+    for the starter, for empty code and for the mistakes above; and Start lesson writes a lesson's own files (money.tuf
+    and the sprite sheet walker.png) next to its file, where the solutions run."""
+    import shutil
+    import tuff_tgame
+    folder = os.path.join(OUT, "learn_150")
+    shutil.rmtree(folder, ignore_errors=True)
+    os.makedirs(folder)
+    learn = os.path.join(REPO, "tuffcode", "renderer", "js", "learn.js")
+    quiet = {"TUFF_NO_SOUND": "1", "TUFF_MUSIC_DIR": os.path.join(folder, "music")}
+
+    def node(plan):
+        path = os.path.join(folder, "plan.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(plan, f)
+        p = subprocess.run(["node", os.path.join(HERE, "learn_test.mjs"), learn, path], capture_output=True, text=True, encoding="utf-8",
+                           timeout=120)
+        try:
+            return json.loads(p.stdout)
+        except ValueError:
+            return {"error": (p.stdout + p.stderr)[-800:]}
+
+    try:
+        got = node({})
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped Learn's Workshop lessons")
+        return
+    titles = [s["title"] for s in got.get("sections", [])]
+    c.check(titles[2:4] == ["Section 1.6 · Toolbox", "Section 1.7 · Workshop"], "learn.js lists Section 1.7 · Workshop right after Toolbox",
+            got.get("error") or titles)
+    work = next((s for s in got.get("sections", []) if s["id"] == "workshop"), None)
+    if work is None:
+        return
+    lessons = work["lessons"]
+    ids = [l["id"] for l in lessons]
+    c.check(work["optional"] and ids == ["workshop-templates", "workshop-kinds", "workshop-actions", "workshop-files", "workshop-music",
+                                         "workshop-tterm", "workshop-sheets"],
+            "...an optional section of 7 lessons: templates, kinds, actions, your own files, music, a terminal game, sprite sheets", ids)
+    c.check([l["file"] for l in lessons] == [f"workshop-{i:02}-{l['id'][len('workshop-'):]}.tuf" for i, l in enumerate(lessons, 1)],
+            "...whose files are lessons/workshop-01-templates.tuf and so on", [l["file"] for l in lessons])
+    heads = [(l["starter"].splitlines() or [""])[0] for l in lessons]
+    c.check(heads == [f"# Section 1.7, Lesson {i}: {l['title']}" for i, l in enumerate(lessons, 1)],
+            "each starter begins '# Section 1.7, Lesson N: <its title>'", heads)
+    c.check(all(l["task"] and l["body"].count("<p>") >= 2 and l["example"] and l["solution"] for l in lessons),
+            "each has a body, an example, a task, a starter and a solution")
+    words = " ".join(" ".join(str(l[k]) for k in ("title", "body", "task", "example", "starter", "solution")) for l in lessons)
+    c.check(not re.search(r"python|pyinstaller|\bpip\b", words, re.I), "...and none of them mentions Python, pip or PyInstaller")
+    own = {l["id"]: l["files"] or {} for l in lessons}
+    c.check({i: sorted(f) for i, f in own.items() if f} == {"workshop-files": ["money.tuf"], "workshop-sheets": ["walker.png"]},
+            "two lessons have files of their own: money.tuf for your own files, walker.png for sprite sheets", {i: sorted(f) for i, f in own.items()})
+    learn_150_write(folder, own["workshop-sheets"])
+    c.check(tuff_tgame.image_size(os.path.join(folder, "walker.png")) == (384, 96),
+            "walker.png is a picture 384 x 96: 4 frames side by side, each 96 x 96", tuff_tgame.image_size(os.path.join(folder, "walker.png")))
+
+    # Each lesson's code, next to its own files: --check, and a run in both runtimes.
+    outputs = {}  # (lesson, part) -> what it said, for its check
+    for l in lessons:
+        where = os.path.join(folder, l["id"])
+        learn_150_write(where, own[l["id"]])
+        game = "mention tgame" in l["example"]
+        for part in ("example", "starter", "solution"):
+            path = os.path.join(where, part + ".tuf")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(l[part])
+            p = subprocess.run(tuff_cmd() + ["--check", path], capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=where,
+                               stdin=subprocess.DEVNULL)
+            c.check(p.returncode == 0 and p.stdout.strip() == "OK", f"{l['id']} {part} passes --check", (p.stdout + p.stderr)[:300])
+            if game:
+                run = learn_150_game(where, "run_" + part, l[part], 10)
+                outputs[(l["id"], part)] = "\n".join(run[1])
+                c.check(run[0] == 0 and not run[2].strip(), "...and runs headless, with no window", run[2][-300:])
+                continue
+            slow, fast =(interp_run(os.path.join(where, mode + "_" + part), l[part], mode == "slow", env=quiet, files=own[l["id"]])
+                          for mode in ("slow", "fast"))
+            outputs[(l["id"], part)] = fast[1]
+            want = LEARN_150_SAYS.get((l["id"], part))
+            c.check(fast[0] == 0 and not fast[2].strip() and slow == fast and (want is None or fast[1].strip() == want),
+                    f"...and runs the same in both runtimes{', saying ' + repr(want[:40]) if want else ''}", (slow, fast))
+
+    # The terminal game: the up and down arrows move the @, and the box's walls stop it (screen:press gives a frame a key).
+    tterm = next(l for l in lessons if l["id"] == "workshop-tterm")
+    c.check(outputs.get(("workshop-tterm", "example"), "").rstrip().endswith("You stopped at 3."), "the tterm example ends 'You stopped at 3.'",
+            outputs.get(("workshop-tterm", "example"), "")[-200:])
+    for key, want in (("up", 1), ("down", 8)):
+        keys = "".join(f'screen:press("{key}", {n})\n' for n in range(2, 30, 2))
+        code = tterm["solution"].replace("screen:every_frame(step)", keys + "screen:every_frame(step)")
+        runs = [interp_run(os.path.join(folder, "tterm_" + key + mode), code, mode == "slow") for mode in ("slow", "fast")]
+        rows = [i for i, line in enumerate(runs[1][1].splitlines()) if "@" in line]
+        c.check(runs[0] == runs[1] and runs[1][0] == 0 and rows == [want],
+                f"the tterm solution: pressing {key} 14 times takes the @ to row {want}, against the box", (rows, runs[1][1][-400:]))
+
+    # The sprite sheet game, headless: the example walks by itself; the solution walks while an arrow is held.
+    sheets = next(l for l in lessons if l["id"] == "workshop-sheets")
+    where = os.path.join(folder, "workshop-sheets")
+    code, out, err, d, secs = scene(os.path.join(where, "example.tuf"))
+    hero = next((t for t in d.get("things", []) if t.get("var") == "hero"), {})
+    c.check(d.get("error") is None and hero.get("frames") == {"cells": [4, 1], "frame": 1, "playing": "walk", "loop": True,
+                                                                 "animations": {"walk": {"frames": [1, 2, 3, 4], "fps": 8}}},
+            "Tuff Engine's preview of the sprite sheet example: 4 frames, walk playing", (d.get("error"), hero.get("frames")))
+    walk = [[1, 2, 3, 4], 8, True]
+    runs = [learn_150_game(where, "example_" + mode, sheets["example"], 30, slow=mode == "slow") for mode in ("slow", "fast")]
+    c.check(runs[1][0] == 0 and not runs[1][2].strip() and learn_150_plays(runs[1][3]) == [(0, walk, 1)]
+            and learn_150_plays(runs[0][3]) == learn_150_plays(runs[1][3]),
+            "the example runs headless in both runtimes, walking from the start", (learn_150_plays(runs[1][3]), runs[1][2][-300:]))
+    keys = {"10": [{"type": "keydown", "code": "ArrowRight"}], "40": [{"type": "keyup", "code": "ArrowRight"}],
+            "50": [{"type": "keydown", "code": "ArrowLeft"}], "60": [{"type": "keyup", "code": "ArrowLeft"}]}
+    runs = [learn_150_game(where, "solution_" + mode, sheets["solution"], 80, keys, slow=mode == "slow") for mode in ("slow", "fast")]
+    plays = [learn_150_plays(r[3]) for r in runs]
+    c.check(runs[1][0] == 0 and not runs[1][2].strip() and plays[0] == plays[1]
+            and plays[1] == [(0, None, 1), (10, walk, None), (40, None, 1), (50, walk, None), (60, None, 1)],
+            "the solution, headless in both runtimes: frame 1 standing, the walk while right or left is held, frame 1 again after",
+            (plays, runs[1][2][-300:]))
+
+    # Learn's checks (in Node), with what the programs really said.
+    mistakes = []
+    for i, (lesson, code, _hint) in enumerate(LEARN_150_MISTAKES):
+        where = os.path.join(folder, "mistake", str(i))
+        if "mention tgame" in code:
+            learn_150_write(where, own[lesson])
+            run = learn_150_game(where, "mistake", code, 5)
+            mistakes.append((run[0], "\n".join(run[1]), run[2]))
+        else:
+            run = interp_run(where, code, False, env=quiet, files=own[lesson])
+            mistakes.append(run)
+    jobs = [{"id": l["id"], "src": l[part], "out": outputs.get((l["id"], part), "")} for l in lessons for part in ("solution", "starter")]
+    jobs += [{"id": l["id"], "src": "", "out": ""} for l in lessons]
+    jobs += [{"id": lesson, "src": code, "out": run[1]} for (lesson, code, _h), run in zip(LEARN_150_MISTAKES, mistakes)]
+    verdicts = node({"checks": jobs}).get("verdicts") or [None] * len(jobs)
+    n = len(lessons)
+    for i, l in enumerate(lessons):
+        solution, starter, empty = verdicts[2 * i], verdicts[2 * i + 1], verdicts[2 * n + i]
+        c.check(solution is True and isinstance(starter, str) and not starter.startswith("THREW") and isinstance(empty, str)
+                and not empty.startswith("THREW"), f"{l['id']}: its check accepts the solution, and gives the starter a hint: {starter}",
+                (solution, starter, empty))
+    for (lesson, code, hint), run, verdict in zip(LEARN_150_MISTAKES, mistakes, verdicts[3 * n:]):
+        shown = " / ".join(x.strip() for x in code.splitlines() if x.strip() and not x.startswith(("mention", "kind", "snacks =")))[-70:]
+        c.check(run[0] == 0 and isinstance(verdict, str) and verdict.startswith(hint),
+                f"{lesson}: '{shown}' runs, and the check says: {hint}", (run[0], run[2][-200:], verdict))
+
+    # Start lesson in a project (its folder has a space in its name): the lesson's file, and its own files next to it.
+    project = os.path.join(folder, "My Project")
+    os.makedirs(project)
+    lessons_dir = os.path.join(project, "lessons")
+    got = node({"starts": [{"root": project, "id": "workshop-files"}, {"root": project, "id": "workshop-sheets"},
+                           {"root": project, "id": "workshop-templates"}]}).get("starts") or [{}] * 3
+    files, sheet, plain = got
+    c.check(files.get("calls") == [["createDir", "lessons"], ["writeFile", "lessons/workshop-04-files.tuf"], ["writeFile", "lessons/money.tuf"],
+                                   ["refreshTree"], ["openFile", "lessons/workshop-04-files.tuf"]],
+            "Start lesson on 'Your own files' makes lessons/, the lesson's file and money.tuf next to it, then opens the lesson", files)
+    with open(os.path.join(lessons_dir, "money.tuf"), encoding="utf-8") as f:
+        c.check(f.read() == own["workshop-files"]["money.tuf"], "...with the money.tuf the lesson has")
+    c.check(sheet.get("calls") == [["writeFile", "lessons/workshop-07-sheets.tuf"], ["plugins.writeFile", "lessons/walker.png", "base64"],
+                                   ["refreshTree"], ["openFile", "lessons/workshop-07-sheets.tuf"]]
+            and tuff_tgame.image_size(os.path.join(lessons_dir, "walker.png")) == (384, 96),
+            "Start lesson on 'Animated pictures' writes walker.png (as base64, inside the project) next to its file", sheet)
+    c.check(plain.get("calls") == [["writeFile", "lessons/workshop-01-templates.tuf"], ["refreshTree"], ["openFile", "lessons/workshop-01-templates.tuf"]],
+            "...and a lesson without files of its own writes only its file", plain)
+    # The solutions, in the lesson files there: they find money.tuf and walker.png.
+    files_lesson = next(l for l in lessons if l["id"] == "workshop-files")
+    runs = [interp_run(lessons_dir, files_lesson["solution"], mode == "slow", env=quiet, main="workshop-04-files.tuf") for mode in ("slow", "fast")]
+    c.check(runs[0] == runs[1] and runs[1][0] == 0 and runs[1][1].strip() == "3 tickets: $16.20",
+            "the 'Your own files' solution, in lessons/workshop-04-files.tuf, imports the money.tuf Learn wrote", runs[1])
+    run = learn_150_game(lessons_dir, "workshop-07-sheets", sheets["solution"], 20, {"5": [{"type": "keydown", "code": "ArrowRight"}]})
+    c.check(run[0] == 0 and learn_150_plays(run[3]) == [(0, None, 1), (5, walk, None)],
+            "the 'Animated pictures' solution, in lessons/, walks with the walker.png Learn wrote", (learn_150_plays(run[3]), run[2][-300:]))
+    # Starting again keeps what the learner changed, and brings back a file they deleted.
+    with open(os.path.join(lessons_dir, "money.tuf"), "a", encoding="utf-8") as f:
+        f.write("\nfunc half(price):\n    return price / 2\n")
+    again, back = node({"starts": [{"root": project, "id": "workshop-files"},
+                                   {"root": project, "id": "workshop-sheets", "remove": ["walker.png"]}]}).get("starts") or [{}] * 2
+    with open(os.path.join(lessons_dir, "money.tuf"), encoding="utf-8") as f:
+        changed = f.read()
+    c.check(again.get("calls") == [["openFile", "lessons/workshop-04-files.tuf"]] and changed.endswith("return price / 2\n"),
+            "starting a lesson again changes nothing: the money.tuf the learner added to stays as it is", again)
+    c.check(back.get("calls", [])[:1] == [["plugins.writeFile", "lessons/walker.png", "base64"]] and os.path.isfile(os.path.join(lessons_dir, "walker.png")),
+            "...and a lesson file it needs that was deleted comes back", back)
+    # The e2e test knows the new section too.
+    with open(os.path.join(HERE, "..", "e2e", "suites", "learn-sections.mjs"), encoding="utf-8") as f:
+        suite = f.read()
+    c.check("'Section 1.7 · Workshop'" in suite and "'workshop'" in suite, "learn-sections.mjs (the e2e test) knows Section 1.7 · Workshop")
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
@@ -8150,6 +8436,7 @@ TESTS.update({"modules": t_modules})  # 1.5.0: your own files as libraries (impo
 TESTS.update({"kinds": t_kinds})  # 1.5.0: your own objects
 TESTS.update({"tterm": t_tterm})  # 1.5.0: terminal games
 TESTS.update({"tmusic": t_tmusic})  # 1.5.0: music from notes
+TESTS.update({"learn_150": t_learn_150})  # 1.5.0: Learn's Section 1.7, the Workshop
 
 
 def main():
