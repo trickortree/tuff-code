@@ -54,15 +54,22 @@ export default async (t, ctx) => {
   await t.key('Backspace');
   await t.waitFor(`document.querySelectorAll('.np-card').length === 10`, 3000);
 
-  // Arrow keys: Down in the search box goes a row down; on the cards Right goes across
+  // Arrow keys: Down in the search box goes a row down from the chosen card (Snake: a card the search showed stays
+  // chosen when the search is cleared); on the cards Home goes to the first and Right goes across
+  s = await state();
+  const was = s.cards.indexOf(s.sel);
+  check('clearing the search keeps the chosen card (Snake)', s.sel === 'snake' && s.cards.length === 10, s);
   await t.key('ArrowDown');
   await t.sleep(200);
   s = await state();
-  check('Down in the search box chooses the card a row below', s.sel === s.cards[s.across] && s.focus === 'np-q', s);
+  check('Down in the search box chooses the card a row below', s.sel === s.cards[was + s.across] && s.focus === 'np-q', s);
   await ev(`document.querySelector('.np-card.sel').focus(); 1`);
+  await arrow('Home', 36);
+  s = await state();
+  check('Home on a card chooses the first one', s.sel === 'blank', s);
   await arrow('ArrowRight', 39);
   s = await state();
-  check('Right on a card chooses the next one, and the focus goes with it', s.sel === s.cards[s.across + 1] && s.focus === s.sel, s);
+  check('Right on a card chooses the next one, and the focus goes with it', s.sel === s.cards[1] && s.focus === s.sel, s);
   await arrow('Home', 36);
   s = await state();
   check('Home goes back to the first card', s.sel === 'blank', s);

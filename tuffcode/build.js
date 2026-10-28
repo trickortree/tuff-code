@@ -214,7 +214,9 @@ const MILESTONES = [
 
 async function build(opts, emit) {
   const step = (id, state, label, detail) => emit({ type: 'step', id, state, label, detail });
-  const log = (text) => emit({ type: 'log', text });
+  // What the build tools print goes to Technical details in TuffCode's words (1.5.0): the tools behind Build Exe are
+  // never named there either. (MILESTONES read the tools' own lines.)
+  const log = (text) => emit({ type: 'log', text: String(text).replace(/pyinstaller/gi, 'packer').replace(/python/gi, 'runtime') });
   const fail = (id, label, message) => {
     step(id, 'error', label);
     emit({ type: 'done', ok: false, message });
@@ -336,7 +338,7 @@ async function build(opts, emit) {
   // The app's windows use the same icon as the app file: the launcher tells the window library
   // where the packed PNG copy is (Tk shows PNGs; its .ico reader can't read modern .ico files).
   await fsp.writeFile(launcher, [
-    'import os, sys, tempfile, threading, traceback',
+    'import os, sys, threading, traceback',
     'base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))',
     'icon = os.path.join(base, "_tuffcode", "app_icon.png")',
     'if os.path.isfile(icon):',
@@ -350,8 +352,12 @@ async function build(opts, emit) {
     '    folder = os.path.dirname(os.path.abspath(sys.executable))',
     '    if sys.platform == "darwin" and folder.endswith(".app/Contents/MacOS"):',
     '        folder = os.path.dirname(os.path.dirname(os.path.dirname(folder)))',
+    // One file made and removed again. (Not tempfile: on Windows, where the user may not write, it tries another name
+    // up to 2,147,483,647 times, so an app in Program Files never started.)
+    '    probe = os.path.join(folder, f".tuff-{os.getpid()}-{os.urandom(4).hex()}.tmp")',
     '    try:',
-    '        tempfile.TemporaryFile(dir=folder).close()',
+    '        os.close(os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY))',
+    '        os.remove(probe)',
     `        return os.path.join(folder, ${JSON.stringify(`${name} files`)})`,
     '    except OSError:',
     '        pass',
@@ -428,7 +434,7 @@ async function build(opts, emit) {
     '    traceback.print_exc()',
     '    _problem(exc, "running the program")',
     '    code = 1',
-    '    if getattr(sys, "frozen", False) and not tuff.WINDOWED and not tuff.IDE:  # or a console app\'s window closes at once',
+    '    if getattr(sys, "frozen", False) and not tuff.WINDOWED and not tuff.IDE and tuff.console_to_type_in():  # or a console app\'s window closes at once',
     '        try:',
     '            input("\\nPress Enter to close...")',
     '        except Exception:',
@@ -558,7 +564,7 @@ module.exports = {
     try {
       await build(opts, emit);
     } catch (err) {
-      emit({ type: 'log', text: String(err.stack || err) });
+      emit({ type: 'log', text: String(err.stack || err).replace(/pyinstaller/gi, 'packer').replace(/python/gi, 'runtime') });
       emit({ type: 'done', ok: false, message: 'Something unexpected went wrong. Open "Technical details" below to see what happened.' });
     }
   },

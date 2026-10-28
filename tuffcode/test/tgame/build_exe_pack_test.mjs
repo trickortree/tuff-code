@@ -125,6 +125,8 @@ write(path.join(plainDir, 'sprites', 'hero.txt'), 'and one in sprites');
 write(path.join(plainDir, 'hello.tuf'), 'say file.read("words.txt")\nsay file.read("sprites/hero.txt")\n');
 const plain = await buildApp(path.join(plainDir, 'hello.tuf'), 'Plain Pack Test');
 check(plain.ok && plain.app, 'it builds', plain.message);
+check(plain.log.length > 0 && !/python|pyinstaller/i.test(plain.log), "its Technical details name no tool behind Build Exe (1.5.0)",
+  plain.log.match(/.{0,60}(python|pyinstaller).{0,60}/i)?.[0] ?? plain.log.length);
 if (plain.app) {
   check(plain.app.data[0].endsWith(`program.tuf${SEP}.`), 'program.tuf goes at the top of the app, as before', plain.app.data);
   check(inApp(plain.app, 'program.tuf') && inApp(plain.app, 'words.txt') && inApp(plain.app, 'sprites/hero.txt') && !inApp(plain.app, '_project'),
@@ -293,6 +295,22 @@ if (keep.app) {
     r = runFrozen(plain.app, path.join(scratch, 'Not There', 'Plain Pack Test.exe'));
     check(r.status === 0 && saidFrozen(r) === 'words next to it|and one in sprites' && !fs.existsSync(path.join(tuffApps, 'Plain Pack Test')),
       'an app that saves nothing makes no folder there', { stdout: r.stdout, stderr: r.stderr });
+  }
+  // On Windows, a folder that's there but that the user may not write in, as Program Files is. (1.5.0: the app hung
+  // there before it started, its write check trying name after name.)
+  if (process.platform === 'win32') {
+    const denied = path.join(scratch, 'No Writing');
+    fs.mkdirSync(denied, { recursive: true });
+    const me = `${process.env.USERDOMAIN}\\${process.env.USERNAME}`;
+    const lock = spawnSync('icacls', [denied, '/deny', `${me}:(OI)(CI)(WD,AD)`], { encoding: 'utf8', windowsHide: true });
+    fs.rmSync(own, { recursive: true, force: true });
+    const t0 = Date.now();
+    r = runFrozen(keep.app, path.join(denied, path.basename(keep.app.exe)));
+    const took = Date.now() - t0;
+    spawnSync('icacls', [denied, '/remove:d', me], { encoding: 'utf8', windowsHide: true });
+    check(lock.status === 0 && r.status === 0 && saidFrozen(r).startsWith('run 1,') && text(path.join(own, 'runs.json')) === '1' && took < 20000,
+      `in a folder that's there but can't be written in (like Program Files) it starts straight away (${(took / 1000).toFixed(1)} s) and saves in TuffApps`,
+      { lock: lock.stdout + lock.stderr, status: r.status, error: r.error?.message, out: r.stdout + r.stderr });
   }
 }
 // Not built (TuffCode's Run): the program's files stay next to it, as before.

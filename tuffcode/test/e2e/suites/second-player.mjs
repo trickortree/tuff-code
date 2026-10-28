@@ -91,9 +91,10 @@ export default async (t, ctx) => {
   await open(game);
   await t.sleep(500);
   const btn = await ev(`(() => { const b = document.querySelector('#btn-run2'); const r = b.getBoundingClientRect(), run = document.querySelector('#btn-run').getBoundingClientRect();
-    return { shown: !b.classList.contains('hidden'), title: b.title, inWidget: !!b.closest('.run-widget'), nextToRun: Math.abs(r.left - run.right) < 4 && Math.abs(r.top - run.top) < 2, w: r.width, runW: run.width, fill: (p => p ? getComputedStyle(p).fill : 'no shape')(b.querySelector('.i-players path')) }; })()`);
+    const dbg = document.querySelector('#btn-debug').getBoundingClientRect(); // (1.5.0: Debug sits between them)
+    return { shown: !b.classList.contains('hidden'), title: b.title, inWidget: !!b.closest('.run-widget'), nextToRun: Math.abs(dbg.left - run.right) < 4 && Math.abs(r.left - dbg.right) < 4 && Math.abs(r.top - run.top) < 2, w: r.width, runW: run.width, fill: (p => p ? getComputedStyle(p).fill : 'no shape')(b.querySelector('.i-players path')) }; })()`);
   check(btn.shown && /second player/i.test(btn.title), 'a game that hosts and joins: the button shows, titled "Run a second player..."', btn);
-  check(btn.inWidget && btn.nextToRun && btn.w === btn.runW, 'it sits right after Run in the run widget, the same size', btn);
+  check(btn.inWidget && btn.nextToRun && btn.w === btn.runW, 'it sits in the run widget right after Run and Debug, the same size', btn);
   check(btn.fill === 'rgb(95, 184, 101)', `its two people are the Run button's green (${btn.fill})`, btn.fill);
   await ev(`document.querySelector('#runconfig-widget').click()`);
   await t.sleep(300);

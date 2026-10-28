@@ -9079,12 +9079,28 @@ def main():
     code = run_program(args[0])
     if DEBUGGER is not None:
         DEBUGGER.end(code)
-    if getattr(sys, "frozen", False) and not WINDOWED and not IDE:
+    if getattr(sys, "frozen", False) and not WINDOWED and not IDE and console_to_type_in():
         try:
             input("\nPress Enter to close...")
         except EOFError:
             pass
     return code
+
+
+def console_to_type_in():
+    """Whether someone can answer a built app's "Press Enter to close...": on Windows, whether it has a console window.
+    A windowed app started with pipes (by a program, or with its output sent to a file) has output but no console,
+    and waiting there would keep it running after its window closed. Elsewhere, whether it's in a terminal."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            return bool(ctypes.windll.kernel32.GetConsoleWindow())
+        except Exception:
+            return True
+    try:
+        return sys.stdin.isatty()
+    except Exception:
+        return False
 
 
 if __name__ == "__main__":
