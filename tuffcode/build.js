@@ -131,7 +131,7 @@ const BUILDING = WIN ? 'Building your .exe' : 'Building your app';
 let current = null;
 
 function safeName(name) {
-  return (name || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'MyTuffApp';
+  return (name || '').replace(/[<>:"/\\|?*;\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'MyTuffApp';
 }
 
 function pngToIco(png) {
@@ -336,11 +336,35 @@ async function build(opts, emit) {
   // The app's windows use the same icon as the app file: the launcher tells the window library
   // where the packed PNG copy is (Tk shows PNGs; its .ico reader can't read modern .ico files).
   await fsp.writeFile(launcher, [
-    'import os, sys, threading, traceback',
+    'import os, sys, tempfile, threading, traceback',
     'base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))',
     'icon = os.path.join(base, "_tuffcode", "app_icon.png")',
     'if os.path.isfile(icon):',
     '    os.environ["TUFF_APP_ICON"] = icon',
+    // The app runs from base, a folder it unpacks into each time it starts, which goes when it closes. So the files its
+    // program saves (file.save, song:save) go in the folder the app is in (on a Mac, the one its .app is in), found out
+    // once here. When that one can't be written to (Program Files, or a Mac app run where it was downloaded), they go in
+    // TuffApps/<the app's name> in the user's data folder, beside tgame's TuffSaves: tuff.py makes it when it first saves.
+    'def _data_folder():',
+    '    folder = os.path.dirname(os.path.abspath(sys.executable))',
+    '    if sys.platform == "darwin" and folder.endswith(".app/Contents/MacOS"):',
+    '        folder = os.path.dirname(os.path.dirname(os.path.dirname(folder)))',
+    '    try:',
+    '        tempfile.TemporaryFile(dir=folder).close()',
+    '        return folder',
+    '    except OSError:',
+    '        pass',
+    '    home = os.path.expanduser("~")',
+    '    if sys.platform == "win32":',
+    '        data = os.environ.get("APPDATA") or os.path.join(home, "AppData", "Roaming")',
+    '    elif sys.platform == "darwin":',
+    '        data = os.path.join(home, "Library", "Application Support")',
+    '    else:',
+    '        xdg = os.environ.get("XDG_DATA_HOME", "")',
+    '        data = xdg if os.path.isabs(xdg) else os.path.join(home, ".local", "share")',
+    `    return os.path.join(data, "TuffApps", ${JSON.stringify(name)})`,
+    'if getattr(sys, "frozen", False):',
+    '    os.environ["TUFF_DATA_DIR"] = _data_folder()',
     'import tuff',
     // An app with no console shows its errors in tkinter's box, but only tgui apps carry tkinter.
     // The others (games, atgui apps) use the system's own box, so they never just close without a word.
@@ -429,15 +453,30 @@ async function build(opts, emit) {
   }
 
   const sep = process.platform === 'win32' ? ';' : ':';
+  // --add-data is "file;its folder in the app" (":" on a Mac), and PyInstaller refuses one with that mark anywhere else,
+  // like a project folder called "Shop; Cafe" (from Open Folder). Such a file is copied into the work folder, into the
+  // folder it goes in, and that whole folder is packed instead: the names inside a packed folder are never split.
+  const addData = [];
+  const staged = path.join(work, 'packed');
+  const add = async (full, to) => {
+    if (!full.includes(sep) && !to.includes(sep)) {
+      addData.push(`${full}${sep}${to}`);
+      return;
+    }
+    const into = path.join(staged, ...to.split('/'));
+    await fsp.mkdir(into, { recursive: true });
+    await fsp.copyFile(full, path.join(into, path.basename(full)));
+    if (!addData.includes(`${staged}${sep}.`)) addData.push(`${staged}${sep}.`);
+  };
+  await add(programCopy, pack.at);
   // The icon goes in a folder of its own inside the app, so no project file can clash with it.
-  const addData = [`${programCopy}${sep}${pack.at}`];
   if (fs.existsSync(iconPng)) addData.push(`${iconPng}${sep}_tuffcode`);
   if (viewLibs.length) addData.push(`${path.join(work, 'tuff_view_web')}${sep}tuff_view_web`);
   // Each file keeps its folder inside the app, so "sprites/hero.png" works there as it does here.
   const assets = [...ownRel, ...pack.files.map((f) => f.shown)];
-  for (const f of pack.files) addData.push(`${f.full}${sep}${f.to}`);
+  for (const f of pack.files) await add(f.full, f.to);
   // The program's own files it imports: beside it, in the folders they're in (libs/money.tuf stays in libs).
-  ownRel.forEach((rel, i) => addData.push(`${ownFiles[i].full}${sep}${path.posix.join(pack.at, path.posix.dirname(rel))}`));
+  for (const [i, rel] of ownRel.entries()) await add(ownFiles[i].full, path.posix.join(pack.at, path.posix.dirname(rel)));
   // On a Mac the app's icon has to be .icns; macOS's own sips tool makes one from the PNG.
   let macIcon = null;
   if (process.platform === 'darwin') {

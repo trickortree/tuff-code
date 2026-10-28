@@ -10241,6 +10241,39 @@ def t_learn_150(c):
     c.check("'Section 1.7 · Workshop'" in suite and "'workshop'" in suite, "learn-sections.mjs (the e2e test) knows Section 1.7 · Workshop")
 
 
+# ---------------------------------------------------------------- Build exe, with its packing tool stood in for (1.5.0)
+
+def t_build_pack(c):
+    """No window, no packing tool: build_exe_pack_test.mjs runs tuffcode/build.js with PyInstaller stood in for, lays the
+    app out as its .exe unpacks it and runs it with the launcher build.js wrote. 1.5.0: a built app run as the real one
+    runs (frozen, unpacked afresh each time, started from another folder) keeps what it saves next to its .exe, or in
+    TuffApps when it can't write there, and reads it back; and a project folder with ; in its path packs."""
+    sep = ";" if os.name == "nt" else ":"
+    try:
+        p = subprocess.run(["node", os.path.join(HERE, "build_exe_pack_test.mjs")], capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=300, env={k: v for k, v in os.environ.items() if k not in ("TUFF_IDE", "TUFF_BASE_DIR")})
+    except FileNotFoundError:
+        c.check(True, "Node isn't installed: skipped Build exe")
+        return
+
+    def section(title):
+        """What build_exe_pack_test.mjs said under == Build exe: title."""
+        at = p.stdout.find(f"== Build exe: {title}")
+        rest = p.stdout[at:] if at >= 0 else ""
+        ends = [i for i in (rest.find("\n== ", 1), rest.find("build_exe_pack:")) if i > 0]
+        return rest[:min(ends)] if ends else rest
+
+    saves = section("a built app keeps what it saves")
+    c.check(saves.count("  ok  ") >= 9 and "FAIL" not in saves,
+            "a built app (run as the real one runs) keeps what it saves next to its .exe, or in TuffApps when it can't write "
+            "there, reads it back the next time it starts, starts from the files packed with it, and imports its own .tuf files "
+            "from the app; not built, a program's files stay next to it", (saves or p.stdout)[-1500:] + p.stderr[-300:])
+    semi = section(f"a project folder with {sep} in its path")
+    c.check(semi.count("  ok  ") >= 6 and "FAIL" not in semi,
+            f"a project folder with {sep} in its path builds: every --add-data has one {sep} (it packs copies of the files), and the "
+            "app's name drops it", (semi or p.stdout)[-1500:] + p.stderr[-300:])
+
+
 TESTS = {"snake": t_snake, "breakout": t_breakout, "snake3d": t_snake3d, "axe": t_axe, "features_2d": t_features_2d,
          "toolbox": t_toolbox, "toolbox_fixes": t_toolbox_fixes, "looks": t_looks,
          "features_3d": t_features_3d, "player_3d": t_player_3d, "callback": t_callback, "errors": t_errors,
@@ -10272,6 +10305,7 @@ TESTS.update({"tmusic": t_tmusic})  # 1.5.0: music from notes
 TESTS.update({"debug": t_debug})  # 1.5.0: the debugger
 TESTS.update({"starters": t_starters})  # 1.5.0: New Project's starters
 TESTS.update({"learn_150": t_learn_150})  # 1.5.0: Learn's Section 1.7, the Workshop
+TESTS.update({"build_pack": t_build_pack})  # 1.5.0: Build exe with its packing tool stood in for (a built app's own files)
 
 
 def main():

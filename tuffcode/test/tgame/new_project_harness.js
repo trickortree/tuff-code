@@ -192,6 +192,8 @@ async function createLogic() {
   const problems = bad.map((n) => starters.check(home, n));
   check(problems.every((r) => !r.ok && r.problem), 'names that can\'t be folders are refused, each with a reason', problems.map((r, i) => [bad[i], r.problem]));
   check(starters.check(home, 'a/b').problem.includes('/'), '...like a name with a / in it', starters.check(home, 'a/b').problem);
+  check(starters.check(home, 'Shop; Cafe').problem === 'A name can\'t have < > : " / \\ | ? * or ; in it.',
+    '...and one with a ; in it, which Build exe\'s tools split paths at (the message lists ; too)', starters.check(home, 'Shop; Cafe'));
   check(starters.check('relative/folder', 'Snake').problem === 'Choose a folder for the project.', 'a folder that isn\'t a full path is refused', null);
   const fresh = starters.check(home, '  Snake ');
   check(fresh.ok && fresh.target === path.join(home, 'Snake'), 'a free name (trimmed) is fine, even before TuffProjects is there', fresh);

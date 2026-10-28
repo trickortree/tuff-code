@@ -658,7 +658,7 @@ class Song:
         self.ready()
         if getattr(rt.interp, "writes", True) is False:  # Tuff Engine's preview, and tuff_run for AI agents
             return None
-        target = rt.path(file.strip())
+        target = rt.save_path(file.strip())  # (a built app's own folder: see tuff.py's Runtime.save_path)
         try:
             folder = os.path.dirname(target)
             if folder:
